@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "Whetstone.csproj"],
+      "port": 5338
+    },
+    {
+      "name": "client",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--prefix", "ClientApp"],
+      "port": 5173
+    }
+  ]
+}

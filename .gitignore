@@ -1,0 +1,91 @@
+# ---- .NET build output ----
+bin/
+obj/
+*.user
+*.suo
+
+# ---- Frontend ----
+ClientApp/node_modules/
+ClientApp/dist/
+ClientApp/*.tsbuildinfo
+
+# NOTE: wwwroot/ (Vite build output) is intentionally committed so the app is
+# clone-and-run — there is no automated `npm run build` step in the .csproj yet.
+
+# ---- Claude Code personal settings ----
+.claude/settings.local.json
+
+# ---- Runtime data & secrets (per-project heartbeat state) ----
+# Machine-local config with credentials/tokens — never commit
+data/config.json
+data/**/config.json
+data/**/project.json
+# A hand-made copy of one, taken before editing it. project.json holds the tracker token, so a
+# backup of it does too — and a backup is exactly the file a `git add -A` sweeps up unnoticed.
+data/**/*.bak
+# Snapshots of the dashboard database, taken before a migration. Local, large, and full of
+# ticket content - never shared.
+data/backups/
+# Runtime state
+data/**/events.jsonl
+data/**/logs/
+data/**/*.lock
+data/**/*.stop
+data/**/improvement-suggestions.md
+# The reflection dedup index - runtime state, one accepted fact key per line
+data/**/reflection-keys.txt
+# Project unregister markers are local runtime state
+data/**/.disabled
+
+# Local ticketing SQLite database (runtime state)
+data/*.db
+data/*.db-shm
+data/*.db-wal
+dashboard.design.db*
+
+# QA shot screenshots (runtime artifacts copied from worker Playwright captures)
+data/qa-shots/
+# Raw Playwright captures for the QA phase, before the worker picks which become QA shots
+data/qa-captures/
+# Map screenshots, one folder per node and one file per captured SHA. The manifest beside them is
+# versioned because a human owns half its fields; the pixels are regenerable and would be GBs.
+data/map-shots/
+# Linked-issue attachments cached locally so phases can read them (fetched with the server's
+# tracker token). The old name is kept because a checkout that predates the rename still has one,
+# and DashboardPaths.MigrateLegacyAttachmentCache only moves it on the next startup.
+data/issue-attachments/
+data/jira-attachments/
+# Voiced walkthrough lines (regenerable from the stored script), and the narrator's own install:
+# its dependencies, which also hold the ~90MB voice model it downloads once (transformers.js caches
+# it under node_modules). The script and package.json are source.
+data/walkthrough-clips/
+data/narrator/node_modules/
+# Files the ticket owner attached to a progress note. Not a cache - there is no upstream to refetch
+# them from - but they are still per-machine runtime data, not source.
+data/ticket-files/
+
+# Generated per-run MCP config (regenerated from project config each cycle;
+# one per project: mcp-config.json, mcp-config.<projectKey>.json)
+data/**/mcp-config.json
+data/**/mcp-config.*.json
+
+# Per-run scratch for the agent fleet: the claim each agent is handed and its own MCP config.
+# Written fresh every cycle and cleared when the orchestrator starts.
+data/run/
+
+# ---- OS / editor cruft ----
+.DS_Store
+Thumbs.db
+*.swp
+
+# ---- Per-project dashboard config (skills, prompts, defaults) ---- [begin project-folders]
+# Every project folder is ignored. A project folder is one machine's business: its skills name
+# that repo's stack and its project.json points at a path that exists on one computer. Each one
+# carries its own nested git repo and private remote instead - the arrangement the notes store
+# already uses (Initialize-NoteStoreGit in notes-store.ps1) - so it is versioned and backed up
+# without any other machine's clone of Whetstone ever receiving it.
+#
+# data/skill-templates/ IS shared: it is what a new project is scaffolded from, and knows
+# nothing about any one repo. Moved here by data/migrate-projects-to-nested-repos.ps1.
+data/projects/*/
+# ---- [end project-folders]

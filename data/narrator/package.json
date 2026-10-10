@@ -1,0 +1,10 @@
+{
+  "name": "whetstone-narrator",
+  "private": true,
+  "description": "Voices Classroom walkthroughs with Kokoro-82M, locally. Run `npm install` here once.",
+  "type": "module",
+  "dependencies": {
+    "kokoro-js": "1.2.1",
+    "phonemizer": "1.2.1"
+  }
+}

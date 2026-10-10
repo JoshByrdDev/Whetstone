@@ -1,0 +1,20 @@
+{
+  "dashboardUrl": "http://localhost:5338",
+  "notificationChannel": "slack",
+  "notificationEvents": ["heartbeat_sleep"],
+  "baseHeartbeatMinutes": 3,
+  "heartbeatIdleMultiplier": 2,
+  "heartbeatMaxMinutes": 60,
+  "offHoursStart": "17:00",
+  "offHoursEnd": "06:30",
+  "heartbeatMaxAttempts": 3,
+  "heartbeatWorkerTimeoutMinutes": 120,
+  "heartbeatWorkers": 3,
+  "baseBranch": "main",
+  "branchPrefix": "",
+  "agentProvider": "claude",
+  "workerModel": "claude-opus-5-5",
+  "phaseModels": {},
+  "reflectionModel": "haiku",
+  "workerReasoningEffort": "high"
+}

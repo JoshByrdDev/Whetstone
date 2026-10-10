@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Whetstone</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>" />
+    <!--
+      The connections stay here; the stylesheet does not. Which faces are wanted is the active
+      theme's business, and it appends its own <link> before the first render (see src/theme). Hard
+      coding one theme's fonts here would download them on every load whatever theme was chosen.
+      Warming the sockets is free either way, and saves the theme's link a round trip.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <script type="module" crossorigin src="/assets/index-_sg5sEjh.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DPrA3zu5.css">
+  </head>
+  <!--
+    No theme classes on the body. Every colour resolves through a custom property the theme writes
+    onto <html>, and those are not set until the module script runs — a body painted from them
+    beforehand would flash a frame of nothing. So the ground reads the property with a literal
+    behind it, matching `html { background: var(--w-ground, #04060c) }`: before the script it is
+    the default theme’s ground, and from the moment a theme is applied — which happens before
+    React mounts — it is that theme’s. The literal on its own was right while there was one
+    theme and became a frame of the wrong century for anyone on a second one.
+  -->
+  <body style="background: var(--w-ground, #04060c); min-height: 100vh">
+    <div id="root"></div>
+  </body>
+</html>

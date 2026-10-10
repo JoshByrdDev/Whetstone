@@ -1,0 +1,241 @@
+# Whetstone — house conventions
+
+A local ticketing board and heartbeat runner. .NET 9 API + SignalR, React/Vite client in `ClientApp`.
+
+This file is what a new session — human or worker — reads before it writes anything. Keep it to the
+things that are *not* discoverable from the code in front of you.
+
+## Build and run
+
+- Build with `-c Release`. `bin\Debug` is held open by the running instance.
+- Restarting the app kills in-flight heartbeat workers. Verify against a throwaway instance, or
+  against the Vite dev server on 5173, which proxies to the running API on 5338.
+- Never host the live instance (5338) as a Claude preview server. `dotnet run` holds the app, the
+  heartbeat and every worker in one kill-on-close job, so when the app reaps that session's preview,
+  the whole fleet dies silently mid-run. Relaunch it with `explorer.exe <repo>\Start-Whetstone.bat`,
+  which no session owns.
+- Editing `ClientApp/tailwind.config.js` needs a Vite restart; a reload silently serves the old CSS.
+- `.ps1` files under `data/` must stay pure ASCII (PS 5.1 parses them as cp1252).
+- Classroom walkthroughs are voiced by Kokoro under Node from `data/narrator/`. Run `npm install` there
+  once per machine (its first run also downloads the ~90MB voice model); without it a walkthrough is
+  still written but plays as captions only, and says so.
+
+## Whetstone knows no project
+
+This repository is the platform. It runs any project it is pointed at and names none of them: not
+in code, not in a comment, not in a test fixture, not in this file. Everything that is true of only
+one project lives in that project's folder, `data/projects/<key>/`, which is gitignored here and is
+its own nested git repo with its own remote:
+
+| What is specific | Where it goes |
+|---|---|
+| What a worker is told to do in each phase | `data/projects/<key>/skills/<phase>/skill.md` |
+| Paths, ports, tracker, credentials, stack commands | `project.json` / `project.defaults.json` there |
+| A command only that repo makes dangerous | `data/projects/<key>/guard.ps1`, tested by a `guard.tests.ps1` beside it |
+| How the narrator says its product names and key prefix | `data/projects/<key>/pronounce.json` |
+
+If a rule cannot be written without naming a repo, a script in it, or one of its hosts, it is not a
+rule for this repository. When the shared code needs an example, it uses a placeholder: `PROJ-123`
+for a tracker key, `alpha` and `bravo` for project keys in tests, `app-` for a stack's containers.
+An incident that explains why something exists is told without the ticket's key - the lesson is
+the platform's, the ticket is the project's.
+
+The check before a commit:
+
+```bash
+git grep -niE '<each project key and display name on this machine>' -- . ':!wwwroot'
+```
+
+## The fleet never leaves this machine
+
+Whetstone is local end to end, and every agent it runs is confined to that: a git worktree, the
+docker stack, a database on `localhost`. Nothing in the pipeline may touch production, UAT, staging,
+shared dev or CI — in either direction, reads included.
+
+This is not a preference a ticket can override. It is the one rule that outranks a ticket's master
+notes, and it is written in three places that have to stay in step:
+
+| Layer | Where | What it does |
+|---|---|---|
+| The rule | `data/heartbeat-prompt.md`, first of the HARD RULES | Binds every provider, every phase |
+| The routing | every `skill.md` — the shared "Local only" section, plus that phase's own part of it | Says what to build *instead* |
+| The wall | `data/worker-guard.ps1`, a `PreToolUse` hook wired in `providers.ps1` | Denies the obvious commands outright |
+| A project's own bricks | `data/projects/<key>/guard.ps1`, dot-sourced last by the wall | Denies what only that repo makes dangerous |
+
+**The guard is a backstop, not the rule.** It is claude-only — codex has no hook system and gemini's
+is not equivalent — and all three providers run with approvals switched off (`bypassPermissions`,
+`--dangerously-bypass-approvals-and-sandbox`, `--approval-mode yolo`), so on two of the three the
+prompt is the entire enforcement. Widening the guard does not close that gap; only the prompt reaches
+there.
+
+Changing the guard? Run its tests. They encode the commands a fleet legitimately runs every day —
+`docker compose down`, `sqlcmd -S localhost,1433`, a single-label docker host in a connection
+string — and a false positive here stops every worker at once:
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-guard.tests.ps1
+```
+
+**A project's rules ride on the shared ones and can only narrow them.** `providers.ps1` starts the
+guard with `-Project <key>`, and `guard.ps1` in that project's folder is dot-sourced after every
+shared rule has cleared the command - so it can refuse what would otherwise pass and can never
+allow what the wall denies. Started without `-Project`, the guard applies every project's file: told
+nothing about who it is working for, it takes the strictest reading. A file that will not load
+denies the call. Changing one? Run the `guard.tests.ps1` beside it, which drives the real guard the
+way that project's workers do.
+
+**TFVC has one writer, and it is the human.** Where a project's source control is TFVC
+(`repoType: tfvc`), the fleet works in the git mirror that shares its working tree, and the human checks in from Visual Studio. The rule
+lives in `data/tfvc-guard.ps1`: `worker-guard.ps1` dot-sources it for workers, and a TFVC repo's own
+`.claude/settings.json` can run it as a hook for interactive sessions — the one hook that reaches a
+human's session, and it names the script by absolute path, so moving or renaming it disarms that
+hook without a sound. It denies local verbs too (`tf add`, `undo`, `get`, `checkout`): the
+server is already out of reach, and what they would rewrite is the human's pending changes. The
+tests above cover both callers.
+
+**A ticket asking for production work is planned, not blocked.** The action belongs to a human; the
+pipeline's job is the investigation plus a locally-proven artifact — the exact statements, a rollback,
+a verification query, committed to the branch, with a runbook comment telling the human what to run
+and what they should see. That routing is why the rule does not simply deadlock such a ticket, and it
+is the half most likely to be dropped by whoever next rewrites the rule shorter.
+
+## "The base" is not always origin's
+
+A ticket's branch is forked from, rebased onto and squashed against one ref, and which ref depends
+on how the project delivers. By pull request: `origin/<base>`, because the local ref is only as
+fresh as the human's last pull. With `mergeInsteadOfPr`: the **local** `<base>`, because that is
+where the board merges every finished ticket and nothing pushes it - on a project where a push is
+a production deploy, local `main` can sit dozens of commits ahead of origin.
+
+The rule is written twice and the two must agree: `Resolve-BaseRef` in `data/worker.ps1` (the
+fork, the hand-off rebase, the squash net) and `BaseRefAsync` in `Services/TicketGitService.cs`
+(the diff a person reviews, the board's rebase). Workers are not left to work it out - the prompt
+names it as `{{BASE_REF}}` and the skills say `<base-ref>`. A skill that spells out `origin/<base>`
+or bare `<base>` in a git command has reintroduced the bug for one kind of project or the other.
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
+```
+
+## The look is a system, not a per-page decision
+
+Nothing in the client picks its own colours, corners, faces or timings. Three files hold all of it,
+and a new page's job is to *name* what it is rather than describe how it should look:
+
+| What | Where | What a page does |
+|---|---|---|
+| Colour, tier, corner shape | `src/theme/` + `src/components/orbit.ts` | `tierToken(phase, kind)`, `chamfer(r)` — never a literal hex or radius |
+| Tailwind class names | `ClientApp/tailwind.config.js` | `bg-gray-900`, `border-hair` — already pointed at the theme |
+| Motion | the motion layer at the top of `src/index.css` | add `orbit-pick` / `orbit-tap` / `orbit-flank` / `orbit-swap` / `orbit-veil` / `orbit-pop` |
+
+### Motion: name the behaviour, do not hand-roll the transition
+
+Every interactive surface answers the pointer, and it answers the same way everywhere. That is a
+class, not a habit:
+
+- **`orbit-pick`** — one item in a list of things you can choose (a ticket row, a queue entry, a
+  file in a diff). Nudges toward whatever it is about to open; does not grow. Mark the current one
+  with `aria-current="true"` and it stays put — the same attribute a screen reader needs, so the
+  two can never disagree. `pick-lift` for a list that runs across the page rather than down it.
+- **`orbit-tap`** — a control rather than a choice: a toggle, a chip, a small button. Lifts.
+- **`orbit-primary`** — the one filled amber action on a page.
+- **`orbit-flank`** — on the *grid container* whose side column opens and shuts. The width lives in
+  `grid-template-columns`, so that is the only property that can carry the animation; both
+  templates need the same number of tracks or the browser cannot interpolate them.
+- **`orbit-swap`** — content replacing other content in the same slot. Give it a React `key` that
+  changes with the state, or React reconciles the two into one element and the animation never
+  re-runs.
+- **`orbit-veil`** — anything that opens over the page: a dialog, a form, a lightbox. Goes on the
+  fixed container, with `data-fx` from `useVeil(onClose)`; every direct child that is not the
+  dimming sheet rises, and that sheet must be marked `orbit-dim` when it is a child rather than the
+  container's own background. An exit only exists if the overlay outlives its own dismissal, which
+  is what the hook's timer buys — so an overlay that stays mounted while hidden has to become a
+  component rendered only while open, or it re-opens already faded out.
+- **`orbit-pop`** — an anchored panel: a menu, a suggestion list, a filter's bands. `data-fx` from
+  `usePop(open)`, which keeps the panel mounted a little past its own close so none of the existing
+  ways of closing it need intercepting. `data-side` names where it sits relative to its control
+  (`above` / `left` / `right`; below is the default) so it arrives from the edge it hangs off — a
+  panel that flips when there is no room below must set it from the same state that flipped it. A
+  list whose open-ness *is* its contents also wants `useHeld`, or it spends its exit empty.
+- **`orbit-spot`** — a part of a picture that a narration is pointing at: a stop on a diagram, a
+  quoted line, a card, a range of code. `data-spot` says where it stands in the telling: `lit` (now),
+  `seen` (already), `dim` (not yet), `off` (not appeared). A lit shape on a dark canvas glows; add
+  `spot-flat` to a picture, paragraph or code line, where a glow would blur the thing pointed at.
+  First used by the Classroom walkthrough; `UserFlow` takes a `spot` prop that applies it per stop.
+- **`orbit-pan`** — a camera move on a picture: a screenshot zooming to the row that proves the point.
+  Its own, slower speed (`--w-dur-pan`), because the eye follows it rather than the hand causing it.
+- **`orbit-row`** — the board's own row shell, which additionally carries its tier's skin.
+
+Durations and travel are `--w-dur-1/2/3` (plus `--w-dur-pan` for `orbit-pan` alone) and `--w-nudge`; the curve for anything that *moves* is
+`--w-ease`. Reduced motion is handled once, in the layer, for every class above.
+
+**The check before you commit a new surface:** does every hovering, opening, or swapping thing on it
+carry one of these classes? If you typed `transition-` or `duration-` into a `className`, you have
+almost certainly re-implemented one of them slightly differently — that is how the app drifted into
+five spellings of the same 150ms fade. `transition-colors` on a bare text or icon colour change is
+the one fair exception.
+
+## A skill exists more than once. Change all of it.
+
+`data/skill-templates/<phase>/skill.md` is the template; `data/projects/<project>/skills/<phase>/skill.md`
+is what a worker on that project actually reads. The scaffolder only ever does `CopyIfMissing`, so a
+project's copy is written once and never updated again — **editing the template changes nothing for
+any project that already exists.**
+
+How many projects have copies is a fact about this machine, not about this repository - take it
+from the `ls` below. The one that gets missed is a project absent from `heartbeatProjects`: nothing
+the fleet runs on a schedule ever reads its copies, and a rule left stale there stays invisible
+until somebody points a run at it.
+
+Each project folder is its own git repo, so a change that goes everywhere is one commit here and
+one more in every project folder it touched.
+
+So a change to a skill is a change to a *set* of files. Before you edit one, list them:
+
+```bash
+ls data/skill-templates/*/skill.md data/projects/*/skills/*/skill.md
+```
+
+Then decide, per project copy, which of three things this change is:
+
+- **A pipeline rule** — anything about phases, hand-offs, MCP tools, what an outcome claims. It goes
+  everywhere, verbatim. This is most changes.
+- **A rule with a local example** — the same rule, worth grounding in what this project's notes store
+  or history already knows. Port it, then add the local detail.
+- **Genuinely project-specific** — a compose command, a credential, a CI quirk. Template gets the
+  general shape; only that project's copy gets the specifics.
+
+**Check for drift in the other direction too.** A fix written into one project's copy is a fix the
+template never got, and the next project inherits the bug. It has happened the other way round as
+well: a commit that expired a stale QA pass - written because a regression shipped under a green
+checklist - landed in the template and in nothing else, so the project the incident came from kept
+running the superseded heuristic for two days. To find that class of gap, read the difference:
+
+```bash
+diff data/skill-templates/qa-test/skill.md data/projects/<key>/skills/qa-test/skill.md
+```
+
+What is left should be only what is genuinely that project's: its compose commands, its ports, its
+local examples. A pipeline rule on one side and not the other is drift, whichever side it is on.
+
+## Knowledge
+
+Whetstone's *managed* projects keep their notes in the repo at `.claude/memory`, junctioned from
+the Claude Code auto-memory path so unattended workers and interactive sessions read the same
+files. Whetstone itself is the exception: it has no `.claude/memory`, and its notes live only at
+`~/.claude/projects/C--Projects-ClaudeDashboard/memory/`. Anything a *human* would also be wrong
+without belongs there — or, if it is a convention rather than a fact, here, where it is read
+without being asked for.
+
+## Git
+
+Commit at the end of every change. Never push.
+
+**No commit ever carries an AI attribution trailer** - not this repo's, not the fleet's. Claude Code
+adds a `Co-Authored-By:` line by default and instructs the model to write one in a message of its
+own, which a ticket prompt cannot outrank; One ticket landed one past both a prompt rule and a
+project note that forbade it. The switch that actually reaches that instruction is
+`includeCoAuthoredBy: false`, and it is set in two places: the per-run settings file
+`providers.ps1` writes for every claude worker, and the human's own `~/.claude/settings.json`.
+Codex and gemini have no equivalent switch, so for them the wording in `data/heartbeat-prompt.md`
+and in the implement and refine skills is the whole of the rule - keep all three in step.

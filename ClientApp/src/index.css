@@ -1,0 +1,808 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---- Utilities the theme gets a say in ----
+
+   `uppercase` reads like a fact about the text and is actually a decision about the face. A HUD
+   sans wants everything shouted; a face with real capitals of its own does not, and shouting it
+   anyway is how a re-skin ends up looking like the old design in new clothes.
+
+   Overridden here rather than rewritten at the fifty-five call sites, and it works because this
+   sits after `@tailwind utilities` in the same file: same specificity, later in the sheet. An
+   element that genuinely must be uppercase whatever the theme says can still say so inline. */
+.uppercase { text-transform: var(--w-caps); }
+
+/* Dark scrollbars for all scrollable areas */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--w-s750) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--w-s750);
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--w-s700);
+}
+
+/* ==== The motion layer =======================================================================
+
+   Every moving thing in this app is meant to move the same way, and up to now that agreement was
+   kept by hand: each new list, drawer and button picked its own `transition-colors duration-150`
+   and its own two pixels of travel, and whichever ones were written in a hurry simply did not
+   move at all. The board grew a proper hover in `.orbit-row`; the tabs written after it did not
+   inherit it, because there was nothing to inherit from.
+
+   So the agreement is written down here instead, as three durations, one curve, and a handful of
+   classes that say what a thing IS rather than what it should animate. A row you can choose is an
+   `.orbit-pick` and it nudges; a control is an `.orbit-tap` and it lifts; a column that opens and
+   shuts is an `.orbit-flank`. New UI opts into a behaviour by name and gets the timing, the
+   direction, the pressed state and the reduced-motion exemption for free.
+
+   Rule of thumb when writing a new surface: if you are about to type `transition-` into a
+   className, the thing you are building probably wants one of these instead. */
+
+:root {
+  /* One curve for anything that MOVES: leaves quickly, arrives softly, no overshoot. Colour and
+     opacity keep a plain ease — a fade with a personality reads as a stutter. */
+  --w-ease: cubic-bezier(.2,.8,.3,1);
+
+  /* Three speeds, and the choice is about how much of the screen changes, not about taste.
+       1  a tint, a hairline, a label brightening      — should feel instant
+       2  the default: something moved, in place       — a nudge, a lift, a chevron turning
+       3  something changed size or place on the page  — a column opening, a panel swapping */
+  --w-dur-1: .12s;
+  --w-dur-2: .18s;
+  --w-dur-3: .26s;
+  /* A camera move on a picture (`.orbit-pan`). Its own speed: the eye follows it, the hand does not. */
+  --w-dur-pan: .9s;
+
+  /* How far a pointed-at thing travels. Two pixels: enough to answer, not enough to break the
+     grid the board is ruled to. Overridable per element for direction (see PickerToggle). */
+  --w-nudge: 2px;
+}
+
+/* ---- The behaviours -------------------------------------------------------------------------
+
+   `.orbit-pick` — one item in a list of things you can choose: a ticket row, a queue entry, a file
+   in a diff. It slides toward the viewer it is about to fill and lights its own edge. It does NOT
+   grow: a card that swells breaks the column its list is ruled to.
+
+   The current item is exempt, because it is already where it was going, and it says so with
+   `aria-current` — which is the same fact a screen reader needs, so the two can never disagree. */
+.orbit-pick {
+  --pick-tf: translateX(var(--w-nudge));
+  transition: transform var(--w-dur-2) var(--w-ease),
+              background-color var(--w-dur-1) ease,
+              border-color var(--w-dur-1) ease,
+              color var(--w-dur-1) ease,
+              box-shadow var(--w-dur-2) ease;
+}
+.orbit-pick:hover:not([aria-current]):not(:disabled),
+.orbit-pick:focus-visible:not([aria-current]) {
+  transform: var(--pick-tf);
+}
+/* A press puts it back where it started, so the click has somewhere to land. */
+.orbit-pick:active:not(:disabled) { transform: none; }
+
+/* A list that runs across the page rather than down it lifts instead of sliding. */
+.orbit-pick.pick-lift { --pick-tf: translateY(calc(-1 * var(--w-nudge))); }
+
+/* `.orbit-tap` — a control rather than a choice: a toggle, a chip, a small button. Same clock as a
+   pick, lifted rather than slid, because a control is not pointing anywhere. */
+.orbit-tap {
+  transition: transform var(--w-dur-2) var(--w-ease),
+              background-color var(--w-dur-1) ease,
+              border-color var(--w-dur-1) ease,
+              color var(--w-dur-1) ease,
+              opacity var(--w-dur-1) ease;
+}
+.orbit-tap:hover:not(:disabled) { transform: translateY(calc(-1 * var(--w-nudge))); }
+.orbit-tap:active:not(:disabled) { transform: none; }
+
+/* `.orbit-flank` — a grid whose side column opens and shuts. Put it on the CONTAINER, not the
+   column: the width lives in `grid-template-columns`, so that is the only property that can be
+   animated, and animating the column itself would leave the main pane snapping to meet it. Both
+   templates must have the same number of tracks for the browser to interpolate them. */
+.orbit-flank { transition: grid-template-columns var(--w-dur-3) var(--w-ease); }
+
+/* `.orbit-swap` — content replacing other content in the same slot: the two states of a drawer,
+   a tab's body. Give the element a React `key` that changes with the state, so the animation is
+   re-run rather than played once on mount. Paired with `.orbit-flank` it covers the moment the
+   old contents vanish before the new width has finished arriving. */
+@keyframes orbit-swap-in {
+  from { opacity: 0; transform: translateX(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+.orbit-swap { animation: orbit-swap-in var(--w-dur-3) var(--w-ease); }
+
+/* `.orbit-veil` — anything that opens over the page: a form, a diff, a screenshot. Goes on the
+   fixed container, which carries `data-fx="in"` while it arrives and `data-fx="out"` while it
+   leaves. The container fades, taking the dim with it however that dim is drawn; every direct child
+   that is not the dim also rises and settles, so a panel is not required to be an `.orbit-modal` —
+   the QA lightbox's figure is a bare image and moves the same way.
+
+   The dim is the one child that must say what it is. It cannot rise: a sheet covering the viewport
+   that slides up by 8px is 8px of un-dimmed page along the bottom edge.
+
+   Same pairing as a filtered row: the parent must keep the overlay mounted for the length of the
+   exit, or there is no leaving to animate — see `useVeil`.
+
+   It leaves faster than it arrives, and travels less on the way out. An entrance is showing you
+   where a thing came from; a dismissal is already answered by the click, and a slow one reads as
+   the app hesitating. */
+@keyframes veil-in   { from { opacity: 0; } to { opacity: 1; } }
+@keyframes veil-out  { to   { opacity: 0; } }
+@keyframes panel-in  { from { opacity: 0; transform: translateY(8px) scale(.985); }
+                       to   { opacity: 1; transform: none; } }
+@keyframes panel-out { to   { opacity: 0; transform: translateY(4px) scale(.99); } }
+
+.orbit-veil[data-fx="in"] { animation: veil-in var(--w-dur-3) ease backwards; }
+.orbit-veil[data-fx="in"] > *:not(.orbit-dim) {
+  animation: panel-in var(--w-dur-3) var(--w-ease) backwards;
+}
+/* `both` holds the faded-out frame for the tick between the animation ending and React unmounting,
+   and nothing is clickable while the overlay is on its way out. */
+.orbit-veil[data-fx="out"] { animation: veil-out var(--w-dur-2) ease both; pointer-events: none; }
+.orbit-veil[data-fx="out"] > *:not(.orbit-dim) {
+  animation: panel-out var(--w-dur-2) var(--w-ease) both;
+}
+
+/* `.orbit-pop` — a small panel anchored to the control that opened it: a menu, a suggestion list,
+   a filter's bands. Shorter and smaller than a veil, because it is not a place you have gone: it
+   is the control saying more. It arrives from the side it is anchored on, so the movement points
+   back at what you clicked — `data-side` names where the panel sits relative to that control, and
+   the default is the common one, hanging below it.
+
+   `useVeil` and `usePop` are the same idea approached from opposite ends, and which one a surface
+   needs is decided by who owns the unmount. A dialog's page drops it on close, so the dialog holds
+   the close off. A popover's own component watches an `open` flag, so it can simply stay mounted a
+   little longer than the flag. */
+@keyframes pop-in  { from { opacity: 0; transform: var(--pop-from) scale(.98); }
+                     to   { opacity: 1; transform: none; } }
+@keyframes pop-out { to   { opacity: 0; transform: var(--pop-back) scale(.99); } }
+
+.orbit-pop                    { --pop-from: translateY(-4px); --pop-back: translateY(-3px);
+                                transform-origin: top center; }
+.orbit-pop[data-side="above"] { --pop-from: translateY(4px);  --pop-back: translateY(3px);
+                                transform-origin: bottom center; }
+.orbit-pop[data-side="right"] { --pop-from: translateX(-4px); --pop-back: translateX(-3px);
+                                transform-origin: left center; }
+.orbit-pop[data-side="left"]  { --pop-from: translateX(4px);  --pop-back: translateX(3px);
+                                transform-origin: right center; }
+
+.orbit-pop[data-fx="in"]  { animation: pop-in var(--w-dur-2) var(--w-ease) backwards; }
+/* Faster out than in, and unclickable on the way: a menu you have dismissed must not be able to
+   catch the click you are making somewhere else. */
+.orbit-pop[data-fx="out"] { animation: pop-out var(--w-dur-1) ease both; pointer-events: none; }
+
+/* `.orbit-spot` — one part of a picture that a narration is pointing at: a stop on a diagram, a
+   quoted line, a card, a highlighted range of code. `data-spot` says where it stands in the telling:
+   `lit` is being talked about now, `seen` was already, `dim` is not yet, `off` has not appeared.
+   The walkthrough is the first user; anything else that narrates over a picture should reuse it. */
+.orbit-spot { transition: opacity var(--w-dur-3) ease, filter var(--w-dur-3) ease; }
+.orbit-spot[data-spot="off"]  { opacity: 0; }
+.orbit-spot[data-spot="dim"]  { opacity: .32; }
+.orbit-spot[data-spot="seen"] { opacity: .72; }
+.orbit-spot[data-spot="lit"]  { opacity: 1; filter: drop-shadow(0 0 6px rgb(var(--w-active-rgb) / .45)); }
+/* The glow is for a shape on a dark canvas. On a picture, a paragraph or a line of code it blurs the
+   thing being pointed at, so those light up by opacity alone and mark themselves some other way. */
+.orbit-spot.spot-flat[data-spot="lit"] { filter: none; }
+
+/* `.orbit-pan` — a camera move on a picture: a screenshot zooming to the row that proves the point.
+   Slower than anything else in the layer on purpose. A control moves under the pointer and should
+   feel instant; here the eye has to follow the picture to know where it has landed. */
+.orbit-pan { transition: transform var(--w-dur-pan) var(--w-ease); }
+
+/* One exemption for the whole layer. Reduced motion means no travel — it does not mean no
+   feedback, so the colour and the hairline still answer. */
+@media (prefers-reduced-motion: reduce) {
+  .orbit-pick, .orbit-tap, .orbit-flank, .orbit-swap, .orbit-pan { transition-duration: .01ms; }
+  .orbit-spot[data-spot="lit"] { filter: none; }
+  .orbit-pick:hover, .orbit-pick:focus-visible, .orbit-pick:active,
+  .orbit-tap:hover, .orbit-tap:active { transform: none; }
+  .orbit-swap { animation: none; }
+  /* The veil keeps its fade — take the travel out and hand the sheet's own opacity-only keyframes
+     to the panel, so the dismiss still lasts as long as the timer that unmounts it. */
+  .orbit-veil[data-fx="in"] > *:not(.orbit-dim)  { animation-name: veil-in; }
+  .orbit-veil[data-fx="out"] > *:not(.orbit-dim) { animation-name: veil-out; }
+  .orbit-pop[data-fx="in"]  { animation-name: veil-in; }
+  .orbit-pop[data-fx="out"] { animation-name: veil-out; }
+}
+
+/* ---- Board journey-track animations ---- */
+
+/* Amber heartbeat pulse on the node of an actively-worked phase. */
+@keyframes hb-beat {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--w-active-rgb) / 0.55); transform: scale(1); }
+  50%      { box-shadow: 0 0 0 7px rgb(var(--w-active-rgb) / 0);  transform: scale(1.18); }
+}
+
+/* Violet breathing glow on cards waiting for a human decision. */
+@keyframes gate-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(var(--w-gate-rgb) / 0), inset 0 0 0 1px rgb(var(--w-gate-rgb) / 0.55); }
+  50%      { box-shadow: 0 0 22px -2px rgb(var(--w-gate-rgb) / 0.55), inset 0 0 0 1px rgb(var(--w-gate-rgb) / 0.9); }
+}
+
+/* Softer ring pulse for the gate node on the track itself. */
+@keyframes gate-pulse {
+  0%, 100% { box-shadow: 0 0 0 4px rgb(var(--w-gate-rgb) / 0.22); }
+  50%      { box-shadow: 0 0 0 8px rgb(var(--w-gate-rgb) / 0.08); }
+}
+
+/* Light sweeping along the segment Claude is currently working. */
+@keyframes track-shimmer {
+  to { background-position: 220px 0; }
+}
+
+/* Inline ticket drawer pulling down into place. */
+@keyframes drawer-down {
+  from { opacity: 0; transform: translateY(-10px) scaleY(0.97); }
+  to   { opacity: 1; transform: translateY(0) scaleY(1); }
+}
+
+/* ---- Heartbeat agent mascot moods ---- */
+@keyframes agent-bob     { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4px)} }
+/* --agent-rgb is set per bot so each agent glows in its own colour; amber is agent 1's, and the
+   fallback keeps a bot with no slot looking exactly as it always did.
+
+   drop-shadow rather than box-shadow, and that is the difference between a lit creature and a lit
+   box. A box-shadow is the shape of the element's border box and is painted only outside it, so a
+   mascot that does not fill its own square — the bear, the baller, anything with air in the
+   corners — got a halo all round it and a hard unlit square where it actually stood. That square
+   read as a black card slipped in behind the animal. drop-shadow takes the alpha of what was
+   painted instead, so the light hugs the ears and the shoulders and there is no box left to see. */
+@keyframes agent-glow    { 0%,100%{filter:drop-shadow(0 3px 8px rgb(var(--agent-rgb,var(--w-active-rgb)) / .5))} 50%{filter:drop-shadow(0 5px 12px rgb(var(--agent-rgb,var(--w-active-rgb)) / .85))} }
+@keyframes agent-breathe { 0%,100%{transform:scale(1)} 50%{transform:scale(1.07)} }
+@keyframes agent-zzz     { 0%{opacity:0;transform:translateY(3px) scale(.8)} 30%{opacity:1} 100%{opacity:0;transform:translateY(-9px) scale(1.1)} }
+@keyframes agent-alert   { 0%,100%{transform:translateY(0) rotate(-5deg)} 50%{transform:translateY(-3px) rotate(5deg)} }
+@keyframes agent-beam    { 0%{top:-2px;opacity:0} 15%{opacity:1} 85%{opacity:1} 100%{top:100%;opacity:0} }
+
+.anim-agentbob     { animation: agent-bob 2.6s ease-in-out infinite; }
+.anim-agentglow    { animation: agent-bob 2.6s ease-in-out infinite, agent-glow 2.2s ease-in-out infinite; }
+.anim-agentbreathe { animation: agent-breathe 3.4s ease-in-out infinite; }
+.anim-agentalert   { animation: agent-alert 0.5s ease-in-out infinite; }
+.anim-agentzzz     { animation: agent-zzz 3s ease-in-out infinite; }
+.anim-agentbeam    { animation: agent-beam 1.6s linear infinite; }
+
+.anim-beat      { animation: hb-beat 1.15s ease-in-out infinite; }
+.anim-drawerdown { animation: drawer-down 0.22s ease-out; transform-origin: top; }
+.anim-gateglow  { animation: gate-glow 2.6s ease-in-out infinite; }
+.anim-gatepulse { animation: gate-pulse 1.8s ease-in-out infinite; }
+.anim-shimmer   { background-size: 120px 100%; animation: track-shimmer 1.4s linear infinite; }
+
+/* ---- ORBIT board: the pipeline drawn as a sector map ---- */
+
+/* The dashed lane crawling along the sector arc. */
+@keyframes arcdash   { to { stroke-dashoffset: -220; } }
+/* Station rings, each turning at its own rate so the header never looks mechanical. */
+@keyframes ringspin  { to { transform: rotate(360deg); } }
+/* Tickets parked at a station, bobbing like ships at anchor. */
+@keyframes shipdrift { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+/* The one node/chevron a ticket is sitting on right now. */
+@keyframes tierpulse { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+/* Sheen crossing the primary action. */
+@keyframes glint     { 0% { transform: translateX(-120%); } 55%,100% { transform: translateX(420%); } }
+
+/* A row joining or leaving the board when the stage filter changes. Two moves in one pass: the
+   fade carries the meaning, and the collapse that follows it closes the hole, so the rows below
+   settle into place instead of snapping up a beat after the row has already gone. --rowgap is the
+   flex gap its container hands down; cancelling it is what stops a departed row leaving a stripe
+   of empty space behind. The 100px is a ceiling, not a height - max-height cannot animate from
+   `auto`, and every row on this board sits well under it.
+
+   Neither animation states the opacity or the transform it ends up at, and that omission is the
+   point. A row is rarely at rest when the filter moves: it is usually dimmed, because you filtered
+   by pointing at a station and pointing at a station is what dims everything else. Naming
+   `opacity: 1` at the start of the fade would have overruled that dimming and flashed the row back
+   to full brightness before taking it away. Left out, the browser fills the missing end in from
+   what the row is actually wearing, so a dimmed row fades from dim and a nudged one leaves from
+   where it was nudged to. */
+@keyframes rowin {
+  0%   { opacity: 0; max-height: 0; border-width: 0; transform: translateY(-3px);
+         margin-bottom: calc(-1 * var(--rowgap, 0px)); }
+  45%  { opacity: 0; max-height: 100px; border-width: 1px; transform: translateY(-3px); margin-bottom: 0; }
+  100% { max-height: 400px; margin-bottom: 0; }
+}
+@keyframes rowout {
+  0%   { max-height: 100px; }
+  /* The border is pinned here rather than left to interpolate across the whole animation: these
+     rows are border-box, so a border that has not gone yet holds the collapsed row 2px open. It
+     goes with the height, in the same half of the animation. */
+  55%  { opacity: 0; max-height: 100px; border-width: 1px; transform: translateY(-3px); margin-bottom: 0; }
+  /* Shut at 92%, not at 100%. A border-width mid-animation is a fraction of a pixel and Chrome
+     rounds any fraction up to a whole one, so a collapse that only reaches zero on the final frame
+     never actually renders closed — the row is still 2px of border at the moment React unmounts
+     it, and the list closes that last gap with a jump. Landing early gives the shut frame ~20ms of
+     its own, which is what the unmount then replaces with nothing. */
+  92%, 100% { opacity: 0; max-height: 0; border-width: 0; transform: translateY(-3px);
+              margin-bottom: calc(-1 * var(--rowgap, 0px)); }
+}
+
+/* ---- A ticket reaching Done ---- */
+
+/* Filed away, not deleted. A green seam is drawn across the finished row, its contents leave,
+   the shell shuts down onto that seam, and the seam is then drawn off to the right — toward the
+   Completed strip that is about to claim it.
+
+   Three beats, and each one is given long enough to be read as a beat. The first version of this
+   ran the lot in 760ms and was unreadable: the row's contents were gone 320ms in, before you could
+   see which ticket had finished, and what you got instead was a smear.
+
+   It is also written to keep the browser's per-frame work down, which is the other half of why
+   that version stuttered. Only one property here forces layout — max-height, which has to, since
+   closing the row's own space is the point — and it moves alone, in one pass, with nothing else
+   competing. Everything expressive is opacity and transform, which composite.
+
+   --rowh is the row's height, measured and written onto the element as the animation starts. The
+   collapse has to begin from the height the row actually is: a fixed ceiling would spend its first
+   third closing distance that was never open, and the seam would appear late and then snap.
+
+   --clip is the row's chamfer, handed over as a custom property so this can flatten it. A card has
+   cut corners; a 3px line has nowhere to put them, and a 13px chamfer on a row 3px tall is a
+   polygon turned inside out. It flattens with the height rather than being dropped in one step:
+   the corners melting as the card becomes a line is the honest reading of what is happening, and
+   a step would have popped the top 13px of the tier bar into existence, since the chamfer is what
+   was cutting it off.
+
+   The backdrop blur is the one thing that does go, because re-sampling a blurred backdrop through
+   a box whose height changes every frame is the most expensive thing this animation could ask for.
+   It is eased down to zero across beat two and only then switched off — stepping it off outright
+   would have snapped the whole starfield behind the row into focus in one frame. */
+@keyframes rowfile {
+  /* Beat one — the row simply sits there, green, readable, while the seam draws itself across it
+     (seamlife). Nothing about the row moves. The point of this beat is that you get to see which
+     ticket finished, which the first version gave you about a tenth of a second for.
+
+     Unlike rowout, this states the opacity it starts from rather than inheriting it: a row filing
+     itself away comes back to full brightness even if the arc was dimming it. The dimming answers
+     a question about stages; this is the row saying it has finished, which outranks the question. */
+  0%, 24% { max-height: var(--rowh,96px); opacity: 1; border-width: 1px;
+            clip-path: var(--clip); backdrop-filter: blur(6px); }
+  /* Beat two — the contents leave (rowempty). The shell is still holding its full height, so the
+     list below stays exactly where it is while you watch them go. */
+  52%     { max-height: var(--rowh,96px); opacity: 1; border-width: 1px;
+            clip-path: var(--clip); backdrop-filter: blur(0px); }
+  /* Switched off now it is already at zero, so the frame that drops it changes nothing on screen
+     and the collapse below never pays for it. */
+  53%     { max-height: var(--rowh,96px); opacity: 1; border-width: 1px;
+            clip-path: var(--clip); backdrop-filter: none; }
+  /* ...and the shell shuts down onto the seam, its corners melting as it goes. The border goes
+     with the height for the reason it does in rowout: these rows are border-box, and a border
+     still standing would hold the seam 2px further open than it should be. */
+  80%     { max-height: 3px; opacity: 1; border-width: 0;
+            clip-path: polygon(0px 0,100% 0,100% calc(100% - 0px),calc(100% - 0px) 100%,0 100%,0 0px); backdrop-filter: none; }
+  /* Beat three — the seam is drawn off (seamlife) and the space it was holding closes behind it.
+     Held at full strength for most of the retreat, so the seam leaves rather than dissolves. */
+  92%     { max-height: 3px; opacity: 1; border-width: 0;
+            clip-path: polygon(0px 0,100% 0,100% calc(100% - 0px),calc(100% - 0px) 100%,0 100%,0 0px); backdrop-filter: none; }
+  100%    { max-height: 0; opacity: 0; border-width: 0;
+            clip-path: polygon(0px 0,100% 0,100% calc(100% - 0px),calc(100% - 0px) 100%,0 100%,0 0px); backdrop-filter: none;
+            margin-bottom: calc(-1 * var(--rowgap,0px)); }
+}
+/* The row's contents, faded and lifted a little rather than squashed. The first version scaled
+   them to a twentieth of their height, which crushed the title, the chip and the track's diamonds
+   into a smear — it read as a rendering fault rather than as a row emptying out. */
+@keyframes rowempty {
+  from { opacity: 1; transform: translateY(0); }
+  to   { opacity: 0; transform: translateY(-5px); }
+}
+/* The seam's whole life, on the same clock as rowfile so the percentages line up.
+   It is drawn on from the left, holds while the shell shuts down onto it, and is drawn off to the
+   right — toward the Completed strip, which is the right-hand of the two folds.
+
+   Arriving is the announcement, and this is the cheapest one available: a scale on a 3px bar,
+   composited, while the row itself does nothing at all. The origin flips at half time, where the
+   seam is at full width and flipping it shows nothing, so the same bar can leave from the end it
+   did not arrive at.
+
+   It retracts rather than travels. A seam that travelled would have to leave the row to go
+   anywhere, and the board scrolls horizontally: 52px of row hanging past its own container is
+   52px of scrollable width, and a horizontal scrollbar flashing on every completion. */
+@keyframes seamlife {
+  0%        { transform: scaleX(0); transform-origin: 0% 50%; }
+  24%, 52%  { transform: scaleX(1); transform-origin: 0% 50%; }
+  53%, 80%  { transform: scaleX(1); transform-origin: 100% 50%; }
+  100%      { transform: scaleX(0); transform-origin: 100% 50%; }
+}
+
+/* The Completed strip taking delivery: it lights as the seam reaches it, and its count ticks up. */
+@keyframes striplight {
+  0%   { box-shadow: inset 0 0 0 0 rgb(var(--w-done-rgb) / 0); }
+  25%  { box-shadow: inset 0 0 40px -6px var(--w-done); }
+  100% { box-shadow: inset 0 0 0 0 rgb(var(--w-done-rgb) / 0); }
+}
+@keyframes counttick {
+  0%   { transform: translateY(4px) scale(.8); opacity: .3; }
+  60%  { transform: translateY(0) scale(1.22); opacity: 1; }
+  100% { transform: none; }
+}
+
+/* A station registering an arrival: a shockwave thrown off the node, and one fast turn of a second
+   ring outside the slow one the node always wears. */
+@keyframes nodeshock { from { transform: scale(.3); opacity: .85; } to { transform: scale(2.7); opacity: 0; } }
+@keyframes nodewhip  { 0% { transform: rotate(0); opacity: 0; } 22% { opacity: 1; } 100% { transform: rotate(560deg); opacity: 0; } }
+
+/* The pace comes from the arc, which reads it off the heartbeat: 6s working, a long slow drift
+   while the fleet rests. A stopped fleet has no pace at all, and a lane that kept crawling would
+   be the board's biggest element telling its most confident lie. */
+.anim-arcdash   { animation: arcdash var(--arcdur, 6s) linear infinite; }
+.anim-arcdash[data-flow="stopped"] { animation: none; }
+.anim-glint     { animation: glint 3.6s ease-in-out infinite; }
+
+/* Row hover lives in CSS so a mouse crossing ten rows costs no React renders. The shell sets
+   --rv (revealed) and the hover skin as custom properties; every descendant reads them. */
+.orbit-row {
+  --rv: 0;
+  /* The resting skin lives here too, not just the hover skin. A background or a border set in the
+     style attribute is unbeatable by a stylesheet rule, so a row carrying its resting colours
+     inline could only ever change its transform on hover — --hbg and --hbc were computed per row
+     and then thrown away. Both ends go through custom properties now, and the cascade is free to
+     do its job. */
+  border: 1px solid var(--rbc, rgb(var(--w-line-rgb) / .1));
+  background: var(--rbg, transparent);
+  box-shadow: var(--rsh, none);
+  /* Cut here rather than in the style attribute, for the same reason as the colours above: a row
+     filing itself away has to flatten its own chamfer, and inline is unbeatable by a keyframe. */
+  clip-path: var(--clip, none);
+  transition: transform var(--w-dur-2) var(--w-ease), box-shadow var(--w-dur-2) ease,
+              background var(--w-dur-2) ease, border-color var(--w-dur-2) ease,
+              opacity var(--w-dur-2) ease, filter var(--w-dur-2) ease;
+}
+
+/* Pointing at a station on the arc sorts the board into "at this stage" and "everything else".
+   The rows that answer step forward out of the column; the rest fall back far enough to read as
+   context rather than content, but not so far that you lose your place in the list. */
+.orbit-row[data-dim="1"] {
+  opacity: .26;
+  filter: saturate(.35);
+}
+.orbit-row[data-spot="1"] {
+  transform: translateX(6px);
+}
+/* Declared after the spotlight so pointing at a row still lifts it, spotlit or not. */
+.orbit-row:hover, .orbit-row:focus-within {
+  --rv: 1;
+  background: var(--hbg);
+  border-color: var(--hbc);
+  box-shadow: var(--hsh);
+  transform: var(--htf, translateY(-2px));
+}
+
+/* Carried for exactly as long as the animation runs and then dropped, so a settled row keeps no
+   leftover max-height that could clip its hover strip. `both` on the way out holds the collapsed
+   frame until React unmounts the row a tick later; on the way in there is nothing to hold, so the
+   row is free to be as tall as it needs the moment it lands. */
+.orbit-row[data-fx="in"], .orbit-fade[data-fx="in"] {
+  animation: rowin .26s cubic-bezier(.2,.8,.3,1) backwards;
+}
+.orbit-row[data-fx="out"], .orbit-fade[data-fx="out"] {
+  animation: rowout .26s cubic-bezier(.4,0,.6,1) both;
+  pointer-events: none;
+}
+/* The row shell already clips itself to a chamfer; a plain wrapper has to be told. */
+.orbit-fade { overflow: hidden; }
+
+/* A ticket that has just reached Done. The row is held in the zone it finished in for exactly as
+   long as this runs — see useLanding in Board.tsx — because a row already moved to Completed has
+   no frames left to leave in. It rides above its neighbours while it goes, so the seam sliding
+   out is not clipped by the row closing up behind it. */
+.orbit-row[data-fx="file"] {
+  animation: rowfile 1.25s cubic-bezier(.4,0,.2,1) both;
+  pointer-events: none;
+  z-index: 1;
+}
+.orbit-row[data-fx="file"] .orbit-rowbody {
+  animation: rowempty .35s cubic-bezier(.4,0,.7,1) .3s both;
+}
+/* The seam: a lit line along the row's top edge, the one strip of the row that a collapse from
+   the bottom never eats. It fades in behind the contents on their way out, so the row is never
+   showing both at full strength. */
+.orbit-row[data-fx="file"]::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: 0; height: 3px;
+  background: linear-gradient(90deg,var(--tier,var(--w-done)),var(--tier,var(--w-done)) 72%,transparent);
+  box-shadow: 0 0 12px var(--tier,var(--w-done));
+  /* The origin is the keyframes' business here — it has to be the left edge on the way on and the
+     right edge on the way off, and only seamlife knows which half of the animation it is in. */
+  animation: seamlife 1.25s cubic-bezier(.4,0,.2,1) both;
+  pointer-events: none;
+}
+/* Each of these is remounted on arrival rather than toggled, which is what restarts it: two
+   tickets finishing a second apart have to read as two arrivals, not one long one. */
+.strip-land  { position: absolute; inset: 0; animation: striplight .62s ease both; pointer-events: none; }
+.strip-count { display: inline-block; animation: counttick .42s cubic-bezier(.2,.9,.3,1.5) both; }
+/* One heartbeat line from an agent, on the station it is working. Sudden on purpose - the attack
+   is over in a twelfth of the animation and the rest is decay, so a run of them reads as a pulse
+   rather than as something breathing. */
+@keyframes nodeflash { 0% { opacity: 0; transform: scale(.5); } 12% { opacity: 1; transform: scale(1.06); } 100% { opacity: 0; transform: scale(1.55); } }
+
+.node-flash  { animation: nodeflash .42s cubic-bezier(.2,.7,.35,1) both; }
+.node-shock  { animation: nodeshock .72s cubic-bezier(.15,.7,.3,1) both; }
+.node-whip   { animation: nodewhip .64s cubic-bezier(.3,0,.2,1) both; }
+
+/* A ticket's name is clipped on a row you are only glancing at and whole on the one you are
+   reading. The same gesture that unfolds the context strip gives the title the room it needs, so
+   hovering a row never leaves you with a name you still cannot finish. overflow-wrap is there for
+   the pasted stack trace of a title: it wraps rather than pushing the track sideways. */
+.orbit-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.orbit-row:hover .orbit-title,
+.orbit-row:focus-within .orbit-title {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  overflow-wrap: anywhere;
+}
+
+/* Same trick for the arc's station nodes: --nv drives the ring, core glow and label together. */
+.orbit-node { --nv: 0; transition: opacity .2s ease, filter .2s ease; }
+/* A station held in the stage filter stays at full brightness with the pointer gone - it is lit
+   for the same reason a hovered one is, so it borrows the same variable rather than inventing a
+   second brightness of its own. What tells the two apart is the still ring the node draws. */
+.orbit-node[data-on="1"] { --nv: 1; }
+/* Filtering on some other station. Dimmed, not hidden: the arc is still the map of the sector,
+   and a station you have filtered past has to stay legible to be worth clicking. Pointing at one
+   brings it most of the way back, so you can read what you are about to add. */
+.orbit-node[data-off="1"] { opacity: .34; filter: saturate(.35); }
+.orbit-node[data-off="1"]:hover { opacity: .82; filter: saturate(.85); }
+.orbit-node:hover { --nv: 1; }
+/* An arrival lights the node it lands on, because that is the statement a hover already makes:
+   this is the station being talked about. Held for the length of the burst, then dropped. */
+.orbit-node[data-burst="1"] { --nv: 1; }
+
+/* Chamfered buttons carry their hover skin the same way — and, for the same reason as the row,
+   their resting skin as well. A button that declared `background` and `border` in its style
+   attribute could not be repainted by :hover no matter what --hbg and --hbc said, so every one of
+   these was hovering with a 1px lift and a brightness nudge and nothing else. */
+.orbit-btn {
+  border: var(--rbw, 1px solid transparent);
+  background: var(--rbg, transparent);
+  transition: all .15s ease;
+}
+/* Keyboard focus gets the same answer as the pointer — these buttons carry no other focus ring, so
+   without it tabbing through the board is silent. */
+.orbit-btn:hover, .orbit-btn:focus-visible {
+  background: var(--hbg);
+  color: var(--htxt, inherit);
+  border-color: var(--hbc);
+  box-shadow: var(--hsh);
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-arcdash, .anim-glint { animation: none; }
+  /* The panel still arrives — it just arrives already there. */
+  [role="dialog"] { animation: none !important; }
+  /* A finished ticket still leaves, and still leaves for Completed — it just does not perform it.
+     The plain collapse says the same thing in one move. */
+  .orbit-row[data-fx="file"] { animation: rowout .26s cubic-bezier(.4,0,.6,1) both; }
+  .orbit-row[data-fx="file"] .orbit-rowbody { animation: none; }
+  .orbit-row[data-fx="file"]::after { display: none; }
+  .strip-land, .strip-count { animation: none; }
+  .node-shock, .node-whip, .node-flash { display: none; }
+}
+
+/* The inspect panel arriving from the right edge. */
+@keyframes orbit-slidein {
+  from { transform: translateX(102%); }
+  to   { transform: translateX(0); }
+}
+
+/* ---- The app shell: one sky, eight tabs sliding across it ---- */
+
+/* Barlow everywhere by default; the display and mono faces are opted into per element. Set on the
+   element rather than only in Tailwind's base so anything rendered outside a styled tree — a
+   portal, a native control — still lands on the right face. */
+html {
+  font-family: var(--w-font-body);
+  background: var(--w-ground, #04060c);
+}
+
+/* The tab transition.
+   Moving right along the nav: the page you are leaving exits to the left and the one you are
+   opening arrives from the right, so the strip of tabs reads as somewhere you are travelling
+   rather than eight separate screens.
+
+   Out is short and accelerating (the page is getting out of the way); in is longer and
+   decelerating (the page is settling). Only opacity and transform are touched, so both halves
+   stay on the compositor and never lay anything out. */
+@keyframes tab-out-l { from { opacity: 1; transform: none; } to { opacity: 0; transform: translate3d(-52px,0,0); } }
+@keyframes tab-out-r { from { opacity: 1; transform: none; } to { opacity: 0; transform: translate3d(52px,0,0); } }
+@keyframes tab-in-r  { from { opacity: 0; transform: translate3d(56px,0,0); } to { opacity: 1; transform: none; } }
+@keyframes tab-in-l  { from { opacity: 0; transform: translate3d(-56px,0,0); } to { opacity: 1; transform: none; } }
+
+.tab-out-left  { animation: tab-out-l .165s cubic-bezier(.55,.06,.85,.3) both; will-change: transform, opacity; }
+.tab-out-right { animation: tab-out-r .165s cubic-bezier(.55,.06,.85,.3) both; will-change: transform, opacity; }
+.tab-in-right  { animation: tab-in-r .28s cubic-bezier(.16,.84,.32,1) both; will-change: transform, opacity; }
+.tab-in-left   { animation: tab-in-l .28s cubic-bezier(.16,.84,.32,1) both; will-change: transform, opacity; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tab-out-left, .tab-out-right, .tab-in-right, .tab-in-left { animation: none; }
+}
+
+/* ---- Form controls ----
+
+   Skinned globally rather than per page. Inputs are the one thing that appears on nearly every tab
+   and is written a slightly different way each time, so a class sweep would have missed some and
+   drifted again on the next one added. Everything here is an element selector at (0,0,1), which
+   any utility class on the element still outranks — a field that wants to be different can be. */
+
+input[type="text"], input[type="password"], input[type="number"], input[type="url"],
+input[type="search"], input:not([type]), textarea, select {
+  background: rgb(var(--w-panel-deep-rgb) / .5);
+  border: 1px solid rgb(var(--w-line-rgb) / .16);
+  border-radius: 2px;
+  color: var(--w-t200);
+  font-family: var(--w-font-body);
+  transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+}
+input::placeholder, textarea::placeholder { color: var(--w-t700); }
+
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: rgb(var(--w-accent-rgb) / .55);
+  background: rgb(var(--w-s950-rgb) / .8);
+  box-shadow: 0 0 0 1px rgb(var(--w-accent-rgb) / .18), 0 0 18px -8px var(--w-accent);
+}
+
+/* The dropdown list is drawn by the OS against its own surface, so it has to be told separately —
+   left alone it is a strip of white in the middle of the sector map. */
+select option { background: var(--w-void); color: var(--w-t200); }
+
+/* A checkbox cannot be restyled without replacing it, and replacing it costs more than it returns
+   here; tinting it is enough to stop it reading as the one piece of stock chrome on the page. */
+input[type="checkbox"], input[type="radio"] { accent-color: var(--w-accent); }
+
+/* Tables carry the same hairline as everything else rather than a heavier default. */
+th { font-family: var(--w-font-display); letter-spacing: calc(var(--w-track, 1) * .1em); }
+
+/* Modals stand on the void so they occlude the sky, and the sheet behind them dims it. Chamfered
+   to match every other surface, since a rounded card is the one shape this design does not use. */
+.orbit-modal {
+  clip-path: var(--w-clip-modal);
+  background: linear-gradient(150deg,rgb(var(--w-panel-lit-rgb) / .97),rgb(var(--w-panel-deep-rgb) / .98));
+  border: 1px solid rgb(var(--w-line-rgb) / .18);
+  box-shadow: 0 40px 90px -30px rgba(0,0,0,.95);
+}
+
+/* An action button on a page other than the board.
+
+   Deliberately a class rather than a component: these buttons are already wired up with their own
+   disabled states and labels, and the thing that made them look foreign was never their markup —
+   it was the rounded rectangle and the sentence-case body type. This changes the shape and the
+   face and leaves everything else where it was. Colour still comes from the utility classes on the
+   element, which now resolve to the board's tier colours. */
+.btn-act {
+  clip-path: var(--w-clip-btn);
+  font-family: var(--w-font-display);
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: calc(var(--w-track, 1) * .16em);
+  text-transform: var(--w-caps);
+  transition: filter .15s ease, transform .15s ease, box-shadow .15s ease;
+}
+.btn-act:hover:not(:disabled) { filter: brightness(1.15); transform: translateY(-1px); }
+.btn-act:active:not(:disabled) { transform: translateY(0); }
+.btn-act:disabled { filter: saturate(.2) brightness(.75); cursor: not-allowed; }
+
+/* ---- Agent berths ----
+
+   The three chips in the board's header. Hover is CSS off a single variable, the same way rows and
+   station nodes work: --dv (dock-visible) drives the whole berth at once, so the bot, its label and
+   the chip around it all answer to one state rather than three listeners.
+
+   The bot scales further than the chip does. Growing them together just makes a bigger chip; making
+   the bot outrun its berth is what reads as the bot leaning out of it. Transform only, so nothing
+   below reflows and the neighbouring berths stay put. */
+.orbit-berth {
+  --dv: 0;
+  position: relative;
+  /* Border and background live here, not on the element, so :hover can win them back. */
+  border: var(--bw, 1px solid rgb(var(--w-line-rgb) / .16));
+  background: rgb(var(--w-panel-deep-rgb) / .55);
+  transition: transform .2s cubic-bezier(.2,.8,.3,1), border-color .2s ease,
+              box-shadow .2s ease, background .2s ease;
+}
+.orbit-berth:hover, .orbit-berth:focus-visible {
+  --dv: 1;
+  z-index: 2;
+  transform: translateY(-2px) scale(1.05);
+  border-color: var(--bc, rgb(var(--w-line-rgb) / .5));
+  /* Inset, not a drop glow. clip-path clips everything the element paints, box-shadow included, so
+     an outer glow on a chamfered chip is drawn and then thrown away. An inner one survives, and
+     reads better here anyway: the berth lights up from inside as the bot leans out of it. */
+  box-shadow: inset 0 0 22px -4px var(--bc, rgb(var(--w-line-rgb) / .5));
+  background: rgb(var(--w-panel-lit-rgb) / .78);
+  outline: none;
+}
+
+/* The bot itself, and the empty outline that stands in for one that is out on the board. */
+.orbit-berth .berth-bot {
+  transform: scale(calc(1 + var(--dv) * .16));
+  transition: transform .22s cubic-bezier(.2,.8,.3,1);
+}
+/* The label lifts out of its muted state rather than changing colour, so a berth that is reporting
+   trouble keeps reporting trouble while you point at it. */
+.orbit-berth .berth-label {
+  filter: brightness(calc(1 + var(--dv) * .35));
+  transition: filter .2s ease;
+}
+
+/* The last thing an agent said, quoted in its berth. Dim at rest — it is context under the status,
+   not the status itself — and lifted with the rest of the chip when you point at it. */
+.orbit-berth .berth-log {
+  filter: brightness(calc(1 + var(--dv) * .45));
+  transition: filter .2s ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit-berth:hover, .orbit-berth:focus-visible { transform: none; }
+  .orbit-berth .berth-bot { transform: none; }
+}
+
+/* The page's primary action. It is the one filled, amber thing on screen, so it does not need a
+   colour change on hover to be found — it needs to answer, which is the same lift every other
+   control on the board gives you, plus a little more of the light it is already made of. */
+.orbit-primary {
+  transition: transform var(--w-dur-2) var(--w-ease), filter var(--w-dur-1) ease;
+}
+.orbit-primary:hover:not(:disabled) {
+  transform: translateY(calc(-1 * var(--w-nudge)));
+  filter: brightness(1.12);
+}
+.orbit-primary:active:not(:disabled) { transform: none; filter: brightness(1.02); }
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit-primary:hover:not(:disabled), .orbit-primary:active:not(:disabled) { transform: none; }
+}
+
+/* Clipping the stage while a tab is moving. See App.tsx for why: without it the translation is
+   part of the document's scroll width for the length of the animation, and the scrollbars that
+   raises cost the viewport ten pixels in each direction on the way in and give them back on the
+   way out. Applied only during the move, so a page at rest is never clipped. */
+.tab-clip { overflow: hidden; }
+
+/* A gutter that is always reserved. Tabs differ in height, so switching from one that needs a
+   vertical scrollbar to one that does not used to change the content width at the moment of the
+   swap — a second, quieter version of the same shake. */
+html { overflow-y: scroll; }
+
+/* ---- Classroom run bar, before there is anything to measure against ----
+
+   The first poll of a run reports it as running before it reports what runs like it have cost:
+   the expectation is read from history a moment into the run, behind a token check that can take
+   its time. The bar this replaces filled a fixed third of the track for that gap and then dropped
+   to two percent when the denominator landed, which read as progress being lost.
+
+   So the unknown state is left-anchored and starts at nothing. It breathes out from zero and back
+   rather than travelling, which says "working, no estimate" without ever sitting far enough right
+   for the switch to a real fraction to look like a fall. */
+@keyframes runbar-wait {
+  0%, 100% { width: 0%; }
+  50%      { width: 28%; }
+}
+.anim-runbar-wait { animation: runbar-wait 1.9s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Still says "something is happening", without the width moving at all. */
+  .anim-runbar-wait { width: 18%; animation: gate-pulse 1.8s ease-in-out infinite; }
+}
