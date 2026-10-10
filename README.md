@@ -40,6 +40,57 @@ under twenty files of generated boilerplate.
 
 ![The pull-request dialog, with the diff ranked by risk](docs/screenshots/pull-request.jpg)
 
+## The Classroom
+
+Every phase in the pipeline checks the work against the *plan*: speculation writes it,
+implementation builds it, QA tests against it. So a blind spot in the plan passes through all of
+them untouched. The Classroom is the one reader that does not start from the plan. After QA, a
+separate run reads the ticket, the diff and the code around it, and explains the change from the
+system's side - what was asked, how it worked before, what changed, and whether the two agree.
+
+![The Classroom: a ticket's analysis, with its narrated walkthrough](docs/screenshots/classroom-overview.jpg)
+
+In the demo, QA had passed the ticket five for five. The analysis found that the server now
+refuses the double booking but the form that submits it throws the refusal away, so the skipper is
+never told - and that the two new tests call a function that does not exist. Nothing in that
+analysis was seeded; it is the feature's own output on the demo repository.
+
+**Requirement coverage.** The ticket's text is split into lines and each one gets a verdict -
+met, partial, gap, deferred - with the code that decides it quoted beside it. A line the run said
+nothing about is marked unaddressed by the app, not by the model, so silence cannot pass as a yes.
+
+![Requirement coverage: each line of the ask, a verdict, and the code behind it](docs/screenshots/classroom-coverage.jpg)
+
+**The user's path.** The change is drawn as the route a person takes through the product, with
+what is new marked against what was already there. Every stop links to the lines of code behind it.
+
+![The user's path through the change, new steps marked](docs/screenshots/classroom-flow.jpg)
+
+**Why it was built this way, and what would catch you out.** The alternatives that were weighed,
+what each costs and leaves open, how the claim that it works was established, and the risks worth
+knowing before you touch the area again.
+
+![Alternatives weighed, how we know it works, and a risk called out](docs/screenshots/classroom-why.jpg)
+
+**It is part of the pipeline, not a report on the side.** The risks and partial verdicts an analysis
+raises become findings on the ticket, and refinement cannot hand off until it has ruled on each
+one: a defect to fix, or not a defect, with a reason. A small ticket can opt out.
+
+**A narrated walkthrough.** Each analysis also comes as a few minutes of guided telling: scenes
+that point at the diagram, the quoted lines and the diff as they are described, with captions and
+optional speech synthesised locally. Every pointer in the script is checked against the analysis
+before it is shown, so the narration cannot gesture at something that is not there.
+
+![The walkthrough player, lighting up the steps it is describing](docs/screenshots/classroom-walkthrough.jpg)
+
+**Built so it cannot ramble.** The run is not asked for prose. It returns a fixed set of typed
+blocks - a comparison, a reading path, a glossary, a flow, a coverage map - under a JSON schema,
+and the app decides how each looks. A section with nothing real to say comes back absent rather
+than padded. Four lenses re-read the same ticket for different readers: full, decisions, code and
+testing.
+
+## More of what it does
+
 **Agents that stay on this machine.** Every worker runs in its own git worktree against a local
 stack. A `PreToolUse` guard denies the commands that reach beyond it — cloud CLIs, `git push`,
 database clients and HTTP requests aimed off-machine — and a ticket that asks for production work
@@ -56,8 +107,6 @@ headroom is left.
 - Up to three workers at once, with leases so two agents never rebuild the same stack.
 - Claude Code, Codex or Gemini CLI as the agent, chosen per installation, with a model per phase.
 - Read-only links to Jira and Azure Boards; git or TFVC-backed repos.
-- A "Classroom" that explains a finished change from the system's side, with an optional narrated
-  walkthrough voiced locally.
 - Slack or ntfy notifications when the fleet needs you.
 - Five themes. The look is a token system, not per-page styling.
 
