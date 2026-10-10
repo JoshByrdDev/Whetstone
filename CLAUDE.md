@@ -223,7 +223,7 @@ local examples. A pipeline rule on one side and not the other is drift, whicheve
 Whetstone's *managed* projects keep their notes in the repo at `.claude/memory`, junctioned from
 the Claude Code auto-memory path so unattended workers and interactive sessions read the same
 files. Whetstone itself is the exception: it has no `.claude/memory`, and its notes live only at
-`~/.claude/projects/C--Projects-ClaudeDashboard/memory/`. Anything a *human* would also be wrong
+`~/.claude/projects/C--Projects-Whetstone/memory/`. Anything a *human* would also be wrong
 without belongs there — or, if it is a convention rather than a fact, here, where it is read
 without being asked for.
 
