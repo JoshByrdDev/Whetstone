@@ -86,6 +86,7 @@ public static class ConfigEndpoints
             {
                 new ModelChoice("claude-opus-5-5", "Opus 5.5"),
                 new ModelChoice("claude-opus-5", "Opus 5"),
+                new ModelChoice("claude-sonnet-5-5", "Sonnet 5.5 (cheaper)"),
                 new ModelChoice("claude-fable-5-1", "Fable 5.1 (most capable)"),
             },
             reflectionModels: new[] { new ModelChoice("haiku", "Haiku") }),
