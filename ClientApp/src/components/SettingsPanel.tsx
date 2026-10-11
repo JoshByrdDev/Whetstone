@@ -231,6 +231,8 @@ interface GlobalConfig {
   /** Write-only: absent unless the user typed one, so saving without touching it keeps the stored
    *  token, and an explicit empty string clears it. */
   claudeOauthToken?: string;
+  /** Claude logins beyond the CLI's own, which the usage chip can switch the fleet between. */
+  claudeAccounts: ClaudeAccountOption[];
   /** Served by the API rather than hardcoded here, so the two halves cannot disagree about
    *  which providers and models exist. */
   agentProviders: AgentProviderOption[];
@@ -241,6 +243,10 @@ interface GlobalConfig {
   notificationEventCatalog: NotificationEventOption[];
   notificationChannels: NotificationChannelOption[];
 }
+
+/** `configDir` is blank until the first save, when the server names a folder for the account;
+ *  `signedIn` is the server's report and absent on a row that has not been saved yet. */
+interface ClaudeAccountOption { name: string; configDir: string; signedIn?: boolean }
 
 interface ModelOption { value: string; label: string }
 
@@ -370,6 +376,8 @@ function GlobalSettings() {
   // The notification test, reported beside its button for the same reason as the token check: "sent"
   // is a claim about the channel, not about the save.
   const [notifyTest, setNotifyTest] = useState<TokenCheck>(null);
+  // What opening a sign-in terminal for a second Claude account answered.
+  const [accountMsg, setAccountMsg] = useState<TokenCheck>(null);
   // Per-machine, so it is not part of cfg and never rides along with "Save global" — it is written
   // the moment it is ticked, which is also the moment the background changes behind the panel.
   const [sky, setSky] = useState(skyEnabled);
@@ -453,6 +461,21 @@ function GlobalSettings() {
     }
   };
 
+  /**
+   * Open a sign-in terminal on the dashboard's machine, pointed at this account's folder. The server
+   * can only do that for an account it has stored, hence the save-first rule on the button.
+   */
+  const signInAccount = async (name: string) => {
+    setAccountMsg(null);
+    try {
+      const r = await fetch(`/api/usage/signin?account=${encodeURIComponent(name)}`, { method: 'POST' });
+      const d = await r.json();
+      setAccountMsg({ state: d.ok ? 'ok' : 'bad', text: d.message ?? 'Could not open a sign-in terminal.' });
+    } catch {
+      setAccountMsg({ state: 'bad', text: 'Could not reach the dashboard to open a sign-in terminal.' });
+    }
+  };
+
   const save = async () => {
     if (!cfg || hasErrors) return;
     setSaving(true); setMsg(null);
@@ -463,6 +486,11 @@ function GlobalSettings() {
       if (!res.ok) throw new Error((await res.json()).error ?? 'Save failed');
       setMsg({ type: 'success', text: 'Saved. Restart the server to apply.' });
       setDirty(false);
+      // The server tidies the account list as it stores it - a folder for each new account, blanks
+      // and duplicates dropped - so what is on screen is re-read rather than assumed.
+      const stored = await fetch('/api/config').then(r => (r.ok ? r.json() : null)).catch(() => null);
+      if (stored?.claudeAccounts)
+        setCfg(prev => (prev ? { ...prev, claudeAccounts: stored.claudeAccounts } : prev));
       // The usage token is the one setting whose value can be wrong in a way the server can check,
       // and the only feedback otherwise is a header chip that goes on saying nothing. So try it.
       if (cfg.claudeOauthToken) await checkToken();
@@ -788,6 +816,63 @@ function GlobalSettings() {
             this provider is selected.
           </p>
         )}
+      </FieldGroup>
+
+      <FieldGroup title="Claude Accounts">
+        <p className="text-xs text-gray-500 -mt-2 mb-3">
+          Other Claude logins the fleet can run on, besides the one Claude Code is already signed in to. Each
+          gets a folder of its own to keep its login in. Add one, save, sign in to it once, and the usage chip
+          in the header gains a picker for switching between them. A switch applies to the next run to start.
+        </p>
+        {(cfg.claudeAccounts ?? []).map((a, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <input
+              aria-label="Account name"
+              value={a.name}
+              placeholder="Name, e.g. Second"
+              onChange={e => update({
+                claudeAccounts: cfg.claudeAccounts.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)),
+              })}
+              className="w-40 bg-gray-900 border border-hair rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:border-gray-500"
+            />
+            <span className="flex-1 min-w-0 truncate text-[11px] text-gray-600" title={a.configDir}>
+              {a.configDir
+                ? `${a.configDir} — ${a.signedIn ? 'signed in' : 'not signed in yet'}`
+                : 'Save to create its folder'}
+            </span>
+            <button
+              type="button"
+              onClick={() => signInAccount(a.name)}
+              disabled={!a.configDir || dirty}
+              title={!a.configDir || dirty ? 'Save first' : 'Opens a terminal on this machine to sign this account in'}
+              className="orbit-tap text-xs px-2 py-1 rounded border border-hair text-gray-300 hover:bg-gray-800 disabled:opacity-50"
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              onClick={() => update({ claudeAccounts: cfg.claudeAccounts.filter((_, j) => j !== i) })}
+              title="Forget this account. Its folder and login are left on disk."
+              className="orbit-tap text-xs px-2 py-1 rounded border border-hair text-gray-400 hover:bg-gray-800"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => update({ claudeAccounts: [...(cfg.claudeAccounts ?? []), { name: '', configDir: '' }] })}
+            className="orbit-tap text-xs px-2 py-1 rounded border border-hair text-gray-300 hover:bg-gray-800"
+          >
+            Add account
+          </button>
+          {accountMsg && accountMsg.state !== 'checking' && (
+            <span className={`text-xs ${accountMsg.state === 'ok' ? 'text-emerald-400' : 'text-red-400'}`}>
+              {accountMsg.text}
+            </span>
+          )}
+        </div>
       </FieldGroup>
 
       <FieldGroup title="Rate-Limit Meter">

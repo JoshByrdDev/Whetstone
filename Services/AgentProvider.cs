@@ -227,15 +227,21 @@ public sealed class ClaudeAgentProvider : AgentProvider
 
     private readonly string _model;
     private readonly string? _effort;
+    private readonly string? _configDir;
 
     /// <param name="effort">
     /// Claude Code's <c>--effort</c>; blank leaves it to the CLI. Its default is per MODEL (Opus 5
     /// ran at high, Opus 5.5 at medium), so "the default" is not a stable meaning to leave a run on.
     /// </param>
-    public ClaudeAgentProvider(string? model = null, string? effort = null)
+    /// <param name="configDir">
+    /// The config directory of the account to run as; blank is the CLI's own login. See
+    /// <see cref="ClaudeAccounts"/>.
+    /// </param>
+    public ClaudeAgentProvider(string? model = null, string? effort = null, string? configDir = null)
     {
         _model = string.IsNullOrWhiteSpace(model) ? DefaultModel : model.Trim();
         _effort = string.IsNullOrWhiteSpace(effort) ? null : effort.Trim();
+        _configDir = string.IsNullOrWhiteSpace(configDir) ? null : configDir.Trim();
     }
 
     public override AgentProviderKind Kind => AgentProviderKind.Claude;
@@ -245,6 +251,7 @@ public sealed class ClaudeAgentProvider : AgentProvider
     public override AgentRun BuildAnalysisRun(string workDir, string jsonSchema, string scratchDir)
     {
         var run = new AgentRun { FileName = Executable };
+        AddAccount(run);
         // ArgumentList rather than a single Arguments string: the schema is 2KB of quotes and
         // braces, and hand-escaping that for a Windows command line is a bug waiting to happen.
         run.Arguments.AddRange(new[]
@@ -281,10 +288,16 @@ public sealed class ClaudeAgentProvider : AgentProvider
     public override AgentRun BuildFreeformRun(string workDir, string scratchDir)
     {
         var run = new AgentRun { FileName = Executable };
+        AddAccount(run);
         run.Arguments.AddRange(new[] { "-p", "--model", _model });
         AddEffort(run);
         run.Arguments.AddRange(new[] { "--permission-mode", "bypassPermissions" });
         return run;
+    }
+
+    private void AddAccount(AgentRun run)
+    {
+        if (_configDir != null) run.Environment["CLAUDE_CONFIG_DIR"] = _configDir;
     }
 
     private void AddEffort(AgentRun run)
@@ -1261,7 +1274,8 @@ public class AgentProviderFactory
         // the heartbeat's workers and silently did nothing to an analysis. The panel said Opus 5 and
         // the finished document said otherwise, which is the worst of both. Effort follows the same
         // rule, for the same reason.
-        _ => new ClaudeAgentProvider(Honour("claude", model, ClaudeAgentProvider.DefaultModel), Effort),
+        _ => new ClaudeAgentProvider(Honour("claude", model, ClaudeAgentProvider.DefaultModel), Effort,
+            ClaudeAccounts.Active(_registry.GetGlobalConfig()).ConfigDir),
     };
 
     private string Configured() => Str("agentProvider") ?? "claude";

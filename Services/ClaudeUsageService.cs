@@ -176,12 +176,55 @@ public class ClaudeUsageService
         get { lock (_gate) return _snapshot; }
     }
 
-    /// <summary>Where Claude Code keeps the OAuth token on Windows and Linux (macOS uses the keychain).</summary>
-    private static string CredentialsPath =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-            ".claude",
-            ".credentials.json");
+    /// <summary>
+    /// The login the fleet is spending, read fresh each time for the same reason the provider is: it
+    /// is a switch on the dashboard, and one captured at startup would do nothing until a restart.
+    /// </summary>
+    private ClaudeAccount Account => ClaudeAccounts.Active(_registry.GetGlobalConfig());
+
+    /// <summary>The account the state on this instance was gathered for; null until the first poll.</summary>
+    private string? _account;
+
+    public string AccountName => Account.Name;
+
+    public IReadOnlyList<ClaudeAccount> Accounts => ClaudeAccounts.All(_registry.GetGlobalConfig());
+
+    /// <summary>
+    /// Forget everything learned about the previous account the moment another is in force. Its
+    /// numbers, its backoffs and its sign-in banner all describe a different subscription, and a
+    /// meter showing the old account's 96% over the new account's name is the one wrong answer this
+    /// feature could give. Called by everything that reads the login, so a hand-edited config file
+    /// is followed as faithfully as the dashboard's own switch.
+    /// </summary>
+    private void FollowAccount()
+    {
+        var name = Account.Name;
+        if (_account == name) return;
+        var first = _account is null;
+        _account = name;
+        if (first) return;
+
+        _retryAfter = DateTimeOffset.MinValue;
+        _renewAfter = DateTimeOffset.MinValue;
+        _renewBlocked = default;
+        _renewRefusals = 0;
+        _renewOverrideSpent = false;
+        _rejected = false;
+        _signInMessage = null;
+        lock (_gate) _snapshot = UsageSnapshot.Empty;
+    }
+
+    /// <summary>
+    /// Where Claude Code keeps the active account's OAuth token on Windows and Linux (macOS uses the
+    /// keychain).
+    /// </summary>
+    private string CredentialsPath => Path.Combine(ClaudeAccounts.DirOf(Account), ".credentials.json");
+
+    /// <summary>Points a <c>claude</c> we start ourselves at the active account, as the agent runs are.</summary>
+    private static void RunAs(ProcessStartInfo psi, ClaudeAccount account)
+    {
+        if (account.ConfigDir is not null) psi.Environment["CLAUDE_CONFIG_DIR"] = account.ConfigDir;
+    }
 
     /// <param name="force">
     /// Ignore every backoff and try now. For the Settings panel's own button only — the timed probe
@@ -198,6 +241,8 @@ public class ClaudeUsageService
             Degrade("unsupported", "Rate-limit headroom is only reported for Claude Code.");
             return;
         }
+
+        FollowAccount();
 
         // A person clicking "test" has new information we do not - usually a credential they just
         // changed - so their click outranks a backoff that was set before it existed.
@@ -347,6 +392,7 @@ public class ClaudeUsageService
             StandardOutputEncoding = ProcessText.Utf8,
             StandardErrorEncoding = ProcessText.Utf8,
         };
+        RunAs(psi, Account);
         foreach (var arg in new[]
                  {
                      "-p", "ok",
@@ -419,6 +465,8 @@ public class ClaudeUsageService
         await _ensureGate.WaitAsync(ct);
         try
         {
+            FollowAccount();
+
             // Read inside the gate rather than before it. Whoever held it may have just renewed, in
             // which case the file already holds a live token and there is nothing left to do.
             var (credentials, error) = ReadCredentials();
@@ -474,19 +522,37 @@ public class ClaudeUsageService
     /// The window stays open after the flow ends (<c>cmd /k</c>), so a sign-in that failed still has
     /// its reason on screen instead of closing over it.
     /// </para>
+    ///
+    /// <para>
+    /// Signs in to the account in force unless <paramref name="accountName"/> names another - which
+    /// is how a second account gets its login in the first place, before anything is switched to it.
+    /// Sign in there with that account's own credentials: the terminal cannot know which one is meant.
+    /// </para>
     /// </summary>
-    public (bool Ok, string Message) LaunchSignIn()
+    public (bool Ok, string Message) LaunchSignIn(string? accountName = null)
     {
+        var account = Account;
+        if (!string.IsNullOrWhiteSpace(accountName))
+        {
+            if (ClaudeAccounts.Find(Accounts, accountName) is not { } named)
+                return (false, $"No Claude account called '{accountName.Trim()}' - save it in Settings first.");
+            account = named;
+        }
+
         if (!OperatingSystem.IsWindows())
             return (false, "Run `claude auth login` in a terminal on the dashboard's machine.");
 
         try
         {
+            // The CLI makes its own default directory and expects to be handed any other.
+            if (account.ConfigDir is not null) Directory.CreateDirectory(account.ConfigDir);
+
             var psi = new ProcessStartInfo("cmd.exe") { UseShellExecute = false, CreateNoWindow = false };
-            foreach (var arg in new[] { "/c", "start", "Claude sign-in", "cmd.exe", "/k", "claude", "auth", "login" })
+            RunAs(psi, account);
+            foreach (var arg in new[] { "/c", "start", $"Claude sign-in - {account.Name}", "cmd.exe", "/k", "claude", "auth", "login" })
                 psi.ArgumentList.Add(arg);
             using var proc = Process.Start(psi);
-            return (true, "A sign-in terminal has opened on the dashboard's machine - finish there.");
+            return (true, $"A sign-in terminal for the {account.Name} account has opened on the dashboard's machine - finish there.");
         }
         catch (Exception ex)
         {
@@ -545,14 +611,22 @@ public class ClaudeUsageService
     /// </summary>
     private (Credentials? Credentials, string? Error) ReadCredentials()
     {
-        var ours = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
-        if (string.IsNullOrWhiteSpace(ours)) ours = ConfiguredToken();
-        if (!string.IsNullOrWhiteSpace(ours))
-            return (new Credentials(ours, null, null, null), null);
+        // Only for the default account. A token of ours is one subscription's, and answering for a
+        // second account with it would put the first account's numbers under the second one's name.
+        if (Account.ConfigDir is null)
+        {
+            var ours = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
+            if (string.IsNullOrWhiteSpace(ours)) ours = ConfiguredToken();
+            if (!string.IsNullOrWhiteSpace(ours))
+                return (new Credentials(ours, null, null, null), null);
+        }
 
         var path = CredentialsPath;
         if (!File.Exists(path))
-            return (null, NoLogin);
+            // A second account has no token to paste: the fix is to sign the CLI in to its folder.
+            return (null, Account.ConfigDir is null
+                ? NoLogin
+                : $"The {Account.Name} account has not been signed in - use Sign in beside it in Settings.");
 
         try
         {

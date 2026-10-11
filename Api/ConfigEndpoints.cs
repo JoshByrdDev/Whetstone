@@ -39,6 +39,9 @@ public static class ConfigEndpoints
         "workerReasoningEffort",
         // The dashboard's own Claude login, for the rate-limit meter. See ClaudeUsageService.
         "claudeOauthToken",
+        // The Claude logins the fleet can be switched between. Which one is in force is not here:
+        // that is switched from the usage chip, through /api/usage/account. See ClaudeAccounts.
+        "claudeAccounts",
     };
 
     /// <summary>One entry in a provider's model dropdown, as the Settings panel reads it.</summary>
@@ -317,6 +320,10 @@ public static class ConfigEndpoints
                 // long-lived subscription token has no business being in a GET body every time
                 // somebody opens a tab.
                 claudeOauthTokenSet = !string.IsNullOrWhiteSpace(Str(g, "claudeOauthToken", "")),
+                // The accounts beyond the CLI's own login, and whether each has ever been signed in
+                // to - the one thing that has to be true before switching to it does any good.
+                claudeAccounts = ClaudeAccounts.All(g).Where(a => a.ConfigDir is not null)
+                    .Select(a => new { name = a.Name, configDir = a.ConfigDir, signedIn = ClaudeAccounts.HasLogin(a) }),
                 // The catalogue the Settings panel renders from.
                 agentProviders = AgentProviders,
                 notificationEventCatalog = NotificationEvents,
@@ -399,6 +406,21 @@ public static class ConfigEndpoints
                 }
                 if (kept.Count > 0) target["phaseModels"] = kept;
                 else target.Remove("phaseModels");
+            }
+
+            // Stored with every directory spelled out, and not at all when there are none. Removing
+            // the account the fleet is on takes the choice with it, so the file never names a login
+            // that no longer exists - both readers would fall back to the default, but silently.
+            if (target.ContainsKey("claudeAccounts"))
+            {
+                var accounts = ClaudeAccounts.Normalize(target["claudeAccounts"]);
+                var active = target["claudeAccount"] is JsonValue chosen && chosen.TryGetValue<string>(out var name)
+                    ? name : null;
+                if (active is not null && !accounts.Any(a => string.Equals(
+                        a?["name"]?.GetValue<string>(), active, StringComparison.OrdinalIgnoreCase)))
+                    target.Remove("claudeAccount");
+                if (accounts.Count > 0) target["claudeAccounts"] = accounts;
+                else target.Remove("claudeAccounts");
             }
 
             SaveObject(paths.GlobalConfigPath, target, before);
@@ -746,7 +768,7 @@ public static class ConfigEndpoints
         catch (JsonException) { return null; }
     }
 
-    private static JsonObject LoadObject(string path)
+    internal static JsonObject LoadObject(string path)
     {
         if (!File.Exists(path)) return new JsonObject();
         try { return JsonNode.Parse(File.ReadAllText(path))?.AsObject() ?? new JsonObject(); }
@@ -783,7 +805,7 @@ public static class ConfigEndpoints
     /// the real change in a whole-file diff.
     /// </para>
     /// </summary>
-    private static void SaveObject(string path, JsonObject obj, string? original = null)
+    internal static void SaveObject(string path, JsonObject obj, string? original = null)
     {
         var json = obj.ToJsonString(WriteOptions);
         if (original is not null && json == original) return;
@@ -794,7 +816,7 @@ public static class ConfigEndpoints
 
     /// <summary>A loaded object's serialised form, to hand back to <see cref="SaveObject"/> so it
     /// can tell a real edit from a no-op.</summary>
-    private static string Snapshot(JsonObject obj) => obj.ToJsonString(WriteOptions);
+    internal static string Snapshot(JsonObject obj) => obj.ToJsonString(WriteOptions);
 
     /// <summary>
     /// The stored per-phase model overrides, filtered to phases the pipeline actually runs and to

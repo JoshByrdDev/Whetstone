@@ -26,6 +26,9 @@ interface Usage {
   status: string;
   message: string | null;
   fetchedAt: string | null;
+  /** Whose numbers these are, and every login the fleet could be switched to. */
+  account: string;
+  accounts: string[];
   limits: UsageLimit[];
 }
 
@@ -35,6 +38,24 @@ const POLL_MS = 60_000;
 function useClaudeUsage() {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [nudging, setNudging] = useState(false);
+  const [switching, setSwitching] = useState(false);
+
+  /**
+   * Point the fleet at another Claude login. The server polls the new account before it answers, so
+   * the snapshot read straight afterwards is already that account's - never the old numbers under
+   * the new name.
+   */
+  const switchAccount = async (name: string) => {
+    setSwitching(true);
+    try {
+      await fetch('/api/usage/account', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+      });
+      const fresh = await fetch('/api/usage');
+      if (fresh.ok) setUsage(await fresh.json());
+    } catch { /* the picker snaps back to the account still in force, which is the truth */ }
+    finally { setSwitching(false); }
+  };
 
   useEffect(() => {
     let active = true;
@@ -68,7 +89,31 @@ function useClaudeUsage() {
     finally { setNudging(false); }
   };
 
-  return { usage, nudge, nudging };
+  return { usage, nudge, nudging, switchAccount, switching };
+}
+
+/**
+ * Which Claude login the fleet is spending. Drawn only when there is a second one to choose: with a
+ * single account it would be a dropdown of one. A switch reaches the next run to start - agents
+ * already out finish on the account they began with.
+ */
+function AccountPicker({ usage, onSwitch, busy }: {
+  usage: Usage; onSwitch: (name: string) => void; busy: boolean;
+}) {
+  const accounts = usage.accounts ?? [];
+  if (accounts.length < 2) return null;
+  return (
+    <select
+      aria-label="Claude account"
+      title="Which Claude login new agent runs spend. Runs already out finish on the one they started with."
+      value={usage.account}
+      disabled={busy}
+      onChange={e => onSwitch(e.target.value)}
+      className="orbit-tap bg-gray-900 border border-hair rounded px-1.5 py-0.5 text-xs text-gray-300 focus:outline-none focus:border-gray-500 disabled:opacity-50"
+    >
+      {accounts.map(a => <option key={a} value={a}>{a}</option>)}
+    </select>
+  );
 }
 
 /**
@@ -147,11 +192,15 @@ function NudgeButton({ onClick, busy }: { onClick: () => void; busy: boolean }) 
  * renders nothing here rather than an error the user did not ask about.
  */
 export function HeaderUsage() {
-  const { usage, nudge, nudging } = useClaudeUsage();
+  const { usage, nudge, nudging, switchAccount, switching } = useClaudeUsage();
   if (!usage) return null;
   // A different agent provider is selected, and this meter only measures one subscription. Nothing
   // is wrong and nothing is fixable, so there is nothing to say.
   if (usage.status === 'unsupported') return null;
+
+  // On every branch below, including the ones that otherwise say nothing: an account with no
+  // numbers is exactly the one you need to be able to switch away from.
+  const picker = <AccountPicker usage={usage} onSwitch={switchAccount} busy={switching} />;
 
   const worst = leading(usage.limits);
   if (!worst) {
@@ -161,6 +210,7 @@ export function HeaderUsage() {
     if (usage.status === 'forbidden' || nudgeable(usage.status)) {
       return (
         <span className="flex items-center gap-1.5 text-xs text-gray-500" title={usage.message ?? ''}>
+          {picker}
           {/* Three different problems, so three different words. "usage expired" over a renewal the
               dashboard is merely waiting to retry would send the user looking for a dead login. */}
           {usage.status === 'forbidden'
@@ -174,7 +224,7 @@ export function HeaderUsage() {
         </span>
       );
     }
-    return null;
+    return picker;
   }
 
   const t = tone(worst);
@@ -187,6 +237,7 @@ export function HeaderUsage() {
       className="flex items-center gap-1.5 text-xs"
       title={summary(usage)}
     >
+      {picker}
       <span className="h-1.5 w-10 rounded-full bg-gray-800 overflow-hidden">
         <span
           className={`block h-full rounded-full ${t.bar} ${stale ? 'opacity-50' : ''}`}

@@ -56,10 +56,38 @@ public static class UsageEndpoints
 
         // Opens a real terminal on the dashboard's machine for the interactive OAuth flow. The last
         // resort, offered only once a renewal has actually been refused - see LaunchSignIn.
-        app.MapPost("/api/usage/signin", (ClaudeUsageService usage) =>
+        // ?account= signs in to a named account rather than the one in force - how a second account
+        // gets a login before anything is switched to it.
+        app.MapPost("/api/usage/signin", (string? account, ClaudeUsageService usage) =>
         {
-            var (ok, message) = usage.LaunchSignIn();
+            var (ok, message) = usage.LaunchSignIn(account);
             return Results.Ok(new { ok, message });
+        });
+
+        // Switch which Claude login the fleet spends. Its own endpoint rather than one more key on
+        // the Settings form because it is not a setting somebody saves and forgets - it is the thing
+        // you reach for when one subscription has run dry, and it has to undo what running dry did.
+        app.MapPost("/api/usage/account", async (
+            AccountSwitch body, ClaudeUsageService usage, DashboardPaths paths, CancellationToken ct) =>
+        {
+            if (ClaudeAccounts.Find(usage.Accounts, body.Name) is not { } account)
+                return Results.BadRequest(new { error = $"No Claude account called '{body.Name}'." });
+
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            // The default is stored as an absence, so a config file that has never heard of accounts
+            // and one that has been switched back are the same file.
+            if (account.ConfigDir is null) config.Remove("claudeAccount");
+            else config["claudeAccount"] = account.Name;
+            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+
+            // A usage-limit pause belongs to the account that hit the limit. Left behind, it would
+            // hold the fleet idle until the old account's reset - the wait the switch was made to skip.
+            try { File.Delete(Path.Combine(paths.RunDir, "usage-limit.json")); }
+            catch (IOException) { /* the heartbeat is reading it; it re-checks on its next pass */ }
+
+            await usage.RefreshAsync(ct, force: true);
+            return Results.Ok(new { account = usage.AccountName, status = usage.Current.Status });
         });
 
         app.MapGet("/api/usage", (ClaudeUsageService usage) =>
@@ -70,6 +98,10 @@ public static class UsageEndpoints
                 status = s.Status,
                 message = s.Message,
                 fetchedAt = s.FetchedAt,
+                // Whose numbers these are, and what else could be switched to. One name means there
+                // is nothing to choose between, and the chip draws no picker.
+                account = usage.AccountName,
+                accounts = usage.Accounts.Select(a => a.Name),
                 limits = s.Limits.Select(l => new
                 {
                     kind = l.Kind,
@@ -84,3 +116,6 @@ public static class UsageEndpoints
         });
     }
 }
+
+/// <param name="Name">An account from <c>/api/usage</c>'s <c>accounts</c>.</param>
+public record AccountSwitch(string? Name);

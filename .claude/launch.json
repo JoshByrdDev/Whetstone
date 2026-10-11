@@ -8,6 +8,15 @@
       "port": 5338
     },
     {
+      "name": "throwaway",
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile", "-Command",
+        "$env:DASHBOARD_DATA_ROOT = Join-Path $env:TEMP 'whetstone-throwaway'; $env:ASPNETCORE_URLS = 'http://localhost:5340'; dotnet bin/Release/net9.0/Whetstone.dll"
+      ],
+      "port": 5340
+    },
+    {
       "name": "client",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "ClientApp"],

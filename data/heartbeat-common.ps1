@@ -115,6 +115,21 @@ if ($null -ne (Get-Global 'heartbeatWorkers')) {
 if ($HeartbeatWorkers -lt 1)                    { $HeartbeatWorkers = 1 }
 if ($HeartbeatWorkers -gt $MaxHeartbeatWorkers) { $HeartbeatWorkers = $MaxHeartbeatWorkers }
 
+# Which Claude login a run spends: the config directory of the account Settings has switched to, or
+# $null for the CLI's own. The dashboard reads the same two keys the same way (ClaudeAccounts.cs),
+# and the two have to agree or its meter shows one account while the fleet spends another - so an
+# entry with no directory is skipped here exactly as it is there, never guessed at.
+function Get-ClaudeAccountDir {
+    $active = "$(Get-Global 'claudeAccount')".Trim()
+    if (-not $active) { return $null }
+    foreach ($a in @(Get-Global 'claudeAccounts')) {
+        if (-not $a) { continue }
+        $dir = "$($a.configDir)".Trim()
+        if ("$($a.name)".Trim() -ieq $active -and $dir) { return $dir }
+    }
+    return $null
+}
+
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 if (-not (Test-Path $RunDir)) { New-Item -ItemType Directory -Path $RunDir -Force | Out-Null }
 

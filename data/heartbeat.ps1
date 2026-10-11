@@ -92,10 +92,13 @@ function Remove-OldLogs {
 # pressed during the nap does nothing until the nap ends - which reads as "I stopped it and it
 # started itself back up". Returns $false when a stop was requested.
 function Start-InterruptibleSleep {
-    param([int]$Seconds)
+    # -WhileExists ends the sleep early, as though it had run its course, once that file is gone:
+    # for a wait whose reason somebody else can remove.
+    param([int]$Seconds, [string]$WhileExists)
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ($true) {
         if (Test-Path $StopFile) { return $false }
+        if ($WhileExists -and -not (Test-Path $WhileExists)) { return $true }
         $remaining = ($deadline - (Get-Date)).TotalSeconds
         if ($remaining -le 0) { return $true }
         Start-Sleep -Seconds ([Math]::Max(1, [Math]::Min(5, [Math]::Ceiling($remaining))))
@@ -623,7 +626,9 @@ while ($true) {
         Send-DashboardEvent -Type "sleep" -DurationSeconds $sleepSeconds -Text "Usage limit until $wakeTime"
         Send-DashboardEvent -Type "state_change" -Text "sleeping"
         Send-SleepNotice -Headline "Heartbeat paused - the account hit its usage limit." -Next "Waking at $wakeTime."
-        if (-not (Start-InterruptibleSleep -Seconds $sleepSeconds)) { continue }   # the stop is handled at the top
+        # Switching the dashboard to another Claude account deletes the pause, since the limit was
+        # the old account's - so the sleep watches for that rather than running out the clock.
+        if (-not (Start-InterruptibleSleep -Seconds $sleepSeconds -WhileExists $UsageLimitFile)) { continue }   # the stop is handled at the top
         Remove-Item $UsageLimitFile -Force -ErrorAction SilentlyContinue
         continue
     }

@@ -48,6 +48,14 @@ if ($env:CLAUDECODE) {
     }
 }
 
+# Which Claude login this run spends, when the dashboard has been switched off the CLI's own. After
+# the strip above, which would take it for something a host session injected; and here rather than
+# in the orchestrator, because a worker is a fresh process that has just read config - so a switch
+# reaches the next run with nothing restarted, and runs already out finish on the account they
+# began with. Everything this process starts inherits it: the agent, its reflection, the notes store.
+$claudeAccountDir = Get-ClaudeAccountDir
+if ($claudeAccountDir) { $env:CLAUDE_CONFIG_DIR = $claudeAccountDir }
+
 # Nobody is watching a worker, so git must never stop to ask. With several GitHub accounts stored,
 # Git Credential Manager answers an unpinned fetch with an account picker on the human's desktop -
 # once per fetch, per worker, forever. Fail the call instead; every fetch here already tolerates
