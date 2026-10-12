@@ -317,7 +317,13 @@ function Start-StewardIfDue {
     if (-not (Test-Path $StewardScript)) { return $false }
 
     $due = $null
-    try { $due = @(Invoke-RestMethod -Uri "$DashboardUrl/api/steward/due" -Method Get -TimeoutSec 15) }
+    # Enumerated and filtered, not just wrapped: Windows PowerShell hands a JSON array back as ONE
+    # object, and an empty one as an object that is not nothing - so "@(...)" alone counts one due
+    # project where there are none, and goes on to launch a steward for a project with no name.
+    try {
+        $due = @((Invoke-RestMethod -Uri "$DashboardUrl/api/steward/due" -Method Get -TimeoutSec 15) |
+            ForEach-Object { $_ } | Where-Object { $_ -and $_.project })
+    }
     catch { return $false }   # a dashboard that will not answer is asked again next pass
     if (-not $due -or $due.Count -eq 0) { return $false }
 

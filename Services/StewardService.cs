@@ -203,6 +203,10 @@ public class StewardService
         var fresh = await _db.StewardQuestions
             .Where(q => q.ProjectKey == projectKey && q.Answer != null && q.AnswerDeliveredAt == null).ToListAsync(ct);
         foreach (var q in fresh) q.AnswerDeliveredAt = DateTime.UtcNow;
+        var said = await _db.StewardEntries
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid && e.DeliveredAt == null)
+            .OrderBy(e => e.At).ToListAsync(ct);
+        foreach (var e in said) e.DeliveredAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
 
         SyncFromResult? sync = null;
@@ -214,6 +218,7 @@ public class StewardService
             mode = cfg.StewardMode.ToString().ToLowerInvariant(),
             because = why ?? "nothing in particular: a look at whether anything is left to file",
             newAnswers = fresh.Select(q => new { q.Key, q.Question, q.Answer }),
+            newInstructions = said.Select(e => e.Text),
             sync,
             status = (await StatusAsync(projectKey, ct)).Data,
         });

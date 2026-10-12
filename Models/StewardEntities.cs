@@ -107,6 +107,13 @@ public class StewardEntry
     public int? TicketId { get; set; }
     public string Text { get; set; } = "";
     public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// For <see cref="StewardEntryKind.OwnerSaid"/>: when a run was first handed this instruction.
+    /// Until then it is news, and is put at the front of the next run rather than left to be found
+    /// among everything the owner has ever decided.
+    /// </summary>
+    public DateTime? DeliveredAt { get; set; }
 }
 
 /// <summary>

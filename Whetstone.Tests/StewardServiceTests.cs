@@ -378,6 +378,22 @@ public class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task An_instruction_from_the_owner_is_put_in_front_of_the_next_run_once()
+    {
+        await In(s => s.OwnerSaysAsync("alpha", "From now on a ticket carries one whole outcome."));
+        Assert.True((await In0(s => s.DueAsync("alpha"))).Due);
+
+        var first = System.Text.Json.JsonSerializer.Serialize((await Begin()).Data);
+        Assert.Contains("one whole outcome", first);
+        await In(s => s.EndAsync("alpha", "applied it", true));
+
+        var second = System.Text.Json.JsonSerializer.Serialize((await Begin()).Data);
+        Assert.DoesNotContain("one whole outcome", second.Split("\"status\"")[0]);   // not news twice
+        Assert.Contains("one whole outcome",
+            System.Text.Json.JsonSerializer.Serialize((await In(s => s.DecisionsAsync("alpha", null))).Data));
+    }
+
+    [Fact]
     public async Task The_steward_cannot_write_what_the_owner_said()
     {
         var id = await AtReview();
