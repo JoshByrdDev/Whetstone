@@ -86,10 +86,14 @@ public class StewardTools
         "'owner' - ask, and leave it unmerged; 'not-proved' - send it back saying what the flags say; 'behind' - rebase, " +
         "then merge again; 'check-failed' - send it back to NeedsImplementation with the output; 'check-could-not-run' - the " +
         "machine, not the ticket: leave it at review and ask the owner once; 'conflict' - send it back to NeedsImplementation " +
-        "naming the files; 'not-in-this-mode' - merging is not yours here. None of them means look for another way.")]
-    public static Task<StewardReply> Merge(StewardService s,
-        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId) =>
-        s.MergeAsync(project, ticketId);
+        "naming the files; 'not-in-this-mode' - merging is not yours here. None of them means look for another way. " +
+        "'checking' is not a refusal: the project's own checks can run for minutes and a call cannot wait that long, so the " +
+        "merge carries on without you. Call merge for the same ticket again until it answers with one of the others - each " +
+        "call joins the same merge - and do not end the run, rebase the ticket or ask the owner about it while it is checking.")]
+    public static Task<StewardReply> Merge(StewardMerges merges,
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        CancellationToken ct) =>
+        merges.MergeAsync(project, ticketId, ct);
 
     [McpServerTool(Name = "steward_rebase"), Description(
         "Rebase a ticket's branch onto the base, when a merge answered 'behind'. A conflict is rolled back and changes nothing.")]

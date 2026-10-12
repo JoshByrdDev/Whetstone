@@ -29,7 +29,7 @@ If the status shows nothing at review, nothing blocked, no new answer and nothin
 - No flag is marked `owner` (those are asked about, never waved through) and none is marked `blocks`.
 - The last hand-off comment leaves no open question. If it leaves one, settle it as step 3 settles a block: from a decision already made, or it is the owner's and the ticket waits unmerged.
 
-Then `steward_merge`. Act on its answer exactly as its description says. `behind`: `steward_rebase`, then merge again.
+Then `steward_merge`. Act on its answer exactly as its description says. `behind`: `steward_rebase`, then merge again. `checking`: the merge's checks are still running and nothing is wrong; call `steward_merge` for that ticket again until it answers with something else, and do not end the run while one is checking.
 
 Something wrong with the work: `steward_send_back` with a note saying what is wrong, where, and what done looks like. NeedsImplementation when code must change; NeedsRefinement when the code is right but a check or the record is missing; NeedsSpeculation when the plan was wrong.
 

@@ -602,6 +602,11 @@ public class StewardService
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"merge ticket {ticketId} into the base ({change.Stat}) and close it");
 
+        // The checks can outlast the call that started them (see StewardMerges), and so can outlast
+        // the run. A change needs a run: one that has ended since gets no merge.
+        if (!await RunOpenAsync(projectKey))
+            return Refuse("no-run", $"The run ended while ticket {ticketId} was being checked, so it was not merged. Begin a run and merge it again.");
+
         // The merge commit is named for the ticket, as it is when a person merges one from the board.
         var merged = await _git.MergeAsync(projectKey, t.Branch!, $"{t.Title} (#{t.Id})", null, ct);
         if (!merged.Ok)

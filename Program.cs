@@ -80,6 +80,9 @@ builder.Services.AddScoped<TicketService>();
 builder.Services.AddSingleton<IStewardGit>(sp => sp.GetRequiredService<TicketGitService>());
 builder.Services.AddSingleton<IStewardProjectFlags, StewardFlagScript>();
 builder.Services.AddScoped<StewardService>();
+// A steward's merge outlives the call that asked for it: a project's checks run longer than a tool
+// call may, and a call that dropped used to take the merge down with it. See StewardMerges.
+builder.Services.AddSingleton<StewardMerges>();
 // What holds a ticket in NeedsRefinement until its independent analysis exists. Registered on its
 // own so TicketService picks it up; see ClassroomGate for why refinement waits for one.
 builder.Services.AddScoped<IClassroomGate, ClassroomGate>();

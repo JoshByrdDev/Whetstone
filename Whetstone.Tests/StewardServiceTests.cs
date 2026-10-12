@@ -520,6 +520,62 @@ public class StewardServiceTests : IDisposable
         Assert.Equal("revised", (await In(s => s.DraftUnitAsync("alpha", "02-second.md", draft))).Answer);
     }
 
+    // ---- a merge that outlasts the call --------------------------------------------------
+
+    [Fact]
+    public async Task A_merge_slower_than_a_call_answers_checking_and_the_next_call_joins_it()
+    {
+        var started = 0;
+        var checks = new TaskCompletionSource<StewardReply>();
+        var merges = new StewardMerges((_, _) => { started++; return checks.Task; }) { Wait = TimeSpan.FromMilliseconds(50) };
+
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+
+        checks.SetResult(new StewardReply("merged"));
+        Assert.Equal("merged", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(1, started);
+
+        // The answer was collected, so the next call is a new merge and not that one again.
+        checks = new TaskCompletionSource<StewardReply>();
+        checks.SetResult(new StewardReply("not-ready"));
+        Assert.Equal("not-ready", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(2, started);
+    }
+
+    [Fact]
+    public async Task A_call_that_drops_does_not_take_the_merge_with_it()
+    {
+        var started = 0;
+        var checks = new TaskCompletionSource<StewardReply>();
+        var merges = new StewardMerges((_, _) => { started++; return checks.Task; }) { Wait = TimeSpan.FromMinutes(5) };
+
+        using var dropped = new CancellationTokenSource();
+        var call = merges.MergeAsync("alpha", 1, dropped.Token);
+        dropped.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => call);
+
+        checks.SetResult(new StewardReply("merged"));
+        Assert.Equal("merged", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(1, started);
+    }
+
+    [Fact]
+    public async Task A_run_that_ended_during_the_checks_gets_no_merge()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "tests", "run": "run-tests" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        _git.DuringCheck = () => In(s => s.EndAsync("alpha", "ended early", false));
+
+        Assert.Equal("no-run", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Empty(_git.Merged);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+    }
+
     // ---- fakes ------------------------------------------------------------------------
 
     private sealed class FakeFlags(params StewardFlag[] flags) : IStewardProjectFlags
@@ -570,7 +626,14 @@ public class StewardServiceTests : IDisposable
 
         public Task<bool> WorktreeAtTipAsync(string projectKey, string worktree, string branch, CancellationToken ct = default) => Task.FromResult(true);
 
-        public Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, CancellationToken ct = default) => Task.FromResult(Check);
+        /// <summary>Something that happens while a check runs, for what a slow check lets change under it.</summary>
+        public Func<Task>? DuringCheck;
+
+        public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, CancellationToken ct = default)
+        {
+            if (DuringCheck is not null) await DuringCheck();
+            return Check;
+        }
 
         public Task<MergeResult> MergeAsync(string projectKey, string branch, string? title, string? description, CancellationToken ct = default)
         {
