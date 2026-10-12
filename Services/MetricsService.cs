@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Whetstone.Models;
 using Whetstone.Persistence;
@@ -38,7 +39,23 @@ public class MetricsService
         int? InputTokens = null,
         int? OutputTokens = null,
         int? CacheReadTokens = null,
-        int? CacheCreationTokens = null);
+        int? CacheCreationTokens = null,
+        int? PeakContextTokens = null,
+        int? ToolResultChars = null,
+        IReadOnlyList<ToolResultSize>? LargestToolResults = null);
+
+    /// <summary>One tool call and how much it returned. <c>Detail</c> is the call's caption from the feed.</summary>
+    public record ToolResultSize(string Tool, string? Detail, int Chars, int Images = 0);
+
+    private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
+
+    /// <summary>A cycle's largest tool results, read back. Empty when none were recorded or the column will not parse.</summary>
+    public static IReadOnlyList<ToolResultSize> LargestToolResultsOf(CycleRun run)
+    {
+        if (string.IsNullOrEmpty(run.LargestToolResultsJson)) return [];
+        try { return JsonSerializer.Deserialize<List<ToolResultSize>>(run.LargestToolResultsJson, Json) ?? []; }
+        catch (JsonException) { return []; }
+    }
 
     /// <summary>
     /// Record one heartbeat worker run. Returns null when the ticket no longer exists — a cycle
@@ -75,6 +92,10 @@ public class MetricsService
             OutputTokens        = r.OutputTokens,
             CacheReadTokens     = r.CacheReadTokens,
             CacheCreationTokens = r.CacheCreationTokens,
+            PeakContextTokens   = r.PeakContextTokens,
+            ToolResultChars     = r.ToolResultChars,
+            LargestToolResultsJson = r.LargestToolResults is { Count: > 0 } top
+                ? JsonSerializer.Serialize(top, Json) : null,
             Mutations           = r.Mutations,
             Outcome             = r.Outcome,
             PhaseAfter          = ticket.Phase,

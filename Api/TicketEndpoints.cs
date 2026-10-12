@@ -61,7 +61,9 @@ public record CycleReportRequest(
     DateTime? StartedAt, double DurationSeconds, int Mutations, string Outcome,
     double? ApiDurationSeconds = null, int? NumTurns = null,
     int? InputTokens = null, int? OutputTokens = null,
-    int? CacheReadTokens = null, int? CacheCreationTokens = null);
+    int? CacheReadTokens = null, int? CacheCreationTokens = null,
+    int? PeakContextTokens = null, int? ToolResultChars = null,
+    List<MetricsService.ToolResultSize>? LargestToolResults = null);
 
 public static class TicketEndpoints
 {
@@ -291,7 +293,8 @@ public static class TicketEndpoints
                 req.TicketId, req.Project ?? "", phase, req.Skill ?? "", req.Resumed, req.Model,
                 req.StartedAt ?? DateTime.UtcNow, req.DurationSeconds, req.Mutations, outcome,
                 req.ApiDurationSeconds, req.NumTurns, req.InputTokens, req.OutputTokens,
-                req.CacheReadTokens, req.CacheCreationTokens));
+                req.CacheReadTokens, req.CacheCreationTokens,
+                req.PeakContextTokens, req.ToolResultChars, req.LargestToolResults));
 
             return run is null
                 ? Results.Ok(new { recorded = false, reason = "ticket not found" })
@@ -363,6 +366,8 @@ public static class TicketEndpoints
                 c.Id, c.TicketId, c.ProjectKey, Phase = c.Phase.ToString(), c.Skill, c.Resumed, c.Model,
                 c.StartedAt, c.DurationSeconds, c.ApiDurationSeconds, c.NumTurns,
                 c.InputTokens, c.OutputTokens, c.CacheReadTokens, c.CacheCreationTokens,
+                c.PeakContextTokens, c.ToolResultChars,
+                LargestToolResults = MetricsService.LargestToolResultsOf(c),
                 c.Mutations, Outcome = c.Outcome.ToString(), PhaseAfter = c.PhaseAfter?.ToString(),
             })));
 

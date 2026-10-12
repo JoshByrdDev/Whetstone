@@ -282,6 +282,23 @@ public class CycleRun
     public int? CacheReadTokens { get; set; }
     public int? CacheCreationTokens { get; set; }
 
+    /// <summary>
+    /// The largest prompt any one turn of the main conversation was sent. A run's cache-read total
+    /// is roughly turns times the average of this, so the two together say whether a costly run
+    /// was long or fat - which are fixed in different places.
+    /// </summary>
+    public int? PeakContextTokens { get; set; }
+
+    /// <summary>Characters every tool call handed back, in all. Text only; images are counted per result.</summary>
+    public int? ToolResultChars { get; set; }
+
+    /// <summary>
+    /// The handful of tool results that were biggest, as JSON (<see cref="Services.MetricsService.ToolResultSize"/>).
+    /// A result enters the conversation once and is re-read on every later turn, so these name
+    /// what to trim. Null for a provider whose stream does not report results.
+    /// </summary>
+    public string? LargestToolResultsJson { get; set; }
+
     /// <summary>Ticket-mutating tool calls the worker made — the crude "did this run do anything" signal.</summary>
     public int Mutations { get; set; }
 

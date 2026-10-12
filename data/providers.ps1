@@ -12,6 +12,11 @@
 #   @{ Kind = 'result';   Text; DurationMs; NumTurns; IsError;
 #                         InputTokens; OutputTokens; CacheReadTokens; CacheCreateTokens }
 #
+# and two that say where a run's context went, which only claude's stream reports:
+#
+#   @{ Kind = 'context';     Tokens }                      one model call's whole prompt
+#   @{ Kind = 'tool_result'; ToolUseId; Chars; Images }    matched to a tool_use by its Id
+#
 # The tool NAME is part of that contract rather than a display detail. The mutation counter, the
 # read-only tool list and the dashboard's feed all key off the `mcp__<server>__<tool>` shape, so
 # Codex - which reports the server and the tool in separate fields - and Gemini - which namespaces
@@ -745,11 +750,24 @@ function ConvertFrom-AgentEvent {
             }
         }
         'assistant' {
+            # How much this one model call was sent: everything the session has accumulated, which
+            # is re-read on every turn and is what a run's cache-read total is the sum of. A
+            # sub-agent's calls carry parent_tool_use_id and are a different, smaller conversation,
+            # so they are left out - the number is the main thread's, or it means nothing.
+            if ($Event.message -and $Event.message.usage -and -not $Event.parent_tool_use_id) {
+                $ctx = [long]0
+                foreach ($k in 'input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens') {
+                    $n = Get-JsonNumber $Event.message.usage $k
+                    if ($null -ne $n) { $ctx += [long]$n }
+                }
+                if ($ctx -gt 0) { $out += [pscustomobject]@{ Kind = 'context'; Tokens = $ctx } }
+            }
             if ($Event.message -and $Event.message.content) {
                 foreach ($block in $Event.message.content) {
                     if ($block.type -eq 'tool_use') {
                         $out += [pscustomobject]@{
                             Kind = 'tool_use'; ToolName = $block.name; Detail = (Format-ToolCall -Block $block)
+                            Id = "$($block.id)"
                         }
                     }
                     elseif ($block.type -eq 'text' -and $block.text) {
@@ -757,6 +775,29 @@ function ConvertFrom-AgentEvent {
                     }
                     elseif ($block.type -eq 'thinking' -and $block.thinking) {
                         $out += [pscustomobject]@{ Kind = 'thinking'; Text = $block.thinking }
+                    }
+                }
+            }
+        }
+        'user' {
+            # What each tool call handed back, by size. A result enters the conversation once and
+            # is then re-read on every later turn, so the big ones are where a run's context goes.
+            # Main thread only, as above: a sub-agent's results stay in the sub-agent, and what the
+            # main thread pays for is the one Task result that comes back.
+            if ($Event.message -and -not $Event.parent_tool_use_id) {
+                foreach ($block in @($Event.message.content)) {
+                    if ($block -is [string] -or $block.type -ne 'tool_result') { continue }
+                    $chars = 0
+                    $images = 0
+                    if ($block.content -is [string]) { $chars = $block.content.Length }
+                    else {
+                        foreach ($part in @($block.content)) {
+                            if ($part.type -eq 'text') { $chars += "$($part.text)".Length }
+                            elseif ($part.type -eq 'image') { $images++ }
+                        }
+                    }
+                    $out += [pscustomobject]@{
+                        Kind = 'tool_result'; ToolUseId = "$($block.tool_use_id)"; Chars = $chars; Images = $images
                     }
                 }
             }

@@ -92,7 +92,8 @@ function Send-CycleReport {
         [string]$TicketId, [string]$Project, [string]$Phase, [string]$Skill, [bool]$Resumed,
         [string]$Model, [datetime]$StartedAt, [double]$DurationSeconds, [int]$Mutations,
         [string]$Outcome, $ApiDurationSeconds = $null, $NumTurns = $null,
-        $InputTokens = $null, $OutputTokens = $null, $CacheReadTokens = $null, $CacheCreationTokens = $null
+        $InputTokens = $null, $OutputTokens = $null, $CacheReadTokens = $null, $CacheCreationTokens = $null,
+        $PeakContextTokens = $null, $ToolResultChars = $null, $LargestToolResults = $null
     )
     if (-not $DashboardUrl -or -not $TicketId) { return }
     try {
@@ -116,8 +117,11 @@ function Send-CycleReport {
         if ($null -ne $OutputTokens)        { $payload.outputTokens        = $OutputTokens }
         if ($null -ne $CacheReadTokens)     { $payload.cacheReadTokens     = $CacheReadTokens }
         if ($null -ne $CacheCreationTokens) { $payload.cacheCreationTokens = $CacheCreationTokens }
+        if ($null -ne $PeakContextTokens)   { $payload.peakContextTokens   = $PeakContextTokens }
+        if ($null -ne $ToolResultChars)     { $payload.toolResultChars     = $ToolResultChars }
+        if ($null -ne $LargestToolResults)  { $payload.largestToolResults  = @($LargestToolResults) }
 
-        $body = $payload | ConvertTo-Json -Compress
+        $body = $payload | ConvertTo-Json -Compress -Depth 4
         Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/cycles" -Method Post `
             -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
     }
@@ -1469,6 +1473,14 @@ $cacheReadTokens    = $null
 $cacheCreateTokens  = $null
 $resultIsError      = $false
 
+# Where the run's context went. The totals above say how much was re-read; these say why: the
+# largest prompt any one turn was sent, and what each tool call handed back. Gathered as the stream
+# goes by rather than off the result event, so a run killed at the timeout still reports them -
+# and that is the run most worth understanding.
+$peakContextTokens = $null
+$toolCalls         = @{}
+$toolResults       = New-Object System.Collections.Generic.List[object]
+
 # Carries what the stream adapter has to remember between lines. Codex reports its accounting on a
 # closing event that does not repeat the summary text, so the last message it sent is kept here.
 $streamState = @{ LastMessage = $null }
@@ -1586,6 +1598,7 @@ try {
                         $toolName = $e.ToolName
                         $toolDetail = $e.Detail
                         $runLogLines += "> Tool: $toolName $toolDetail"
+                        if ($e.Id) { $toolCalls[$e.Id] = @{ Tool = "$toolName"; Detail = "$toolDetail" } }
 
                         # The feed is a human-readable story of the ticket's progress, so we only
                         # surface ticket mutations (phase moves, work/QA items, comments). Everything
@@ -1612,6 +1625,18 @@ try {
                         else {
                             Write-Log "  . $toolName $toolDetail"   # not shown in feed: local log only
                         }
+                    }
+                    "context" {
+                        if ($null -eq $peakContextTokens -or $e.Tokens -gt $peakContextTokens) { $peakContextTokens = [int]$e.Tokens }
+                    }
+                    "tool_result" {
+                        $call = $toolCalls[$e.ToolUseId]
+                        $toolResults.Add([pscustomobject]@{
+                            tool   = if ($call) { $call.Tool } else { '(unknown)' }
+                            detail = if ($call) { $call.Detail } else { '' }
+                            chars  = [int]$e.Chars
+                            images = [int]$e.Images
+                        })
                     }
                     "text" {
                         $e.Text -split "`n" | ForEach-Object {
@@ -1829,15 +1854,35 @@ $outcome = if ($resultReceived) {
 elseif ($workerTimer.Elapsed.TotalMinutes -ge $WorkerTimeoutMinutes) { "Timeout" }
 else { "Error" }
 
+# The few results that account for most of what the run carried. Five, because the point is to name
+# what to trim, and past the first handful a run's results are all the same small size. Left $null
+# when the stream reported none (codex, gemini), so "not measured" never reads as "nothing returned".
+$toolResultChars    = $null
+$largestToolResults = $null
+if ($toolResults.Count -gt 0) {
+    $toolResultChars    = [int](($toolResults | Measure-Object -Property chars -Sum).Sum)
+    $largestToolResults = @($toolResults | Sort-Object -Property chars, images -Descending | Select-Object -First 5)
+}
+
 Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
     -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
     -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations $mutations -Outcome $outcome `
     -ApiDurationSeconds $apiDurationSeconds -NumTurns $numTurns `
     -InputTokens $inputTokens -OutputTokens $outputTokens `
-    -CacheReadTokens $cacheReadTokens -CacheCreationTokens $cacheCreateTokens
+    -CacheReadTokens $cacheReadTokens -CacheCreationTokens $cacheCreateTokens `
+    -PeakContextTokens $peakContextTokens -ToolResultChars $toolResultChars `
+    -LargestToolResults $largestToolResults
 
 Write-Log ("  Cycle: {0} in {1}s ({2} turns, {3} in / {4} out tokens)" -f $outcome,
     [math]::Round($cycleTimer.Elapsed.TotalSeconds), $numTurns, $inputTokens, $outputTokens)
+if ($null -ne $peakContextTokens) {
+    Write-Log ("  Context: peak {0:N0} tokens in one turn; {1} tool results, {2:N0} chars in all" -f $peakContextTokens,
+        $toolResults.Count, $toolResultChars)
+    foreach ($r in $largestToolResults) {
+        $img = if ($r.images -gt 0) { " + $($r.images) image(s)" } else { "" }
+        Write-Log ("    {0,9:N0} chars{1}  {2} {3}" -f $r.chars, $img, $r.tool, $r.detail)
+    }
+}
 
 # Release AFTER the safety nets above have finished with the worktree: the commit and squash
 # steps still touch this ticket's workspace, and handing the QA stack to the next agent while

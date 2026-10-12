@@ -185,6 +185,38 @@ public class MetricsTests : IDisposable
     }
 
     [Fact]
+    public async Task Cycle_keeps_where_its_context_went()
+    {
+        int id;
+        await using (var ctx = NewCtx()) id = (await Seed(ctx, TicketPhase.QaTesting)).Id;
+
+        await using (var ctx = NewCtx())
+            await new MetricsService(ctx).RecordCycleAsync(Report(id, TicketPhase.QaTesting) with
+            {
+                PeakContextTokens = 184_000,
+                ToolResultChars = 61_500,
+                LargestToolResults =
+                [
+                    new("Bash", "pnpm check", 48_000),
+                    new("mcp__playwright__browser_snapshot", null, 13_500, Images: 1),
+                ],
+            });
+
+        // Read back through a fresh context: the list is a JSON column, so what matters is that it
+        // survives the round trip, not that the object handed in still has it.
+        await using (var ctx = NewCtx())
+        {
+            var run = (await new MetricsService(ctx).RecentCyclesAsync(null, 1)).Single();
+            Assert.Equal(184_000, run.PeakContextTokens);
+            Assert.Equal(61_500, run.ToolResultChars);
+            var top = MetricsService.LargestToolResultsOf(run);
+            Assert.Equal(["Bash", "mcp__playwright__browser_snapshot"], top.Select(t => t.Tool));
+            Assert.Equal("pnpm check", top[0].Detail);
+            Assert.Equal(1, top[1].Images);
+        }
+    }
+
+    [Fact]
     public async Task A_run_that_never_reported_is_still_recorded()
     {
         // A worker killed at the timeout produces no result event, so it has no token counts. That
@@ -201,6 +233,8 @@ public class MetricsTests : IDisposable
         Assert.Equal(CycleOutcome.Timeout, run!.Outcome);
         Assert.Null(run.NumTurns);
         Assert.Null(run.InputTokens);
+        Assert.Null(run.PeakContextTokens);
+        Assert.Empty(MetricsService.LargestToolResultsOf(run));
         Assert.Equal(TicketPhase.QaTesting, run.PhaseAfter);   // never handed off
     }
 

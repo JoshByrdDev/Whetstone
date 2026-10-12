@@ -144,6 +144,9 @@ namespace Whetstone.Migrations
                     b.Property<int?>("InputTokens")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("LargestToolResultsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Model")
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
@@ -160,6 +163,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("OutputTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("PeakContextTokens")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Phase")
@@ -188,6 +194,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ToolResultChars")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("Track")
