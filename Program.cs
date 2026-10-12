@@ -75,6 +75,11 @@ builder.Services.AddDbContext<DashboardDbContext>((sp, options) =>
     options.UseSqlite($"Data Source={dbPath}");
 });
 builder.Services.AddScoped<TicketService>();
+// A project's steward: what it may do and every limit on it. Its git is the ticket git service,
+// reached through an interface so the rules can be tested without a repository.
+builder.Services.AddSingleton<IStewardGit>(sp => sp.GetRequiredService<TicketGitService>());
+builder.Services.AddSingleton<IStewardProjectFlags, StewardFlagScript>();
+builder.Services.AddScoped<StewardService>();
 // What holds a ticket in NeedsRefinement until its independent analysis exists. Registered on its
 // own so TicketService picks it up; see ClassroomGate for why refinement waits for one.
 builder.Services.AddScoped<IClassroomGate, ClassroomGate>();
@@ -122,7 +127,25 @@ builder.Services.Configure<HostOptions>(o =>
 // Local ticketing MCP server (Streamable HTTP at /mcp). The heartbeat's headless
 // Claude session connects here and drives local tickets via these tools instead
 // of writing to the external tracker.
-builder.Services.AddMcpServer().WithHttpTransport().WithTools<TicketTools>();
+//
+// One server, two doors. A worker's session connects at /mcp and is shown the ticket tools; a
+// project's steward connects at /mcp/steward and is shown only its own (see StewardTools). Each
+// session's list is cut here, by the path it came in on, so neither kind of agent is ever offered
+// the other's tools.
+builder.Services.AddMcpServer()
+    .WithHttpTransport(o => o.ConfigureSessionOptions = (http, mcp, _) =>
+    {
+        if (mcp.ToolCollection is not { } all) return Task.CompletedTask;
+        var steward = http.Request.Path.StartsWithSegments("/mcp/steward");
+        var mine = new ModelContextProtocol.Server.McpServerPrimitiveCollection<ModelContextProtocol.Server.McpServerTool>();
+        foreach (var tool in all)
+            if (tool.ProtocolTool.Name.StartsWith(StewardTools.Prefix, StringComparison.Ordinal) == steward)
+                mine.Add(tool);
+        mcp.ToolCollection = mine;
+        return Task.CompletedTask;
+    })
+    .WithTools<TicketTools>()
+    .WithTools<StewardTools>();
 
 // Add SignalR
 builder.Services.AddSignalR();
@@ -225,6 +248,7 @@ app.MapWalkthroughEndpoints();
 // The owner's filing tags. Separate routes and separate DTOs from the ticket API, so a label can
 // never ride along into a worker's prompt - see Api/LabelEndpoints.cs.
 app.MapLabelEndpoints();
+app.MapStewardEndpoints();
 
 // A ticket's trip through the phases. Its own endpoint rather than a field on the ticket detail,
 // which is also what every worker receives through MCP — see TicketJourney.
@@ -232,6 +256,8 @@ app.MapJourneyEndpoint();
 
 // Local ticketing MCP endpoint (JSON-RPC over Streamable HTTP).
 app.MapMcp("/mcp");
+// The same server through its other door: a project's steward, and only its tools.
+app.MapMcp("/mcp/steward");
 
 // POST /api/events — receive event from heartbeat.ps1
 app.MapPost("/api/events", async (HeartbeatEvent evt, EventStore store, IHubContext<HeartbeatHub> hub) =>

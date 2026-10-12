@@ -205,6 +205,22 @@ public static class ConfigEndpoints
             description = "Once, when the fleet finishes its work and the board goes quiet. Waking " +
                           "to an empty board and going straight back to sleep does not send another.",
         },
+        // The two below are sent by the dashboard (StewardService, through data/notify-send.ps1),
+        // not by the heartbeat script - the same notifier, reached from the other side.
+        new
+        {
+            key = "steward_question",
+            label = "A steward needs a decision",
+            description = "Once per question, when a project's steward asks its owner something only " +
+                          "they can decide. Carries the question, the steward's own pick, and what is held up.",
+        },
+        new
+        {
+            key = "steward_reminder",
+            label = "A steward is still waiting",
+            description = "At most once a day per project, while a question asked on an earlier day " +
+                          "is still unanswered.",
+        },
     };
 
     /// <summary>One place a notification can be delivered, as the Settings panel reads it.</summary>

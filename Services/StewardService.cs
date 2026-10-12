@@ -522,7 +522,8 @@ public class StewardService
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"merge ticket {ticketId} into the base ({change.Stat}) and close it");
 
-        var merged = await _git.MergeAsync(projectKey, t.Branch!, null, null, ct);
+        // The merge commit is named for the ticket, as it is when a person merges one from the board.
+        var merged = await _git.MergeAsync(projectKey, t.Branch!, $"{t.Title} (#{t.Id})", null, ct);
         if (!merged.Ok)
             return merged.Conflicted
                 ? Refuse("conflict", "The merge conflicts and was rolled back. Send it back to NeedsImplementation naming these files.", merged.ConflictedFiles)
