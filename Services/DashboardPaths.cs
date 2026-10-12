@@ -152,6 +152,7 @@ public class DashboardPaths
     public string GlobalMcpConfig => Path.Combine(DataRoot, "mcp-config.json");
     public string GlobalLockFile => Path.Combine(DataRoot, "heartbeat.lock");
     public string GlobalStopFile => Path.Combine(DataRoot, "heartbeat.stop");
+    public string GlobalWakeFile => Path.Combine(DataRoot, "heartbeat.wake");
     public string GlobalLogsDir => Path.Combine(DataRoot, "logs");
 
     /// <summary>Committed, project-agnostic skill + operational-file templates used to scaffold a new project.</summary>

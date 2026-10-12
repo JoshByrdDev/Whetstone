@@ -94,10 +94,21 @@ function Remove-OldLogs {
 function Start-InterruptibleSleep {
     # -WhileExists ends the sleep early, as though it had run its course, once that file is gone:
     # for a wait whose reason somebody else can remove.
-    param([int]$Seconds, [string]$WhileExists)
+    #
+    # -Wakeable ends it early when the dashboard leaves a wake signal, and says so in
+    # $script:WokenEarly so the caller can drop its backoff: there is known work, and the next
+    # idle pass should not start from an hour. Only the idle sleeps pass it - a usage-limit pause
+    # is not something new work can lift.
+    param([int]$Seconds, [string]$WhileExists, [switch]$Wakeable)
+    $script:WokenEarly = $false
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ($true) {
         if (Test-Path $StopFile) { return $false }
+        if ($Wakeable -and (Test-Path $WakeFile)) {
+            Remove-Item $WakeFile -Force -ErrorAction SilentlyContinue
+            $script:WokenEarly = $true
+            return $true
+        }
         if ($WhileExists -and -not (Test-Path $WhileExists)) { return $true }
         $remaining = ($deadline - (Get-Date)).TotalSeconds
         if ($remaining -le 0) { return $true }
@@ -596,6 +607,10 @@ while ($true) {
     }
 
     New-Lock  # refresh timestamp so a long-running ticket never looks stale
+    # A wake signal is for a sleeping orchestrator. This pass is about to look at the queue anyway,
+    # so one left while the fleet was busy is spent here rather than cutting short a later sleep
+    # that has nothing to do with it.
+    if (Test-Path $WakeFile) { Remove-Item $WakeFile -Force -ErrorAction SilentlyContinue }
     Update-Fleet
 
     # Take back anything claimed but abandoned before asking for more - most often the ticket a
@@ -711,14 +726,20 @@ while ($true) {
         Send-DashboardEvent -Type "sleep" -DurationSeconds $sleepSeconds -Text "Off-hours until $wakeTime"
         Send-DashboardEvent -Type "state_change" -Text "off-hours"
         Send-SleepNotice -Next "Off-hours until ${OffHoursEnd} - waking at $wakeTime."
-        $slept = Start-InterruptibleSleep -Seconds $sleepSeconds
+        $slept = Start-InterruptibleSleep -Seconds $sleepSeconds -Wakeable
     }
     else {
         Write-Log "Sleeping $CurrentHeartbeatMinutes min..."
         Send-DashboardEvent -Type "sleep" -DurationSeconds ($CurrentHeartbeatMinutes * 60) -Text "Sleeping ${CurrentHeartbeatMinutes}m"
         Send-DashboardEvent -Type "state_change" -Text "sleeping"
         Send-SleepNotice -Next "Next check in ${CurrentHeartbeatMinutes} min."
-        $slept = Start-InterruptibleSleep -Seconds ($CurrentHeartbeatMinutes * 60)
+        $slept = Start-InterruptibleSleep -Seconds ($CurrentHeartbeatMinutes * 60) -Wakeable
+    }
+
+    if ($script:WokenEarly) {
+        Write-Log "Woken by the dashboard: there is new work to look at."
+        $CurrentHeartbeatMinutes = $BaseHeartbeatMinutes
+        Send-DashboardEvent -Type "state_change" -Text "idle"
     }
 
     # Woken early by a stop request - act on it now rather than starting another cycle first.

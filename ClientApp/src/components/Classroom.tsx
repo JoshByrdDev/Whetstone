@@ -1140,7 +1140,8 @@ function BounceNote({ note }: { note: Comment }) {
   }, [note.body, open]);
 
   const who = note.author === 'Human' ? 'You' : note.author;
-  const tone = note.author === 'Human' ? 'text-sky-400' : note.author === 'Claude' ? 'text-violet-400' : 'text-gray-500';
+  const tone = note.author === 'Human' || note.author === 'Steward' ? 'text-sky-400'
+    : note.author === 'Claude' ? 'text-violet-400' : 'text-gray-500';
 
   return (
     <div className="min-w-0">

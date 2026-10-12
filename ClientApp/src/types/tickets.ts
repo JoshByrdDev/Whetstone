@@ -57,7 +57,7 @@ export interface ReviewComment {
   body: string;
   severity: ReviewSeverity;
   status: ReviewCommentStatus;
-  author: 'Human' | 'Claude' | 'System';
+  author: AuthorName;
   anchorSha?: string | null;
   qaItemId?: number | null;
   qaShotOrder?: number | null;
@@ -83,7 +83,8 @@ export interface JourneyLeg {
   backward: boolean;
 }
 export type QaStatusName = 'Todo' | 'Passed' | 'Failed' | 'Blocked';
-export type AuthorName = 'Human' | 'Claude' | 'System';
+// Steward: the project's stand-in for the owner. Its notes bind a worker exactly as the owner's do.
+export type AuthorName = 'Human' | 'Claude' | 'System' | 'Steward';
 
 export interface PhaseInfo {
   name: Phase;

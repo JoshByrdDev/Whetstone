@@ -534,7 +534,8 @@ export function TicketDetail({
                       const who = c.author === 'Human' ? 'You' : c.author;
                       // A note of yours that no run has answered is the one entry on this timeline
                       // that is not history: it is holding the ticket's next hand-off right now.
-                      const pending = c.author === 'Human' && c.acknowledged === false;
+                      // A steward's note holds it the same way, in the owner's place.
+                      const pending = (c.author === 'Human' || c.author === 'Steward') && c.acknowledged === false;
                       const dot = pending ? 'bg-amber-400'
                         : c.author === 'System' ? 'bg-gray-600' : c.author === 'Claude' ? 'bg-violet-400' : 'bg-sky-400';
                       const head = c.author === 'System' ? 'text-gray-500' : c.author === 'Claude' ? 'text-violet-400' : 'text-sky-400';

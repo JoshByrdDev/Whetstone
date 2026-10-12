@@ -19,6 +19,7 @@ public class HeartbeatManager
     private readonly string _workerScriptPath;
     private readonly string _lockFilePath;
     private readonly string _stopFilePath;
+    private readonly string _wakeFilePath;
     private readonly string _workingDir;
     private Process? _process;
 
@@ -31,6 +32,7 @@ public class HeartbeatManager
         _workerScriptPath = paths.GlobalWorkerScript;
         _lockFilePath = paths.GlobalLockFile;
         _stopFilePath = paths.GlobalStopFile;
+        _wakeFilePath = paths.GlobalWakeFile;
         _workingDir = paths.DataRoot;
     }
 
@@ -85,6 +87,35 @@ public class HeartbeatManager
     {
         try { if (File.Exists(_lockFilePath)) File.Delete(_lockFilePath); } catch { /* best effort */ }
         try { if (File.Exists(_stopFilePath)) File.Delete(_stopFilePath); } catch { /* best effort */ }
+        try { if (File.Exists(_wakeFilePath)) File.Delete(_wakeFilePath); } catch { /* best effort */ }
+    }
+
+    /// <summary>
+    /// Tell a sleeping heartbeat there is work it cannot see from inside its nap.
+    /// <para>
+    /// An idle orchestrator backs off to an hour and hibernates through off-hours, and nothing that
+    /// happened on the board used to reach it: a ticket filed or unblocked at the start of a nap
+    /// waited the nap out. The only way to cut it short was to stop the heartbeat and start it
+    /// again, and a stop takes every worker with it. This is a signal file the idle sleep polls,
+    /// exactly as it polls for a stop, so it can only ever end a sleep.
+    /// </para>
+    /// <para>
+    /// A heartbeat that is not running stays not running: somebody stopped it, and new work is not
+    /// a reason to overrule them. Never throws - a wake that fails costs a wait, nothing else.
+    /// </para>
+    /// </summary>
+    public bool Wake()
+    {
+        if (!IsRunning) return false;
+        try
+        {
+            File.WriteAllText(_wakeFilePath, DateTime.UtcNow.ToString("o"));
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     // Both halves, because the orchestrator without its worker script exits within a second of

@@ -164,6 +164,22 @@ public enum AuthorKind
     Human,
     Claude,
     System,
+    /// <summary>
+    /// The project's steward: the agent that stands in for the ticket's owner between worker runs.
+    /// Its own name rather than <see cref="Human"/> so the record never claims a person said
+    /// something they did not, and so what it did can be counted without reading comment text.
+    /// </summary>
+    Steward,
+}
+
+public static class AuthorKinds
+{
+    /// <summary>
+    /// A note a worker has to answer before it hands off: the owner's, or the steward's speaking
+    /// for them. The steward's send-back is the same instruction the owner's would have been, and
+    /// a worker free to ignore it would make sending work back a suggestion.
+    /// </summary>
+    public static bool IsDirective(AuthorKind author) => author is AuthorKind.Human or AuthorKind.Steward;
 }
 
 /// <summary>A local ticket — the unit of work on the board. Belongs to one project (by key).</summary>

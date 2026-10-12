@@ -89,6 +89,36 @@ public class OwnerNoteTests : IDisposable
     }
 
     /// <summary>
+    /// A steward sends work back in the owner's place, and its note has to bind exactly as the
+    /// owner's would: a send-back a worker could hand off past is a suggestion.
+    /// </summary>
+    [Fact]
+    public async Task A_stewards_note_holds_the_handoff_and_is_answered_like_an_owners()
+    {
+        var id = await Seed(TicketPhase.Implementing);
+        int noteId;
+        await using (var ctx = NewCtx())
+            noteId = (await new TicketService(ctx).AddCommentAsync(
+                id, "The empty state still says 'No results' where the ticket asked for a way to clear the filter.", AuthorKind.Steward))!.Id;
+
+        await using (var ctx = NewCtx())
+            await Assert.ThrowsAsync<HandoffRequirementException>(() =>
+                new TicketService(ctx).TransitionAsync(id, TicketPhase.NeedsImplementationReview, null, TransitionActor.Worker));
+
+        await using (var ctx = NewCtx())
+        {
+            var (_, problem) = await new TicketService(ctx).AcknowledgeNoteAsync(
+                noteId, "Replaced the empty state with a 'Clear filter' button and a line saying which filter hid everything.");
+            Assert.Null(problem);
+        }
+
+        await using var ctx2 = NewCtx();
+        var t = await new TicketService(ctx2).TransitionAsync(
+            id, TicketPhase.NeedsImplementationReview, null, TransitionActor.Worker);
+        Assert.Equal(TicketPhase.NeedsQa, t!.Phase);
+    }
+
+    /// <summary>
     /// The whole reason acknowledgement exists rather than delivery being enough: a run can read a
     /// note and then die, and the note has to survive that. Delivery is not consumption.
     /// </summary>

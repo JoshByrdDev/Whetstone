@@ -146,6 +146,12 @@ public enum TransitionActor
     Worker,
     /// <summary>The dashboard itself — the claim lock, a skipped review gate, the wedged-ticket breaker.</summary>
     System,
+    /// <summary>
+    /// The project's steward, acting for the owner within the mode the owner set. Not held to a
+    /// worker's hand-off requirements, because the moves it makes are the owner's moves; what it
+    /// may do at all is decided before it gets here, by the steward's own policy.
+    /// </summary>
+    Steward,
 }
 
 /// <summary>

@@ -59,11 +59,26 @@ public class TicketService
     // And again: absent, a ticket in NeedsRefinement is claimed at once, with no analysis to rule on.
     private readonly IClassroomGate? _classroomGate;
 
+    // And once more: absent, work that lands in a queue waits for the heartbeat's own timer, which
+    // is how it always was.
+    private readonly HeartbeatManager? _heartbeat;
+
     public TicketService(DashboardDbContext db, IssueSnapshotService? snapshots = null,
         TicketDependencyService? dependencies = null, ResourceLeaseService? leases = null,
-        IClassroomGate? classroomGate = null)
-        => (_db, _snapshots, _dependencies, _leases, _classroomGate)
-         = (db, snapshots, dependencies, leases, classroomGate);
+        IClassroomGate? classroomGate = null, HeartbeatManager? heartbeat = null)
+        => (_db, _snapshots, _dependencies, _leases, _classroomGate, _heartbeat)
+         = (db, snapshots, dependencies, leases, classroomGate, heartbeat);
+
+    /// <summary>
+    /// A ticket has just become something a worker could pick up, or has finished and may have
+    /// freed the tickets that were waiting on it. A worker's own hand-off needs no help - the
+    /// orchestrator is awake and polling while anything runs - so this matters for the moves made
+    /// while it sleeps: a person's, the dashboard's, a steward's.
+    /// </summary>
+    private void WakeFor(TicketPhase phase)
+    {
+        if (PhaseMachine.IsActionable(phase) || phase == TicketPhase.Done) _heartbeat?.Wake();
+    }
 
     // Four collections off one root, so this MUST be a split query. As a single query EF joins them
     // all together and SQLite returns the cartesian product - one row per (comment x work item x qa
@@ -454,6 +469,7 @@ public class TicketService
 
         _db.Tickets.Add(ticket);
         await _db.SaveChangesAsync();
+        WakeFor(phase);
         return (await GetAsync(ticket.Id))!;
     }
 
@@ -767,6 +783,7 @@ public class TicketService
         });
 
         await _db.SaveChangesAsync();
+        WakeFor(to);
 
         // Leaving speculation means a plan now exists, built against the linked issue as it stands
         // right now — so this is the moment to record what it was built against. Every later phase
@@ -1495,7 +1512,7 @@ public class TicketService
         var note = await _db.Comments.FirstOrDefaultAsync(c => c.Id == noteId);
         if (note is null) return (null, null);
 
-        if (note.Author != AuthorKind.Human)
+        if (!AuthorKinds.IsDirective(note.Author))
             return (note, $"Note {noteId} was written by {note.Author}, not by the ticket's owner. Only "
                         + "the owner's notes are addressed to you, and only they need answering — your "
                         + "own notes and the phase log do not.");

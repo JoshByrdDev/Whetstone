@@ -50,6 +50,9 @@ $PromptFile         = Join-Path $DataRoot "heartbeat-prompt.md"
 $WorkerScript       = Join-Path $DataRoot "worker.ps1"
 $LockFile           = Join-Path $DataRoot "heartbeat.lock"
 $StopFile           = Join-Path $DataRoot "heartbeat.stop"
+# Written by the dashboard when work arrives that a sleeping orchestrator cannot see (a ticket
+# filed, unblocked or sent back, a steward run falling due). It ends an idle sleep and nothing else.
+$WakeFile           = Join-Path $DataRoot "heartbeat.wake"
 $LogDir             = Join-Path $DataRoot "logs"
 $RunDir             = Join-Path $DataRoot "run"
 $GlobalDefaultsFile = Join-Path $DataRoot "config.defaults.json"

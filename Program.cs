@@ -44,6 +44,8 @@ builder.Services.AddSingleton<EventStore>();
 builder.Services.AddSingleton<IssueTrackerFactory>();
 builder.Services.AddSingleton<LinkedIssueResolver>();
 builder.Services.AddSingleton<HeartbeatManager>();
+// Notices the dashboard raises itself. Goes through the heartbeat's own notifier script.
+builder.Services.AddSingleton<NotificationSender>();
 // Which agent CLI the one-shot runs below shell out to, and how. Reads the provider off global
 // config on every call rather than caching it, so the Settings toggle takes effect without a
 // restart — which here would also kill every in-flight worker. The heartbeat's own runs have the
@@ -365,6 +367,12 @@ app.MapPost("/api/heartbeat/stop-after-cycle", (HeartbeatManager hb) =>
     var (success, message) = hb.RequestStopAfterCycle();
     return success ? Results.Ok(new { message }) : Results.BadRequest(new { message });
 });
+
+// POST /api/heartbeat/wake — end an idle sleep now, because there is work the nap cannot see
+app.MapPost("/api/heartbeat/wake", (HeartbeatManager hb) =>
+    hb.Wake()
+        ? Results.Ok(new { message = "The heartbeat will look at the queue now" })
+        : Results.BadRequest(new { message = "Heartbeat is not running" }));
 
 // POST /api/heartbeat/cancel-stop — remove the stop-after-cycle signal
 app.MapPost("/api/heartbeat/cancel-stop", (HeartbeatManager hb) =>

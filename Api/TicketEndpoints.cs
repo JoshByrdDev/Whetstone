@@ -687,6 +687,10 @@ public static class TicketEndpoints
             var author = AuthorKind.Human;
             if (!string.IsNullOrEmpty(req.Author) && !Enum.TryParse(req.Author, true, out author))
                 return Results.BadRequest(new { error = $"Unknown author '{req.Author}'" });
+            // A steward's note is an instruction a worker must answer, and it is written only by
+            // the steward's own tools - not claimed through the open door by naming it here.
+            if (author == AuthorKind.Steward)
+                return Results.BadRequest(new { error = "A steward's note is written by the steward, not through this route." });
 
             var c = await svc.AddCommentAsync(id, req.Body, author);
             return c is null ? Results.NotFound() : Results.Ok(new CommentDto(c.Id, c.Author.ToString(), c.Body, c.Phase?.ToString(), c.CreatedAt));

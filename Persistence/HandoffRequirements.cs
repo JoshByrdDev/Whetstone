@@ -48,7 +48,7 @@ public static class HandoffRequirements
     /// </para>
     /// </summary>
     public static IReadOnlyList<Comment> UnansweredOwnerNotes(Ticket t) => t.Comments
-        .Where(c => c.Author == AuthorKind.Human && c.AcknowledgedAt is null)
+        .Where(c => AuthorKinds.IsDirective(c.Author) && c.AcknowledgedAt is null)
         .OrderBy(c => c.CreatedAt)
         .ToList();
 
