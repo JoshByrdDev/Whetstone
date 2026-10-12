@@ -211,7 +211,7 @@ export function AgentDock({ status, wakeAt, workers, agents, visible, events = [
   const now = useNow(agents.length > 0);
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-1.5 max-sm:flex-wrap max-sm:max-w-full">
       {slots.map(slot => {
         const a = bySlot.get(slot);
         const ticket = a?.ticketId ? Number(a.ticketId.replace(/\D/g, '')) : null;
@@ -235,7 +235,7 @@ export function AgentDock({ status, wakeAt, workers, agents, visible, events = [
           return (
             <div
               key={slot}
-              className="orbit-berth flex items-center gap-1.5 pl-2 pr-2.5 py-1"
+              className="orbit-berth flex items-center gap-1.5 pl-2 pr-2.5 py-1 max-sm:max-w-full"
               tabIndex={0}
               title={`Agent ${slot} — out on the board, working #${ticket}`}
               style={{ ...berth, ['--bw' as string]: `1px dashed ${accent.edge}` } as CSSProperties}
@@ -262,7 +262,7 @@ export function AgentDock({ status, wakeAt, workers, agents, visible, events = [
         return (
           <div
             key={slot}
-            className="orbit-berth flex items-center gap-2 pl-1.5 pr-2.5 py-1"
+            className="orbit-berth flex items-center gap-2 pl-1.5 pr-2.5 py-1 max-sm:max-w-full"
             tabIndex={0}
             title={`Agent ${slot} — ${a && ticket != null ? `working ticket #${ticket}` : DOCK_LABEL[mood]}`}
             style={{ ...berth, ['--bw' as string]: '1px solid rgb(var(--w-line-rgb) / .16)' } as CSSProperties}

@@ -102,7 +102,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
     : `Last run ${ago(page.lastRunEndedAt)}${page.due ? ` - a run is due: ${page.dueReason}` : page.resting ? ' - resting until something changes' : ''}`;
 
   return (
-    <div className="max-w-7xl mx-auto px-6 py-4">
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4">
       <PageHead
         eyebrow="Whetstone // stand-in"
         title="Steward"
@@ -427,15 +427,17 @@ function PlanSection({ status }: { status: StewardStatus | null }) {
               const c = TIER[STATE_TIER[o.state]].c;
               return (
                 <div
-                  key={o.outcome} className="flex items-baseline gap-3"
+                  // On a phone the tickets and the note each take a line of their own under the
+                  // outcome: side by side, a dozen ticket numbers are wider than the screen.
+                  key={o.outcome} className="flex items-baseline gap-x-3 gap-y-1 max-sm:flex-wrap"
                   style={{ padding: '7px 16px', borderBottom: '1px solid rgb(var(--w-line-rgb) / .06)' }}
                 >
                   <span style={{ font: `700 11.5px ${MONO}`, color: 'var(--w-t200)', width: 34, flex: 'none' }}>{o.outcome}</span>
                   <span style={{ ...label(c), width: 92, flex: 'none' }}>
                     {o.state === 'NotStarted' ? 'not started' : o.state === 'InProgress' ? 'in progress' : 'done'}
                   </span>
-                  <span style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t400)', flex: 'none' }}>{o.tickets.join('  ')}</span>
-                  <span style={{ font: `400 11.5px ${BODY}`, color: fade('var(--w-t400)', 80), minWidth: 0 }}>
+                  <span className="flex-none max-sm:flex-auto max-sm:basis-full max-sm:min-w-0" style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t400)' }}>{o.tickets.join('  ')}</span>
+                  <span className="max-sm:basis-full max-sm:empty:hidden" style={{ font: `400 11.5px ${BODY}`, color: fade('var(--w-t400)', 80), minWidth: 0 }}>
                     {o.moreToFile && <span style={{ color: TIER.active.c }}>more to file. </span>}{o.note}
                   </span>
                 </div>

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { usePop } from '../hooks/usePop';
 import type { CSSProperties, ReactNode } from 'react';
 import { useTickets } from '../hooks/useTickets';
+import { useNarrow } from '../hooks/useNarrow';
 import { PHASE_LABEL, DEFAULT_PRIORITY, PRIORITY_COLOR, PRIORITY_HINT, PRIORITY_LEVEL, PRIORITY_MARK } from '../types/tickets';
 import type { LabelRef, Phase, PhaseInfo, PhaseKind, TicketSummary, Track } from '../types/tickets';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
@@ -44,8 +45,13 @@ const GATE_ACTIONS: Partial<Record<Phase, { to: Phase; label: string }[]>> = {
 /** Shared empty list for the rows wearing no labels — the common case, and not worth an allocation. */
 const NO_LABELS: LabelRef[] = [];
 
-/** Board gutter. The arc, the section rules and every row share it, so the sky shows through evenly. */
+/**
+ * Board gutter. The arc, the section rules and every row share it, so the sky shows through evenly.
+ * Padding reads it as `--board-gutter`, which the board sets from this at a desk and from
+ * {@link GUTTER_NARROW} on a phone, where 26px either side is a seventh of the screen.
+ */
 const GUTTER = 26;
+const GUTTER_NARROW = 4;
 /** Row shell padding. The arc's probe grid sits inside the same inset, which is what aligns them. */
 const ROW_PAD_L = 20;
 const ROW_PAD_R = 16;
@@ -97,6 +103,7 @@ function zoneOf(t: TicketSummary, kindOf: ReadonlyMap<Phase, PhaseKind>): Zone {
 
 export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt: Date | null; events: HeartbeatEvent[] }) {
   const [projectFilter, setProjectFilter] = useState<string | null>(null);
+  const narrow = useNarrow();
   const { tickets, phases, projects, labels, loading, error, refreshTickets } = useTickets(projectFilter);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [creating, setCreating] = useState(false);
@@ -497,7 +504,7 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
     if (!expanded[o.title]) return null;
     const rows = shown(o.rows);
     return (
-      <div style={{ padding: `0 ${GUTTER}px 12px`, gap: 6, ['--rowgap' as string]: '6px' } as CSSProperties} className="flex flex-col">
+      <div style={{ padding: `0 var(--board-gutter) 12px`, gap: 6, ['--rowgap' as string]: '6px' } as CSSProperties} className="flex flex-col">
         {/* Controls for the list, above the list. They cannot live on the header itself: the header
             is one button, and a button inside a button is neither valid nor clickable. */}
         {o.head}
@@ -513,13 +520,16 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
   };
 
   return (
-    <div className="px-6 py-4">
+    <div
+      className={narrow ? 'px-2 py-2' : 'px-6 py-4'}
+      style={{ ['--board-gutter' as string]: `${narrow ? GUTTER_NARROW : GUTTER}px` } as CSSProperties}
+    >
       {/* No background of its own: one sky is mounted at the root behind every tab, and a shell
           that painted itself would cover the very thing it used to contain. */}
       <div className="relative flex flex-col min-h-[calc(100vh-9rem)]">
 
         {/* ---- Station header ---- */}
-        <div style={{ padding: `24px ${GUTTER}px 0` }}>
+        <div style={{ padding: `${narrow ? 10 : 24}px var(--board-gutter) 0` }}>
           <PageHead
             eyebrow="Whetstone // pipeline"
             title="Board"
@@ -557,7 +567,7 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
         {/* Thin manifest line: what the sector holds, plus the repo controls for the current filter. */}
         <div
           className="relative flex flex-wrap items-center gap-3"
-          style={{ padding: `10px ${GUTTER}px 0`, font: `400 10.5px ${BODY}`, color: 'var(--w-t600)' }}
+          style={{ padding: `10px var(--board-gutter) 0`, font: `400 10.5px ${BODY}`, color: 'var(--w-t600)' }}
         >
           <span style={{ font: `600 9.5px ${DISPLAY}`, letterSpacing: track(.22), textTransform: CAPS }}>
             {filtering && `${openVisible} of `}{openCount} open ticket{openCount === 1 ? '' : 's'} · {projects.length} project{projects.length === 1 ? '' : 's'}
@@ -605,10 +615,13 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
             Charting the sector…
           </div>
         ) : (
-          <div className="relative flex-1 overflow-x-auto">
-            <div style={{ minWidth: 1180 }}>
-              {/* +1 for the row shell's own border, which the grid inside it sits behind. */}
-              <SectorArc
+          <div className={`relative flex-1 ${narrow ? '' : 'overflow-x-auto'}`}>
+            <div style={{ minWidth: narrow ? undefined : 1180 }}>
+              {/* The arc is a map nine stations wide, and every row is ruled to its columns. A
+                  phone has room for neither, so there the board is the list alone: each row says
+                  its own phase on its chip, which is the same fact the column was drawing.
+                  +1 for the row shell's own border, which the grid inside it sits behind. */}
+              {!narrow && <SectorArc
                 load={load}
                 // Which lanes to draw, from the per-project setting rather than from what happens
                 // to be parked on the board.
@@ -627,14 +640,14 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
                 onHoverStation={setHoverStation}
                 selected={stationFilter}
                 onToggleStation={toggleStation}
-              />
+              />}
 
               <SectionRule
                 colour="var(--w-gate)"
                 title="Awaiting your call"
                 count={filtering ? kept(waiting) : waiting.length}
               />
-              <div style={{ padding: `0 ${GUTTER}px 12px`, gap: 8, ['--rowgap' as string]: '8px' } as CSSProperties} className="flex flex-col">
+              <div style={{ padding: `0 var(--board-gutter) 12px`, gap: 8, ['--rowgap' as string]: '8px' } as CSSProperties} className="flex flex-col">
                 {kept(waiting) === 0 && shown(waiting).length === 0 ? (
                   <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t700)', padding: '2px 4px' }}>
                     {filtering && waiting.length > 0
@@ -653,7 +666,7 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
                 title="In flight"
                 meta={`Claude, autonomously · ${String(filtering ? kept(flight) : flight.length).padStart(2, '0')}`}
               />
-              <div style={{ padding: `0 ${GUTTER}px 12px`, gap: 3, ['--rowgap' as string]: '3px' } as CSSProperties} className="flex flex-col">
+              <div style={{ padding: `0 var(--board-gutter) 12px`, gap: 3, ['--rowgap' as string]: '3px' } as CSSProperties} className="flex flex-col">
                 {kept(flight) === 0 && shown(flight).length === 0 ? (
                   <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t700)', padding: '2px 4px' }}>
                     {filtering && flight.length > 0 ? 'Nothing in flight at the selected stages.' : 'Nothing in flight.'}
@@ -667,7 +680,7 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
                         {/* The agent marker belongs to the row beneath it, so it leaves on the same
                             beat. Left behind, it would be a mascot beaming down at a ticket the
                             filter has just taken off the board. */}
-                        {worker && (
+                        {worker && !narrow && (
                           <div className="orbit-fade" data-fx={fx}>
                             <AgentHover phase={worker.phase} station={stationOf(t)} agent={worker.slot} />
                           </div>
@@ -679,7 +692,7 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
                 )}
               </div>
 
-              <div className="flex gap-2.5" style={{ padding: `2px ${GUTTER}px 12px` }}>
+              <div className={`flex ${narrow ? 'flex-col gap-1.5' : 'gap-2.5'}`} style={{ padding: `2px var(--board-gutter) 12px` }}>
                 {foldSection({ title: 'Backlog', rows: backlog, tier: 'backlog', empty: 'Backlog is empty.' })}
                 {foldSection({
                   title: 'Completed', rows: done, tier: 'done', landed: filed,
@@ -1004,7 +1017,7 @@ function SectionRule({ colour, title, count, meta }: {
   colour: string; title: string; count?: number; meta?: string;
 }) {
   return (
-    <div className="relative flex items-center gap-3" style={{ padding: `4px ${GUTTER}px 8px` }}>
+    <div className="relative flex items-center gap-3" style={{ padding: `4px var(--board-gutter) 8px` }}>
       <span style={{ width: 3, height: 14, background: colour, boxShadow: `0 0 12px ${colour}` }} />
       <span style={{ font: `700 10.5px ${DISPLAY}`, letterSpacing: track(.3), color: colour, textTransform: CAPS }}>
         {title}
@@ -1069,6 +1082,10 @@ function OrbitRow({
   const blocked = t.phase === 'Blocked';
   const glow = kind === 'active' ? '206,174,51' : '150,180,230';
   const shell = useRef<HTMLDivElement>(null);
+  // On a phone the row is a card: what it is, then what you can do about it, one under the other.
+  // The nine station columns go, and so does everything that waited for a pointer to rest on the
+  // row - there is no hover to wait for, so the line it unfolded is simply there.
+  const narrow = useNarrow();
 
   // The collapse has to start from the height this row actually is, and the row is the only thing
   // that knows it. A layout effect writes it on before the browser paints the animation's first
@@ -1138,13 +1155,18 @@ function OrbitRow({
       <Bracket tier={tier.c} corner="br" />
 
       {/* Named so the exit can crush the row's contents without touching the shell they sit in. */}
-      <div className="orbit-rowbody" style={{ ...GRID, padding: `${variant === 'waiting' ? 11 : 9}px ${ROW_PAD_R}px ${variant === 'waiting' ? 11 : 9}px ${ROW_PAD_L}px` }}>
-        <div style={{ paddingRight: 16, minWidth: 0 }}>
+      <div
+        className="orbit-rowbody"
+        style={narrow
+          ? { display: 'flex', flexDirection: 'column', gap: 8, padding: '10px 12px 10px 15px' }
+          : { ...GRID, padding: `${variant === 'waiting' ? 11 : 9}px ${ROW_PAD_R}px ${variant === 'waiting' ? 11 : 9}px ${ROW_PAD_L}px` }}
+      >
+        <div style={{ paddingRight: narrow ? 0 : 16, minWidth: 0 }}>
           {/* Same shape in both zones: what phase this is and which ticket it is, then the title.
               The zone a row sits in already implies its phase, but only to someone who knows the
               board — and the implication breaks the moment a row is spotlit, dragged into view by
               a filter, or read on its own. The chip is the row saying it itself. */}
-          <div className="flex items-center gap-2 min-w-0" style={{ marginBottom: variant === 'waiting' ? 3 : 2 }}>
+          <div className={`flex items-center gap-2 min-w-0 ${narrow ? 'flex-wrap' : ''}`} style={{ marginBottom: variant === 'waiting' ? 3 : 2 }}>
             {/* The phase, not a rank. Set to be read rather than to look like a badge — less
                 tracking than the rest of the display type, and it never shrinks: the borrowed
                 identifiers beside it give way first. */}
@@ -1220,19 +1242,26 @@ function OrbitRow({
           {/* Unfolds on hover. The context you want before deciding, and the controls that act on
               the branch rather than on the ticket's phase — neither of which belongs in a row you
               are only glancing at. */}
-          <div style={{ maxHeight: 'calc(var(--rv,0) * 46px)', opacity: 'var(--rv,0)', overflow: 'hidden', transition: 'max-height .22s ease,opacity .18s ease' }}>
-            <div className="flex items-center gap-2" style={{ paddingTop: 4 }}>
+          <div style={narrow ? undefined : { maxHeight: 'calc(var(--rv,0) * 46px)', opacity: 'var(--rv,0)', overflow: 'hidden', transition: 'max-height .22s ease,opacity .18s ease' }}>
+            <div className={`flex items-center gap-2 ${narrow ? 'flex-wrap' : ''}`} style={{ paddingTop: 4 }}>
               <span
                 style={{
                   font: `400 ${variant === 'waiting' ? 11 : 10.5}px/1.5 ${BODY}`,
                   color: blocked ? 'var(--w-blocked-200)' : 'var(--w-t400)',
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0,
+                  minWidth: 0, overflow: 'hidden',
+                  // Two lines on a phone, where one is about forty characters and the reason a
+                  // ticket is stuck is the thing you opened the board to read.
+                  ...(narrow
+                    ? { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }
+                    : { whiteSpace: 'nowrap' as const, textOverflow: 'ellipsis' }),
                 }}
                 title={blocked ? clip(t.blockedReason) : undefined}
               >
                 <RowContext t={t} kind={kind} />
               </span>
-              <span className="flex-1" />
+              {/* No spacer on a phone: the controls wrap under the line, and pushed to the far
+                  edge they land left on one card and right on the next, by how long the line was. */}
+              {!narrow && <span className="flex-1" />}
               <span className="flex items-center gap-1 flex-none" onClick={e => e.stopPropagation()}>
                 <TicketGitActions ticketId={t.id} branch={t.branch ?? t.reviewBranch} size="row" track={t.track} repoType={repoType} merge={mergeInsteadOfPr} />
                 {revealMenu && (
@@ -1252,9 +1281,9 @@ function OrbitRow({
           </div>
         </div>
 
-        <TrackCells station={stationOf(t)} current={blocked ? 'blocked' : trackState(t.phase, kind)} delay={delay} track={t.track} />
+        {!narrow && <TrackCells station={stationOf(t)} current={blocked ? 'blocked' : trackState(t.phase, kind)} delay={delay} track={t.track} />}
 
-        <div className="flex items-center justify-end gap-1.5" onClick={e => e.stopPropagation()}>
+        <div className={`flex items-center gap-1.5 ${narrow ? 'flex-wrap' : 'justify-end'}`} onClick={e => e.stopPropagation()}>
           {variant === 'waiting' ? (
             blocked ? (
               <>
@@ -1288,7 +1317,7 @@ function OrbitRow({
               ))
             )
           ) : (
-            <span className="flex flex-col items-end" style={{ gap: 2 }}>
+            <span className={narrow ? 'flex items-baseline' : 'flex flex-col items-end'} style={{ gap: narrow ? 8 : 2 }}>
               <span
                 style={{
                   font: `700 10.5px ${MONO}`, color: tier.c, whiteSpace: 'nowrap',
@@ -1382,6 +1411,8 @@ function Ident({ t, showProjectBadge, keepWhole }: {
 function ActionButton({ tier, primary, children, onClick, title }: {
   tier: string; primary?: boolean; children: ReactNode; onClick: () => void; title?: string;
 }) {
+  // A decision made with a thumb needs more to land on than one made with a pointer.
+  const narrow = useNarrow();
   return (
     <button
       onClick={onClick}
@@ -1391,8 +1422,8 @@ function ActionButton({ tier, primary, children, onClick, title }: {
         clipPath: chamfer(9),
         ['--rbg' as string]: primary ? `linear-gradient(120deg,${tier},${fade(tier, 60)})` : 'rgb(var(--w-line-rgb) / .06)',
         ['--rbw' as string]: `1px solid ${primary ? 'transparent' : 'rgb(var(--w-line-rgb) / .18)'}`,
-        padding: primary ? '6px 12px' : '5px 11px',
-        font: `700 9.5px ${DISPLAY}`, letterSpacing: track(.16), textTransform: CAPS,
+        padding: narrow ? (primary ? '10px 16px' : '9px 15px') : primary ? '6px 12px' : '5px 11px',
+        font: `700 ${narrow ? 10.5 : 9.5}px ${DISPLAY}`, letterSpacing: track(.16), textTransform: CAPS,
         color: primary ? 'var(--w-void)' : 'var(--w-t300)', whiteSpace: 'nowrap',
         ['--hbg' as string]: primary ? `linear-gradient(120deg,${tier},${tier})` : 'rgb(var(--w-line-rgb) / .15)',
         ['--htxt' as string]: primary ? 'var(--w-void)' : 'var(--w-t100)',
@@ -1583,6 +1614,9 @@ function InspectPanel({ t, kind, agent, phases, onClose, onChanged }: {
 }) {
   const tier = tierToken(t.phase, kind);
   const blocked = t.phase === 'Blocked';
+  // Beside the board at a desk; in place of it on a phone, where two thirds of the width is a
+  // column too thin to read a plan in.
+  const narrow = useNarrow();
 
   return createPortal(
     <>
@@ -1598,8 +1632,8 @@ function InspectPanel({ t, kind, agent, phases, onClose, onChanged }: {
         aria-label={`Ticket #${t.id}`}
         style={{
           position: 'fixed', top: 0, right: 0, bottom: 0, zIndex: 41,
-          width: 'min(66vw, 1040px)', display: 'flex', flexDirection: 'column',
-          clipPath: chamfer(26),
+          width: narrow ? '100vw' : 'min(66vw, 1040px)', display: 'flex', flexDirection: 'column',
+          clipPath: narrow ? undefined : chamfer(26),
           background: 'linear-gradient(150deg,rgb(var(--w-panel-lit-rgb) / .96),rgb(var(--w-panel-deep-rgb) / .985))',
           backdropFilter: 'blur(16px)',
           borderLeft: `1px solid ${fade(tier.c, 30)}`,
@@ -1616,13 +1650,13 @@ function InspectPanel({ t, kind, agent, phases, onClose, onChanged }: {
             background: `linear-gradient(180deg,transparent,${tier.c},transparent)`,
           }}
         />
-        <div style={{ flex: 'none', padding: '24px 28px 0' }}>
-          <div className="flex items-start gap-4">
+        <div style={{ flex: 'none', padding: narrow ? '12px 14px 0' : '24px 28px 0' }}>
+          <div className={`flex items-start ${narrow ? 'gap-3' : 'gap-4'}`}>
             {/* The glyph's halo is a sibling behind it, not a box-shadow on it. A shape cut with
                 clip-path cannot cast light past its own edge — the shadow is painted and then
                 clipped away — so anything that has to glow outward needs something unclipped to
                 glow from. */}
-            <div style={{ position: 'relative', width: 64, height: 64, flex: 'none' }}>
+            {!narrow && <div style={{ position: 'relative', width: 64, height: 64, flex: 'none' }}>
               <span
                 style={{
                   position: 'absolute', left: -24, top: -24, width: 112, height: 112,
@@ -1637,13 +1671,13 @@ function InspectPanel({ t, kind, agent, phases, onClose, onChanged }: {
                   boxShadow: `inset 0 0 24px rgba(0,0,0,.65)`,
                 }}
               />
-            </div>
+            </div>}
             <div className="flex-1 min-w-0" style={{ paddingTop: 2 }}>
               <div style={{ font: `700 10px ${DISPLAY}`, letterSpacing: track(.36), textTransform: CAPS, color: tier.c, textShadow: `0 0 18px ${fade(tier.c, 60)}` }}>
                 {PHASE_LABEL[t.phase]}
               </div>
               <div
-                style={{ font: `700 26px/1.1 ${DISPLAY}`, letterSpacing: track(.02), color: 'var(--w-t100)', textTransform: CAPS, marginTop: 5 }}
+                style={{ font: `700 ${narrow ? 17 : 26}px/1.15 ${DISPLAY}`, letterSpacing: track(.02), color: 'var(--w-t100)', textTransform: CAPS, marginTop: 5 }}
               >
                 {t.title}
               </div>
@@ -1663,7 +1697,7 @@ function InspectPanel({ t, kind, agent, phases, onClose, onChanged }: {
               aria-label="Close"
               className="orbit-btn flex-none flex items-center justify-center"
               style={{
-                width: 32, height: 32, clipPath: chamfer(9),
+                width: narrow ? 40 : 32, height: narrow ? 40 : 32, clipPath: chamfer(9),
                 background: 'rgb(var(--w-line-rgb) / .06)', border: '1px solid rgb(var(--w-line-rgb) / .18)',
                 color: 'var(--w-t300)', font: `400 14px ${BODY}`,
                 ['--hbg' as string]: 'rgb(var(--w-line-rgb) / .16)',
@@ -1675,7 +1709,7 @@ function InspectPanel({ t, kind, agent, phases, onClose, onChanged }: {
               ✕
             </button>
           </div>
-          <div style={{ height: 1, background: `linear-gradient(90deg,${tier.c},rgb(var(--w-line-rgb) / .08) 60%,transparent)`, marginTop: 18 }} />
+          <div style={{ height: 1, background: `linear-gradient(90deg,${tier.c},rgb(var(--w-line-rgb) / .08) 60%,transparent)`, marginTop: narrow ? 10 : 18 }} />
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto">

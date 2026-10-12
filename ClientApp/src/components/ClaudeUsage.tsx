@@ -109,7 +109,7 @@ function AccountPicker({ usage, onSwitch, busy }: {
       value={usage.account}
       disabled={busy}
       onChange={e => onSwitch(e.target.value)}
-      className="orbit-tap bg-gray-900 border border-hair rounded px-1.5 py-0.5 text-xs text-gray-300 focus:outline-none focus:border-gray-500 disabled:opacity-50"
+      className="orbit-tap bg-gray-900 border border-hair rounded px-1.5 py-0.5 text-xs text-gray-300 focus:outline-none focus:border-gray-500 disabled:opacity-50 max-sm:max-w-[120px]"
     >
       {accounts.map(a => <option key={a} value={a}>{a}</option>)}
     </select>
@@ -237,8 +237,12 @@ export function HeaderUsage() {
       className="flex items-center gap-1.5 text-xs"
       title={summary(usage)}
     >
-      {picker}
-      <span className="h-1.5 w-10 rounded-full bg-gray-800 overflow-hidden">
+      {/* The picker, the bar and the reset time stay at the desk. On a phone the percent is the
+          whole glance - the bar it shares with a full fleet's pulse has no room for more - and the
+          Metrics tab has every window spelled out. The picker still shows there whenever there
+          are no numbers, which is when switching away is the point. */}
+      <span className="max-sm:hidden">{picker}</span>
+      <span className="h-1.5 w-10 rounded-full bg-gray-800 overflow-hidden max-sm:hidden">
         <span
           className={`block h-full rounded-full ${t.bar} ${stale ? 'opacity-50' : ''}`}
           style={{ width: `${Math.min(100, Math.max(2, worst.percent))}%` }}
@@ -247,7 +251,7 @@ export function HeaderUsage() {
       <span className={`font-medium ${stale ? 'text-gray-500' : t.text}`}>
         {Math.round(worst.percent)}%
       </span>
-      {reset && <span className="text-gray-500">resets {reset}</span>}
+      {reset && <span className="text-gray-500 whitespace-nowrap max-sm:hidden">resets {reset}</span>}
       {stale && <span className="text-gray-600">·stale</span>}
       {/* The usual way to see a dead login is right here rather than on the empty chip above: a
           failed poll keeps the last good numbers, so the meter goes stale long before it goes

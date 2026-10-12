@@ -175,6 +175,19 @@ almost certainly re-implemented one of them slightly differently — that is how
 five spellings of the same 150ms fade. `transition-colors` on a bare text or icon colour change is
 the one fair exception.
 
+### The phone view is the same components, arranged for a thumb
+
+The client is also read on a phone, over a private network address that proxies to 5338. There is
+no second UI: a page folds to one column below one width, `NARROW_PX` in `src/hooks/useNarrow.ts`,
+which is Tailwind's `sm`. Say it in a class where a class can reach (`max-sm:`, `sm:`); ask
+`useNarrow()` where the layout is an inline style, which is most of the board.
+
+Two things a new surface gets wrong on a phone without ever looking wrong at a desk: anything that
+only appears on hover (there is no hover - show it, or leave it to the drawer), and a `flex-1`
+input or text run with no `min-w-0`, which refuses to shrink and scrolls the whole page sideways.
+The check is the page at 390px wide with `document.documentElement.scrollWidth` equal to the
+viewport's.
+
 ## A skill exists more than once. Change all of it.
 
 `data/skill-templates/<phase>/skill.md` is the template; `data/projects/<project>/skills/<phase>/skill.md`

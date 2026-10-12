@@ -17,8 +17,12 @@ const statusMeta: Record<string, { label: string; dot: string; text: string; pul
  * Compact fleet glance for the app bar — status pill plus one chip per working agent, in that
  * agent's colour. Shows the linked issue key when the ticket has one, else the (truncated) local
  * title. Visible on every tab.
+ *
+ * `compact` is the phone's bar: the pill and each agent's numbered dot, without the ticket names.
+ * Three truncated titles are wider than the screen they would be read on, and the board directly
+ * underneath says which ticket each agent is holding.
  */
-export function HeaderHeartbeat({ state, wakeAt }: { state: DashboardState; wakeAt?: Date | null }) {
+export function HeaderHeartbeat({ state, wakeAt, compact }: { state: DashboardState; wakeAt?: Date | null; compact?: boolean }) {
   const [titles, setTitles] = useState<Record<string, { title: string; issueKey?: string | null }>>({});
 
   // Every ticket the fleet is on, as a stable key so this refetches when the set changes rather
@@ -57,7 +61,7 @@ export function HeaderHeartbeat({ state, wakeAt }: { state: DashboardState; wake
 
   return (
     <div className="flex items-center gap-2 text-xs">
-      <span className={`inline-flex items-center gap-1.5 font-medium ${meta.text}`}>
+      <span className={`inline-flex items-center gap-1.5 font-medium whitespace-nowrap ${meta.text}`}>
         <span className="relative flex h-2 w-2">
           {meta.pulse && (
             <span className={`animate-ping absolute inline-flex h-full w-full rounded-full ${meta.dot} opacity-75`} />
@@ -69,7 +73,7 @@ export function HeaderHeartbeat({ state, wakeAt }: { state: DashboardState; wake
       {state.status === 'sleeping' && wakeAt && (
         <>
           <span className="text-gray-700">·</span>
-          <span className="text-amber-300/80">wakes {formatWakeTime(wakeAt)}</span>
+          <span className="text-amber-300/80 whitespace-nowrap">wakes {formatWakeTime(wakeAt)}</span>
         </>
       )}
       {state.agents.map(a => {
@@ -81,20 +85,20 @@ export function HeaderHeartbeat({ state, wakeAt }: { state: DashboardState; wake
         const isLinked = !!(t && t.issueKey?.trim());
         return (
           <span key={a.slot} className="flex items-center gap-1">
-            <span className="text-gray-700">·</span>
+            {!compact && <span className="text-gray-700">·</span>}
             <span
               className="inline-flex items-center justify-center flex-shrink-0 rounded-full border text-[9px] font-bold leading-none"
               style={{ width: 14, height: 14, borderColor: accent.edge, color: accent.hex, background: 'var(--w-void)' }}
-              title={`Agent ${a.slot}`}
+              title={compact ? `Agent ${a.slot} - ${t?.title ?? label}` : `Agent ${a.slot}`}
             >
               {a.slot}
             </span>
-            <span
+            {!compact && <span
               className={`max-w-[150px] truncate ${isLinked ? 'font-mono text-blue-300' : 'text-gray-300'}`}
               title={t?.title ?? label}
             >
               {label}
-            </span>
+            </span>}
           </span>
         );
       })}

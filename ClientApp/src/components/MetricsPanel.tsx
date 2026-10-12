@@ -49,7 +49,7 @@ const WINDOWS = [7, 30, 90];
  * centring, so the whole page hugged the left edge and its content jumped sideways whenever you
  * arrived from History or Skills.
  */
-const PAGE = 'max-w-7xl mx-auto px-6 py-4';
+const PAGE = 'max-w-7xl mx-auto px-3 sm:px-6 py-4';
 
 function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n < 10_000_000 ? 1 : 0)}M`;

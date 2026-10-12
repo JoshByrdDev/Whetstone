@@ -283,7 +283,7 @@ export function Classroom({ initialTicketId }: { initialTicketId?: number | null
     [tickets]);
 
   return (
-    <div className="max-w-[100rem] mx-auto px-6 py-4">
+    <div className="max-w-[100rem] mx-auto px-3 sm:px-6 py-4">
       <PageHead
         eyebrow="Whetstone // learning"
         title="Classroom"

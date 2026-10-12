@@ -24,6 +24,7 @@ import { PageHead, SectionRule } from './components/ui';
 import { chamfer, CAPS, DISPLAY } from './components/orbit';
 import { useTheme, track } from './theme';
 import { useTabStatus } from './hooks/useTabStatus';
+import { useNarrow } from './hooks/useNarrow';
 
 type Tab = 'board' | 'steward' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
 
@@ -57,6 +58,11 @@ export default function App() {
   // the chamfers, the backdrop spec — which need a render to be recomputed. Nothing below is
   // memoised, so one state change at the root is enough to reach all of them.
   useTheme();
+  // On a phone the bar is two short rows - the fleet's pulse, then the tabs as one strip you swipe
+  // along. Left to wrap, nine tabs and three agents' tickets stood a third of the screen tall, and
+  // stuck there. The name gives up its place: the row is exactly as wide as a full fleet's pulse,
+  // and nobody holding the app needs telling which app it is.
+  const narrow = useNarrow();
   const [tab, setTab] = useState<Tab>('board');
   const [classroomTicket, setClassroomTicket] = useState<number | null>(null);
   // The ticket open in the slide-over on the heartbeat page — the board's own drawer, not a lookalike.
@@ -172,17 +178,18 @@ export default function App() {
 
       <div className="relative" style={{ zIndex: 1 }}>
         <header
-          className="sticky top-0 flex items-center justify-between gap-6 flex-wrap"
+          className={`sticky top-0 flex items-center justify-between flex-wrap ${narrow ? 'gap-x-3 gap-y-1.5' : 'gap-6'}`}
           style={{
             zIndex: 30,
-            padding: '10px 24px',
+            padding: narrow ? '8px 12px 6px' : '10px 24px',
             borderBottom: '1px solid rgb(var(--w-line-rgb) / .13)',
             background: 'linear-gradient(180deg,rgb(var(--w-s950-rgb) / .88),rgb(var(--w-s950-rgb) / .62))',
             backdropFilter: 'blur(10px)',
           }}
         >
-          <div className="flex items-center gap-7 flex-wrap">
-            <div>
+          {/* `contents` on a phone: the tabs leave this group and take the whole second row. */}
+          <div className={narrow ? 'contents' : 'flex items-center gap-7 flex-wrap'}>
+            {!narrow && <div>
               <div
                 style={{
                   font: `700 15px ${DISPLAY}`, letterSpacing: track(.3),
@@ -194,8 +201,8 @@ export default function App() {
               <div style={{ font: `500 8px ${DISPLAY}`, letterSpacing: track(.3), color: 'var(--w-t600)', textTransform: CAPS }}>
                 Local ticketing &amp; heartbeat
               </div>
-            </div>
-            <nav className="flex gap-1 flex-wrap">
+            </div>}
+            <nav className={narrow ? 'tab-strip flex gap-1 order-last w-full' : 'flex gap-1 flex-wrap'}>
               {TABS.map(t => (
                 <TabButton key={t.id} on={tab === t.id} onClick={() => go(t.id)}>
                   {t.label}
@@ -203,8 +210,8 @@ export default function App() {
               ))}
             </nav>
           </div>
-          <div className="flex items-center gap-4">
-            <HeaderHeartbeat state={state} wakeAt={wakeAt} />
+          <div className={`flex items-center min-w-0 ${narrow ? 'w-full justify-between flex-wrap gap-x-2.5 gap-y-1' : 'gap-4'}`}>
+            <HeaderHeartbeat state={state} wakeAt={wakeAt} compact={narrow} />
             <HeaderHeartbeatToggle />
             <HeaderUsage />
           </div>
@@ -230,7 +237,7 @@ export default function App() {
           {tab === 'classroom' && <Classroom initialTicketId={classroomTicket} />}
 
           {tab === 'heartbeat' && (
-            <div className="max-w-7xl mx-auto px-6 py-4">
+            <div className={`max-w-7xl mx-auto py-4 ${narrow ? 'px-3' : 'px-6'}`}>
               <PageHead
                 eyebrow="Whetstone // fleet"
                 title="Heartbeat"
@@ -301,7 +308,10 @@ function TabButton({ on, onClick, children }: {
   return (
     <button
       onClick={onClick}
-      className="orbit-btn relative"
+      className="orbit-btn relative flex-none"
+      // The strip scrolls on a phone, and the tab you are on has to come with it: the one you
+      // picked from the far end would otherwise be the one tab not on screen.
+      ref={el => { if (on && el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }}
       style={{
         clipPath: chamfer(8),
         ['--rbg' as string]: on ? 'rgb(var(--w-accent-rgb) / .14)' : 'transparent',

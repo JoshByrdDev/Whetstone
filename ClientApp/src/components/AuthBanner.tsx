@@ -66,7 +66,7 @@ export function AuthBanner() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto px-6 pt-4">
+    <div className="max-w-7xl mx-auto px-3 sm:px-6 pt-4">
       <div className="rounded-lg border border-amber-700/60 bg-amber-950/40 px-4 py-3 flex flex-wrap items-center gap-x-4 gap-y-2">
         <span className="text-amber-300 text-sm font-semibold">Claude sign-in needed</span>
         <span className="text-amber-200/80 text-sm flex-1 min-w-[16rem]">

@@ -550,6 +550,17 @@
   text-overflow: clip;
   overflow-wrap: anywhere;
 }
+/* On a phone there is no pointer to rest on the row, and the one line is about thirty characters.
+   The name is simply given in full: a card can be as tall as its title, where a row ruled to nine
+   columns could not. */
+@media (max-width: 639px) {
+  .orbit-title {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+  }
+}
 
 /* Same trick for the arc's station nodes: --nv drives the ring, core glow and label together. */
 .orbit-node { --nv: 0; transition: opacity .2s ease, filter .2s ease; }
@@ -780,6 +791,12 @@ th { font-family: var(--w-font-display); letter-spacing: calc(var(--w-track, 1) 
    raises cost the viewport ten pixels in each direction on the way in and give them back on the
    way out. Applied only during the move, so a page at rest is never clipped. */
 .tab-clip { overflow: hidden; }
+
+/* The tabs on a phone: one row you swipe along, rather than three you scroll past. No scrollbar -
+   a bar under a strip this short is taller than the hint it gives, and the tab cut off at the
+   edge already says there is more. */
+.tab-strip { overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+.tab-strip::-webkit-scrollbar { display: none; }
 
 /* A gutter that is always reserved. Tabs differ in height, so switching from one that needs a
    vertical scrollbar to one that does not used to change the content width at the moment of the

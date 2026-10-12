@@ -361,7 +361,7 @@ export function TicketDetail({
                         {w.done ? '✓' : ''}
                       </button>
                       <span
-                        className={`flex-1 text-[13.5px] ${w.done ? 'text-gray-400' : 'text-gray-200'}`}
+                        className={`flex-1 min-w-0 break-words text-[13.5px] ${w.done ? 'text-gray-400' : 'text-gray-200'}`}
                         style={working && accent ? { color: accent.hex } : undefined}
                       >
                         {w.text}
@@ -449,7 +449,7 @@ export function TicketDetail({
                         {QA_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
                       </select>
                       <span
-                        className="flex-1 text-[13.5px] text-gray-300 min-w-0"
+                        className="flex-1 text-[13.5px] text-gray-300 min-w-0 break-words"
                         style={testing && accent ? { color: accent.hex } : undefined}
                       >
                         {q.text}
