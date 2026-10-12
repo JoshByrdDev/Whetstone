@@ -384,7 +384,14 @@ function Invoke-AgentPrompt {
             # PSObject, and a native command's argv is the wrong place to discover that.
             $exe     = [string]$cmd.Exe
             $cmdArgs = @($cmd.Args | ForEach-Object { [string]$_ })
-            Get-Content -Path $file -Raw | & $exe @cmdArgs 2>&1 | Out-String
+            # Stdout only, as the name says. Folding stderr in (2>&1 | Out-String) put the CLI's
+            # own warnings - rendered by 5.1 as an error record - at the top of every reply, where
+            # the first line is exactly what the callers read to decide what the agent answered.
+            $said = New-Object System.Collections.Generic.List[string]
+            Get-Content -Path $file -Raw | & $exe @cmdArgs 2>&1 | ForEach-Object {
+                if ($_ -isnot [System.Management.Automation.ErrorRecord]) { $said.Add([string]$_) }
+            }
+            $said -join "`n"
         } -ArgumentList $tempFile, $WorkDir, $Command
 
         if (Wait-Job $job -Timeout $TimeoutSec) { $reply = (Receive-Job $job) -join "`n" }

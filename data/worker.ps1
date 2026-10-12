@@ -1010,7 +1010,21 @@ function Invoke-Reflection {
             # PSObject, and a native command's argv is the wrong place to discover that.
             $exe     = [string]$cmd.Exe
             $cmdArgs = @($cmd.Args | ForEach-Object { [string]$_ })
-            Get-Content -Path $file -Raw | & $exe @cmdArgs 2>&1 | Out-String
+            # Stdout and stderr are told apart rather than folded together. The CLI warns on stderr
+            # about things that are none of this call's business (a permission rule it will not
+            # match, a workspace it does not trust), and 5.1 renders each such line as an error
+            # record ending "[], RemoteException" - a bracket AHEAD of the reply, which the parser
+            # took for the start of the array. Every reflection was discarded for days on that.
+            # Stderr is still handed back when there is no reply at all, so a call that failed
+            # outright says why in the log.
+            $said   = New-Object System.Collections.Generic.List[string]
+            $warned = New-Object System.Collections.Generic.List[string]
+            Get-Content -Path $file -Raw | & $exe @cmdArgs 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $warned.Add([string]$_) }
+                else { $said.Add([string]$_) }
+            }
+            $reply = ($said -join "`n").Trim()
+            if ($reply) { $reply } else { $warned -join "`n" }
         } -ArgumentList $tempReflectFile, $RepoDir, $reflectCmd
 
         if (Wait-Job $reflectJob -Timeout 120) {
@@ -1084,7 +1098,10 @@ function Invoke-Reflection {
         }
 
         $promoted = 0; $merged = 0; $filed = 0
-        if (@($claim.accepted).Count -gt 0 -and $MemoryDir) { [void](Initialize-NoteStoreGit -MemoryDir $MemoryDir) }
+        # .Count on the list itself: @() around a generic List throws "Argument types do not match"
+        # on 5.1, and it threw AFTER phase one had claimed the keys - so the facts were lost and
+        # marked as known in the same breath.
+        if ($claim.accepted.Count -gt 0 -and $MemoryDir) { [void](Initialize-NoteStoreGit -MemoryDir $MemoryDir) }
 
         foreach ($a in $claim.accepted) {
             # The routing rule, and the only place it is enforced rather than described.
