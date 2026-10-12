@@ -809,9 +809,10 @@ public class TicketService
             }
         }
 
-        // A ticket reaching Done keeps its worktree. It used to be removed here, but a worktree
-        // costs only disk and holding it means the finished work stays inspectable in place —
-        // cleanup is a deliberate `git worktree remove` by the user, whenever they want the space.
+        // A ticket reaching Done keeps its worktree. It used to be removed here, but holding it
+        // means the finished work stays inspectable in place while anyone is still likely to look.
+        // It is not kept forever: WorktreeReaper takes it back once the ticket has been Done for
+        // worktreeRetentionDays, because a worktree with its packages installed is a gigabyte.
 
         // The short loop home. A reviewer asked for a small change and said to bring it straight back
         // to them, so the implementation hand-off routes past QA and refinement to the sign-off gate.

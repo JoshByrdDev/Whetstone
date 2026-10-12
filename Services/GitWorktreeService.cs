@@ -89,7 +89,29 @@ public class GitWorktreeService
             return new WorktreeRemoval(false);
         }
 
-        var (ok, _, stderr) = Run(repoDir, "worktree", "remove", known.Path);
+        // The lock every worker takes before it touches the hub repo (Invoke-WithMutex "hub-<repo>"
+        // in worker.ps1): a removal rewrites the same registrations a `worktree add` is writing.
+        // The name is built from the path as configured, as theirs is, so the two only meet when
+        // both were handed the same spelling of it - which they are, from the one project config.
+        using var hub = new Mutex(false, HubMutexName(repoDir));
+        var held = false;
+        bool ok;
+        string stderr;
+        try
+        {
+            try { held = hub.WaitOne(HubWait); }
+            catch (AbandonedMutexException) { held = true; }
+            if (!held) return new WorktreeRemoval(false, "the hub repo was busy; left for the next pass");
+
+            // Not a metadata operation like the rest: this deletes the directory, installed
+            // packages and all, and on a real worktree that is a gigabyte of small files.
+            (ok, _, stderr) = Run(repoDir, RemoveTimeout, "worktree", "remove", known.Path);
+        }
+        finally
+        {
+            if (held) hub.ReleaseMutex();
+        }
+
         if (ok)
         {
             _log.LogInformation("Removed worktree {Path}", known.Path);
@@ -110,7 +132,18 @@ public class GitWorktreeService
     private static bool IsGitRepo(string dir) =>
         !string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir) && Path.Exists(Path.Combine(dir, ".git"));
 
-    private (bool Ok, string Stdout, string Stderr) Run(string workingDir, params string[] args)
+    private static readonly TimeSpan HubWait = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan RemoveTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>The name <c>Invoke-WithMutex -Name "hub-$RepoDir"</c> resolves to in heartbeat-common.ps1.</summary>
+    private static string HubMutexName(string repoDir) =>
+        @"Local\CDH-" + System.Text.RegularExpressions.Regex.Replace("hub-" + repoDir, "[^A-Za-z0-9_-]", "-");
+
+    // Generous but bounded: these are all local metadata operations, not network calls.
+    private (bool Ok, string Stdout, string Stderr) Run(string workingDir, params string[] args) =>
+        Run(workingDir, TimeSpan.FromSeconds(30), args);
+
+    private (bool Ok, string Stdout, string Stderr) Run(string workingDir, TimeSpan timeout, params string[] args)
     {
         var psi = new ProcessStartInfo("git")
         {
@@ -130,8 +163,7 @@ public class GitWorktreeService
             if (p is null) return (false, "", "could not start git");
             var stdout = p.StandardOutput.ReadToEnd();
             var stderr = p.StandardError.ReadToEnd();
-            // Generous but bounded: these are all local metadata operations, not network calls.
-            if (!p.WaitForExit(30_000)) { try { p.Kill(true); } catch { } return (false, stdout, "git timed out"); }
+            if (!p.WaitForExit(timeout)) { try { p.Kill(true); } catch { } return (false, stdout, "git timed out"); }
             return (p.ExitCode == 0, stdout, stderr);
         }
         catch (Exception ex)

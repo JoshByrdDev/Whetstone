@@ -18,6 +18,8 @@
   "offHoursEnd": "06:30",
   "heartbeatMaxAttempts": 3,
   "heartbeatWorkerTimeoutMinutes": 120,
+  "_comment_worktreeRetentionDays": "How long a ticket's worktree is kept after the ticket reaches Done. Past that it is removed on the next start of the app, or the next daily pass - the directory only: the branch stays, and a worktree with uncommitted or untracked files is never removed. 0 keeps every worktree until someone removes it by hand.",
+  "worktreeRetentionDays": 7,
   "heartbeatProjects": [],
   "heartbeatPriorities": [],
   "baseBranch": "main",

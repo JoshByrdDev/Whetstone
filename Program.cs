@@ -108,6 +108,8 @@ builder.Services.AddSingleton<IssueContextBuilder>();
 // Reads and cleans up the per-ticket git worktrees the heartbeat creates. Creation lives in the
 // heartbeat (it owns branch naming); this side only lists, prunes and removes.
 builder.Services.AddSingleton<GitWorktreeService>();
+// Reclaims the worktree of a ticket that has been Done for worktreeRetentionDays: on start, then daily.
+builder.Services.AddHostedService<WorktreeReaper>();
 // The human's own git moves on a ticket: check its branch out in the hub repo, and raise its PR.
 // Separate from the worktree service above because it targets the user's checkout, not the agents'.
 builder.Services.AddSingleton<TicketGitService>();
