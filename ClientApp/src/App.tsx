@@ -18,13 +18,14 @@ import { HeaderUsage } from './components/ClaudeUsage';
 import { HistoryPanel } from './components/HistoryPanel';
 import { MetricsPanel } from './components/MetricsPanel';
 import { Classroom } from './components/Classroom';
+import { StewardPanel } from './components/StewardPanel';
 import { Backdrop } from './components/Backdrop';
 import { PageHead, SectionRule } from './components/ui';
 import { chamfer, CAPS, DISPLAY } from './components/orbit';
 import { useTheme, track } from './theme';
 import { useTabStatus } from './hooks/useTabStatus';
 
-type Tab = 'board' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
+type Tab = 'board' | 'steward' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
 
 /**
  * The tabs, in the order they appear in the nav — which is also the order they sit in space.
@@ -35,6 +36,7 @@ type Tab = 'board' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills
  */
 const TABS: { id: Tab; label: string }[] = [
   { id: 'board', label: 'Board' },
+  { id: 'steward', label: 'Steward' },
   { id: 'classroom', label: 'Classroom' },
   { id: 'heartbeat', label: 'Heartbeat' },
   { id: 'metrics', label: 'Metrics' },
@@ -221,6 +223,8 @@ export default function App() {
               from its first frame rather than being skipped as an unchanged class. */}
           <div key={tab} className={stageClass} style={{ pointerEvents: leaving ? 'none' : undefined }}>
           {tab === 'board' && <Board state={state} wakeAt={wakeAt} events={events} />}
+
+          {tab === 'steward' && <StewardPanel />}
 
           {tab === 'classroom' && <Classroom initialTicketId={classroomTicket} />}
 

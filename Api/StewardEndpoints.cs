@@ -8,6 +8,7 @@ namespace Whetstone.Api;
 
 public record StewardAnswerRequest(string? Answer);
 public record StewardSaidRequest(string? Text);
+public record StewardModeRequest(string? Mode);
 
 /// <summary>
 /// The owner's side of a project's steward, and the two calls whatever launches a run needs.
@@ -96,6 +97,37 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerSaysAsync(project ?? "", req.Text ?? "", ct);
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The mode: the one switch on a steward, and its owner's alone. Written to the project's
+        // machine-local file, never its committed defaults - how far a steward is trusted is a fact
+        // about this machine and this week, not about the project.
+        app.MapPut("/api/steward/mode", async (string? project, StewardModeRequest req, ProjectRegistry registry,
+            DashboardPaths paths, StewardService steward) =>
+        {
+            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
+            var name = req.Mode?.Trim() ?? "";
+            var mode = StewardConfig.ParseMode(name);
+            if (!string.Equals(mode.ToString(), name, StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new { error = "The mode is off, propose, manage or full." });
+
+            var file = paths.ProjectConfig(project!);
+            System.Text.Json.Nodes.JsonObject local;
+            try
+            {
+                local = File.Exists(file)
+                    ? System.Text.Json.Nodes.JsonNode.Parse(await File.ReadAllTextAsync(file)) as System.Text.Json.Nodes.JsonObject ?? new()
+                    : new();
+            }
+            catch (JsonException) { return Results.BadRequest(new { error = $"{file} is not valid JSON, so it was left alone." }); }
+
+            local["stewardMode"] = mode.ToString().ToLowerInvariant();
+            await File.WriteAllTextAsync(file, local.ToJsonString(new JsonSerializerOptions { WriteIndented = true }) + Environment.NewLine);
+
+            // Switched on is a reason to look at the board; switched off needs nothing.
+            var cfg = registry.GetProjectConfig(project!);
+            if (cfg.StewardMode != StewardMode.Off) await steward.MarkDueAsync(project!, $"its mode was set to {cfg.StewardMode.ToString().ToLowerInvariant()}");
+            return Results.Ok(new { mode = cfg.StewardMode.ToString().ToLowerInvariant(), modeSetting = cfg.StewardModeSetting.ToString().ToLowerInvariant() });
         });
 
         // ---- for whatever launches a run -------------------------------------------------
