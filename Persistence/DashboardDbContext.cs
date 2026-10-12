@@ -28,6 +28,7 @@ public class DashboardDbContext : DbContext
     public DbSet<StewardQuestion> StewardQuestions => Set<StewardQuestion>();
     public DbSet<StewardEntry> StewardEntries => Set<StewardEntry>();
     public DbSet<StewardState> StewardStates => Set<StewardState>();
+    public DbSet<StewardOutcome> StewardOutcomes => Set<StewardOutcome>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -265,6 +266,14 @@ public class DashboardDbContext : DbContext
             e.Property(x => x.ProjectKey).HasMaxLength(128);
             e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(16);
             e.HasIndex(x => new { x.ProjectKey, x.Kind, x.At });
+        });
+
+        b.Entity<StewardOutcome>(e =>
+        {
+            e.Property(o => o.ProjectKey).HasMaxLength(128);
+            e.Property(o => o.Outcome).HasMaxLength(16);
+            e.Property(o => o.State).HasConversion<string>().HasMaxLength(16);
+            e.HasIndex(o => new { o.ProjectKey, o.Unit, o.Outcome }).IsUnique();
         });
 
         b.Entity<StewardState>(e =>

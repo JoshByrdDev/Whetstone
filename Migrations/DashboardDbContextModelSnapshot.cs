@@ -679,6 +679,47 @@ namespace Whetstone.Migrations
                     b.ToTable("StewardEntries");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.StewardOutcome", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("MoreToFile")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Unit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Unit", "Outcome")
+                        .IsUnique();
+
+                    b.ToTable("StewardOutcomes");
+                });
+
             modelBuilder.Entity("Whetstone.Models.StewardQuestion", b =>
                 {
                     b.Property<int>("Id")

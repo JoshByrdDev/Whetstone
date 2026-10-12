@@ -146,3 +146,41 @@ public class StewardState
     public string? CreatedDay { get; set; }
     public int CreatedCount { get; set; }
 }
+
+/// <summary>Where one outcome of the plan stands, as its steward last judged it.</summary>
+public enum StewardOutcomeState
+{
+    NotStarted,
+    InProgress,
+    Done,
+}
+
+/// <summary>
+/// The steward's standing judgment on one outcome of one unit of the plan.
+/// <para>
+/// Which tickets deliver an outcome is on the tickets themselves (<see cref="Ticket.PlanOutcomes"/>),
+/// and the board can count those. What it cannot count is whether they are ALL of it: an outcome
+/// with two merged tickets may be finished or may be waiting on a third nobody has written yet.
+/// That is a judgment, so it is recorded as one, here, and it is the only thing that calls an
+/// outcome done.
+/// </para>
+/// </summary>
+public class StewardOutcome
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+    public int Unit { get; set; }
+
+    /// <summary>The outcome's id in its spec, like <c>A2</c>.</summary>
+    public string Outcome { get; set; } = "";
+
+    public StewardOutcomeState State { get; set; }
+
+    /// <summary>True while a ticket for this outcome is still to be written.</summary>
+    public bool MoreToFile { get; set; }
+
+    /// <summary>A line for the next run: what is left to file, and what it waits on.</summary>
+    public string? Note { get; set; }
+
+    public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}

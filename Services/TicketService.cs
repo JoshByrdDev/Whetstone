@@ -70,14 +70,17 @@ public class TicketService
          = (db, snapshots, dependencies, leases, classroomGate, heartbeat);
 
     /// <summary>
-    /// A ticket has just become something a worker could pick up, or has finished and may have
-    /// freed the tickets that were waiting on it. A worker's own hand-off needs no help - the
-    /// orchestrator is awake and polling while anything runs - so this matters for the moves made
-    /// while it sleeps: a person's, the dashboard's, a steward's.
+    /// A ticket has just become something a worker could pick up, has finished and may have freed
+    /// the tickets that were waiting on it, or has arrived where a steward takes over (review, a
+    /// block). A worker's own hand-off needs no help - the orchestrator is awake and polling while
+    /// anything runs - so this matters for the moves made while it sleeps: a person's, the
+    /// dashboard's, a steward's.
     /// </summary>
     private void WakeFor(TicketPhase phase)
     {
-        if (PhaseMachine.IsActionable(phase) || phase == TicketPhase.Done) _heartbeat?.Wake();
+        if (PhaseMachine.IsActionable(phase)
+            || phase is TicketPhase.Done or TicketPhase.NeedsReview or TicketPhase.Blocked)
+            _heartbeat?.Wake();
     }
 
     // Four collections off one root, so this MUST be a split query. As a single query EF joins them
@@ -782,6 +785,12 @@ public class TicketService
             At          = DateTime.UtcNow,
         });
 
+        // The two arrivals a project's steward exists to answer: finished work to sign off, and a
+        // question somebody has to settle. Not its own moves - a run does not owe itself another.
+        if (actor != TransitionActor.Steward && to is TicketPhase.NeedsReview or TicketPhase.Blocked)
+            await StewardDue.MarkAsync(_db, t.ProjectKey,
+                to == TicketPhase.NeedsReview ? $"#{t.Id} is ready for review" : $"#{t.Id} is blocked");
+
         await _db.SaveChangesAsync();
         WakeFor(to);
 
@@ -1023,8 +1032,12 @@ public class TicketService
     /// </summary>
     public async Task<Ticket?> RequestChangesAsync(int id, string body, IReadOnlyList<string>? changeItems,
         bool shortLoop, IReadOnlyList<NoteAttachment>? attachments = null, TicketPriority? priority = null,
-        bool replan = false)
+        bool replan = false, TransitionActor actor = TransitionActor.Human)
     {
+        // A steward sends work back in the owner's place: the same note, the same move, under its
+        // own name. Anything else through this door is a person.
+        var author = actor == TransitionActor.Steward ? AuthorKind.Steward : AuthorKind.Human;
+
         var t = await GetAsync(id);
         if (t is null) return null;
 
@@ -1041,7 +1054,7 @@ public class TicketService
             throw new InvalidTransitionException(
                 $"A ticket in {t.Phase} cannot be sent back {(replan ? "for a replan" : "for changes")}", t.Phase, PhaseMachine.NextPhases(t.Phase, t.Track));
 
-        await AddCommentAsync(id, body, AuthorKind.Human, attachments);
+        await AddCommentAsync(id, body, author, attachments);
 
         foreach (var item in (changeItems ?? Array.Empty<string>()).Where(s => !string.IsNullOrWhiteSpace(s)))
             await AddWorkItemAsync(id, item);
@@ -1065,7 +1078,7 @@ public class TicketService
         var firstLine = body.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
         if (firstLine.Length > 200) firstLine = firstLine[..197] + "...";
         return await TransitionAsync(id, target,
-            $"{(replan ? "Replan requested" : "Changes requested")}: {firstLine}", TransitionActor.Human);
+            $"{(replan ? "Replan requested" : "Changes requested")}: {firstLine}", actor);
     }
 
     /// <summary>Whether this ticket wants the human review gate it just landed on.</summary>
