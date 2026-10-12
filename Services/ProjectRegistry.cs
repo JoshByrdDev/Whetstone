@@ -238,6 +238,33 @@ public class ProjectConfig
     public bool MergeInsteadOfPr { get; init; }
 
     /// <summary>
+    /// How this project's steward works: its limits, its plan, what its merge checks and refuses.
+    /// See <see cref="StewardConfig"/>.
+    /// </summary>
+    public StewardConfig Steward { get; init; } = new();
+
+    /// <summary>
+    /// The mode as written in the project's config (<c>stewardMode</c>). What the steward may
+    /// actually do is <see cref="StewardMode"/>, which this is only the upper bound of.
+    /// </summary>
+    public StewardMode StewardModeSetting { get; init; } = StewardMode.Off;
+
+    /// <summary>
+    /// What this project's steward may do, after the limits the project itself imposes.
+    /// <para>
+    /// <see cref="Models.StewardMode.Full"/> means merging, and a merge is only local where the
+    /// project delivers by merging into its base (<see cref="MergeInsteadOfPr"/>). Where delivery
+    /// is a pull request the last step is a push, which leaves this machine; where it is a TFVC
+    /// check-in the one writer is the human. On both the steward stops at
+    /// <see cref="Models.StewardMode.Manage"/> however it is set.
+    /// </para>
+    /// </summary>
+    public StewardMode StewardMode =>
+        StewardModeSetting == Models.StewardMode.Full && (!MergeInsteadOfPr || IsTfvc)
+            ? Models.StewardMode.Manage
+            : StewardModeSetting;
+
+    /// <summary>
     /// Which external issue tracker this project's tickets link to, and the credentials for it.
     /// One per project and no default: one project can be on Jira while the project beside it is on
     /// Azure Boards, and a project with neither works fine - its tickets simply own their titles.
@@ -467,6 +494,9 @@ public class ProjectRegistry
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
             Tracker = TrackerConfig.From(cfg),
             Stack = GetStack(cfg),
+            Steward = StewardConfig.From(cfg),
+            StewardModeSetting = StewardConfig.ParseMode(
+                cfg.TryGetValue("stewardMode", out var sm) && sm.ValueKind == JsonValueKind.String ? sm.GetString() : null),
         };
     }
 

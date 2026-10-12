@@ -25,6 +25,9 @@ public class DashboardDbContext : DbContext
     public DbSet<ReviewTarget> ReviewTargets => Set<ReviewTarget>();
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
     public DbSet<GateFinding> GateFindings => Set<GateFinding>();
+    public DbSet<StewardQuestion> StewardQuestions => Set<StewardQuestion>();
+    public DbSet<StewardEntry> StewardEntries => Set<StewardEntry>();
+    public DbSet<StewardState> StewardStates => Set<StewardState>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -73,6 +76,8 @@ public class DashboardDbContext : DbContext
             // reinterpret rows already on disk. The claim's ordering happens in memory on the
             // materialized list, so nothing depends on this sorting in SQL.
             e.Property(t => t.Track).HasConversion<string>().HasMaxLength(16);
+            e.Property(t => t.CreatedBy).HasConversion<string>().HasMaxLength(16);
+            e.Property(t => t.PlanOutcomes).HasMaxLength(256);
             e.HasIndex(t => t.Phase);
             e.HasIndex(t => t.ProjectKey);
 
@@ -242,6 +247,32 @@ public class DashboardDbContext : DbContext
             e.HasIndex(c => new { c.TicketId, c.Order });
             e.HasOne(c => c.Ticket).WithMany(t => t.ReviewComments)
                 .HasForeignKey(c => c.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // A steward's own tables. None of them hangs off the Ticket entity: a question or a call
+        // may name a ticket, but it belongs to the project and outlives the ticket it was about.
+        b.Entity<StewardQuestion>(e =>
+        {
+            e.Property(q => q.ProjectKey).HasMaxLength(128);
+            e.Property(q => q.Key).HasMaxLength(64);
+            e.Property(q => q.RemindedOn).HasMaxLength(10);
+            // Asked once, for good: this is what refuses a run that has forgotten it already asked.
+            e.HasIndex(q => new { q.ProjectKey, q.Key }).IsUnique();
+        });
+
+        b.Entity<StewardEntry>(e =>
+        {
+            e.Property(x => x.ProjectKey).HasMaxLength(128);
+            e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(16);
+            e.HasIndex(x => new { x.ProjectKey, x.Kind, x.At });
+        });
+
+        b.Entity<StewardState>(e =>
+        {
+            e.HasKey(s => s.ProjectKey);
+            e.Property(s => s.ProjectKey).HasMaxLength(128);
+            e.Property(s => s.RestingAtSha).HasMaxLength(64);
+            e.Property(s => s.CreatedDay).HasMaxLength(10);
         });
 
         b.Entity<CycleRun>(e =>

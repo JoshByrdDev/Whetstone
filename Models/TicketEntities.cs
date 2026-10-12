@@ -412,6 +412,22 @@ public class Ticket
     /// </summary>
     public bool ShortLoopReview { get; set; }
 
+    /// <summary>
+    /// Who filed this ticket, when it was not a person: <see cref="TransitionActor.Steward"/> for
+    /// one a steward wrote from the plan. Null for everything a person filed, and for every ticket
+    /// from before this was recorded.
+    /// </summary>
+    public TransitionActor? CreatedBy { get; set; }
+
+    /// <summary>
+    /// The unit of the project's plan this ticket delivers part of, by number, and which of its
+    /// outcomes (<see cref="PlanOutcomes"/>, comma-separated ids). Set when a steward files a
+    /// ticket against the plan, and what lets "how far is this unit" be counted off the board
+    /// rather than read back out of each ticket's description.
+    /// </summary>
+    public int? PlanUnit { get; set; }
+    public string? PlanOutcomes { get; set; }
+
     /// <summary>Set when Phase == Blocked.</summary>
     public string? BlockedReason { get; set; }
 
