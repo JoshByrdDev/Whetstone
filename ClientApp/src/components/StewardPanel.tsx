@@ -231,16 +231,16 @@ function QuestionCard({ q, onAnswer }: { q: StewardQuestion; onAnswer: (answer: 
       {pick === 'other'
         ? (
           <textarea
-            autoFocus value={other} onChange={e => setOther(e.target.value)} rows={2}
+            autoFocus value={other} onChange={e => setOther(e.target.value)} rows={4}
             placeholder="Your answer, in your own words. The steward reads it as a decision made."
             className="mt-2 w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none"
           />
         )
         : (
-          <input
-            value={note} onChange={e => setNote(e.target.value)}
+          <textarea
+            value={note} onChange={e => setNote(e.target.value)} rows={2}
             placeholder="Anything to add (optional)"
-            className="mt-2 w-full rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none"
+            className="mt-2 w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none"
           />
         )}
 
