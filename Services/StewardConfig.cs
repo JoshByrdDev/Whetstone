@@ -66,6 +66,18 @@ public class StewardConfig
     /// </summary>
     public string SyncFrom { get; init; } = "";
 
+    /// <summary>
+    /// A file in the repo that the owner's decisions are written out to, or empty for none.
+    /// <para>
+    /// The dashboard's database is the record a steward works from, and it is machine-local. What
+    /// the owner decided is also part of the project's own history - it is why the code is the way
+    /// it is - so it is kept beside the plan, on the base branch, where it travels with the code
+    /// and is there for whoever reads the repo without a dashboard. Written out whole each time,
+    /// from the database; nothing reads it back.
+    /// </para>
+    /// </summary>
+    public string DecisionsFile { get; init; } = "";
+
     public StewardPlan Plan { get; init; } = new("", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed,
         StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
 
@@ -118,6 +130,7 @@ public class StewardConfig
             SendBacksPerTicket = Int(limits, "sendBacksPerTicket", d.SendBacksPerTicket, 0, 20),
             MemoMaxChars = Int(s, "memoMaxChars", d.MemoMaxChars, 1000, 500000),
             SyncFrom = Str(s, "syncFrom"),
+            DecisionsFile = Str(s, "decisionsFile").Replace('\\', '/').TrimStart('/'),
             Plan = new StewardPlan(
                 Str(plan, "units").Replace('\\', '/').Trim('/'),
                 Pattern(plan, "unitFile", StewardPlan.DefaultUnitFile),

@@ -1088,7 +1088,7 @@ public class TicketService
         // the one decision no phase downstream is allowed to make on the owner's behalf.
         TicketPhase.NeedsApproval => t.RequiresSpeculationReview || WorkItemScopes.OpenExpansionCount(t) > 0,
         TicketPhase.NeedsImplementationReview => t.RequiresImplementationReview,
-        _ => true,  // notably NeedsReview: the final sign-off is always a human's.
+        _ => true,  // notably NeedsReview: the final sign-off is the owner's - a person's, or their steward's - and never skipped.
     };
 
     private static string GateName(TicketPhase gate) => gate switch

@@ -27,6 +27,24 @@ public record StewardTicketDraft(
 public record StewardAsk(
     string Key, string Question, string Why, IReadOnlyList<BlockOption> Options, string HeldUp, int? TicketId = null);
 
+/// <summary>A steward's record kept elsewhere, to be taken in once. See <see cref="StewardService.ImportAsync"/>.</summary>
+public record StewardImport(
+    IReadOnlyList<StewardImportQuestion>? Questions = null, IReadOnlyList<StewardImportEntry>? Entries = null,
+    IReadOnlyList<StewardImportOutcome>? Outcomes = null, IReadOnlyList<StewardImportTicket>? Tickets = null,
+    string? Memo = null);
+
+/// <summary>A question as it was asked; with <paramref name="Answer"/> when the owner has answered it.</summary>
+public record StewardImportQuestion(string Key, string Question, string? Why = null,
+    IReadOnlyList<BlockOption>? Options = null, string? HeldUp = null, DateTime? AskedAt = null,
+    string? Answer = null, DateTime? AnsweredAt = null);
+
+/// <param name="Kind">Call, BeforeRelease or OwnerSaid.</param>
+public record StewardImportEntry(string Kind, string Text, int? TicketId = null, DateTime? At = null);
+
+public record StewardImportOutcome(int Unit, string Outcome, string State, bool MoreToFile = false, string? Note = null);
+
+public record StewardImportTicket(int Id, int Unit, IReadOnlyList<string> Outcomes, bool FiledBySteward = true);
+
 /// <summary>
 /// A project's steward: everything it may do, and every limit on it.
 /// <para>
@@ -235,6 +253,9 @@ public class StewardService
         var cfg = Config(projectKey);
         if (Off(cfg, projectKey) is { } off) return off;
 
+        // Before the head is read below: a run that rests is resting at the commit this leaves.
+        var exported = await ExportDecisionsAsync(cfg!, ct);
+
         var s = await StewardDue.StateAsync(_db, projectKey);
         s.LastRunEndedAt = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(summary)) s.LastRunSummary = summary.Trim();
@@ -245,7 +266,7 @@ public class StewardService
 
         await _leases.ReleaseHumanLeaseAsync(LeaseKey(projectKey), "run ended");
         var reminder = await RemindAsync(cfg!, ct);
-        return new StewardReply("ended", null, new { resting = s.RestingAtSha is not null, reminder });
+        return new StewardReply("ended", null, new { resting = s.RestingAtSha is not null, reminder, decisions = exported });
     }
 
     /// <summary>
@@ -277,6 +298,37 @@ public class StewardService
             await _db.SaveChangesAsync();
         }
         return released;
+    }
+
+    /// <summary>
+    /// Write the owner's decisions out to the project's repo, when it names a file for them.
+    /// Best-effort by design: the hub is a person's checkout, and when it is busy or dirty this
+    /// says so and leaves it - the next answer, or the end of the next run, writes the whole file
+    /// again, so nothing is lost by skipping once.
+    /// </summary>
+    private async Task<string?> ExportDecisionsAsync(ProjectConfig cfg, CancellationToken ct)
+    {
+        var file = cfg.Steward.DecisionsFile;
+        if (file.Length == 0 || cfg.StewardMode is StewardMode.Off or StewardMode.Propose) return null;
+
+        var answered = await _db.StewardQuestions.AsNoTracking()
+            .Where(q => q.ProjectKey == cfg.Name && q.Answer != null).ToListAsync(ct);
+        var said = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == cfg.Name && e.Kind == StewardEntryKind.OwnerSaid).ToListAsync(ct);
+        if (answered.Count == 0 && said.Count == 0) return null;
+
+        var lines = answered.Select(q => (At: q.AnsweredAt ?? q.AskedAt,
+                Text: $"- {(q.AnsweredAt ?? q.AskedAt).ToLocalTime():yyyy-MM-dd}, **{q.Key}**: {q.Question} {q.Answer}"))
+            .Concat(said.Select(e => (e.At, Text: $"- {e.At.ToLocalTime():yyyy-MM-dd}: {e.Text.Replace("\n", " ")}")))
+            .OrderBy(x => x.At).Select(x => x.Text);
+        var text = "# Decisions\n\n"
+            + "What this project's owner has decided through its steward: the answers to its questions, and standing "
+            + "instructions, oldest first. Written out by the ticket board from its own record each time one is added; "
+            + "edits made here are overwritten.\n\n"
+            + string.Join("\n\n", lines) + "\n";
+
+        var (sha, unchanged, refusal) = await _git.CommitFileAsync(cfg.Name, file, text, "The owner's decisions, as recorded on the board", ct);
+        return refusal is not null ? $"not written to {file}: {refusal}" : unchanged ? null : $"written to {file} at {sha}";
     }
 
     /// <summary>A question is announced once when asked. After that, one nudge a day while any still waits.</summary>
@@ -908,8 +960,9 @@ public class StewardService
         q.AnsweredAt = DateTime.UtcNow;
         await StewardDue.MarkAsync(_db, projectKey, $"the owner answered {key}");
         await _db.SaveChangesAsync(ct);
+        var exported = Config(projectKey) is { } cfg ? await ExportDecisionsAsync(cfg, ct) : null;
         _heartbeat?.Wake();
-        return new StewardReply("recorded");
+        return new StewardReply("recorded", exported);
     }
 
     /// <summary>A standing instruction from the owner that answers no question.</summary>
@@ -920,8 +973,95 @@ public class StewardService
         _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, Text = text.Trim() });
         await StewardDue.MarkAsync(_db, projectKey, "the owner left an instruction");
         await _db.SaveChangesAsync(ct);
+        var exported = await ExportDecisionsAsync(Config(projectKey)!, ct);
         _heartbeat?.Wake();
-        return new StewardReply("recorded");
+        return new StewardReply("recorded", exported);
+    }
+
+    /// <summary>
+    /// Take in a steward's record that was kept somewhere else - a ledger file, another machine.
+    /// <para>
+    /// The owner's to run, once, when a project's stand-in moves into the dashboard from wherever
+    /// it lived before. Safe to run again: a question already here by its key is left alone, an
+    /// identical line is not added twice, an outcome is set to what the import says, and the memo
+    /// is only filled when there is none. Everything it brings in is history, so none of it is
+    /// handed to the next run as news - that run finds it where every later one will.
+    /// </para>
+    /// </summary>
+    public async Task<StewardReply> ImportAsync(string projectKey, StewardImport import, CancellationToken ct = default)
+    {
+        if (Config(projectKey) is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var now = DateTime.UtcNow;
+        int questions = 0, said = 0, entries = 0, outcomes = 0, tickets = 0;
+
+        var keys = (await _db.StewardQuestions.Where(q => q.ProjectKey == projectKey).Select(q => q.Key).ToListAsync(ct)).ToHashSet();
+        foreach (var q in import.Questions ?? Array.Empty<StewardImportQuestion>())
+        {
+            if (string.IsNullOrWhiteSpace(q.Key) || string.IsNullOrWhiteSpace(q.Question) || !keys.Add(q.Key.Trim())) continue;
+            var answered = !string.IsNullOrWhiteSpace(q.Answer);
+            _db.StewardQuestions.Add(new StewardQuestion
+            {
+                ProjectKey = projectKey,
+                Key = q.Key.Trim(),
+                Question = q.Question.Trim(),
+                Why = q.Why?.Trim() ?? "",
+                OptionsJson = JsonSerializer.Serialize(q.Options ?? Array.Empty<BlockOption>(), Json),
+                HeldUp = q.HeldUp?.Trim() ?? "",
+                AskedAt = q.AskedAt ?? q.AnsweredAt ?? now,
+                Answer = answered ? q.Answer!.Trim() : null,
+                AnsweredAt = answered ? q.AnsweredAt ?? now : null,
+                AnswerDeliveredAt = answered ? now : null,
+            });
+            questions++;
+        }
+
+        var have = (await _db.StewardEntries.Where(e => e.ProjectKey == projectKey).Select(e => e.Text).ToListAsync(ct)).ToHashSet();
+        foreach (var e in import.Entries ?? Array.Empty<StewardImportEntry>())
+        {
+            var text = e.Text?.Trim() ?? "";
+            if (text.Length == 0 || !Enum.TryParse<StewardEntryKind>(e.Kind, true, out var kind) || !have.Add(text)) continue;
+            _db.StewardEntries.Add(new StewardEntry
+            {
+                ProjectKey = projectKey, Kind = kind, TicketId = e.TicketId, Text = text, At = e.At ?? now,
+                DeliveredAt = kind == StewardEntryKind.OwnerSaid ? now : null,
+            });
+            if (kind == StewardEntryKind.OwnerSaid) said++; else entries++;
+        }
+
+        foreach (var o in import.Outcomes ?? Array.Empty<StewardImportOutcome>())
+        {
+            if (string.IsNullOrWhiteSpace(o.Outcome) || !Enum.TryParse<StewardOutcomeState>(o.State, true, out var st)) continue;
+            var row = await _db.StewardOutcomes.FirstOrDefaultAsync(
+                x => x.ProjectKey == projectKey && x.Unit == o.Unit && x.Outcome == o.Outcome, ct);
+            if (row is null) _db.StewardOutcomes.Add(row = new StewardOutcome { ProjectKey = projectKey, Unit = o.Unit, Outcome = o.Outcome.Trim() });
+            row.State = st;
+            row.MoreToFile = o.MoreToFile && st != StewardOutcomeState.Done;
+            row.Note = string.IsNullOrWhiteSpace(o.Note) ? null : o.Note.Trim();
+            row.UpdatedAt = now;
+            outcomes++;
+        }
+
+        foreach (var t in import.Tickets ?? Array.Empty<StewardImportTicket>())
+        {
+            var row = await _db.Tickets.FirstOrDefaultAsync(x => x.Id == t.Id && x.ProjectKey == projectKey, ct);
+            if (row is null || t.Outcomes is not { Count: > 0 }) continue;
+            row.PlanUnit = t.Unit;
+            row.PlanOutcomes = string.Join(", ", t.Outcomes.Select(o => o.Trim()).Where(o => o.Length > 0));
+            if (t.FiledBySteward) row.CreatedBy = TransitionActor.Steward;
+            tickets++;
+        }
+
+        var s = await StewardDue.StateAsync(_db, projectKey);
+        var memo = false;
+        if (!string.IsNullOrWhiteSpace(import.Memo) && string.IsNullOrWhiteSpace(s.Memo))
+        {
+            s.Memo = import.Memo.Replace("\r\n", "\n").Trim();
+            s.MemoUpdatedAt = now;
+            memo = true;
+        }
+
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("imported", null, new { questions, ownerSaid = said, entries, outcomes, tickets, memo });
     }
 
     private static string Head(string s, int max)

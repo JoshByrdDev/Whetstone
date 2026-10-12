@@ -130,6 +130,13 @@ public static class StewardEndpoints
             return Results.Ok(new { mode = cfg.StewardMode.ToString().ToLowerInvariant(), modeSetting = cfg.StewardModeSetting.ToString().ToLowerInvariant() });
         });
 
+        // Take in a steward's record that was kept somewhere else. The owner's, and once.
+        app.MapPost("/api/steward/import", async (string? project, StewardImport import, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.ImportAsync(project ?? "", import, ct);
+            return r.Answer == "imported" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
         // ---- for whatever launches a run -------------------------------------------------
 
         // Which projects' stewards are owed a run right now. Costs a few reads and no agent.

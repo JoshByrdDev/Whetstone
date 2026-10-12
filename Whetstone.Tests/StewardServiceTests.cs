@@ -394,6 +394,65 @@ public class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_record_kept_elsewhere_is_taken_in_once_and_is_not_news()
+    {
+        var id = await AtReview();
+        var import = new StewardImport(
+            Questions: new[]
+            {
+                new StewardImportQuestion("sms-provider", "Which provider sends our texts?", Answer: "The one we already pay for."),
+                new StewardImportQuestion("map-provider", "Which map provider looks addresses up?", "It decides the address box.",
+                    new[] { new BlockOption("None", null, true), new BlockOption("A paid one") }, "The address screen."),
+            },
+            Entries: new[]
+            {
+                new StewardImportEntry("OwnerSaid", "A ticket carries one whole outcome."),
+                new StewardImportEntry("Call", "Kept the wording: unit 1, A2.", id),
+            },
+            Outcomes: new[] { new StewardImportOutcome(1, "A1", "InProgress", true, "The screen is left.") },
+            Tickets: new[] { new StewardImportTicket(id, 1, new[] { "A1" }) },
+            Memo: "Swept group A.");
+
+        Assert.Equal("imported", (await In(s => s.ImportAsync("alpha", import))).Answer);
+        Assert.Equal("imported", (await In(s => s.ImportAsync("alpha", import))).Answer);   // again: nothing doubles
+
+        await using (var ctx = NewCtx())
+        {
+            Assert.Equal(2, await ctx.StewardQuestions.CountAsync());
+            Assert.Equal(2, await ctx.StewardEntries.CountAsync());
+            Assert.Equal("A1", (await ctx.Tickets.FindAsync(id))!.PlanOutcomes);
+            Assert.Equal("Swept group A.", (await ctx.StewardStates.FindAsync("alpha"))!.Memo);
+        }
+
+        // History, not news: the first run is not handed any of it as new, and can still find it.
+        var begin = System.Text.Json.JsonSerializer.Serialize((await Begin()).Data);
+        Assert.Contains("\"newAnswers\":[]", begin);
+        Assert.Contains("\"newInstructions\":[]", begin);
+        Assert.Contains("map-provider", begin);   // still waiting on the owner
+        Assert.Contains("one whole outcome",
+            System.Text.Json.JsonSerializer.Serialize((await In(s => s.DecisionsAsync("alpha", null))).Data));
+        Assert.Equal("already-asked", (await In(s => s.AskAsync("alpha", Question()))).Answer);
+    }
+
+    [Fact]
+    public async Task The_owners_decisions_are_written_out_to_the_repo_when_it_names_a_file_for_them()
+    {
+        Configure("full", """ "plan": { "units": "docs/units" }, "decisionsFile": "docs/decisions.md" """);
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question()));
+        await In(s => s.EndAsync("alpha", "asked", true));
+        Assert.Empty(_git.Committed);   // nothing decided yet, so nothing to write
+
+        await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "The one we already pay for."));
+        await In(s => s.OwnerSaysAsync("alpha", "A ticket carries one whole outcome."));
+
+        var last = _git.Committed[^1];
+        Assert.Equal("docs/decisions.md", last.Path);
+        Assert.Contains("**sms-provider**: Which provider sends our texts? The one we already pay for.", last.Content);
+        Assert.Contains("A ticket carries one whole outcome.", last.Content);
+    }
+
+    [Fact]
     public async Task The_steward_cannot_write_what_the_owner_said()
     {
         var id = await AtReview();
@@ -501,8 +560,13 @@ public class StewardServiceTests : IDisposable
         public Task<SyncFromResult> SyncFromAsync(string projectKey, string from, bool dryRun, CancellationToken ct = default) =>
             Task.FromResult(new SyncFromResult("up-to-date", 0, Array.Empty<string>(), null));
 
-        public Task<(string? Sha, bool Unchanged, string? Refusal)> CommitFileAsync(string projectKey, string relativePath, string content, string message, CancellationToken ct = default) =>
-            Task.FromResult<(string?, bool, string?)>(("def", false, null));
+        public List<(string Path, string Content)> Committed = new();
+
+        public Task<(string? Sha, bool Unchanged, string? Refusal)> CommitFileAsync(string projectKey, string relativePath, string content, string message, CancellationToken ct = default)
+        {
+            Committed.Add((relativePath, content));
+            return Task.FromResult<(string?, bool, string?)>(("def", false, null));
+        }
 
         public Task<bool> WorktreeAtTipAsync(string projectKey, string worktree, string branch, CancellationToken ct = default) => Task.FromResult(true);
 

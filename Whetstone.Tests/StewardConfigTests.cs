@@ -77,6 +77,7 @@ public class StewardConfigTests : IDisposable
             "limits": { "createdPerDay": 100, "openAtOnce": 9, "sendBacksPerTicket": 3 },
             "memoMaxChars": 5000,
             "syncFrom": "main",
+            "decisionsFile": "docs\\plan\\decisions.md",
             "plan": { "units": "docs/plan/units/", "outcome": "^## ([A-Z]\\d+)" },
             "neverMerge": ["infra/", "deploy.config.ts"],
             "mergeChecks": [
@@ -93,6 +94,7 @@ public class StewardConfigTests : IDisposable
         Assert.Equal(3, s.SendBacksPerTicket);
         Assert.Equal(5000, s.MemoMaxChars);
         Assert.Equal("main", s.SyncFrom);
+        Assert.Equal("docs/plan/decisions.md", s.DecisionsFile);
         Assert.Equal("docs/plan/units", s.Plan.UnitsDir);
         Assert.Equal(@"^## ([A-Z]\d+)", s.Plan.Outcome);
         Assert.Equal(StewardPlan.DefaultAgreed, s.Plan.Agreed);   // unsaid keeps the default

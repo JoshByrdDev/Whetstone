@@ -218,6 +218,59 @@ diff data/skill-templates/qa-test/skill.md data/projects/<key>/skills/qa-test/sk
 What is left should be only what is genuinely that project's: its compose commands, its ports, its
 local examples. A pipeline rule on one side and not the other is drift, whichever side it is on.
 
+## A project can have a steward, and its limits are code
+
+A steward stands in for a ticket's owner between worker runs: it files the next tickets from a plan
+the owner agreed, answers blocked tickets from decisions already made, reviews and merges finished
+work, and asks the owner only what is the owner's. It is per project, off unless its owner switches
+it on, and it is the one thing in the pipeline that moves a ticket to Done without a person.
+
+That last sentence used to be false by design, and the comments that said "only a human signs a
+ticket off" were the design. What replaced it is narrower than it sounds, and every part of the
+narrowing is enforced in `StewardService`, not asked for in a prompt:
+
+| The limit | Where |
+|---|---|
+| The mode - `off`, `propose` (says what it would do), `manage` (never merges), `full` | `stewardMode` in the project's machine-local `project.json`; set only from the Steward page. No tool changes it |
+| Full means merging only where a merge is local | `ProjectConfig.StewardMode`: by pull request or TFVC it stops at `manage` however it is set |
+| A change needs a run, and one run at a time | the `steward:<key>` lease, taken by `steward_begin` |
+| Tickets only against a unit of the plan its owner agreed | the spec's status line, read from git **as committed** - nothing a steward can run commits one |
+| What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
+| What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
+
+**The words are taken.** "Orchestrator" is `heartbeat.ps1` and "owner" is the human whose ticket it
+is - both everywhere in this code. The stand-in is the *steward*, and a new name for it in one file
+is how the next reader ends up looking for two things.
+
+**Its tools are a second door on the one MCP server.** A worker's session connects to `/mcp` and is
+never shown a steward tool; a steward's connects to `/mcp/steward` and is shown nothing else. That
+is separation by absence, the same kind "there is no tool that signs a ticket off" always was. It
+is not authentication - nothing on this machine is - so do not describe it as a security boundary.
+
+**It runs in a berth of its own.** The orchestrator asks `GET /api/steward/due` each pass and
+starts `data/steward.ps1` in slot 4, beside the three worker slots and never counted against them.
+A run is started by something happening (a ticket reached review or blocked, the owner answered,
+the base moved), not by a clock, and at most once per project in five minutes.
+
+**A steward changes no file.** On claude that is a fact: the run is launched with no shell and no
+editor (`--tools Read,Grep,Glob`) and does everything through its MCP tools. On codex and gemini it
+is the prompt's rule alone - the same gap, for the same reason, as the local-only guard.
+
+**What is one project's stays in that project's folder**, as with everything else here:
+
+| What is specific | Where it goes |
+|---|---|
+| Limits, the branch synced into the base, where the plan lives, never-merged paths, merge checks | `steward` in `project.defaults.json` |
+| What only that repo makes worth holding a merge for | `data/projects/<key>/steward-flags.ps1`, which like `guard.ps1` can only add a reason to wait |
+| The order of work and the judgment behind it | `data/projects/<key>/skills/steward/skill.md` (template: `data/skill-templates/steward/skill.md`) |
+
+The rules that outrank that skill are `data/steward-prompt.md`. Changing what a steward may do?
+The tests are the specification of the limits:
+
+```bash
+dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~Steward"
+```
+
 ## Knowledge
 
 Whetstone's *managed* projects keep their notes in the repo at `.claude/memory`, junctioned from
