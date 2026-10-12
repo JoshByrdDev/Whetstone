@@ -121,7 +121,7 @@ export function StewardPanel() {
 
       {page && !off && (
         <>
-          <SectionRule title="Waiting on you" colour={TIER.blocked.c} count={page.waiting.length} />
+          <Fold id="waiting" open title="Waiting on you" colour={TIER.blocked.c} count={page.waiting.length}>
           {page.waiting.length === 0
             ? <Quiet>Nothing is waiting on you.</Quiet>
             : (
@@ -131,13 +131,15 @@ export function StewardPanel() {
                 ))}
               </div>
             )}
+          </Fold>
 
-          <SectionRule title="Tell your steward" colour="var(--w-accent)" meta="a standing instruction, read by every run" />
-          <Tell onSend={async text => { await tellSteward(page.project, text); await load(); }} />
+          <Fold id="tell" open title="Tell your steward" colour="var(--w-accent)" meta="a standing instruction, read by every run">
+            <Tell onSend={async text => { await tellSteward(page.project, text); await load(); }} />
+          </Fold>
 
           <PlanSection status={status} />
 
-          <SectionRule title="Last run" colour={TIER.queue.c} meta={page.lastRunEndedAt ? ago(page.lastRunEndedAt) : undefined} />
+          <Fold id="last-run" open title="Last run" colour={TIER.queue.c} meta={page.lastRunEndedAt ? ago(page.lastRunEndedAt) : undefined}>
           <Panel className="mb-8">
             <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: 'var(--w-t200)' }}>
               {page.lastRunSummary ?? 'No run has finished yet.'}
@@ -154,6 +156,7 @@ export function StewardPanel() {
               </details>
             )}
           </Panel>
+          </Fold>
 
           <EntryList title="Calls it made for you" colour={TIER.gate.c} kind="Call" entries={entries}
             empty="No calls recorded yet." />
@@ -162,7 +165,7 @@ export function StewardPanel() {
           <EntryList title="What you told it" colour="var(--w-accent)" kind="OwnerSaid" entries={entries}
             empty="No standing instructions." />
 
-          <SectionRule title="Answered" colour={TIER.done.c} count={page.answered.length} />
+          <Fold id="answered" title="Answered" colour={TIER.done.c} count={page.answered.length}>
           {page.answered.length === 0
             ? <Quiet>No questions answered yet.</Quiet>
             : (
@@ -176,9 +179,68 @@ export function StewardPanel() {
                 ))}
               </div>
             )}
+          </Fold>
         </>
       )}
     </div>
+  );
+}
+
+/** Which sections a person last left open or shut, kept per machine so the page opens as they left it. */
+const FOLD_PREFIX = 'whetstone.steward.fold.';
+
+function rememberedFold(id: string): boolean | null {
+  try {
+    const v = localStorage.getItem(FOLD_PREFIX + id);
+    return v === null ? null : v === '1';
+  } catch {
+    return null;   // private mode, blocked storage: the section just opens on its default
+  }
+}
+
+/**
+ * One section of the page: its heading, and a body that folds away under it.
+ *
+ * The heading is the control, whole, because it is the only thing left to aim at when the section
+ * is shut. `open` is where the section starts for someone who has never touched it: what needs a
+ * person, and what says how things stand, start open; the record, which is there to be looked
+ * things up in, starts shut and still shows its count.
+ */
+function Fold({ id, open: startsOpen = false, title, colour, count, meta, right, children }: {
+  id: string; open?: boolean; title: string; colour?: string; count?: number; meta?: string;
+  right?: ReactNode; children: ReactNode;
+}) {
+  const [open, setOpen] = useState(() => rememberedFold(id) ?? startsOpen);
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    try { localStorage.setItem(FOLD_PREFIX + id, next ? '1' : '0'); } catch { /* still stands for this visit */ }
+  };
+  return (
+    <>
+      <button
+        onClick={toggle}
+        aria-expanded={open}
+        title={open ? 'Hide this section' : 'Show this section'}
+        className="orbit-tap block w-full text-left"
+      >
+        <SectionRule
+          title={title} colour={colour} count={count} meta={meta}
+          right={(
+            <>
+              {right}
+              <span style={{ font: `700 10px ${MONO}`, color: 'var(--w-t500)', width: 10, textAlign: 'center' }}>
+                {open ? '-' : '+'}
+              </span>
+            </>
+          )}
+        />
+      </button>
+      {/* Keyed on the state so the body arrives each time it is opened, not only the first. */}
+      {open
+        ? <div key="open" className="orbit-swap">{children}</div>
+        : <div style={{ height: 12 }} />}
+    </>
   );
 }
 
@@ -306,12 +368,11 @@ function PlanSection({ status }: { status: StewardStatus | null }) {
   const plan = status.plan;
   const p = status.progress;
   return (
-    <>
-      <SectionRule
-        title="The plan" colour={TIER.active.c}
-        meta={p ? `unit ${p.unit}: ${p.done} of ${p.outcomes} outcomes done, ${p.inProgress} in progress` : undefined}
-        right={p ? <span style={{ font: `700 13px ${MONO}`, color: TIER.active.c }}>{p.percent}%</span> : undefined}
-      />
+    <Fold
+      id="plan" open title="The plan" colour={TIER.active.c}
+      meta={p ? `unit ${p.unit}: ${p.done} of ${p.outcomes} outcomes done, ${p.inProgress} in progress` : undefined}
+      right={p ? <span style={{ font: `700 13px ${MONO}`, color: TIER.active.c }}>{p.percent}%</span> : undefined}
+    >
       {typeof plan === 'string'
         ? <Quiet>{plan}</Quiet>
         : (
@@ -350,7 +411,7 @@ function PlanSection({ status }: { status: StewardStatus | null }) {
             })}
           </Panel>
         )}
-    </>
+    </Fold>
   );
 }
 
@@ -359,8 +420,7 @@ function EntryList({ title, colour, kind, entries, empty }: {
 }) {
   const rows = entries.filter(e => e.kind === kind);
   return (
-    <>
-      <SectionRule title={title} colour={colour} count={rows.length} />
+    <Fold id={kind} title={title} colour={colour} count={rows.length}>
       {rows.length === 0
         ? <Quiet>{empty}</Quiet>
         : (
@@ -375,6 +435,6 @@ function EntryList({ title, colour, kind, entries, empty }: {
             ))}
           </Panel>
         )}
-    </>
+    </Fold>
   );
 }
