@@ -1,9 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { Chip, GhostButton, PageHead, Panel, SectionRule } from './ui';
 import { BODY, CAPS, DISPLAY, MONO, TIER, chamfer, fade } from './orbit';
 import { track } from '../theme';
+import { ActivityFeed } from './ActivityFeed';
+import { isStewardEvent } from '../types/events';
+import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
   answerStewardQuestion, getSteward, getStewardEntries, getStewardStatus, setStewardMode, tellSteward,
 } from '../api/steward';
@@ -45,7 +48,7 @@ function ago(iso?: string | null): string {
   return `${Math.round(mins / (60 * 24))}d ago`;
 }
 
-export function StewardPanel() {
+export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; state: DashboardState }) {
   const [projects, project, setProject] = useProjectList('steward');
   const [page, setPage] = useState<StewardPage | null>(null);
   const [status, setStatus] = useState<StewardStatus | null>(null);
@@ -77,9 +80,25 @@ export function StewardPanel() {
     catch (err) { setError(err instanceof Error ? err.message : String(err)); }
   };
 
+  // What this project's steward is thinking, saying and doing, as it happens: its own strand of
+  // the feed the Heartbeat page shows whole, from the same stream, so the two can never differ.
+  const live = useMemo(
+    () => events.filter(e => isStewardEvent(e) && e.project === project),
+    [events, project],
+  );
+  // The fleet's state hears a run begin and end within the second; the page's own answer is only
+  // as fresh as its last slow read.
+  const runningNow = !!project && state.steward?.project === project;
+  // A run that has just ended has changed what is below - its summary, its calls, its questions.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !runningNow) load();
+    wasRunning.current = runningNow;
+  }, [runningNow, load]);
+
   const off = page?.mode === 'off';
   const sub = !page ? 'Loading' : off ? 'No steward for this project'
-    : page.running ? 'A run is in progress'
+    : runningNow || page.running ? 'A run is in progress'
     : `Last run ${ago(page.lastRunEndedAt)}${page.due ? ` - a run is due: ${page.dueReason}` : page.resting ? ' - resting until something changes' : ''}`;
 
   return (
@@ -131,6 +150,19 @@ export function StewardPanel() {
                 ))}
               </div>
             )}
+          </Fold>
+
+          <Fold
+            id="live" open title="Live" colour={TIER.queue.c}
+            meta={runningNow ? 'a run is in progress'
+              : live.length > 0 ? `last heard ${ago(live[live.length - 1].timestamp)}` : 'no run going'}
+          >
+            <div className="mb-8">
+              <ActivityFeed
+                events={live} solo
+                empty="Nothing from this steward in the recent feed. When a run starts, what it thinks, says and does shows here as it happens."
+              />
+            </div>
           </Fold>
 
           <Fold id="tell" open title="Tell your steward" colour="var(--w-accent)" meta="a standing instruction, read by every run">

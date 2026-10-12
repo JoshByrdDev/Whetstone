@@ -90,10 +90,11 @@ export default function App() {
     setAgentFilter(prev => {
       if (prev.size === 0) return prev;
       const out = new Set(state.agents.map(a => a.slot));
+      if (state.steward) out.add(state.steward.slot);
       const kept = [...prev].filter(s => out.has(s));
       return kept.length === prev.size ? prev : new Set(kept);
     });
-  }, [state.agents]);
+  }, [state.agents, state.steward]);
 
   // Where the page is in its two-step move. `leaving` holds the tab we are on our way to while the
   // current one animates out; `entering` is the direction the new one flies in from once it lands.
@@ -224,7 +225,7 @@ export default function App() {
           <div key={tab} className={stageClass} style={{ pointerEvents: leaving ? 'none' : undefined }}>
           {tab === 'board' && <Board state={state} wakeAt={wakeAt} events={events} />}
 
-          {tab === 'steward' && <StewardPanel />}
+          {tab === 'steward' && <StewardPanel events={events} state={state} />}
 
           {tab === 'classroom' && <Classroom initialTicketId={classroomTicket} />}
 

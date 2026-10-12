@@ -1,5 +1,6 @@
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import { AgentMascot } from './AgentMascot';
+import { StewardTag } from './StewardMark';
 
 interface Props {
   state: DashboardState;
@@ -37,6 +38,16 @@ export function StatusBanner({
   const label = state.status === 'running' && working > 0
     ? `${working} of ${state.workers} working`
     : config.label;
+  // The steward is out beside the agents, never counted among them, and its chip filters the page
+  // the same way theirs do - by the slot its lines arrive on.
+  const steward = state.steward ?? null;
+  const stewardOn = steward != null && !!agentFilter?.has(steward.slot);
+  const picked = [...(agentFilter ?? [])].sort((x, y) => x - y);
+  const pickedAgents = picked.filter(s => s !== steward?.slot);
+  const pickedLabel = [
+    pickedAgents.length > 0 ? `Agent ${pickedAgents.join(' · ')}` : null,
+    stewardOn ? 'Steward' : null,
+  ].filter(Boolean).join(' · ');
 
   return (
     <div className={`${config.bg} rounded-lg px-6 py-4 flex flex-wrap items-center justify-between gap-y-3`}>
@@ -53,7 +64,7 @@ export function StatusBanner({
             Wake up at {wakeUpTime}
           </span>
         )}
-        {working === 0 && state.project && (
+        {working === 0 && !steward && state.project && (
           <span className="ml-2 bg-white/25 rounded px-2 py-0.5 text-sm font-medium">
             {state.project}
           </span>
@@ -95,6 +106,25 @@ export function StatusBanner({
             </button>
           );
         })}
+        {/* Not a fourth pill. An agent's is round and carries its bot and its ticket; the steward
+            has neither, so it is a squared chip that says what it is in a word. */}
+        {steward && (
+          <button
+            type="button"
+            onClick={() => onToggleAgent?.(steward.slot)}
+            aria-pressed={stewardOn}
+            title={stewardOn
+              ? 'Showing only the steward — click to drop it from the filter'
+              : `Show only the steward${filtering ? ' as well' : ''}`}
+            className={`orbit-tap flex items-center gap-2 rounded px-2 py-1 border text-sm
+              focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80 ${
+              stewardOn ? 'bg-black/55 border-white/70' : 'bg-black/40 border-white/25 hover:border-white/50'
+            } ${filtering && !stewardOn ? 'opacity-45 saturate-50 hover:opacity-90 hover:saturate-100' : ''}`}
+          >
+            <StewardTag />
+            {steward.project && <span className="opacity-80">{steward.project}</span>}
+          </button>
+        )}
         {filtering && (
           <button
             type="button"
@@ -105,7 +135,7 @@ export function StatusBanner({
               focus:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
           >
             <span className="font-semibold">
-              Agent {[...(agentFilter ?? [])].sort((x, y) => x - y).join(' · ')} only
+              {pickedLabel} only
             </span>
             <span aria-hidden className="opacity-70 leading-none">✕</span>
           </button>

@@ -1,3 +1,4 @@
+import { isStewardEvent } from '../types/events';
 import type { HeartbeatEvent } from '../types/events';
 
 // One place that turns an event into words. The activity feed renders each kind in its own row
@@ -8,12 +9,22 @@ import type { HeartbeatEvent } from '../types/events';
 export function prettyTool(name?: string): string {
   if (!name) return 'tool';
   if (name.startsWith('mcp__tickets__')) return name.slice('mcp__tickets__'.length);
+  // A steward's verbs all say whose they are twice over; the feed already says it once.
+  if (name.startsWith('mcp__steward__')) return name.slice('mcp__steward__'.length).replace(/^steward_/, '');
   if (name.startsWith('mcp__')) return name.split('__').slice(-1)[0];
   return name;
 }
 
 /** The feed's phrasing for the event kinds that are rendered as a single action line. */
 export function formatEventText(evt: HeartbeatEvent): string {
+  // A steward's run opens and closes with the same two events a ticket's cycle does, and has no
+  // ticket to name: without this it reads as the whole heartbeat starting and stopping.
+  if (isStewardEvent(evt)) {
+    if (evt.type === 'cycle_start') return 'Run started';
+    if (evt.type === 'cycle_end') {
+      return evt.durationSeconds ? `Run over after ${Math.max(1, Math.round(evt.durationSeconds / 60))}m` : 'Run over';
+    }
+  }
   switch (evt.type) {
     case 'cycle_start':
       return evt.ticketId

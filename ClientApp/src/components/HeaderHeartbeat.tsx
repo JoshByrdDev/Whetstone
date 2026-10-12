@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import type { DashboardState } from '../types/events';
 import { formatWakeTime } from '../hooks/useTabStatus';
 import { agentAccent } from './AgentMascot';
+import { StewardTag } from './StewardMark';
 
 const statusMeta: Record<string, { label: string; dot: string; text: string; pulse: boolean }> = {
   running:    { label: 'Running',   dot: 'bg-emerald-400', text: 'text-emerald-300', pulse: true },
@@ -97,6 +98,13 @@ export function HeaderHeartbeat({ state, wakeAt }: { state: DashboardState; wake
           </span>
         );
       })}
+      {/* Out beside the agents, and said in a word: it has no number and no ticket to show. */}
+      {state.steward && (
+        <span className="flex items-center gap-1" title={`A steward's run is going${state.steward.project ? ` for ${state.steward.project}` : ''}`}>
+          <span className="text-gray-700">·</span>
+          <StewardTag />
+        </span>
+      )}
     </div>
   );
 }

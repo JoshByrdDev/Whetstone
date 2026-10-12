@@ -45,6 +45,22 @@ export interface AgentState {
   since?: string;
 }
 
+/**
+ * A project's steward, while it has a run going. It reports through the same events a worker does
+ * and is berthed in a slot beside theirs, but it is not one of them: it holds no ticket, and every
+ * surface that counts or draws agents leaves it out and shows it as itself.
+ */
+export interface StewardRun {
+  slot: number;
+  project?: string;
+  since?: string;
+}
+
+/** The one phase name that is not a ticket's - what a steward's run stamps on its events. */
+export const STEWARD_PHASE = 'Steward';
+
+export const isStewardEvent = (evt: HeartbeatEvent) => evt.phase === STEWARD_PHASE;
+
 export interface DashboardState {
   status: 'idle' | 'running' | 'sleeping' | 'error' | 'off-hours' | 'stopped';
   /**
@@ -60,4 +76,6 @@ export interface DashboardState {
   workers: number;
   /** The agents currently out, lowest slot first. Empty when the fleet is idle or stopped. */
   agents: AgentState[];
+  /** The steward's run, when one is going. Never among `agents`. */
+  steward?: StewardRun | null;
 }

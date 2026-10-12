@@ -1,6 +1,8 @@
-import { useRef, useState, useEffect } from 'react';
+import { Fragment, useRef, useState, useEffect } from 'react';
+import { isStewardEvent } from '../types/events';
 import type { HeartbeatEvent } from '../types/events';
 import { AgentTag, agentAccent } from './AgentMascot';
+import { STEWARD_HUE, STEWARD_WASH, StewardTag } from './StewardMark';
 import { FEED_HIDDEN, formatEventText, prettyTool } from './eventText';
 
 interface Props {
@@ -11,6 +13,13 @@ interface Props {
    * a feed asked for one strand should not keep interleaving them.
    */
   agentFilter?: ReadonlySet<number>;
+  /**
+   * The feed is one voice's - the Steward page's, handed only its own steward's lines. Nothing in
+   * it needs marking as whose, and it is as tall as what it has to say rather than a fixed column.
+   */
+  solo?: boolean;
+  /** What to say when there is nothing to show, where the fleet's own wording would be wrong. */
+  empty?: string;
 }
 
 const typeIcons: Record<string, string> = {
@@ -43,7 +52,7 @@ const typeColors: Record<string, string> = {
   ticket_skip:    'border-red-500',
 };
 
-export function ActivityFeed({ events, agentFilter }: Props) {
+export function ActivityFeed({ events, agentFilter, solo = false, empty }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -75,10 +84,10 @@ export function ActivityFeed({ events, agentFilter }: Props) {
 
   if (feedEvents.length === 0) {
     return (
-      <div className="h-[500px] flex items-center justify-center bg-gray-900 rounded-lg border border-hair text-gray-500 text-center px-6">
-        {filtering
+      <div className={`${solo ? 'h-24' : 'h-[500px]'} flex items-center justify-center bg-gray-900 rounded-lg border border-hair text-gray-500 text-center px-6`}>
+        {empty ?? (filtering
           ? 'Nothing from the selected agents yet. Press Esc, or click the chip again, for the whole fleet.'
-          : 'Waiting for heartbeat events...'}
+          : 'Waiting for heartbeat events...')}
       </div>
     );
   }
@@ -101,15 +110,22 @@ export function ActivityFeed({ events, agentFilter }: Props) {
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className="h-[500px] overflow-y-auto bg-gray-900 rounded-lg border border-hair p-3 dark-scrollbar"
+        className={`${solo ? 'max-h-[500px]' : 'h-[500px]'} overflow-y-auto bg-gray-900 rounded-lg border border-hair p-3 dark-scrollbar`}
       >
-        {feedEvents.map(evt => {
-          switch (evt.type) {
-            case 'text_output': return <NarrationRow key={evt.id} evt={evt} />;
-            case 'thinking':    return <ThinkingRow key={evt.id} evt={evt} />;
-            case 'tool_call':   return <ToolRow key={evt.id} evt={evt} />;
-            default:            return <ActionRow key={evt.id} evt={evt} />;
-          }
+        {feedEvents.map((evt, i) => {
+          // Where the steward takes up the telling, say so once, at the head of its stretch: its
+          // narration and thinking rows carry no name of their own, and a tag on every line of
+          // them would be louder than the lines.
+          const heads = !solo && isStewardEvent(evt) && !(i > 0 && isStewardEvent(feedEvents[i - 1]));
+          return (
+            <Fragment key={evt.id}>
+              {heads && <StewardHead evt={evt} />}
+              {evt.type === 'text_output' ? <NarrationRow evt={evt} solo={solo} />
+                : evt.type === 'thinking' ? <ThinkingRow evt={evt} solo={solo} />
+                : evt.type === 'tool_call' ? <ToolRow evt={evt} solo={solo} />
+                : <ActionRow evt={evt} solo={solo} />}
+            </Fragment>
+          );
         })}
       </div>
     </div>
@@ -124,18 +140,33 @@ export function ActivityFeed({ events, agentFilter }: Props) {
  * stories and become noise. The rail is what lets the eye follow one strand down the column
  * without reading a word. Orchestrator lines (sleep, idle) have no agent and no rail.
  */
-function rail(evt: HeartbeatEvent) {
+function rail(evt: HeartbeatEvent, solo = false) {
+  // The steward is not a fourth agent and does not borrow one's colour: its lines sit on its own
+  // rail and a faint wash, so its stretch of the feed reads as a different kind of thing rather
+  // than as one more strand. On a feed that is only the steward's there is nothing to tell apart.
+  if (isStewardEvent(evt)) return solo ? undefined : { borderLeft: `2px solid ${STEWARD_HUE}`, background: STEWARD_WASH };
   if (evt.agent == null) return undefined;
   return { borderLeft: `2px solid ${agentAccent(evt.agent).hex}` };
 }
 
-function ActionRow({ evt }: { evt: HeartbeatEvent }) {
-  const agentRail = rail(evt);
+/** The line that opens a stretch of the steward's lines: who is speaking, and for which project. */
+function StewardHead({ evt }: { evt: HeartbeatEvent }) {
+  return (
+    <div style={rail(evt)} className="flex items-center gap-2 pl-3 pr-2 pt-2 pb-1 mt-1 rounded-r">
+      <StewardTag />
+      {evt.project && <span className="text-[10px] font-medium text-gray-400">{evt.project}</span>}
+    </div>
+  );
+}
+
+function ActionRow({ evt, solo }: { evt: HeartbeatEvent; solo: boolean }) {
+  const steward = isStewardEvent(evt);
+  const agentRail = rail(evt, solo);
   return (
     <div
       style={agentRail}
       className={`flex items-start gap-3 pl-3 py-1.5 rounded-r ${
-        agentRail ? '' : `border-l-2 ${typeColors[evt.type] ?? 'border-hair'}`
+        agentRail || steward ? '' : `border-l-2 ${typeColors[evt.type] ?? 'border-hair'}`
       }`}
     >
       <span className="text-sm flex-shrink-0 w-5" title={evt.type}>
@@ -146,8 +177,8 @@ function ActionRow({ evt }: { evt: HeartbeatEvent }) {
           <span className="text-xs text-gray-500">
             {new Date(evt.timestamp).toLocaleTimeString()}
           </span>
-          {evt.agent != null && <AgentTag agent={evt.agent} />}
-          {evt.project && (
+          {evt.agent != null && !steward && <AgentTag agent={evt.agent} />}
+          {evt.project && !steward && (
             <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-700 text-gray-300">
               {evt.project}
             </span>
@@ -169,18 +200,19 @@ function time(evt: HeartbeatEvent) {
 }
 
 // Claude's narration — the voice of the run. Rendered prominently, like a chat turn.
-function NarrationRow({ evt }: { evt: HeartbeatEvent }) {
-  const accent = evt.agent != null ? agentAccent(evt.agent) : null;
+function NarrationRow({ evt, solo }: { evt: HeartbeatEvent; solo: boolean }) {
+  const steward = isStewardEvent(evt);
+  const accent = steward || evt.agent == null ? null : agentAccent(evt.agent);
   return (
-    <div style={rail(evt)} className="flex gap-3 py-1.5 px-2 rounded">
+    <div style={rail(evt, solo)} className="flex gap-3 py-1.5 px-2 rounded-r">
       {/* The speaker's mark takes the agent's colour: with three voices in one column, an
           identical bullet on every line is the thing that makes them one indistinct stream. */}
       <span
         className="flex-shrink-0 text-sm leading-relaxed select-none"
-        style={{ color: accent ? accent.hex : 'rgb(var(--w-queue-rgb) / .8)' }}
-        title={evt.agent != null ? `Agent ${evt.agent}` : undefined}
+        style={{ color: steward ? STEWARD_HUE : accent ? accent.hex : 'rgb(var(--w-queue-rgb) / .8)' }}
+        title={steward ? 'Steward' : evt.agent != null ? `Agent ${evt.agent}` : undefined}
       >
-        ✦
+        {steward ? '◆' : '✦'}
       </span>
       <p className="flex-1 min-w-0 text-sm text-gray-100 leading-relaxed whitespace-pre-wrap break-words">
         {evt.text ?? ''}
@@ -191,9 +223,9 @@ function NarrationRow({ evt }: { evt: HeartbeatEvent }) {
 }
 
 // The model's reasoning — a quiet, dimmed aside beneath the narration.
-function ThinkingRow({ evt }: { evt: HeartbeatEvent }) {
+function ThinkingRow({ evt, solo }: { evt: HeartbeatEvent; solo: boolean }) {
   return (
-    <div style={rail(evt)} className="flex gap-2 py-1 pl-3 pr-2 rounded">
+    <div style={rail(evt, solo)} className="flex gap-2 py-1 pl-3 pr-2 rounded-r">
       <span className="flex-shrink-0 text-gray-600 text-xs leading-relaxed select-none">💭</span>
       <p className="flex-1 min-w-0 text-xs italic text-gray-500 leading-relaxed whitespace-pre-wrap break-words">
         {evt.text ?? ''}
@@ -203,9 +235,9 @@ function ThinkingRow({ evt }: { evt: HeartbeatEvent }) {
 }
 
 // A single tool invocation — compact and subordinate: verb + what it acted on.
-function ToolRow({ evt }: { evt: HeartbeatEvent }) {
+function ToolRow({ evt, solo }: { evt: HeartbeatEvent; solo: boolean }) {
   return (
-    <div style={rail(evt)} className="flex items-baseline gap-2 py-0.5 pl-8 pr-2 rounded">
+    <div style={rail(evt, solo)} className="flex items-baseline gap-2 py-0.5 pl-8 pr-2 rounded-r">
       <span className="flex-shrink-0 text-[10px] text-gray-700">{typeIcons.tool_call}</span>
       <span className="flex-shrink-0 text-xs font-mono text-gray-400">{prettyTool(evt.toolName)}</span>
       {evt.text && (

@@ -127,4 +127,31 @@ public class EventStoreAgentResetTests : IDisposable
         Assert.Equal("36", one.GetProperty("ticketId").GetString());
         Assert.Equal("alpha", one.GetProperty("project").GetString());
     }
+
+    [Fact]
+    public void A_stewards_run_is_reported_beside_the_agents_and_never_as_one()
+    {
+        FakeLiveHeartbeat();
+        var store = NewStore();
+        store.Add(CycleStart(1, "36"));
+        store.Add(new HeartbeatEvent { Type = EventTypes.CycleStart, Agent = 4, Phase = EventPhases.Steward, Project = "bravo" });
+
+        var state = JsonDocument.Parse(JsonSerializer.Serialize(store.GetState())).RootElement;
+        var one = Assert.Single(state.GetProperty("agents").EnumerateArray());
+        Assert.Equal(1, one.GetProperty("slot").GetInt32());
+        // The lead ticket is a worker's: a steward holds none.
+        Assert.Equal("36", state.GetProperty("ticketId").GetString());
+        Assert.Equal(4, state.GetProperty("steward").GetProperty("slot").GetInt32());
+        Assert.Equal("bravo", state.GetProperty("steward").GetProperty("project").GetString());
+
+        // On its own it still means the fleet is running, and it is gone when its run ends.
+        store.Add(new HeartbeatEvent { Type = EventTypes.CycleEnd, Agent = 1 });
+        state = JsonDocument.Parse(JsonSerializer.Serialize(store.GetState())).RootElement;
+        Assert.Empty(state.GetProperty("agents").EnumerateArray());
+        Assert.Equal("running", state.GetProperty("status").GetString());
+
+        store.Add(new HeartbeatEvent { Type = EventTypes.CycleEnd, Agent = 4, Phase = EventPhases.Steward });
+        state = JsonDocument.Parse(JsonSerializer.Serialize(store.GetState())).RootElement;
+        Assert.Equal(JsonValueKind.Null, state.GetProperty("steward").ValueKind);
+    }
 }

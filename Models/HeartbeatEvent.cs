@@ -41,3 +41,14 @@ public static class EventTypes
     public const string Summary = "summary";
     public const string StateChange = "state_change";
 }
+
+/// <summary>
+/// The one phase name that is not a ticket's. A steward's run reports through the same events a
+/// worker's does, from a slot beside the worker slots, and this on its events is what says so - to
+/// the fleet's state, which must not count it as a ticket being worked, and to the feed, which
+/// draws it as what it is. steward.ps1 and the orchestrator send it; the client reads the same word.
+/// </summary>
+public static class EventPhases
+{
+    public const string Steward = "Steward";
+}

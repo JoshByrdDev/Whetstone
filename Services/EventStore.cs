@@ -305,6 +305,7 @@ public class EventStore
         var running = _heartbeat.IsRunning;
 
         List<object> agents;
+        object? steward;
         AgentState? lead = null;
         lock (_agentLock)
         {
@@ -314,8 +315,16 @@ public class EventStore
                 ? _agents.Where(kv => kv.Value.Status == "running").OrderBy(kv => kv.Key).ToList()
                 : new List<KeyValuePair<int, AgentState>>();
 
-            lead = busy.Select(kv => kv.Value).FirstOrDefault();
-            agents = busy.Select(kv => (object)new
+            // A steward's run is out too, but it is not a ticket being worked: it holds no ticket,
+            // takes no worker's berth, and "4 of 3 working" is what counting it as one looks like.
+            // It is reported beside the agents, never among them.
+            steward = busy.Where(kv => kv.Value.Phase == EventPhases.Steward)
+                .Select(kv => (object)new { slot = kv.Key, project = kv.Value.Project, since = kv.Value.Since })
+                .FirstOrDefault();
+            var workers = busy.Where(kv => kv.Value.Phase != EventPhases.Steward).ToList();
+
+            lead = workers.Select(kv => kv.Value).FirstOrDefault();
+            agents = workers.Select(kv => (object)new
             {
                 slot = kv.Key,
                 status = kv.Value.Status,
@@ -328,9 +337,9 @@ public class EventStore
 
         // One agent working means the fleet is running, whatever the orchestrator was last heard
         // saying: it reports "idle" between claims, and with three agents out that would read as a
-        // stopped pipeline.
+        // stopped pipeline. A steward's run counts for the same reason.
         var status = !running ? "stopped"
-                   : agents.Count > 0 ? "running"
+                   : agents.Count > 0 || steward is not null ? "running"
                    : _currentState;
 
         return new
@@ -345,6 +354,7 @@ public class EventStore
             totalEvents = _events.Count,
             workers = ConfiguredWorkers(),
             agents,
+            steward,
         };
     }
 }

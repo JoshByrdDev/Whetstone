@@ -47,6 +47,9 @@ $env:GIT_TERMINAL_PROMPT = '0'
 
 $script:AgentSlot = $Agent
 $StewardSkill = 'steward'
+# Every event this run sends carries -Phase "Steward". The slot number says only where it is
+# berthed; the phase is what tells the dashboard this is not a ticket being worked, so the fleet's
+# count leaves it out and the feed draws it as the steward's.
 
 # Give the run's lock back. A run that ended itself has already released it and this does nothing;
 # one that died, timed out or never started is the case it exists for. Without it the project's
@@ -80,12 +83,12 @@ Write-Log "Steward run for $projectName [$Project], mode $($launch.mode)."
 
 if (-not $launch.skillExists) {
     Write-Log "  ERROR: no steward skill at $skillFile. Copy data/skill-templates/steward/skill.md there and make it this project's own."
-    Send-DashboardEvent -Type "error" -Project $Project -Error "Steward: no skill file at $skillFile"
+    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward: no skill file at $skillFile"
     exit 1
 }
 if (-not $workDir -or -not (Test-Path $workDir)) {
     Write-Log "  ERROR: the project's checkout '$workDir' does not exist."
-    Send-DashboardEvent -Type "error" -Project $Project -Error "Steward: no checkout at $workDir"
+    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward: no checkout at $workDir"
     exit 1
 }
 if (-not (Test-Path $PromptStewardFile)) {
@@ -245,14 +248,14 @@ if ($limitReset) {
             ConvertTo-Json -Compress | Set-Content -Path $UsageLimitFile -Encoding UTF8
     }
     catch { Write-Log "  Could not record the usage limit: $($_.Exception.Message)" }
-    Send-DashboardEvent -Type "error" -Project $Project -Error "Usage limit - paused until $($limitReset.ToString('HH:mm'))"
+    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Usage limit - paused until $($limitReset.ToString('HH:mm'))"
 }
 elseif ($mcpProblem) {
-    Send-DashboardEvent -Type "error" -Project $Project -Error "Steward: its tools were not usable ($mcpProblem)"
+    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward: its tools were not usable ($mcpProblem)"
 }
 elseif (-not $resultReceived) {
     Write-Log "  The steward did not finish (elapsed ${elapsedMin}min, timeout ${WorkerTimeoutMinutes}min)."
-    Send-DashboardEvent -Type "error" -Project $Project -Error "Steward did not finish (elapsed ${elapsedMin}min)"
+    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward did not finish (elapsed ${elapsedMin}min)"
 }
 
 $why = if ($limitReset) { "the account's usage limit refused the run" }

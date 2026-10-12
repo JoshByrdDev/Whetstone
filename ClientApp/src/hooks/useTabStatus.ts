@@ -40,6 +40,7 @@ function getStatusText(state: DashboardState, wakeAt?: Date | null): string {
     if (state.agents.length > 1) return `${state.agents.length} agents working`;
     if (state.ticketId && state.phase) return `${state.ticketId} ${state.phase}`;
     if (state.ticketId) return `${state.ticketId} Running`;
+    if (state.steward) return 'Steward running';
     return 'Running';
   }
   if (state.status === 'sleeping') return wakeAt ? `Sleeping until ${formatWakeTime(wakeAt)}` : 'Sleeping';
@@ -63,5 +64,5 @@ export function useTabStatus(state: DashboardState, wakeAt?: Date | null) {
       document.head.appendChild(link);
     }
     link.href = buildFavicon(color);
-  }, [state.status, state.ticketId, state.phase, state.agents.length, wakeAt?.getTime(), theme]);
+  }, [state.status, state.ticketId, state.phase, state.agents.length, state.steward != null, wakeAt?.getTime(), theme]);
 }
