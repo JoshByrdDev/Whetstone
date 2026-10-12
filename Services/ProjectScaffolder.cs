@@ -58,6 +58,11 @@ public static class ProjectScaffolder
         foreach (var skill in PhaseMachine.AllSkills)
             CopyIfMissing(paths.SkillTemplate(skill), paths.SkillFile(project, skill), $"skills/{skill}/skill.md");
 
+        // The steward's skill is not a phase and sits in no list of them, but a project gets the
+        // file for the same reason it gets the optional review skill: so that switching its steward
+        // on is a setting, not a hunt for a template.
+        CopyIfMissing(paths.SkillTemplate("steward"), paths.SkillFile(project, "steward"), "skills/steward/skill.md");
+
         CopyIfMissing(paths.ReflectPromptTemplate, paths.ReflectPromptFile(project), "reflect-prompt.md");
 
         return created;

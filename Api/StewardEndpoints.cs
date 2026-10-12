@@ -22,6 +22,9 @@ public static class StewardEndpoints
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    /// <summary>The skill a steward's run reads: <c>data/projects/&lt;key&gt;/skills/steward/skill.md</c>.</summary>
+    public const string StewardSkill = "steward";
+
     public static void MapStewardEndpoints(this WebApplication app)
     {
         // Everything the Steward page draws for one project.
@@ -98,20 +101,57 @@ public static class StewardEndpoints
         // ---- for whatever launches a run -------------------------------------------------
 
         // Which projects' stewards are owed a run right now. Costs a few reads and no agent.
+        // Honours the same project filter the claim does (heartbeatProjects, empty = all): a project the
+        // fleet is not working is not one whose steward should be filing tickets for it.
         app.MapGet("/api/steward/due", async (ProjectRegistry registry, StewardService steward, CancellationToken ct) =>
         {
+            var only = registry.GetGlobalConfig().TryGetValue("heartbeatProjects", out var hp) && hp.ValueKind == JsonValueKind.Array
+                ? hp.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToArray()
+                : Array.Empty<string>();
             var due = new List<object>();
             foreach (var key in registry.Projects)
             {
+                if (only.Length > 0 && !only.Contains(key)) continue;
                 var (isDue, reason) = await steward.DueAsync(key, ct);
                 if (isDue) due.Add(new { project = key, reason });
             }
             return Results.Ok(due);
         });
 
-        // The process that held a run's lease is gone without ending it.
-        app.MapPost("/api/steward/abandon", async (string? project, string? reason, StewardService steward) =>
-            Results.Ok(new { released = await steward.AbandonRunAsync(project ?? "", reason ?? "the run's process ended without closing it") }));
+        // A run is about to be launched: stamp the attempt, and hand over what the launcher needs
+        // to point an agent at this project. The skill is named whether or not it exists, so the
+        // launcher can say which file is missing.
+        app.MapPost("/api/steward/launching", async (string? project, ProjectRegistry registry, DashboardPaths paths,
+            StewardService steward) =>
+        {
+            var r = await steward.LaunchingAsync(project ?? "");
+            if (r.Answer != "launching") return Results.BadRequest(r);
+            var cfg = registry.GetProjectConfig(project!);
+            var skill = paths.SkillFile(project!, StewardSkill);
+            return Results.Ok(new
+            {
+                project,
+                displayName = cfg.DisplayName,
+                mode = cfg.StewardMode.ToString().ToLowerInvariant(),
+                projectPath = cfg.ProjectPath,
+                skillFile = skill,
+                skillExists = File.Exists(skill),
+                memoryIndex = cfg.ResolvedMemoryIndex,
+                planUnits = cfg.Steward.Plan.UnitsDir,
+            });
+        });
+
+        // The process that held a run's lease is gone without ending it. With no project named,
+        // every project's: an orchestrator starting up has no steward running, so any run still
+        // marked open belongs to a process that died with the last one.
+        app.MapPost("/api/steward/abandon", async (string? project, string? reason, ProjectRegistry registry, StewardService steward) =>
+        {
+            var why = reason ?? "the run's process ended without closing it";
+            var released = new List<string>();
+            foreach (var key in string.IsNullOrWhiteSpace(project) ? registry.Projects : new[] { project })
+                if (await steward.AbandonRunAsync(key, why)) released.Add(key);
+            return Results.Ok(new { released });
+        });
     }
 
     private static object Question(StewardQuestion q) => new

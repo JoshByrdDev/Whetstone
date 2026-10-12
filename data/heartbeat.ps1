@@ -191,6 +191,12 @@ $Agents = @{}
 
 function Get-BusyCount { return $Agents.Count }
 
+# Tickets being worked, which is what the worker limit limits. The steward's berth is beside the
+# worker slots, not one of them (see $StewardSlot), so it counts as busy and never as a worker.
+function Get-WorkerCount {
+    return @($Agents.Keys | Where-Object { $_ -ne $StewardSlot }).Count
+}
+
 function Get-FreeSlot {
     for ($i = 1; $i -le $HeartbeatWorkers; $i++) {
         if (-not $Agents.ContainsKey($i)) { return $i }
@@ -213,6 +219,16 @@ function Update-Fleet {
         # that is noise in the one log somebody reads to find out whether the fleet is healthy.
         $code = $null
         try { $code = $a.Process.ExitCode } catch { }
+
+        if ($slot -eq $StewardSlot) {
+            Write-Log "The steward's run for [$($a.Project)] is over after ${mins}min$(if ($null -ne $code -and $code -ne 0) { " (exit code $code)" })."
+            # The run gives its own lock back, and steward.ps1 does it again on the way out. This
+            # is for the one case neither covers: the script itself was killed.
+            Send-StewardAbandon -Project $a.Project -Reason "the steward's process ended"
+            Send-DashboardEvent -Type "state_change" -Text "idle" -Agent $slot
+            $Agents.Remove($slot)
+            continue
+        }
 
         if ($code -eq 0)         { Write-Log "Agent $slot finished ticket #$($a.TicketId) [$($a.Project)] after ${mins}min." }
         elseif ($null -eq $code) { Write-Log "Agent $slot finished ticket #$($a.TicketId) [$($a.Project)] after ${mins}min (exit code unavailable)." }
@@ -276,6 +292,80 @@ function Resolve-OrphanedClaims {
         Write-Log "Ticket #$id is leased but no agent here is working it - releasing the orphaned claim."
         Send-LeaseRelease -TicketId $id -Reason "orphaned claim - the heartbeat holding it never started a worker"
     }
+}
+
+# Release a steward run's lock on the dashboard: one project's, or with no project every project's.
+# Harmless when nothing is held, which is the ordinary case.
+function Send-StewardAbandon {
+    param([string]$Project = '', [string]$Reason = 'the run ended without closing itself')
+    try {
+        $q = "reason=$([Uri]::EscapeDataString($Reason))"
+        if ($Project) { $q = "project=$([Uri]::EscapeDataString($Project))&$q" }
+        Invoke-RestMethod -Uri "$DashboardUrl/api/steward/abandon?$q" -Method Post -TimeoutSec 10 | Out-Null
+    }
+    catch { Write-Log "  Could not release the steward lock: $($_.Exception.Message)" }
+}
+
+# Start a steward's run if some project is owed one and the steward's berth is free.
+#
+# Whether a run is owed is the dashboard's to say (GET /api/steward/due): a ticket came for review,
+# one blocked, the owner answered a question, the base branch moved. Asking costs a few reads and
+# no agent, so it is asked every pass - and a board where nothing has changed starts nothing, which
+# is the whole difference between this and running one on a clock.
+function Start-StewardIfDue {
+    if ($Agents.ContainsKey($StewardSlot)) { return $false }
+    if (-not (Test-Path $StewardScript)) { return $false }
+
+    $due = $null
+    try { $due = @(Invoke-RestMethod -Uri "$DashboardUrl/api/steward/due" -Method Get -TimeoutSec 15) }
+    catch { return $false }   # a dashboard that will not answer is asked again next pass
+    if (-not $due -or $due.Count -eq 0) { return $false }
+
+    $project = "$($due[0].project)"
+    Write-Log "Steward [$project] is due: $($due[0].reason)"
+
+    $psArgs = @("-ExecutionPolicy", "Bypass", "-File", $StewardScript, "-Project", $project, "-Agent", "$StewardSlot")
+    try {
+        $proc = if ($HasConsole) {
+            Start-Process -FilePath "powershell" -ArgumentList $psArgs -PassThru -NoNewWindow
+        } else {
+            Start-Process -FilePath "powershell" -ArgumentList $psArgs -PassThru -WindowStyle Hidden
+        }
+    }
+    catch {
+        Write-Log "Could not launch the steward for [$project]: $($_.Exception.Message)"
+        return $false
+    }
+    try { $null = $proc.Handle } catch { }   # see Start-Agent: keeps the exit code readable
+
+    $Agents[$StewardSlot] = @{
+        Process   = $proc
+        TicketId  = ''
+        Project   = $project
+        Skill     = 'steward'
+        StartedAt = Get-Date
+        ClaimFile = $null
+    }
+    return $true
+}
+
+# A steward left running by an orchestrator that died is taken onto the books like a worker is, and
+# for a simpler reason: it holds its project's steward lock, and it will give it back when it ends.
+# With none running, any lock still held belongs to a process that is gone, and is released.
+function Add-OrphanSteward {
+    $found = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -like '*-File*steward.ps1*' -and $_.CommandLine -notlike '*-Command*' })
+    foreach ($o in $found) {
+        $project = if ($o.CommandLine -match '-Project\s+"?([A-Za-z0-9._-]+)') { $Matches[1] } else { '' }
+        $proc = $null
+        try { $proc = Get-Process -Id $o.ProcessId -ErrorAction Stop; $null = $proc.Handle } catch { }
+        if ($proc -and $project -and -not $Agents.ContainsKey($StewardSlot)) {
+            Write-Log "A steward run for [$project] is still going from a previous orchestrator (pid $($o.ProcessId)) - tracking it."
+            $Agents[$StewardSlot] = @{ Process = $proc; TicketId = ''; Project = $project; Skill = 'steward'; StartedAt = Get-Date; ClaimFile = $null }
+            Send-DashboardEvent -Type "state_change" -Text "working" -Agent $StewardSlot -Project $project -Phase "Steward"
+        }
+    }
+    if (-not $Agents.ContainsKey($StewardSlot)) { Send-StewardAbandon -Reason "orchestrator restarted" }
 }
 
 # Put one claimed ticket in front of one agent. The claim is written to disk rather than passed on
@@ -592,6 +682,7 @@ Get-ChildItem -Path $RunDir -Filter "claim-*.json" -ErrorAction SilentlyContinue
     Where-Object { $inUse -notcontains $_.FullName } | Remove-Item -Force
 
 Reset-Leases -KeepTicketIds $keepTickets
+Add-OrphanSteward
 
 # --- Main loop: fill every free slot, then watch; back off only when the whole fleet is idle ---
 while ($true) {
@@ -648,7 +739,7 @@ while ($true) {
         continue
     }
 
-    while ((Get-BusyCount) -lt $HeartbeatWorkers) {
+    while ((Get-WorkerCount) -lt $HeartbeatWorkers) {
         # Re-read the flag before every berth, not once a pass. Filling three slots is up to three
         # claim-next calls with a tracker round-trip behind each, so a pass that began before the
         # button was pressed can still be handing out tickets a minute later - and a ticket handed
@@ -681,6 +772,10 @@ while ($true) {
     # A stop that landed mid-fill goes round to the top rather than being handled here: that is the
     # one place the drain lives, and it keeps this pass from announcing a sleep it will not take.
     if (Test-Path $StopFile) { continue }
+
+    # After the workers, in its own berth. A failure here is never allowed to cost the pass.
+    try { $null = Start-StewardIfDue }
+    catch { Write-Log "ERROR starting a steward run: $($_.Exception.Message)" }
 
     if ((Get-BusyCount) -gt 0) {
         # Work is in flight. Poll on a short interval rather than the heartbeat interval: a slot

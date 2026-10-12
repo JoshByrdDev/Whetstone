@@ -23,6 +23,7 @@ public class StewardServiceTests : IDisposable
     private readonly DbContextOptions<DashboardDbContext> _options;
     private readonly string _dataRoot;
     private readonly FakeGit _git = new();
+    private TimeSpan _minGap = TimeSpan.Zero;
 
     public StewardServiceTests()
     {
@@ -63,7 +64,12 @@ public class StewardServiceTests : IDisposable
         var registry = new ProjectRegistry(new DashboardPaths(_dataRoot));
         var leases = new ResourceLeaseService(ctx, registry);
         var deps = new TicketDependencyService(ctx);
-        return new StewardService(ctx, new TicketService(ctx, dependencies: deps, leases: leases), registry, _git, leases, deps, flags);
+        // No gap between runs here: these tests are about what a run may do, and one that had to
+        // wait five minutes for its second run would be testing the clock.
+        return new StewardService(ctx, new TicketService(ctx, dependencies: deps, leases: leases), registry, _git, leases, deps, flags)
+        {
+            MinGapBetweenRuns = _minGap,
+        };
     }
 
     private async Task<StewardReply> In(Func<StewardService, Task<StewardReply>> act, IStewardProjectFlags? flags = null)
@@ -408,6 +414,16 @@ public class StewardServiceTests : IDisposable
         await In(s => s.EndAsync("alpha", "nothing to do", true));
         _git.Head = "moved";
         Assert.True((await In0(s => s.DueAsync("alpha"))).Due);
+    }
+
+    [Fact]
+    public async Task A_run_is_not_started_again_moments_after_the_last_one_began()
+    {
+        _minGap = TimeSpan.FromMinutes(5);
+        Assert.True((await In0(s => s.DueAsync("alpha"))).Due);            // never run: due at once
+        Assert.Equal("launching", (await In(s => s.LaunchingAsync("alpha"))).Answer);
+        // The agent died before it could open the run. It is still an attempt, and not retried at once.
+        Assert.False((await In0(s => s.DueAsync("alpha"))).Due);
     }
 
     [Fact]

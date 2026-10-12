@@ -47,6 +47,8 @@ $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
 # --- Paths (every caller sets $DataRoot to the data/ root before sourcing this) ---
 $PromptFile         = Join-Path $DataRoot "heartbeat-prompt.md"
+$PromptStewardFile  = Join-Path $DataRoot "steward-prompt.md"
+$StewardScript      = Join-Path $DataRoot "steward.ps1"
 $WorkerScript       = Join-Path $DataRoot "worker.ps1"
 $LockFile           = Join-Path $DataRoot "heartbeat.lock"
 $StopFile           = Join-Path $DataRoot "heartbeat.stop"
@@ -87,6 +89,12 @@ $HeartbeatWorkers        = 3
 # system clamp to it independently so a hand-edited config file cannot start a fourth agent by
 # going round whichever half happens to read the value first.
 $MaxHeartbeatWorkers     = 3
+
+# The berth a project's steward runs in: one past the last worker slot, and never counted against
+# the worker limit. A steward is the thing that answers questions and signs work off, so making it
+# wait for a free worker slot would have the fleet's own output queueing behind the fleet. One at a
+# time across every project - it is a full session on the same account as the three beside it.
+$StewardSlot             = $MaxHeartbeatWorkers + 1
 
 $globalDefaults = $null
 $global         = $null

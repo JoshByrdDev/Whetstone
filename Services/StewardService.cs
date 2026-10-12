@@ -61,6 +61,13 @@ public class StewardService
     /// </summary>
     private static readonly TimeSpan IdleInterval = TimeSpan.FromMinutes(30);
 
+    /// <summary>
+    /// The least time between one run starting and the next. It batches arrivals - three tickets
+    /// finishing a minute apart are one run's work, not three - and it is what stops a run that
+    /// cannot start (a missing skill, a refused login) from being relaunched every few seconds.
+    /// </summary>
+    public TimeSpan MinGapBetweenRuns { get; set; } = TimeSpan.FromMinutes(5);
+
     private const int DiffMaxChars = 120_000;
     private const string HolderLabel = "steward";
 
@@ -139,6 +146,8 @@ public class StewardService
         if (await RunOpenAsync(projectKey)) return (false, "a run is already open");
 
         var s = await _db.StewardStates.AsNoTracking().FirstOrDefaultAsync(x => x.ProjectKey == projectKey, ct);
+        if (s?.LastRunStartedAt is { } started && DateTime.UtcNow - started < MinGapBetweenRuns)
+            return (false, "a run was started a moment ago");
         if (!string.IsNullOrEmpty(s?.DueReason)) return (true, s!.DueReason!);
         if (s?.LastRunEndedAt is null) return (true, "first run");
 
@@ -232,6 +241,20 @@ public class StewardService
         await _leases.ReleaseHumanLeaseAsync(LeaseKey(projectKey), "run ended");
         var reminder = await RemindAsync(cfg!, ct);
         return new StewardReply("ended", null, new { resting = s.RestingAtSha is not null, reminder });
+    }
+
+    /// <summary>
+    /// A run is about to be launched for this project. Stamped before the agent starts, so a run
+    /// that dies before it can open itself still counts as an attempt and is not retried at once.
+    /// </summary>
+    public async Task<StewardReply> LaunchingAsync(string projectKey)
+    {
+        var cfg = Config(projectKey);
+        if (Off(cfg, projectKey) is { } off) return off;
+        var s = await StewardDue.StateAsync(_db, projectKey);
+        s.LastRunStartedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return new StewardReply("launching");
     }
 
     /// <summary>
