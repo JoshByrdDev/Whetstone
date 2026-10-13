@@ -10,6 +10,8 @@ public record StewardAnswerRequest(string? Answer);
 public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
+public record StewardUnitReleased(bool? Released);
+public record StewardNewPlan(string? Key, string? Name, string? Folder);
 
 /// <summary>
 /// The owner's side of a project's steward, and the two calls whatever launches a run needs.
@@ -65,7 +67,7 @@ public static class StewardEndpoints
         // The record: the calls it made, what to read before a release, what the owner told it.
         // With ?ticket=, one ticket's lines - which is how a ticket shows what was decided about it.
         app.MapGet("/api/steward/entries", async (string? project, string? kind, int? ticket, ProjectRegistry registry,
-            DashboardDbContext db, CancellationToken ct) =>
+            DashboardDbContext db, StewardService steward, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
             var q = db.StewardEntries.AsNoTracking().Where(e => e.ProjectKey == project);
@@ -74,7 +76,8 @@ public static class StewardEndpoints
             var rows = await q.OrderByDescending(e => e.At).Take(5000).ToListAsync(ct);
             var ids = rows.Where(r => r.TicketId is not null).Select(r => r.TicketId!.Value).Distinct().ToList();
             var tickets = await db.Tickets.AsNoTracking().Where(t => ids.Contains(t.Id))
-                .Select(t => new { t.Id, t.Title, t.PlanUnit }).ToDictionaryAsync(t => t.Id, ct);
+                .Select(t => new { t.Id, t.Title, t.PlanUnit, t.PlanKey }).ToDictionaryAsync(t => t.Id, ct);
+            var goesOutWith = await steward.ReleaseUnitOfNotesAsync(project!, ct);
             return Results.Ok(rows.Select(e =>
             {
                 var t = e.TicketId is { } id && tickets.TryGetValue(id, out var found) ? found : null;
@@ -85,7 +88,11 @@ public static class StewardEndpoints
                     e.TicketId,
                     ticketTitle = t?.Title,
                     // The unit of the plan the line belongs to, by way of its ticket.
-                    unit = t?.PlanUnit,
+                    // For a release note, the unit it will go out with - its ticket's, or the next
+                    // to be released when it has none - so a unit's notes here are the ones its
+                    // release is held for.
+                    unit = goesOutWith.TryGetValue(e.Id, out var with) ? with : t?.PlanUnit,
+                    plan = t?.PlanUnit is null ? null : t.PlanKey ?? "",
                     // A note from before notes had kinds is one to know, until its owner says otherwise.
                     release = e.Kind == StewardEntryKind.BeforeRelease ? (e.Release ?? StewardReleaseKind.Note).ToString() : null,
                     e.HandledAt,
@@ -114,14 +121,56 @@ public static class StewardEndpoints
 
         // The plan as its owner reads it: each unit's spec and outcomes, and the document the
         // units are cut from when the project names one.
-        app.MapGet("/api/steward/plan", async (string? project, ProjectRegistry registry, StewardService steward,
+        // With ?plan=<key>, a plan the project has finished: readable, and worked by nothing.
+        app.MapGet("/api/steward/plan", async (string? project, string? plan, ProjectRegistry registry, StewardService steward,
             TicketGitService git, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
-            var r = await steward.PlanViewAsync(project!, ct);
-            var file = registry.GetProjectConfig(project!).Steward.Plan.Master;
+            var r = await steward.PlanViewAsync(project!, plan, ct);
+            var cfg = registry.GetProjectConfig(project!).Steward;
+            var file = (plan is null ? cfg.Plan : cfg.PlanByKey(plan))?.Master ?? "";
             var text = file.Length > 0 ? await git.FileAtBaseAsync(project!, file, ct) : null;
             return Results.Ok(new { r.Answer, r.Why, plan = r.Data, master = text is null ? null : new { file, text } });
+        });
+
+        // Agree a draft unit: the commit that has always been what agrees one, made from the board.
+        // The owner's, like every route here that a steward's own tools have no counterpart to.
+        app.MapPost("/api/steward/plan/units/{unit:int}/agree", async (int unit, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerAgreesUnitAsync(project ?? "", unit, ct);
+            return r.Answer == "agreed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Say a unit's work has been released, or take that back.
+        app.MapPut("/api/steward/plan/units/{unit:int}/released", async (int unit, string? project, StewardUnitReleased body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerReleasesUnitAsync(project ?? "", unit, body.Released ?? true, ct);
+            return r.Answer is "released" or "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Start a new plan: its two documents into the repo from the templates, then the project's
+        // settings pointed at it. The plan that was being worked moves to pastPlans.
+        app.MapPost("/api/steward/plan/new", async (string? project, StewardNewPlan body, ProjectRegistry registry, DashboardPaths paths,
+            StewardService steward, CancellationToken ct) =>
+        {
+            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
+            var planTemplate = Path.Combine(paths.DataRoot, "plan-templates", "plan.md");
+            var unitTemplate = Path.Combine(paths.DataRoot, "plan-templates", "unit.md");
+            if (!File.Exists(planTemplate) || !File.Exists(unitTemplate))
+                return Results.BadRequest(new { error = $"The plan templates are missing from {Path.GetDirectoryName(planTemplate)}." });
+
+            var r = await steward.OwnerStartsPlanAsync(project!, body.Key, body.Name, body.Folder,
+                await File.ReadAllTextAsync(planTemplate, ct), await File.ReadAllTextAsync(unitTemplate, ct), ct);
+            if (r.Answer != "started") return Results.BadRequest(r);
+
+            var made = JsonSerializer.SerializeToElement(r.Data, Json);
+            var file = paths.ProjectConfigDefaults(project!);
+            var failed = await StewardPlanFile.StartAsync(file, made.GetProperty("key").GetString()!, made.GetProperty("name").GetString()!,
+                made.GetProperty("units").GetString()!, made.GetProperty("master").GetString()!, ct);
+            return failed is null
+                ? Results.Ok(new { r.Answer, r.Data, settings = file })
+                : Results.BadRequest(new { answer = "documents-only", why = $"The plan's documents are in the repo, but the project's settings were not changed: {failed}" });
         });
 
         // The plan and how far it is, without a run: the same figures a run is shown.

@@ -42,6 +42,12 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const [status, setStatus] = useState<StewardStatus | null>(null);
   const [entries, setEntries] = useState<StewardEntry[]>([]);
   const [plan, setPlan] = useState<StewardPlanView | null>(null);
+  // Which of the project's plans is being read: null is the one being worked.
+  const [planKey, setPlanKey] = useState<string | null>(null);
+  // The unit whose notes the record is showing, when somebody came from that unit's release.
+  const [notesUnit, setNotesUnit] = useState<number | null>(null);
+  // Another project's plans and units are another project's.
+  useEffect(() => { setPlanKey(null); setNotesUnit(null); }, [project]);
   const [view, setView] = useState<View>(() => {
     const v = remembered('view');
     return v === 'plan' || v === 'record' ? v : 'now';
@@ -56,13 +62,13 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
         getSteward(project), getStewardStatus(project), getStewardEntries(project),
         // The plan is read from the project's repo, and a repo that cannot be read must not be
         // what stops a person answering a question.
-        getStewardPlan(project).catch(() => ({ why: 'The plan could not be read just now.' } as StewardPlanView)),
+        getStewardPlan(project, planKey).catch(() => ({ why: 'The plan could not be read just now.' } as StewardPlanView)),
       ]);
       setPage(p); setStatus(s); setEntries(e); setPlan(pl); setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [project]);
+  }, [project, planKey]);
 
   // A steward's run changes this page from the outside, so it is re-read on a slow tick. Slow
   // because nothing here is urgent to the second: a question waits for a person either way.
@@ -207,13 +213,19 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
           )}
 
           {view === 'plan' && (
-            <div key="plan" className="orbit-swap"><StewardPlan view={plan} status={status} /></div>
+            <div key="plan" className="orbit-swap">
+              <StewardPlan
+                project={page.project} view={plan} status={status} onChanged={load}
+                onPlan={key => { setPlan(null); setPlanKey(key); }}
+                onNotes={unit => { setNotesUnit(unit); show('record'); }}
+              />
+            </div>
           )}
 
           {view === 'record' && (
             <div key="record" className="orbit-swap">
               <StewardRecord
-                entries={entries} answered={page.answered}
+                entries={entries} answered={page.answered} unit={notesUnit} onUnit={setNotesUnit}
                 onMark={async (id, mark) => { await markStewardEntry(page.project, id, mark); await load(); }}
               />
             </div>

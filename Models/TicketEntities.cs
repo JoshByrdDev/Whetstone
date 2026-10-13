@@ -428,6 +428,13 @@ public class Ticket
     public int? PlanUnit { get; set; }
     public string? PlanOutcomes { get; set; }
 
+    /// <summary>
+    /// The key of the plan <see cref="PlanUnit"/> is a unit of. Every plan numbers its units from
+    /// one, so the number names a unit only together with this. Null or empty for a plan that was
+    /// never given a key.
+    /// </summary>
+    public string? PlanKey { get; set; }
+
     /// <summary>Set when Phase == Blocked.</summary>
     public string? BlockedReason { get; set; }
 

@@ -391,7 +391,10 @@ public class StewardService
         var s = await _db.StewardStates.AsNoTracking().FirstOrDefaultAsync(x => x.ProjectKey == projectKey, ct);
         var created = s?.CreatedDay == Today() ? s.CreatedCount : 0;
         var plan = await _git.PlanAsync(projectKey, ct);
-        var states = await _db.StewardOutcomes.AsNoTracking().Where(o => o.ProjectKey == projectKey).ToListAsync(ct);
+        var key = cfg!.Steward.Plan.Key;
+        var states = await StatesAsync(projectKey, key, ct);
+        // Only this plan's tickets count toward it: the last plan's unit 1 is not this one's.
+        var mine = all.Where(t => (t.PlanKey ?? "") == key).ToList();
         var current = StewardProgress.Current(plan, states);
         var memo = s?.Memo ?? "";
         var waiting = await _db.StewardQuestions.AsNoTracking()
@@ -399,7 +402,7 @@ public class StewardService
 
         return new StewardReply("status", null, new
         {
-            mode = cfg!.StewardMode.ToString().ToLowerInvariant(),
+            mode = cfg.StewardMode.ToString().ToLowerInvariant(),
             heartbeat = _heartbeat is null ? null : _heartbeat.IsRunning ? "running" : "stopped: nothing is worked until its owner starts it",
             limits = new
             {
@@ -410,7 +413,7 @@ public class StewardService
             plan = plan.Count == 0
                 ? (object)"This project has no plan configured (steward.plan.units), so there is nothing to file tickets from."
                 : plan.Select(u => new { unit = u.Number, u.File, u.Agreed, u.Draft, outcomes = u.Outcomes.Count }),
-            progress = current is null ? null : StewardProgress.For(current, states, all),
+            progress = current is null ? null : StewardProgress.For(current, states, mine),
             outcomes = current is null ? null : current.Outcomes.Select(o =>
             {
                 var st = states.FirstOrDefault(x => x.Unit == current.Number && x.Outcome == o);
@@ -420,7 +423,7 @@ public class StewardService
                     state = (st?.State ?? StewardOutcomeState.NotStarted).ToString(),
                     moreToFile = st?.MoreToFile ?? false,
                     note = st?.Note,
-                    tickets = all.Where(t => t.PlanUnit == current.Number && StewardProgress.OutcomesOf(t).Contains(o))
+                    tickets = mine.Where(t => t.PlanUnit == current.Number && StewardProgress.OutcomesOf(t).Contains(o))
                         .Select(t => $"#{t.Id} {t.Phase}"),
                 };
             }),
@@ -788,6 +791,7 @@ public class StewardService
         var row = await _db.Tickets.FirstAsync(t => t.Id == made.Id, ct);
         row.CreatedBy = TransitionActor.Steward;
         row.PlanUnit = unit.Number;
+        row.PlanKey = cfg.Steward.Plan.Key;
         row.PlanOutcomes = string.Join(", ", outcomes);
         row.Description = $"{d.Description!.TrimEnd()}\n\n{PlanLine(row)}";
         s.CreatedCount++;
@@ -822,9 +826,10 @@ public class StewardService
             return Refuse("bad-request", "An outcome with a ticket still to be written is not done.");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"mark {unit} {outcome} as {st}");
 
+        var key = cfg.Steward.Plan.Key;
         var row = await _db.StewardOutcomes.FirstOrDefaultAsync(
-            o => o.ProjectKey == projectKey && o.Unit == unit && o.Outcome == outcome, ct);
-        if (row is null) _db.StewardOutcomes.Add(row = new StewardOutcome { ProjectKey = projectKey, Unit = unit, Outcome = outcome });
+            o => o.ProjectKey == projectKey && o.Plan == key && o.Unit == unit && o.Outcome == outcome, ct);
+        if (row is null) _db.StewardOutcomes.Add(row = new StewardOutcome { ProjectKey = projectKey, Plan = key, Unit = unit, Outcome = outcome });
         row.State = st;
         row.MoreToFile = moreToFile;
         row.Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim();
@@ -1043,31 +1048,107 @@ public class StewardService
         return new StewardReply("recorded", null, new { sorted, passedOver = kinds.Count - sorted });
     }
 
+    private Task<List<StewardOutcome>> StatesAsync(string projectKey, string planKey, CancellationToken ct) =>
+        _db.StewardOutcomes.AsNoTracking().Where(o => o.ProjectKey == projectKey && o.Plan == planKey).ToListAsync(ct);
+
+    /// <summary>One plan's notes for a release, each under the unit it will go out with.</summary>
+    private sealed record UnitNotes(Dictionary<int, List<StewardEntry>> ByUnit)
+    {
+        public IReadOnlyList<StewardEntry> Of(int unit) => ByUnit.TryGetValue(unit, out var l) ? l : new List<StewardEntry>();
+    }
+
+    /// <summary>
+    /// Which unit each note for a release belongs to. A note goes with its ticket's unit. One with
+    /// no unit to go with - written about a ticket filed outside the plan, or brought in from an
+    /// older record - goes out with whatever is released next, so it is put with the earliest unit
+    /// not yet released: nothing noted for a release may be left where no release asks about it.
+    /// </summary>
+    private async Task<UnitNotes> UnitNotesAsync(string projectKey, StewardPlan plan, bool working,
+        IReadOnlyList<PlanUnit> units, IReadOnlyCollection<StewardUnit> rows, IReadOnlyCollection<Ticket> all, bool track, CancellationToken ct)
+    {
+        var q = _db.StewardEntries.Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.BeforeRelease);
+        var notes = await (track ? q : q.AsNoTracking()).ToListAsync(ct);
+        var unitOf = all.Where(t => t.PlanUnit is not null).ToDictionary(t => t.Id, t => (Key: t.PlanKey ?? "", Unit: t.PlanUnit!.Value));
+        var next = working
+            ? units.Where(u => u.Agreed && rows.All(r => r.Unit != u.Number || r.ReleasedAt is null)).Select(u => (int?)u.Number).FirstOrDefault()
+            : null;
+
+        var by = new Dictionary<int, List<StewardEntry>>();
+        foreach (var n in notes)
+        {
+            int? unit = n.TicketId is { } id && unitOf.TryGetValue(id, out var at)
+                ? at.Key == plan.Key ? at.Unit : null
+                : next;
+            // A ticket of another plan's is that plan's note, not a loose one.
+            if (n.TicketId is { } tid && unitOf.TryGetValue(tid, out var other) && other.Key != plan.Key) continue;
+            if (unit is not { } u) continue;
+            if (!by.TryGetValue(u, out var list)) by[u] = list = new();
+            list.Add(n);
+        }
+        return new UnitNotes(by);
+    }
+
+    /// <summary>
+    /// For the plan being worked, the unit each note for a release will go out with, by the note's
+    /// id - so the record can show a unit's notes as the same set its release is held for.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, int>> ReleaseUnitOfNotesAsync(string projectKey, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null || !cfg.Steward.Plan.Configured) return new Dictionary<int, int>();
+        var p = cfg.Steward.Plan;
+        var plan = await _git.PlanAsync(projectKey, ct);
+        var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == p.Key).ToListAsync(ct);
+        var notes = await UnitNotesAsync(projectKey, p, working: true, plan, rows, await _tickets.ListAsync(projectKey, null), track: false, ct);
+        return notes.ByUnit.SelectMany(kv => kv.Value.Select(n => (n.Id, Unit: kv.Key))).ToDictionary(x => x.Id, x => x.Unit);
+    }
+
+    private static bool Outstanding(StewardEntry e) =>
+        e.HandledAt is null && (e.Release ?? StewardReleaseKind.Note) != StewardReleaseKind.Note;
+
     /// <summary>
     /// The plan as its owner reads it: every unit with its own name, its spec, and its outcomes
     /// under the headings the spec puts them beneath - each with its sentence, where it stands and
-    /// the tickets that carry it. Read from the base branch as committed, like everything else
-    /// about the plan. It is the owner's view and no run is shown it: a run reads the specs.
+    /// the tickets that carry it - and where the unit is on its way from a draft to released. Read
+    /// from the base branch as committed, like everything else about the plan. It is the owner's
+    /// view and no run is shown it: a run reads the specs. With <paramref name="planKey"/>, a plan
+    /// the project has finished.
     /// </summary>
-    public async Task<StewardReply> PlanViewAsync(string projectKey, CancellationToken ct = default)
+    public async Task<StewardReply> PlanViewAsync(string projectKey, string? planKey = null, CancellationToken ct = default)
     {
         var cfg = Config(projectKey);
         if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
-        var plan = await _git.PlanAsync(projectKey, ct);
-        if (plan.Count == 0)
-            return Refuse("no-plan", "This project has no plan configured (steward.plan.units), so there is nothing to file tickets from.");
+        var working = cfg.Steward.Plan;
+        var which = planKey is null ? working : cfg.Steward.PlanByKey(planKey);
+        var plans = new[] { working }.Where(p => p.Configured).Concat(cfg.Steward.PastPlans)
+            .Select(p => new { p.Key, name = p.DisplayName, working = ReferenceEquals(p, working) }).ToList();
+        if (which is null || !which.Configured)
+            return Refuse("no-plan", "This project has no plan yet, so there is nothing to file tickets from.", new { plans });
 
+        var isWorking = ReferenceEquals(which, working);
+        var plan = await _git.PlanOfAsync(projectKey, which, ct);
         var all = await _tickets.ListAsync(projectKey, null);
-        var states = await _db.StewardOutcomes.AsNoTracking().Where(o => o.ProjectKey == projectKey).ToListAsync(ct);
-        var current = StewardProgress.Current(plan, states);
+        var mine = all.Where(t => (t.PlanKey ?? "") == which.Key).ToList();
+        var states = await StatesAsync(projectKey, which.Key, ct);
+        var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == which.Key).ToListAsync(ct);
+        var notes = await UnitNotesAsync(projectKey, which, isWorking, plan, rows, all, track: false, ct);
+        var current = isWorking ? StewardProgress.Current(plan, states) : null;
 
         return new StewardReply("plan", null, new
         {
+            plans,
+            plan = new { which.Key, name = which.DisplayName, working = isWorking, which.UnitsDir },
             current = current?.Number,
             units = plan.Select(u =>
             {
-                var p = StewardProgress.For(u, states, all);
-                var mine = all.Where(t => t.PlanUnit == u.Number).ToList();
+                var p = StewardProgress.For(u, states, mine);
+                var its = mine.Where(t => t.PlanUnit == u.Number).ToList();
+                var row = rows.FirstOrDefault(r => r.Unit == u.Number);
+                var built = u.Agreed && p.Outcomes > 0 && p.Done == p.Outcomes;
+                var left = notes.Of(u.Number).Where(n => n.HandledAt is null).ToList();
+                int Left(StewardReleaseKind k) => left.Count(n => (n.Release ?? StewardReleaseKind.Note) == k);
+                var outstanding = left.Count(Outstanding);
+                var earlier = plan.Where(x => x.Number < u.Number && !x.Agreed).Select(x => x.Number).ToList();
                 return new
                 {
                     unit = u.Number,
@@ -1075,11 +1156,32 @@ public class StewardService
                     title = TicketGitService.UnitTitle(u),
                     u.Agreed,
                     u.Draft,
-                    // Finished is every outcome called done, and a unit with none has finished nothing.
-                    done = u.Agreed && p.Outcomes > 0 && p.Done == p.Outcomes,
+                    // Built is every outcome called done, and a unit with none has built nothing.
+                    done = built,
+                    // Where it is on the way from a draft to released, in one word.
+                    stage = row?.ReleasedAt is not null ? "released" : built ? "built"
+                        : u.Agreed ? u.Number == current?.Number ? "building" : "agreed"
+                        : u.Draft ? "draft" : "notAgreed",
+                    agreedAt = row?.AgreedAt,
+                    releasedAt = row?.ReleasedAt,
+                    // Why a draft cannot be agreed from here, or null when it can (or is not a draft).
+                    cannotAgree = !u.Draft ? null
+                        : !isWorking ? "This plan is finished: nothing is filed against it."
+                        : earlier.Count > 0 ? $"Unit {earlier[0]} comes first and is not agreed."
+                        : TicketGitService.MarkAgreed(which, u.Text, DateTime.Now) is null
+                            ? "Its status line is not written the way the board can rewrite. Mark it agreed in the file and commit that."
+                        : null,
+                    release = !u.Agreed ? null : new
+                    {
+                        migrations = Left(StewardReleaseKind.Migration),
+                        config = Left(StewardReleaseKind.Config),
+                        actions = Left(StewardReleaseKind.Action),
+                        toKnow = Left(StewardReleaseKind.Note),
+                        outstanding,
+                    },
                     progress = new { p.Percent, p.Done, p.InProgress, p.NotStarted, p.Outcomes },
                     u.Text,
-                    groups = TicketGitService.UnitGroups(cfg.Steward.Plan, u).Select(g => new
+                    groups = TicketGitService.UnitGroups(which, u).Select(g => new
                     {
                         g.Heading,
                         outcomes = g.Outcomes.Select(o =>
@@ -1092,7 +1194,7 @@ public class StewardService
                                 state = (st?.State ?? StewardOutcomeState.NotStarted).ToString(),
                                 moreToFile = st?.MoreToFile ?? false,
                                 note = st?.Note,
-                                tickets = mine.Where(t => StewardProgress.OutcomesOf(t).Contains(o.Outcome)).OrderBy(t => t.Id)
+                                tickets = its.Where(t => StewardProgress.OutcomesOf(t).Contains(o.Outcome)).OrderBy(t => t.Id)
                                     .Select(t => new { t.Id, phase = t.Phase.ToString(), t.Title }),
                             };
                         }),
@@ -1100,6 +1202,149 @@ public class StewardService
                 };
             }),
         });
+    }
+
+    private async Task<StewardUnit> UnitRowAsync(string projectKey, string planKey, int unit, CancellationToken ct)
+    {
+        var row = await _db.StewardUnits.FirstOrDefaultAsync(u => u.ProjectKey == projectKey && u.Plan == planKey && u.Unit == unit, ct);
+        if (row is null) _db.StewardUnits.Add(row = new StewardUnit { ProjectKey = projectKey, Plan = planKey, Unit = unit });
+        return row;
+    }
+
+    /// <summary>
+    /// The owner agrees a draft unit: its status line is rewritten and committed to the base
+    /// branch, which is the only thing that has ever made a unit agreed. This is that same commit,
+    /// made from the board instead of an editor - and it has no tool, so it is still the owner's
+    /// alone. Units are agreed in order, and only a spec that says it is a draft can be agreed by
+    /// rule: anything else is left for a person to edit.
+    /// </summary>
+    public async Task<StewardReply> OwnerAgreesUnitAsync(string projectKey, int unit, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var p = cfg.Steward.Plan;
+        var plan = await _git.PlanAsync(projectKey, ct);
+        var u = plan.FirstOrDefault(x => x.Number == unit);
+        if (u is null) return Refuse("bad-request", $"The plan has no unit numbered {unit}.");
+        if (u.Agreed) return Refuse("already-agreed", $"{u.File} is already agreed.");
+        if (!u.Draft) return Refuse("not-a-draft", $"{u.File} does not say it is a draft, so there is nothing here to agree by rule. Mark it agreed in the file and commit that.");
+        if (plan.FirstOrDefault(x => x.Number < unit && !x.Agreed) is { } earlier)
+            return Refuse("not-next", $"Unit {earlier.Number} comes first and is not agreed. Units are worked in order.");
+        if (TicketGitService.MarkAgreed(p, u.Text, DateTime.Now) is not { } marked)
+            return Refuse("not-by-rule", $"The status line of {u.File} is not written the way the board can rewrite. Mark it agreed in the file and commit that.");
+
+        var (sha, _, refusal) = await _git.CommitFileAsync(projectKey, u.File, marked, $"Unit {unit} of the plan, agreed by its owner", ct);
+        if (refusal is not null) return Refuse("refused", refusal);
+
+        (await UnitRowAsync(projectKey, p.Key, unit, ct)).AgreedAt = DateTime.UtcNow;
+        await StewardDue.MarkAsync(_db, projectKey, $"the owner agreed unit {unit}");
+        await _db.SaveChangesAsync(ct);
+        _heartbeat?.Wake();
+        return new StewardReply("agreed", null, new { file = u.File, commit = sha });
+    }
+
+    /// <summary>
+    /// The owner says a unit's work has been released, or takes that back.
+    /// <para>
+    /// Releasing is theirs in every sense - the merge that carries it out, and the push after, are
+    /// made by hand and never by the board - so this only records that it happened. What it asks
+    /// first is the reason notes for a release exist at all: every outcome built, and every note
+    /// that is something to do (a migration, something to set up, something theirs) ticked off.
+    /// What was only to know goes out with it and is ticked off here.
+    /// </para>
+    /// </summary>
+    public async Task<StewardReply> OwnerReleasesUnitAsync(string projectKey, int unit, bool released, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var p = cfg.Steward.Plan;
+        var plan = await _git.PlanAsync(projectKey, ct);
+        var u = plan.FirstOrDefault(x => x.Number == unit);
+        if (u is null || !u.Agreed) return Refuse("unit-not-agreed", $"Unit {unit} is not an agreed unit of the plan.");
+
+        var row = await UnitRowAsync(projectKey, p.Key, unit, ct);
+        if (!released)
+        {
+            (row.ReleasedAt, row.ReleasedSha) = (null, null);
+            await _db.SaveChangesAsync(ct);
+            return new StewardReply("recorded");
+        }
+        if (row.ReleasedAt is not null) return Refuse("already-released", $"Unit {unit} was released on {row.ReleasedAt.Value.ToLocalTime():yyyy-MM-dd}.");
+
+        var all = await _tickets.ListAsync(projectKey, null);
+        var mine = all.Where(t => (t.PlanKey ?? "") == p.Key).ToList();
+        var progress = StewardProgress.For(u, await StatesAsync(projectKey, p.Key, ct), mine);
+        if (progress.Outcomes == 0 || progress.Done < progress.Outcomes)
+            return Refuse("not-built", $"{progress.Outcomes - progress.Done} of unit {unit}'s {progress.Outcomes} outcomes are not done.");
+
+        var rows = await _db.StewardUnits.Where(x => x.ProjectKey == projectKey && x.Plan == p.Key).ToListAsync(ct);
+        var notes = (await UnitNotesAsync(projectKey, p, working: true, plan, rows, all, track: true, ct)).Of(unit);
+        var outstanding = notes.Count(Outstanding);
+        if (outstanding > 0)
+            return Refuse("notes-outstanding", $"{outstanding} note{(outstanding == 1 ? "" : "s")} for this release - a migration, something to set up, something yours to do - {(outstanding == 1 ? "is" : "are")} not ticked off.");
+
+        var now = DateTime.UtcNow;
+        foreach (var n in notes.Where(n => n.HandledAt is null)) n.HandledAt = now;
+        (row.ReleasedAt, row.ReleasedSha) = (now, await _git.BaseHeadAsync(projectKey, ct));
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("released", null, new { at = row.ReleasedSha });
+    }
+
+    /// <summary>
+    /// The owner starts a new plan: its two documents are committed to the base branch - the plan
+    /// itself, and a first unit as a draft - each from a template that says what goes where, so
+    /// whoever writes it (a person, or a session they sit with) has a shape to write into that
+    /// the board can read. Refused while the plan being worked has a ticket still open: a steward
+    /// in the middle of one plan is not handed another.
+    /// <para>
+    /// It does not write the project's config; the caller does, once this has answered "started",
+    /// because where a project's settings live is not this service's to know.
+    /// </para>
+    /// </summary>
+    public async Task<StewardReply> OwnerStartsPlanAsync(string projectKey, string? key, string? name, string? folder,
+        string planTemplate, string unitTemplate, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        key = key?.Trim().ToLowerInvariant() ?? "";
+        name = name?.Trim() ?? "";
+        if (!StewardPlan.IsKey(key)) return Refuse("bad-request", "The key is the plan's short name: lowercase letters, digits and hyphens, 40 at most.");
+        if (name.Length is < 3 or > 80) return Refuse("bad-request", "Give the plan a name a person would call it, 3 to 80 characters.");
+        if (cfg.Steward.PlanByKey(key) is not null) return Refuse("exists", $"This project already has a plan with the key \"{key}\".");
+
+        folder = string.IsNullOrWhiteSpace(folder) ? $"docs/plans/{key}" : folder.Replace('\\', '/').Trim().Trim('/');
+        if (folder.Split('/').Any(part => part is "" or "." or ".." || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
+            return Refuse("bad-request", "The folder is a path inside the repo, like docs/plans/its-key.");
+
+        if (await RunOpenAsync(projectKey)) return Refuse("run-open", "A steward run is in progress. Start the plan once it has ended.");
+        var working = cfg.Steward.Plan;
+        if (working.Configured)
+        {
+            var open = (await _tickets.ListAsync(projectKey, null))
+                .Where(t => t.PlanUnit is not null && (t.PlanKey ?? "") == working.Key && t.Phase != TicketPhase.Done).Select(t => t.Id).ToList();
+            if (open.Count > 0)
+                return Refuse("plan-in-flight", $"{working.DisplayName} still has {open.Count} ticket{(open.Count == 1 ? "" : "s")} open ({string.Join(", ", open.Take(8).Select(i => $"#{i}"))}). Finish or close them first: the plan being worked is the one a steward files against.");
+        }
+
+        var master = $"{folder}/PLAN.md";
+        var units = $"{folder}/units";
+        var first = $"{units}/01-first-unit.md";
+        if (await _git.FileAtBaseAsync(projectKey, master, ct) is not null) return Refuse("exists", $"{master} is already in the repo.");
+        if (await _git.FileAtBaseAsync(projectKey, first, ct) is not null) return Refuse("exists", $"{first} is already in the repo.");
+
+        string Fill(string t) => t.Replace("{{NAME}}", name).Replace("{{KEY}}", key).Replace("{{DATE}}", DateTime.Now.ToString("yyyy-MM-dd"))
+            .Replace("{{PLAN_FILE}}", "../PLAN.md").Replace("{{UNITS_DIR}}", "units");
+        var unitText = Fill(unitTemplate);
+        var probe = new StewardPlan(units, StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed, StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
+        if (!TicketGitService.ReadUnit(probe, 1, first, unitText).Draft)
+            return Refuse("bad-template", "The unit template does not read as a draft, so it was not written.");
+
+        var (_, _, no1) = await _git.CommitFileAsync(projectKey, master, Fill(planTemplate), $"{name}: the plan, to be written", ct);
+        if (no1 is not null) return Refuse("refused", no1);
+        var (sha, _, no2) = await _git.CommitFileAsync(projectKey, first, unitText, $"{name}: a first unit, as a draft", ct);
+        if (no2 is not null) return Refuse("refused", $"{master} was committed, but the first unit was not: {no2}");
+
+        return new StewardReply("started", null, new { key, name, master, units, first, commit = sha });
     }
 
     /// <summary>
@@ -1116,6 +1361,7 @@ public class StewardService
     {
         if (Config(projectKey) is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
         var now = DateTime.UtcNow;
+        var planKey = Config(projectKey)!.Steward.Plan.Key;
         int questions = 0, said = 0, entries = 0, outcomes = 0, tickets = 0;
 
         var keys = (await _db.StewardQuestions.Where(q => q.ProjectKey == projectKey).Select(q => q.Key).ToListAsync(ct)).ToHashSet();
@@ -1156,8 +1402,8 @@ public class StewardService
         {
             if (string.IsNullOrWhiteSpace(o.Outcome) || !Enum.TryParse<StewardOutcomeState>(o.State, true, out var st)) continue;
             var row = await _db.StewardOutcomes.FirstOrDefaultAsync(
-                x => x.ProjectKey == projectKey && x.Unit == o.Unit && x.Outcome == o.Outcome, ct);
-            if (row is null) _db.StewardOutcomes.Add(row = new StewardOutcome { ProjectKey = projectKey, Unit = o.Unit, Outcome = o.Outcome.Trim() });
+                x => x.ProjectKey == projectKey && x.Plan == planKey && x.Unit == o.Unit && x.Outcome == o.Outcome, ct);
+            if (row is null) _db.StewardOutcomes.Add(row = new StewardOutcome { ProjectKey = projectKey, Plan = planKey, Unit = o.Unit, Outcome = o.Outcome.Trim() });
             row.State = st;
             row.MoreToFile = o.MoreToFile && st != StewardOutcomeState.Done;
             row.Note = string.IsNullOrWhiteSpace(o.Note) ? null : o.Note.Trim();
@@ -1170,6 +1416,7 @@ public class StewardService
             var row = await _db.Tickets.FirstOrDefaultAsync(x => x.Id == t.Id && x.ProjectKey == projectKey, ct);
             if (row is null || t.Outcomes is not { Count: > 0 }) continue;
             row.PlanUnit = t.Unit;
+            row.PlanKey = planKey;
             row.PlanOutcomes = string.Join(", ", t.Outcomes.Select(o => o.Trim()).Where(o => o.Length > 0));
             if (t.FiledBySteward) row.CreatedBy = TransitionActor.Steward;
             tickets++;

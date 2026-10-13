@@ -1,20 +1,25 @@
 import { useEffect, useState } from 'react';
-import { Chip, Panel } from './ui';
+import type { ReactNode } from 'react';
+import { Chip, GhostButton, Panel } from './ui';
 import { BODY, MONO, TIER, chamfer, fade } from './orbit';
 import { Markdown } from './Markdown';
-import { Quiet, label, remember, remembered } from './stewardParts';
+import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
+import { agreeStewardUnit, setStewardUnitReleased, startStewardPlan } from '../api/steward';
 import type {
-  StewardPlanOutcome, StewardPlanUnitView, StewardPlanView, StewardStatus,
+  StewardPlanOutcome, StewardPlanUnitView, StewardPlanView, StewardStatus, UnitStage,
 } from '../api/steward';
 
 /**
- * The plan, as something to read.
+ * The plan, as something to read and to move along.
  *
  * A plan is one document and the units cut from it, and a person needs three things of it at
  * different moments: where the whole stands (the rail), what one unit promised and how far each
  * promise is (its outcomes, in the spec's own words and order), and the text itself - the unit's
- * spec, or the document all of them come from. Nothing here is a control. Agreeing a unit is still
- * a line its owner commits.
+ * spec, or the document all of them come from.
+ *
+ * A unit goes one way: a draft, agreed, building, built, released. Two of those steps are a
+ * person's and are taken here - agreeing a draft, and saying a built unit has gone out. Everything
+ * between is the steward's and the fleet's, and is only shown.
  */
 
 type Selected = number | 'master';
@@ -26,51 +31,109 @@ const STATE_WORD: Record<StewardPlanOutcome['state'], string> = {
   NotStarted: 'not started', InProgress: 'in progress', Done: 'done',
 };
 
-/** Where a unit stands, in a word, and the tier that colours it. */
-function standing(u: StewardPlanUnitView, current?: number | null): { word: string; tier: keyof typeof TIER } {
-  if (u.done) return { word: 'done', tier: 'done' };
-  if (u.agreed) return u.unit === current ? { word: 'building', tier: 'active' } : { word: 'agreed', tier: 'queue' };
-  if (u.draft) return { word: 'draft - yours to agree', tier: 'gate' };
-  return { word: 'not agreed', tier: 'backlog' };
-}
+/** Where a unit stands, in words, and the tier that colours it. */
+const STAGE: Record<UnitStage, { word: string; tier: keyof typeof TIER }> = {
+  draft: { word: 'draft - yours to agree', tier: 'gate' },
+  notAgreed: { word: 'not agreed', tier: 'backlog' },
+  agreed: { word: 'agreed', tier: 'queue' },
+  building: { word: 'building', tier: 'active' },
+  built: { word: 'built - yours to release', tier: 'gate' },
+  released: { word: 'released', tier: 'done' },
+};
 
-export function StewardPlan({ view, status }: { view: StewardPlanView | null; status: StewardStatus | null }) {
-  const units = view?.plan?.units ?? [];
+/** The way a unit goes, for the strip that shows how far along it is. */
+const STEPS: { stage: UnitStage; word: string }[] = [
+  { stage: 'draft', word: 'Draft' },
+  { stage: 'agreed', word: 'Agreed' },
+  { stage: 'building', word: 'Building' },
+  { stage: 'built', word: 'Built' },
+  { stage: 'released', word: 'Released' },
+];
+
+export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes }: {
+  project: string;
+  view: StewardPlanView | null;
+  status: StewardStatus | null;
+  /** Read another of the project's plans; null is the one being worked. */
+  onPlan: (key: string | null) => void;
+  /** Something here changed what the page shows. */
+  onChanged: () => Promise<void>;
+  /** Show a unit's notes for its release, in the record. */
+  onNotes: (unit: number) => void;
+}) {
   const current = view?.plan?.current;
+  // A server from before units had stages says only agreed, draft and done: read the stage off those.
+  const units = (view?.plan?.units ?? []).map(u => ({
+    ...u,
+    stage: u.stage ?? (u.done ? 'built' : u.agreed ? (u.unit === current ? 'building' : 'agreed') : u.draft ? 'draft' : 'notAgreed'),
+  }));
+  const plans = view?.plan?.plans ?? [];
+  const plan = view?.plan?.plan;
   const [picked, setPicked] = useState<Selected | null>(null);
+  // Another plan's units are another set: whatever was picked in the last one means nothing here.
+  useEffect(() => { setPicked(null); }, [plan?.key]);
 
-  // Until somebody picks, the page is on the unit being built: that is the one being asked about.
-  const selected: Selected | null = picked ?? current ?? (units.length > 0 ? units[units.length - 1].unit : view?.master ? 'master' : null);
+  // Until somebody picks, the page is on the unit that wants something: a draft to agree or a
+  // built unit to release first, then the one being built.
+  const asking = units.find(u => u.stage === 'built') ?? units.find(u => u.stage === 'draft' && !u.cannotAgree);
+  const selected: Selected | null = picked ?? asking?.unit ?? current
+    ?? (units.length > 0 ? units[units.length - 1].unit : view?.master ? 'master' : null);
   const unit = typeof selected === 'number' ? units.find(u => u.unit === selected) : undefined;
 
   if (!view) return <Quiet>Reading the plan.</Quiet>;
-  if (units.length === 0 && !view.master) return <Quiet>{view.why ?? 'This project has no plan.'}</Quiet>;
 
+  const working = !plan || plan.working;
   return (
     <div className="mb-8">
-      <div className="flex flex-wrap gap-2" style={{ marginBottom: 14 }}>
-        {view.master && (
-          <RailItem on={selected === 'master'} onClick={() => setPicked('master')} lead="All" title="The whole plan" sub={view.master.file} />
-        )}
-        {units.map(u => {
-          const s = standing(u, current);
-          return (
-            <RailItem
-              key={u.unit} on={selected === u.unit} onClick={() => setPicked(u.unit)}
-              lead={String(u.unit).padStart(2, '0')} title={u.title} colour={TIER[s.tier].c}
-              sub={`${s.word}${u.agreed && !u.done ? ` - ${u.progress.percent}%` : ''}`}
-              percent={u.agreed ? u.progress.percent : undefined}
-            />
-          );
-        })}
-      </div>
-
-      {selected === 'master' && view.master && (
-        <Panel key="master" className="orbit-swap">
-          <div style={{ maxWidth: 780 }}><Markdown doc text={view.master.text} /></div>
-        </Panel>
+      {plans.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 12 }}>
+          <span style={label()}>Plan</span>
+          {plans.map(p => (
+            <Chip key={p.key} on={plan?.key === p.key} onClick={() => onPlan(p.working ? null : p.key)}
+              title={p.working ? 'The plan being worked' : 'A plan this project has finished'}>
+              {p.name}{p.working ? '' : ' - finished'}
+            </Chip>
+          ))}
+        </div>
       )}
-      {unit && <UnitView key={unit.unit} unit={unit} current={current} status={status} />}
+
+      {units.length === 0 && !view.master
+        ? <Quiet>{view.why ?? 'This plan has no units yet.'}</Quiet>
+        : (
+          <>
+            <div className="flex flex-wrap gap-2" style={{ marginBottom: 14 }}>
+              {view.master && (
+                <RailItem on={selected === 'master'} onClick={() => setPicked('master')} lead="All"
+                  title={plan?.name && plan.name !== 'The plan' ? plan.name : 'The whole plan'} sub={view.master.file} />
+              )}
+              {units.map(u => {
+                const s = STAGE[u.stage];
+                return (
+                  <RailItem
+                    key={u.unit} on={selected === u.unit} onClick={() => setPicked(u.unit)}
+                    lead={String(u.unit).padStart(2, '0')} title={u.title} colour={TIER[s.tier].c}
+                    sub={`${s.word}${u.stage === 'building' || u.stage === 'agreed' ? ` - ${u.progress.percent}%` : ''}`}
+                    percent={u.agreed ? u.progress.percent : undefined}
+                  />
+                );
+              })}
+            </div>
+
+            {selected === 'master' && view.master && (
+              <Panel key="master" className="orbit-swap">
+                <div style={{ maxWidth: 780 }}><Markdown doc text={view.master.text} /></div>
+              </Panel>
+            )}
+            {unit && (
+              <UnitView
+                key={`${plan?.key}.${unit.unit}`} project={project} unit={unit} working={working}
+                status={unit.unit === current ? status : null} onChanged={onChanged} onNotes={onNotes}
+              />
+            )}
+          </>
+        )}
+
+      {working && <NewPlan project={project} has={units.length > 0 || !!view.master} onStarted={onChanged} />}
     </div>
   );
 }
@@ -110,13 +173,36 @@ function Bar({ percent, colour, height = 2 }: { percent: number; colour: string;
   );
 }
 
-function UnitView({ unit, current, status }: { unit: StewardPlanUnitView; current?: number | null; status: StewardStatus | null }) {
-  const [show, setShow] = useState<'outcomes' | 'spec'>(() => (remembered('plan.show') === 'spec' ? 'spec' : 'outcomes'));
-  const [leftOnly, setLeftOnly] = useState(() => remembered('plan.left') === '1');
-  useEffect(() => { remember('plan.show', show); }, [show]);
-  useEffect(() => { remember('plan.left', leftOnly ? '1' : '0'); }, [leftOnly]);
+/** How far along its one way a unit is: every step named, the ones behind it lit. */
+function Steps({ stage }: { stage: UnitStage }) {
+  const at = stage === 'notAgreed' ? -1 : STEPS.findIndex(s => s.stage === stage);
+  return (
+    <div className="flex items-center flex-wrap gap-x-2 gap-y-1" style={{ marginTop: 10 }}>
+      {STEPS.map((s, i) => {
+        const c = i < at ? TIER.done.c : i === at ? TIER[STAGE[stage].tier].c : 'var(--w-t600)';
+        return (
+          <span key={s.stage} className="flex items-center gap-2">
+            {i > 0 && <span style={{ width: 14, height: 1, background: i <= at ? fade(TIER.done.c, 60) : 'rgb(var(--w-line-rgb) / .2)' }} />}
+            <span style={{ ...label(c), fontWeight: i === at ? 700 : 600 }}>{s.word}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
-  const s = standing(unit, current);
+function UnitView({ project, unit, working, status, onChanged, onNotes }: {
+  project: string; unit: StewardPlanUnitView; working: boolean; status: StewardStatus | null;
+  onChanged: () => Promise<void>; onNotes: (unit: number) => void;
+}) {
+  const [show, setShow] = useState<'outcomes' | 'spec'>(() =>
+    // A draft is there to be read before it is agreed: it opens on its words.
+    unit.stage === 'draft' || remembered('plan.show') === 'spec' ? 'spec' : 'outcomes');
+  const [leftOnly, setLeftOnly] = useState(() => remembered('plan.left') === '1');
+  const pick = (v: 'outcomes' | 'spec') => { setShow(v); remember('plan.show', v); };
+  const left = (v: boolean) => { setLeftOnly(v); remember('plan.left', v ? '1' : '0'); };
+
+  const s = STAGE[unit.stage];
   const c = TIER[s.tier].c;
   const p = unit.progress;
   const anyOutcomes = unit.groups.some(g => g.outcomes.length > 0);
@@ -130,7 +216,11 @@ function UnitView({ unit, current, status }: { unit: StewardPlanUnitView; curren
           {unit.agreed && <span style={{ font: `700 13px ${MONO}`, color: c, marginLeft: 'auto' }}>{p.percent}%</span>}
         </div>
         {unit.agreed && <Bar percent={p.percent} colour={c} height={3} />}
-        <div className="flex items-center gap-x-4 gap-y-2 flex-wrap" style={{ marginTop: 10 }}>
+        <Steps stage={unit.stage} />
+
+        {working && <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes} />}
+
+        <div className="flex items-center gap-x-4 gap-y-2 flex-wrap" style={{ marginTop: 12 }}>
           <span style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t400)' }}>
             {p.outcomes} outcome{p.outcomes === 1 ? '' : 's'}
             {unit.agreed && <>: {p.done} done, {p.inProgress} in progress, {p.notStarted} not started</>}
@@ -138,20 +228,13 @@ function UnitView({ unit, current, status }: { unit: StewardPlanUnitView; curren
           <span className="truncate min-w-0" style={{ font: `400 11px ${MONO}`, color: 'var(--w-t600)' }}>{unit.file}</span>
           <span className="flex items-center gap-2 flex-wrap" style={{ marginLeft: 'auto' }}>
             {show === 'outcomes' && unit.agreed && p.done > 0 && p.done < p.outcomes && (
-              <Chip on={leftOnly} onClick={() => setLeftOnly(!leftOnly)} title="Hide the outcomes that are done">What is left</Chip>
+              <Chip on={leftOnly} onClick={() => left(!leftOnly)} title="Hide the outcomes that are done">What is left</Chip>
             )}
-            <Chip on={show === 'outcomes'} onClick={() => setShow('outcomes')}>Outcomes</Chip>
-            <Chip on={show === 'spec'} onClick={() => setShow('spec')} title="The unit's spec, as committed">The spec</Chip>
+            <Chip on={show === 'outcomes'} onClick={() => pick('outcomes')}>Outcomes</Chip>
+            <Chip on={show === 'spec'} onClick={() => pick('spec')} title="The unit's spec, as committed">The spec</Chip>
           </span>
         </div>
-        {!unit.agreed && (
-          <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 10 }}>
-            {unit.draft
-              ? 'A draft. Nothing is filed against it until you mark it agreed in the file itself and commit that.'
-              : 'Not marked agreed, so nothing is filed against it.'}
-          </div>
-        )}
-        {status && unit.unit === current && (
+        {status && (
           <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t600)', marginTop: 8 }}>
             Tickets filed today {status.limits.createdToday} - open {status.limits.open}
           </div>
@@ -175,11 +258,13 @@ function UnitView({ unit, current, status }: { unit: StewardPlanUnitView; curren
                       style={{ padding: '12px 16px 6px', background: 'rgb(var(--w-line-rgb) / .03)', borderBottom: '1px solid rgb(var(--w-line-rgb) / .08)' }}
                     >
                       <span className="min-w-0" style={{ font: `700 12px ${BODY}`, color: 'var(--w-t100)' }}>{g.heading || 'Outcomes'}</span>
-                      <span style={{ ...label(done === g.outcomes.length ? TIER.done.c : 'var(--w-t500)'), marginLeft: 'auto', flex: 'none' }}>
-                        {done} of {g.outcomes.length} done
-                      </span>
+                      {unit.agreed && (
+                        <span style={{ ...label(done === g.outcomes.length ? TIER.done.c : 'var(--w-t500)'), marginLeft: 'auto', flex: 'none' }}>
+                          {done} of {g.outcomes.length} done
+                        </span>
+                      )}
                     </div>
-                    {shown.map(o => <OutcomeRow key={o.outcome} o={o} />)}
+                    {shown.map(o => <OutcomeRow key={o.outcome} o={o} agreed={unit.agreed} />)}
                   </div>
                 );
               })}
@@ -189,8 +274,122 @@ function UnitView({ unit, current, status }: { unit: StewardPlanUnitView; curren
   );
 }
 
+/**
+ * The step that is the owner's, when the unit is at one: agree a draft, or say a built unit has
+ * gone out. Both ask twice, because both are said once and acted on by something unattended.
+ */
+function Yours({ project, unit, onChanged, onNotes }: {
+  project: string; unit: StewardPlanUnitView; onChanged: () => Promise<void>; onNotes: (unit: number) => void;
+}) {
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const run = async (act: () => Promise<unknown>) => {
+    setBusy(true); setFailed(null);
+    try { await act(); await onChanged(); setSure(false); }
+    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+
+  const r = unit.release;
+  const counts = r ? [
+    [r.migrations, 'migration', 'migrations'], [r.config, 'thing to set up', 'things to set up'], [r.actions, 'thing yours to do', 'things yours to do'],
+  ].filter(([n]) => (n as number) > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`) : [];
+  const box = (tone: string, children: ReactNode) => (
+    <div
+      style={{
+        marginTop: 12, padding: '10px 12px', clipPath: chamfer(8),
+        background: fade(tone, 7), border: `1px solid ${fade(tone, 30)}`,
+      }}
+    >
+      {children}
+      {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 6 }}>{failed}</div>}
+    </div>
+  );
+  const say = (text: ReactNode) => <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>{text}</div>;
+
+  if (unit.stage === 'draft') {
+    return box(TIER.gate.c, (
+      <>
+        {say(unit.cannotAgree
+          ?? 'A draft. Read the spec below; nothing is filed against it until you agree it. Agreeing commits its status line to the base branch, and the steward starts filing tickets against its outcomes on its next run.')}
+        {!unit.cannotAgree && (
+          <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
+            {sure
+              ? (
+                <>
+                  <GhostButton tone="go" disabled={busy} onClick={() => run(() => agreeStewardUnit(project, unit.unit))}>
+                    {busy ? 'Agreeing' : `Yes, agree unit ${unit.unit}`}
+                  </GhostButton>
+                  <GhostButton disabled={busy} onClick={() => setSure(false)}>Not yet</GhostButton>
+                </>
+              )
+              : <GhostButton tone="go" onClick={() => setSure(true)}>Agree this unit</GhostButton>}
+          </div>
+        )}
+      </>
+    ));
+  }
+
+  if (unit.stage === 'notAgreed') {
+    return box('var(--w-t500)', say('Its spec does not say it is a draft or agreed, so nothing is filed against it. Mark it agreed in the file and commit that.'));
+  }
+
+  if (unit.stage === 'released') {
+    return (
+      <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 12 }}>
+        <span style={{ font: `400 12px ${BODY}`, color: 'var(--w-t400)' }}>Released {ago(unit.releasedAt)}.</span>
+        <GhostButton disabled={busy} onClick={() => run(() => setStewardUnitReleased(project, unit.unit, false))}
+          title="Put it back to built: it has not gone out after all">
+          Not released after all
+        </GhostButton>
+        {failed && <span style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c }}>{failed}</span>}
+      </div>
+    );
+  }
+
+  if (!r) return null;
+  const notes = counts.length > 0 || r.toKnow > 0;
+  const seeNotes = notes && (
+    <GhostButton onClick={() => onNotes(unit.unit)} title="This unit's notes, in the record">Read its notes</GhostButton>
+  );
+
+  if (unit.stage === 'built') {
+    return box(r.outstanding > 0 ? TIER.gate.c : TIER.done.c, (
+      <>
+        {say(r.outstanding > 0
+          ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b> still to tick off{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
+          : <>Every outcome is done and nothing for its release is outstanding{r.toKnow > 0 ? ` (${r.toKnow} to know, which go out with it)` : ''}. Releasing it is yours: merge and push by hand, then say so here.</>)}
+        <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
+          {seeNotes}
+          {r.outstanding === 0 && (sure
+            ? (
+              <>
+                <GhostButton tone="go" disabled={busy} onClick={() => run(() => setStewardUnitReleased(project, unit.unit, true))}>
+                  {busy ? 'Recording' : `Yes, unit ${unit.unit} has been released`}
+                </GhostButton>
+                <GhostButton disabled={busy} onClick={() => setSure(false)}>Not yet</GhostButton>
+              </>
+            )
+            : <GhostButton tone="go" onClick={() => setSure(true)}>It has been released</GhostButton>)}
+        </div>
+      </>
+    ));
+  }
+
+  // Agreed or building: nothing is the owner's yet, but what its release will ask is already known.
+  return notes ? (
+    <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 12 }}>
+      <span style={{ font: `400 12px ${BODY}`, color: 'var(--w-t400)' }}>
+        For its release so far: {[...counts, r.toKnow > 0 ? `${r.toKnow} to know` : ''].filter(Boolean).join(', ')}.
+      </span>
+      {seeNotes}
+    </div>
+  ) : null;
+}
+
 /** One promise of the unit: what it says, where it stands, and the tickets carrying it. */
-function OutcomeRow({ o }: { o: StewardPlanOutcome }) {
+function OutcomeRow({ o, agreed }: { o: StewardPlanOutcome; agreed: boolean }) {
   const c = TIER[STATE_TIER[o.state]].c;
   const open = o.tickets.filter(t => t.phase !== 'Done');
   return (
@@ -198,9 +397,10 @@ function OutcomeRow({ o }: { o: StewardPlanOutcome }) {
       className="flex gap-x-3 gap-y-1 max-sm:flex-wrap"
       style={{ padding: '9px 16px', borderBottom: '1px solid rgb(var(--w-line-rgb) / .06)' }}
     >
-      <div className="flex items-baseline gap-3 flex-none" style={{ width: 128 }}>
+      <div className="flex items-baseline gap-3 flex-none" style={{ width: agreed ? 128 : 30 }}>
         <span style={{ font: `700 11.5px ${MONO}`, color: 'var(--w-t200)', width: 30, flex: 'none' }}>{o.outcome}</span>
-        <span style={label(c)}>{STATE_WORD[o.state]}</span>
+        {/* A draft's outcomes have no standing yet: saying "not started" of each would be noise. */}
+        {agreed && <span style={label(c)}>{STATE_WORD[o.state]}</span>}
       </div>
       <div className="min-w-0 flex-1 max-sm:basis-full">
         <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: o.state === 'Done' ? 'var(--w-t400)' : 'var(--w-t200)' }}>
@@ -247,5 +447,91 @@ function Sentence({ text }: { text: string }) {
           ? <code key={i} style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t300)' }}>{p.slice(1, -1)}</code>
           : p)}
     </>
+  );
+}
+
+const FIELD = 'w-full min-w-0 rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none';
+
+/**
+ * Start a plan. What this makes is two documents with the right shape and nothing in them: the
+ * plan, and a first unit as a draft. Writing them is a conversation, not a form - so this ends by
+ * saying where they are, for whoever sits down to write them.
+ */
+function NewPlan({ project, has, onStarted }: { project: string; has: boolean; onStarted: () => Promise<void> }) {
+  const [name, setName] = useState('');
+  const [key, setKey] = useState('');
+  const [folder, setFolder] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [made, setMade] = useState<{ master: string; first: string; settings: string } | null>(null);
+
+  // The key follows the name until somebody types one of their own.
+  const [keyTouched, setKeyTouched] = useState(false);
+  const slug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const theKey = keyTouched ? key : slug(name);
+  const theFolder = folder.trim() || (theKey ? `docs/plans/${theKey}` : '');
+
+  const start = async () => {
+    setBusy(true); setFailed(null);
+    try {
+      const r = await startStewardPlan(project, { key: theKey, name: name.trim(), folder: folder.trim() || undefined });
+      setMade({ master: r.data.master, first: r.data.first, settings: r.settings });
+      await onStarted();
+    } catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ marginTop: 22 }}>
+      <Fold id="new-plan" open={!has} title="Start a new plan" colour="var(--w-accent)"
+        meta={has ? 'once this one is finished' : undefined}>
+        <Panel className="mb-2">
+          {made
+            ? (
+              <div style={{ font: `400 12.5px/1.6 ${BODY}`, color: 'var(--w-t200)' }}>
+                The plan is started, with nothing in it yet. Two documents are on the base branch:
+                <div style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t300)', margin: '6px 0' }}>{made.master}<br />{made.first}</div>
+                Write the plan first, then the first unit from it, in a session in the repo; each file says what goes where.
+                Then agree the unit here. The project's settings now point at this plan
+                (<span style={{ font: `400 11.5px ${MONO}` }}>{made.settings}</span>): commit that file in the project's folder.
+              </div>
+            )
+            : (
+              <>
+                <div style={{ font: `400 12px/1.55 ${BODY}`, color: 'var(--w-t400)', marginBottom: 10 }}>
+                  {has
+                    ? 'A project works one plan at a time. Starting another keeps this one to be read and moves the steward to the new one, so it waits until every ticket of this plan is closed.'
+                    : 'A plan is one document saying what is to be built, and a unit spec for each slice of it. This writes both into the repo with their shape and nothing else, for you to fill in.'}
+                </div>
+                <div className="grid gap-2 sm:grid-cols-3">
+                  <label className="min-w-0">
+                    <div style={{ ...label(), marginBottom: 4 }}>What it is called</div>
+                    <input value={name} onChange={e => setName(e.target.value)} placeholder="Customer accounts" className={FIELD} />
+                  </label>
+                  <label className="min-w-0">
+                    <div style={{ ...label(), marginBottom: 4 }}>Its key</div>
+                    <input value={theKey} onChange={e => { setKeyTouched(true); setKey(slug(e.target.value)); }} placeholder="customer-accounts" className={FIELD} />
+                  </label>
+                  <label className="min-w-0">
+                    <div style={{ ...label(), marginBottom: 4 }}>Where in the repo</div>
+                    <input value={folder} onChange={e => setFolder(e.target.value)} placeholder={theFolder || 'docs/plans/its-key'} className={FIELD} />
+                  </label>
+                </div>
+                <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 10 }}>
+                  <GhostButton tone="go" disabled={busy || name.trim().length < 3 || !theKey} onClick={start}>
+                    {busy ? 'Starting' : 'Start the plan'}
+                  </GhostButton>
+                  {theFolder && (
+                    <span className="min-w-0 truncate" style={{ font: `400 11px ${MONO}`, color: 'var(--w-t600)' }}>
+                      {theFolder}/PLAN.md, {theFolder}/units/
+                    </span>
+                  )}
+                </div>
+                {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 8 }}>{failed}</div>}
+              </>
+            )}
+        </Panel>
+      </Fold>
+    </div>
   );
 }

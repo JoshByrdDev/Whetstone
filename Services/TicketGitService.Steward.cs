@@ -70,10 +70,15 @@ public partial class TicketGitService
     /// The project's plan: every unit spec in the configured folder, read from the base branch's
     /// last commit. Empty when the project has no plan configured or the folder does not exist yet.
     /// </summary>
-    public async Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default)
+    public Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default) =>
+        PlanOfAsync(projectKey, _registry.GetProjectConfig(projectKey).Steward.Plan, ct);
+
+    /// <summary>
+    /// The units of one plan - the one being worked or one already finished - read the same way.
+    /// </summary>
+    public async Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default)
     {
-        var (cfg, repo, baseBranch) = HubOf(projectKey);
-        var plan = cfg.Steward.Plan;
+        var (_, repo, baseBranch) = HubOf(projectKey);
         if (!plan.Configured || !IsGitRepo(repo)) return Array.Empty<PlanUnit>();
 
         var ls = await GitAsync(repo, ct, "ls-tree", "--name-only", $"refs/heads/{baseBranch}", $"{plan.UnitsDir}/");
@@ -101,6 +106,31 @@ public partial class TicketGitService
         var outcomes = Regex.Matches(text, plan.Outcome, RegexOptions.Multiline)
             .Select(m => m.Groups.Count > 1 ? m.Groups[1].Value : m.Value).Distinct().ToList();
         return new PlanUnit(number, file, agreed, !agreed && Regex.IsMatch(text, plan.Draft, o), outcomes, text);
+    }
+
+    /// <summary>
+    /// A draft spec's text with its status rewritten to agreed, or null when that cannot be done by
+    /// rule. The bold run that says "draft" is replaced whole by the plan's agreed line, and the
+    /// result has to read as agreed and not as a draft by the plan's own patterns - so a spec
+    /// whose status is written some other way is left for its owner to edit by hand, never guessed at.
+    /// </summary>
+    public static string? MarkAgreed(StewardPlan plan, string text, DateTime day)
+    {
+        const RegexOptions o = RegexOptions.IgnoreCase | RegexOptions.Multiline;
+        var m = Regex.Match(text, plan.Draft, o);
+        if (!m.Success) return null;
+        // The status is a bold run: from where the draft pattern starts to the "**" that closes it,
+        // on the same line.
+        var lineEnd = text.IndexOf('\n', m.Index);
+        if (lineEnd < 0) lineEnd = text.Length;
+        var from = m.Index + (m.Value.StartsWith("**") ? 2 : 0);
+        var close = text.IndexOf("**", Math.Min(from, text.Length), StringComparison.Ordinal);
+        if (close < 0 || close >= lineEnd) return null;
+
+        var line = plan.AgreedLine.Replace("{date}", day.ToString("yyyy-MM-dd"));
+        var marked = text[..m.Index] + line + text[(close + 2)..];
+        var read = ReadUnit(plan, 0, "", marked);
+        return read.Agreed && !Regex.IsMatch(marked, plan.Draft, o) ? marked : null;
     }
 
     /// <summary>A unit's own name: its spec's first heading, or its file name when it has none.</summary>

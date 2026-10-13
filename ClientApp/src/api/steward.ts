@@ -147,21 +147,56 @@ export interface StewardPlanUnitView {
   draft: boolean;
   /** Every outcome has been called done. */
   done: boolean;
+  /** Where it is on the way from a draft to released. */
+  stage: UnitStage;
+  agreedAt?: string | null;
+  releasedAt?: string | null;
+  /** Why a draft cannot be agreed from the board, when it cannot. */
+  cannotAgree?: string | null;
+  /** What its release still asks, by kind; null for a unit nobody has agreed. */
+  release?: { migrations: number; config: number; actions: number; toKnow: number; outstanding: number } | null;
   progress: { percent: number; done: number; inProgress: number; notStarted: number; outcomes: number };
   text: string;
   groups: { heading: string; outcomes: StewardPlanOutcome[] }[];
 }
 
+export type UnitStage = 'draft' | 'notAgreed' | 'agreed' | 'building' | 'built' | 'released';
+
+export interface StewardPlanName { key: string; name: string; working: boolean }
+
 export interface StewardPlanView {
   /** Why there is no plan to show, when there is none. */
   why?: string | null;
-  plan?: { current?: number | null; units: StewardPlanUnitView[] } | null;
+  plan?: {
+    /** Every plan the project has: the one being worked, then the ones it has finished. */
+    plans?: StewardPlanName[];
+    /** The plan these units are of. */
+    plan?: StewardPlanName & { unitsDir: string };
+    current?: number | null;
+    units?: StewardPlanUnitView[];
+  } | null;
   /** The document the units are cut from, when the project names one. */
   master?: { file: string; text: string } | null;
 }
 
-export const getStewardPlan = (project: string) =>
-  fetch(`/api/steward/plan?${q(project)}`).then(json<StewardPlanView>);
+/** The plan being worked, or with `plan` one the project has finished. */
+export const getStewardPlan = (project: string, plan?: string | null) =>
+  fetch(`/api/steward/plan?${q(project)}${plan != null ? `&plan=${encodeURIComponent(plan)}` : ''}`).then(json<StewardPlanView>);
+
+/** Agree a draft unit: the commit that agrees it, made from here. */
+export const agreeStewardUnit = (project: string, unit: number) =>
+  fetch(`/api/steward/plan/units/${unit}/agree?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);
+
+/** Say a unit's work has been released, or take that back. */
+export const setStewardUnitReleased = (project: string, unit: number, released: boolean) =>
+  fetch(`/api/steward/plan/units/${unit}/released?${q(project)}`, {
+    method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ released }),
+  }).then(json<{ answer: string }>);
+
+/** Start a new plan: its documents into the repo, and the project pointed at it. */
+export const startStewardPlan = (project: string, plan: { key: string; name: string; folder?: string }) =>
+  fetch(`/api/steward/plan/new?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(plan) })
+    .then(json<{ answer: string; data: { master: string; first: string }; settings: string }>);
 
 /** One ticket's lines of the record: what was decided about it, and what it leaves for a release. */
 export const getStewardEntriesForTicket = (project: string, ticketId: number) =>

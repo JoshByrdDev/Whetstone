@@ -74,7 +74,7 @@ Work only inside agreed units, earliest first. For each outcome no ticket covers
 
 `steward_create` files it. `limit`: stop creating; the next run continues. You never start a unit that is not agreed, even when it is the obvious next one.
 
-**The next unit's spec.** So the owner is never the reason nothing is being built: once every outcome of the last agreed unit has a ticket and no spec exists for the unit after it, draft that spec with `steward_draft_unit` - the same parts in the same order as the agreed spec before it, every open choice written as a numbered decision with its options, what each costs, and your pick. Then ask once that it be read. One draft ahead, never two. A draft is not a decision made.
+**The next unit's spec.** So the owner is never the reason nothing is being built: once every outcome of the last agreed unit has a ticket and no spec exists for the unit after it, draft that spec with `steward_draft_unit` - the same parts in the same order as the agreed spec before it, every open choice written as a numbered decision with its options, what each costs, and your pick. Then ask once that it be read: the owner agrees it on the Steward page, or by editing its status line, and until one of those is committed it decides nothing. One draft ahead, never two. A draft is not a decision made.
 
 ## 6. What goes to the owner
 

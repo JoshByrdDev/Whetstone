@@ -205,6 +205,14 @@ public class StewardOutcome
 {
     public int Id { get; set; }
     public string ProjectKey { get; set; } = "";
+
+    /// <summary>
+    /// The key of the plan the unit belongs to. A project works one plan after another and each
+    /// numbers its units from one, so a unit's number alone stops naming it the day a second plan
+    /// starts. Empty for a plan that was never given a key.
+    /// </summary>
+    public string Plan { get; set; } = "";
+
     public int Unit { get; set; }
 
     /// <summary>The outcome's id in its spec, like <c>A2</c>.</summary>
@@ -219,4 +227,34 @@ public class StewardOutcome
     public string? Note { get; set; }
 
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// What the owner has done about one unit of a plan: agreed it, and released it.
+/// <para>
+/// Whether a unit is agreed is never read from here - that is the spec's own status line, as
+/// committed, and this row only remembers when the owner pressed the button that committed it.
+/// Released is different: nothing in the repo says a unit's work has gone out, because going out
+/// is a merge and a push the board never makes. So it is the owner's word, recorded here, and it
+/// is what closes a unit: its notes for a release are behind it, and the page stops asking.
+/// </para>
+/// </summary>
+public class StewardUnit
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>The plan's key, as on <see cref="StewardOutcome.Plan"/>.</summary>
+    public string Plan { get; set; } = "";
+
+    public int Unit { get; set; }
+
+    /// <summary>When the owner agreed it from the board. Null when they agreed it by hand, in the file.</summary>
+    public DateTime? AgreedAt { get; set; }
+
+    /// <summary>When the owner said its work had been released. Null until then.</summary>
+    public DateTime? ReleasedAt { get; set; }
+
+    /// <summary>The base branch's head when it was released: what "released" meant that day.</summary>
+    public string? ReleasedSha { get; set; }
 }

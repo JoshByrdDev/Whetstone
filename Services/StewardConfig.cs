@@ -40,6 +40,31 @@ public record StewardPlan(string UnitsDir, string UnitFile, string Agreed, strin
     /// the owner can read the plan beside its progress.
     /// </summary>
     public string Master { get; init; } = "";
+
+    /// <summary>
+    /// The plan's own short name, lowercase with hyphens, which every ticket and outcome filed
+    /// against it carries. A project works one plan after another and each numbers its units from
+    /// one, so this is what keeps "unit 1" of the next plan apart from "unit 1" of the last. Empty
+    /// for a plan that was never given one - which can be true of one plan per project, and no more.
+    /// </summary>
+    public string Key { get; init; } = "";
+
+    /// <summary>What a person calls the plan. Falls back to its key, then to "The plan".</summary>
+    public string Name { get; init; } = "";
+
+    public string DisplayName => Name.Length > 0 ? Name : Key.Length > 0 ? Key : "The plan";
+
+    /// <summary>
+    /// What a draft's status is rewritten to when its owner agrees it from the board. <c>{date}</c>
+    /// is the day. It has to be something <see cref="Agreed"/> matches and <see cref="Draft"/> does
+    /// not, and a project that changes those two patterns changes this with them.
+    /// </summary>
+    public string AgreedLine { get; init; } = DefaultAgreedLine;
+
+    public const string DefaultAgreedLine = "**Status: agreed {date}.**";
+
+    /// <summary>A plan's key is short, lowercase and safe to put in a URL - or empty.</summary>
+    public static bool IsKey(string? key) => key is not null && Regex.IsMatch(key, "^[a-z0-9][a-z0-9-]{0,39}$");
 }
 
 /// <summary>
@@ -87,6 +112,13 @@ public class StewardConfig
 
     public StewardPlan Plan { get; init; } = new("", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed,
         StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
+
+    /// <summary>
+    /// Plans this project has finished. Kept so what was built under them can still be read - the
+    /// units, their outcomes, the tickets - and for nothing else: a steward files against
+    /// <see cref="Plan"/> alone, and no verb reaches one of these.
+    /// </summary>
+    public StewardPlan[] PastPlans { get; init; } = Array.Empty<StewardPlan>();
 
     /// <summary>
     /// Paths an unattended merge may never carry: how the project deploys, what the fleet and the
@@ -138,16 +170,41 @@ public class StewardConfig
             MemoMaxChars = Int(s, "memoMaxChars", d.MemoMaxChars, 1000, 500000),
             SyncFrom = Str(s, "syncFrom"),
             DecisionsFile = Str(s, "decisionsFile").Replace('\\', '/').TrimStart('/'),
-            Plan = new StewardPlan(
-                Str(plan, "units").Replace('\\', '/').Trim('/'),
-                Pattern(plan, "unitFile", StewardPlan.DefaultUnitFile),
-                Pattern(plan, "agreed", StewardPlan.DefaultAgreed),
-                Pattern(plan, "draft", StewardPlan.DefaultDraft),
-                Pattern(plan, "outcome", StewardPlan.DefaultOutcome))
-            { Master = Str(plan, "master").Replace('\\', '/').Trim('/') },
+            Plan = PlanFrom(plan),
+            PastPlans = s.TryGetProperty("pastPlans", out var past) && past.ValueKind == JsonValueKind.Array
+                ? past.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object).Select(PlanFrom)
+                    .Where(x => x.Configured).ToArray()
+                : Array.Empty<StewardPlan>(),
             NeverMerge = StrArray(s, "neverMerge"),
             MergeChecks = Checks(s),
         };
+    }
+
+    private static StewardPlan PlanFrom(JsonElement plan)
+    {
+        var key = Str(plan, "key").ToLowerInvariant();
+        var line = Str(plan, "agreedLine");
+        return new StewardPlan(
+            Str(plan, "units").Replace('\\', '/').Trim('/'),
+            Pattern(plan, "unitFile", StewardPlan.DefaultUnitFile),
+            Pattern(plan, "agreed", StewardPlan.DefaultAgreed),
+            Pattern(plan, "draft", StewardPlan.DefaultDraft),
+            Pattern(plan, "outcome", StewardPlan.DefaultOutcome))
+        {
+            Master = Str(plan, "master").Replace('\\', '/').Trim('/'),
+            // A key that is not one reads as none: it goes into every row filed against the plan.
+            Key = StewardPlan.IsKey(key) ? key : "",
+            Name = Str(plan, "name"),
+            AgreedLine = line.Length > 0 ? line : StewardPlan.DefaultAgreedLine,
+        };
+    }
+
+    /// <summary>The plan being worked, or a finished one, by key. Null when the project has neither.</summary>
+    public StewardPlan? PlanByKey(string? key)
+    {
+        var k = key?.Trim().ToLowerInvariant() ?? "";
+        if (Plan.Configured && Plan.Key == k) return Plan;
+        return PastPlans.FirstOrDefault(p => p.Key == k);
     }
 
     private static StewardCheck[] Checks(JsonElement s)

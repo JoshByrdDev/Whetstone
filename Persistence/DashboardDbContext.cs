@@ -27,6 +27,7 @@ public class DashboardDbContext : DbContext
     public DbSet<GateFinding> GateFindings => Set<GateFinding>();
     public DbSet<StewardQuestion> StewardQuestions => Set<StewardQuestion>();
     public DbSet<StewardEntry> StewardEntries => Set<StewardEntry>();
+    public DbSet<StewardUnit> StewardUnits => Set<StewardUnit>();
     public DbSet<StewardState> StewardStates => Set<StewardState>();
     public DbSet<StewardOutcome> StewardOutcomes => Set<StewardOutcome>();
 
@@ -79,6 +80,7 @@ public class DashboardDbContext : DbContext
             e.Property(t => t.Track).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.CreatedBy).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.PlanOutcomes).HasMaxLength(256);
+            e.Property(t => t.PlanKey).HasMaxLength(64);
             e.HasIndex(t => t.Phase);
             e.HasIndex(t => t.ProjectKey);
 
@@ -274,7 +276,16 @@ public class DashboardDbContext : DbContext
             e.Property(o => o.ProjectKey).HasMaxLength(128);
             e.Property(o => o.Outcome).HasMaxLength(16);
             e.Property(o => o.State).HasConversion<string>().HasMaxLength(16);
-            e.HasIndex(o => new { o.ProjectKey, o.Unit, o.Outcome }).IsUnique();
+            e.Property(o => o.Plan).HasMaxLength(64);
+            e.HasIndex(o => new { o.ProjectKey, o.Plan, o.Unit, o.Outcome }).IsUnique();
+        });
+
+        b.Entity<StewardUnit>(e =>
+        {
+            e.Property(u => u.ProjectKey).HasMaxLength(128);
+            e.Property(u => u.Plan).HasMaxLength(64);
+            e.Property(u => u.ReleasedSha).HasMaxLength(64);
+            e.HasIndex(u => new { u.ProjectKey, u.Plan, u.Unit }).IsUnique();
         });
 
         b.Entity<StewardState>(e =>

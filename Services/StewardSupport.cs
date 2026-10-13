@@ -14,6 +14,8 @@ public interface IStewardGit
 {
     Task<string?> BaseHeadAsync(string projectKey, CancellationToken ct = default);
     Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default);
+    Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default);
+    Task<string?> FileAtBaseAsync(string projectKey, string path, CancellationToken ct = default);
     Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default);
     Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default);
     Task<int> AheadOfBaseAsync(string projectKey, string from, CancellationToken ct = default);

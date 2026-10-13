@@ -706,6 +706,11 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Plan")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -724,7 +729,7 @@ namespace Whetstone.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectKey", "Unit", "Outcome")
+                    b.HasIndex("ProjectKey", "Plan", "Unit", "Outcome")
                         .IsUnique();
 
                     b.ToTable("StewardOutcomes");
@@ -833,6 +838,43 @@ namespace Whetstone.Migrations
                     b.ToTable("StewardStates");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.StewardUnit", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("AgreedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Plan")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReleasedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReleasedSha")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Unit")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Plan", "Unit")
+                        .IsUnique();
+
+                    b.ToTable("StewardUnits");
+                });
+
             modelBuilder.Entity("Whetstone.Models.Ticket", b =>
                 {
                     b.Property<int>("Id")
@@ -901,6 +943,10 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("PhaseBeforeBlock")
                         .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlanKey")
+                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("PlanOutcomes")

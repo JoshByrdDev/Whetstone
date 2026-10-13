@@ -543,6 +543,178 @@ public class StewardServiceTests : IDisposable
         Assert.Equal("They can save a card.", groups[1].Outcomes.Single().Text);
     }
 
+    // ---- a unit, from a draft to released ---------------------------------------------
+
+    private async Task<int> Built(int unit, string outcomes, string? planKey = null, TicketPhase phase = TicketPhase.Done)
+    {
+        await using var ctx = NewCtx();
+        var t = new Ticket { ProjectKey = "alpha", Title = $"Work for {outcomes}", Phase = phase, PlanUnit = unit, PlanOutcomes = outcomes, PlanKey = planKey };
+        ctx.Tickets.Add(t);
+        await ctx.SaveChangesAsync();
+        return t.Id;
+    }
+
+    [Fact]
+    public async Task The_owner_agrees_a_draft_from_the_board_and_it_is_the_same_commit()
+    {
+        Assert.Equal("already-agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 1))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerAgreesUnitAsync("alpha", 9))).Answer);
+        Assert.Empty(_git.Committed);
+
+        Assert.Equal("agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 2))).Answer);
+        var (path, content) = _git.Committed.Single();
+        Assert.Equal("docs/units/02-second.md", path);
+        Assert.Contains($"**Status: agreed {DateTime.Now:yyyy-MM-dd}.**", content);
+        Assert.DoesNotContain("draft", content);
+        // Agreeing is news for the steward: there is now something to file against.
+        await using var ctx = NewCtx();
+        Assert.Contains("agreed unit 2", ctx.StewardStates.Single().DueReason);
+        Assert.NotNull(ctx.StewardUnits.Single(u => u.Unit == 2).AgreedAt);
+    }
+
+    [Fact]
+    public void A_status_line_is_rewritten_only_when_the_result_reads_as_agreed()
+    {
+        var p = new StewardPlan("docs/units", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed,
+            StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
+        var day = new DateTime(2026, 3, 4);
+
+        var marked = TicketGitService.MarkAgreed(p, "# One\n\n> **Status: draft, awaiting the owner.** Written last week.\n\n- **A1.** One.\n", day);
+        Assert.Equal("# One\n\n> **Status: agreed 2026-03-04.** Written last week.\n\n- **A1.** One.\n", marked);
+
+        // No status, an agreed one, and a bold run that never closes on its line are all left alone.
+        Assert.Null(TicketGitService.MarkAgreed(p, "# One\n\n- **A1.** One.\n", day));
+        Assert.Null(TicketGitService.MarkAgreed(p, "> **Status: agreed 2026-01-01.**\n", day));
+        Assert.Null(TicketGitService.MarkAgreed(p, "> **Status: draft\n\n**later**\n", day));
+        // A project whose agreed line does not satisfy its own pattern gets nothing written.
+        Assert.Null(TicketGitService.MarkAgreed(p with { AgreedLine = "**Status: ready.**" }, "> **Status: draft.**\n", day));
+    }
+
+    [Fact]
+    public async Task A_unit_is_released_only_when_it_is_built_and_its_notes_are_dealt_with()
+    {
+        var id = await Built(1, "A1, A2");
+        Assert.Equal("unit-not-agreed", (await In(s => s.OwnerReleasesUnitAsync("alpha", 2, true))).Answer);
+        Assert.Equal("not-built", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+
+        await Begin();
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Adds a table.", "migration"));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "It rounds down.", "note"));
+
+        Assert.Equal("notes-outstanding", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+        var migration = Entries().Single(e => e.Release == StewardReleaseKind.Migration).Id;
+        await In(s => s.OwnerMarksEntryAsync("alpha", migration, true, null));
+
+        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+        // What was only to know went out with it.
+        Assert.All(Entries().Where(e => e.Kind == StewardEntryKind.BeforeRelease), e => Assert.NotNull(e.HandledAt));
+        await using (var ctx = NewCtx())
+        {
+            var row = ctx.StewardUnits.Single(u => u.Unit == 1);
+            Assert.NotNull(row.ReleasedAt);
+            Assert.Equal("abc", row.ReleasedSha);
+        }
+        Assert.Contains("\"stage\":\"released\"", System.Text.Json.JsonSerializer.Serialize((await In(s => s.PlanViewAsync("alpha"))).Data));
+
+        Assert.Equal("already-released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+        Assert.Equal("recorded", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, false))).Answer);
+        await using var after = NewCtx();
+        Assert.Null(after.StewardUnits.Single(u => u.Unit == 1).ReleasedAt);
+    }
+
+    [Fact]
+    public async Task A_note_with_no_unit_goes_out_with_the_next_release()
+    {
+        var loose = await AtReview();   // a ticket filed outside the plan
+        await Built(1, "A1, A2");
+        await Begin();
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, loose, "Set the variable.", "config"));
+
+        Assert.Equal("notes-outstanding", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+    }
+
+    // ---- one plan after another -------------------------------------------------------
+
+    [Fact]
+    public async Task The_last_plans_unit_one_is_not_this_plans()
+    {
+        // The plan being worked has a key; a ticket and an outcome left by the plan before it do not.
+        var old = await Built(1, "A1");
+        await using (var ctx = NewCtx())
+        {
+            ctx.StewardOutcomes.Add(new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = 1, Outcome = "A1", State = StewardOutcomeState.Done });
+            await ctx.SaveChangesAsync();
+        }
+        Configure("full", """
+            "plan": { "key": "second", "name": "The second plan", "units": "docs/units" }
+            """);
+
+        var json = System.Text.Json.JsonSerializer.Serialize((await In(s => s.PlanViewAsync("alpha"))).Data);
+        Assert.DoesNotContain($"\"Id\":{old}", json);
+        Assert.DoesNotContain("\"state\":\"Done\"", json);
+        Assert.Contains("\"name\":\"The second plan\"", json);
+
+        // What a run records now is filed under the plan's own key, beside the old row and not over it.
+        await Begin();
+        Assert.Equal("recorded", (await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "InProgress", false, null))).Answer);
+        await using var after = NewCtx();
+        Assert.Equal(new[] { "", "second" }, after.StewardOutcomes.Where(o => o.Outcome == "A1").Select(o => o.Plan).OrderBy(x => x));
+        Assert.Equal(StewardOutcomeState.Done, after.StewardOutcomes.Single(o => o.Plan == "").State);
+    }
+
+    private const string PlanTemplate = "# {{NAME}}\n\nStarted {{DATE}}.\n";
+    private const string UnitTemplate = "# Unit 1\n\n> **Status: draft, awaiting the owner.**\n\n- **A1.** A person can ...\n";
+
+    [Fact]
+    public async Task A_new_plan_is_its_two_documents_and_waits_for_the_last_one_to_finish()
+    {
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "Not A Key", "Next", null, PlanTemplate, UnitTemplate))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", "../outside", PlanTemplate, UnitTemplate))).Answer);
+        // The plan being worked has no key, so "" is taken; and it has a ticket still open.
+        var open = await Built(1, "A1", phase: TicketPhase.Implementing);
+        var held = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, PlanTemplate, UnitTemplate));
+        Assert.Equal("plan-in-flight", held.Answer);
+        Assert.Contains($"#{open}", held.Why);
+        Assert.Empty(_git.Committed);
+
+        await using (var ctx = NewCtx())
+        {
+            (await ctx.Tickets.SingleAsync(t => t.Id == open)).Phase = TicketPhase.Done;
+            await ctx.SaveChangesAsync();
+        }
+        _git.InRepo["docs/plans/taken/PLAN.md"] = "already here";
+        Assert.Equal("exists", (await In(s => s.OwnerStartsPlanAsync("alpha", "taken", "Taken", null, PlanTemplate, UnitTemplate))).Answer);
+
+        var r = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, PlanTemplate, UnitTemplate));
+        Assert.Equal("started", r.Answer);
+        Assert.Equal(new[] { "docs/plans/next/PLAN.md", "docs/plans/next/units/01-first-unit.md" }, _git.Committed.Select(c => c.Path));
+        Assert.StartsWith("# Next thing", _git.Committed[0].Content);
+        Assert.DoesNotContain("{{", _git.Committed[0].Content);
+    }
+
+    [Fact]
+    public async Task Starting_a_plan_keeps_the_one_before_it_to_be_read()
+    {
+        var paths = new DashboardPaths(_dataRoot);
+        var file = paths.ProjectConfigDefaults("alpha");
+        Assert.Null(await StewardPlanFile.StartAsync(file, "next", "Next thing", "docs/plans/next/units", "docs/plans/next/PLAN.md"));
+
+        var cfg = new ProjectRegistry(paths).GetProjectConfig("alpha");
+        Assert.Equal("next", cfg.Steward.Plan.Key);
+        Assert.Equal("Next thing", cfg.Steward.Plan.DisplayName);
+        Assert.Equal("docs/plans/next/PLAN.md", cfg.Steward.Plan.Master);
+        var past = Assert.Single(cfg.Steward.PastPlans);
+        Assert.Equal("docs/units", past.UnitsDir);
+        Assert.Same(past, cfg.Steward.PlanByKey(""));
+        // Everything else the project said is still said.
+        Assert.Equal(2, cfg.Steward.CreatedPerDay);
+        Assert.Equal("Alpha", cfg.DisplayName);
+    }
+
     // ---- when a run is owed -----------------------------------------------------------
 
     [Fact]
@@ -686,6 +858,15 @@ public class StewardServiceTests : IDisposable
                 TicketGitService.ReadUnit(P, 1, "docs/units/01-first.md", "> **Status: agreed 2026-01-01.**\n\n- **A1.** One.\n- **A2.** Two.\n"),
                 TicketGitService.ReadUnit(P, 2, "docs/units/02-second.md", "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n"),
             });
+
+        public Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default) =>
+            PlanAsync(projectKey, ct);
+
+        /// <summary>What is already in the repo, by path, for the reads that ask whether a file is there.</summary>
+        public Dictionary<string, string> InRepo = new();
+
+        public Task<string?> FileAtBaseAsync(string projectKey, string path, CancellationToken ct = default) =>
+            Task.FromResult(InRepo.TryGetValue(path, out var text) ? text : null);
 
         public Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default) =>
             Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, 1, "1 file changed", "main"));

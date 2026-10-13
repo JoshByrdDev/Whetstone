@@ -247,7 +247,8 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | The mode - `off`, `propose` (says what it would do), `manage` (never merges), `full` | `stewardMode` in the project's machine-local `project.json`; set only from the Steward page. No tool changes it |
 | Full means merging only where a merge is local | `ProjectConfig.StewardMode`: by pull request or TFVC it stops at `manage` however it is set |
 | A change needs a run, and one run at a time | the `steward:<key>` lease, taken by `steward_begin` |
-| Tickets only against a unit of the plan its owner agreed | the spec's status line, read from git **as committed** - nothing a steward can run commits one |
+| Tickets only against a unit of the plan its owner agreed | the spec's status line, read from git **as committed** - nothing a steward can run commits one. The owner can, from the Steward page: a REST route with no tool behind it, that makes the same commit |
+| A unit is released when its owner says so | `StewardUnit.ReleasedAt`, set by a REST route with no tool behind it, and refused while an outcome is not done or a note that is something to do is not ticked off |
 | What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
@@ -274,9 +275,17 @@ is the prompt's rule alone - the same gap, for the same reason, as the local-onl
 
 | What is specific | Where it goes |
 |---|---|
-| Limits, the branch synced into the base, where the plan lives (`plan.units`, and `plan.master` for the document they are cut from), never-merged paths, merge checks | `steward` in `project.defaults.json` |
+| Limits, the branch synced into the base, never-merged paths, merge checks | `steward` in `project.defaults.json` |
+| The plan being worked: its `key` and `name`, where its units live (`units`), the document they are cut from (`master`) | `steward.plan` there; the plans before it, readable and worked by nothing, in `steward.pastPlans` |
 | What only that repo makes worth holding a merge for | `data/projects/<key>/steward-flags.ps1`, which like `guard.ps1` can only add a reason to wait |
 | The order of work and the judgment behind it | `data/projects/<key>/skills/steward/skill.md` (template: `data/skill-templates/steward/skill.md`) |
+
+**A project works one plan at a time, and a unit's number means nothing without its plan.** Every
+plan numbers its units from one, so a ticket and an outcome carry the plan's key beside the unit
+(`Ticket.PlanKey`, `StewardOutcome.Plan`), and anything that counts a unit's tickets filters on
+both. A count by `PlanUnit` alone is right until the day a second plan starts and wrong from then
+on. Starting one is the owner's (the Steward page, `data/plan-templates/` for the two documents'
+shape) and is refused while the plan being worked has a ticket open.
 
 The rules that outrank that skill are `data/steward-prompt.md`. Changing what a steward may do?
 The tests are the specification of the limits:

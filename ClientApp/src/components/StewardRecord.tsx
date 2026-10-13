@@ -24,8 +24,10 @@ const KINDS: { id: ReleaseKind; title: string; says: string; tier: keyof typeof 
 
 type Mark = (id: number, mark: { handled?: boolean; release?: ReleaseKind }) => Promise<void>;
 
-export function StewardRecord({ entries, answered, onMark }: {
+export function StewardRecord({ entries, answered, onMark, unit, onUnit }: {
   entries: StewardEntry[]; answered: StewardQuestion[]; onMark: Mark;
+  /** Show only the notes that go out with this unit of the plan; null is all of them. */
+  unit: number | null; onUnit: (unit: number | null) => void;
 }) {
   // A note with no kind is one to know: the same reading the board gives it.
   const notes = useMemo(() => entries.filter(e => e.kind === 'BeforeRelease').map(e => ({ ...e, release: e.release ?? 'Note' as const })), [entries]);
@@ -34,7 +36,7 @@ export function StewardRecord({ entries, answered, onMark }: {
 
   return (
     <>
-      <ReleaseNotes notes={notes} onMark={onMark} />
+      <ReleaseNotes notes={notes} onMark={onMark} unit={unit} onUnit={onUnit} />
 
       <Fold id="Call" title="Calls it made for you" colour={TIER.gate.c} count={calls.filter(e => !e.handledAt).length}
         meta={calls.length > 0 ? `${calls.length} in all` : undefined}>
@@ -78,7 +80,13 @@ export function StewardRecord({ entries, answered, onMark }: {
 }
 
 /** What to read before a release, by what kind of thing each note is. */
-function ReleaseNotes({ notes, onMark }: { notes: StewardEntry[]; onMark: Mark }) {
+function ReleaseNotes({ notes: every, onMark, unit, onUnit }: {
+  notes: StewardEntry[]; onMark: Mark; unit: number | null; onUnit: (unit: number | null) => void;
+}) {
+  // A note goes out with one unit of the plan, and a release is one unit's: so the list can be
+  // narrowed to exactly what that release is held for.
+  const units = [...new Set(every.map(e => e.unit).filter((u): u is number => u != null))].sort((a, b) => a - b);
+  const notes = unit == null ? every : every.filter(e => e.unit === unit);
   const left = (k: ReleaseKind) => notes.filter(e => e.release === k && !e.handledAt).length;
   const [kind, setKind] = useState<ReleaseKind>(() => {
     const was = remembered('record.kind') as ReleaseKind | null;
@@ -95,10 +103,19 @@ function ReleaseNotes({ notes, onMark }: { notes: StewardEntry[]; onMark: Mark }
   return (
     <Fold id="BeforeRelease" open title="To read before a release" colour={TIER.active.c} count={outstanding}
       meta={notes.length > outstanding ? `${notes.length - outstanding} ticked off` : undefined}>
-      {notes.length === 0
+      {every.length === 0
         ? <Quiet>Nothing noted for release yet.</Quiet>
         : (
           <>
+            {(units.length > 1 || unit != null) && (
+              <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 10 }}>
+                <span style={label()}>Going out with</span>
+                <Chip on={unit == null} onClick={() => onUnit(null)}>Every unit</Chip>
+                {units.map(u => (
+                  <Chip key={u} on={unit === u} onClick={() => onUnit(u)}>Unit {String(u).padStart(2, '0')}</Chip>
+                ))}
+              </div>
+            )}
             <div className="flex flex-wrap gap-2" style={{ marginBottom: 8 }}>
               {KINDS.map(k => (
                 <Chip key={k.id} on={kind === k.id} onClick={() => choose(k.id)} title={k.says}>
