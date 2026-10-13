@@ -190,10 +190,10 @@ public class WorktreeReaperTests : IDisposable
     }
 
     [Theory]
-    [InlineData("{}", 7)]
+    [InlineData("{}", 2)]
     [InlineData("{\"worktreeRetentionDays\": 30}", 30)]
     [InlineData("{\"worktreeRetentionDays\": 0}", 0)]       // off
-    [InlineData("{\"worktreeRetentionDays\": \"soon\"}", 7)]
+    [InlineData("{\"worktreeRetentionDays\": \"soon\"}", 2)]
     public void Retention_is_read_from_the_global_config(string json, int expected)
         => Assert.Equal(expected,
             WorktreeReaper.RetentionDays(JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)!));

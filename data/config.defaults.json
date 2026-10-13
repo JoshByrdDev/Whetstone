@@ -10,7 +10,7 @@
   "heartbeatMaxAttempts": 3,
   "heartbeatWorkerTimeoutMinutes": 120,
   "heartbeatWorkers": 3,
-  "worktreeRetentionDays": 7,
+  "worktreeRetentionDays": 2,
   "baseBranch": "main",
   "branchPrefix": "",
   "agentProvider": "claude",

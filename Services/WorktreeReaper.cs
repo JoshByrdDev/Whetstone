@@ -28,7 +28,7 @@ public class WorktreeReaper : BackgroundService
     /// <summary>The app stays up for days at a time, so starting is not often enough on its own.</summary>
     private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
 
-    public const int DefaultRetentionDays = 7;
+    public const int DefaultRetentionDays = 2;
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ProjectRegistry _registry;
