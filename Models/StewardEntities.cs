@@ -98,6 +98,23 @@ public enum StewardEntryKind
     OwnerSaid,
 }
 
+/// <summary>
+/// What a <see cref="StewardEntryKind.BeforeRelease"/> note asks of the owner. A release is read
+/// by what it will do, not by the order tickets happened to merge in: the migrations together, what
+/// has to be set up, what is theirs to do, and last what is only worth knowing.
+/// </summary>
+public enum StewardReleaseKind
+{
+    /// <summary>The merge carries a migration, or any change to the schema or data that runs on release.</summary>
+    Migration,
+    /// <summary>Releasing needs something set up outside the code: a variable, a secret, infrastructure, an account.</summary>
+    Config,
+    /// <summary>Something for the owner to do, check or approve: wording to read, a line for their own documents, a step by hand.</summary>
+    Action,
+    /// <summary>Only to know: how a thing behaves, a limit, a narrow reading somebody took.</summary>
+    Note,
+}
+
 /// <summary>One line in a steward's record: a call it made, a note for release, or a word from the owner.</summary>
 public class StewardEntry
 {
@@ -114,6 +131,18 @@ public class StewardEntry
     /// among everything the owner has ever decided.
     /// </summary>
     public DateTime? DeliveredAt { get; set; }
+
+    /// <summary>
+    /// For <see cref="StewardEntryKind.BeforeRelease"/>: what kind of thing it is. Null on a note
+    /// written before notes had kinds, which reads as <see cref="StewardReleaseKind.Note"/>.
+    /// </summary>
+    public StewardReleaseKind? Release { get; set; }
+
+    /// <summary>
+    /// When the owner ticked this off as read or dealt with. The owner's alone: no tool sets it, so
+    /// a steward cannot clear its own notes out of the way of a release.
+    /// </summary>
+    public DateTime? HandledAt { get; set; }
 }
 
 /// <summary>

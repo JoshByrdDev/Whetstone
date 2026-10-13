@@ -203,11 +203,17 @@ public class StewardTools
     [McpServerTool(Name = "steward_note_for_release"), Description(
         "After merging a ticket that leaves the owner something to read before the base branch is released: a migration and " +
         "what it adds, a line a worker wrote for the owner's own documents (copy it as written, with the file and section it " +
-        "names), a step to do by hand. A few lines, facts only. A ticket that leaves nothing gets no entry.")]
+        "names), a step to do by hand. A few lines, facts only. A ticket that leaves nothing gets no entry. One note is one " +
+        "kind of thing, because the owner reads them by kind: a ticket that leaves a migration and wording to check gets two " +
+        "notes. Start with the one sentence that would do if it were all the owner read.")]
     public static Task<StewardReply> NoteForRelease(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
-        [Description("What the owner should read or do, in a few lines.")] string text) =>
-        s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text);
+        [Description("What the owner should read or do, in a few lines.")] string text,
+        [Description("What kind of thing it is. 'migration': the merge carries a migration or any change to the schema or data " +
+            "that runs on release. 'config': releasing needs something set up outside the code - a variable, a secret, " +
+            "infrastructure, an account. 'action': something for the owner to do, check or approve - wording to read, a line " +
+            "for their own documents, a step by hand. 'note': only to know.")] string kind) =>
+        s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text, kind);
 
     [McpServerTool(Name = "steward_save_memo"), Description(
         "Replace your memo to the next run, which starts from nothing but the plan, the board and this. It holds only what " +

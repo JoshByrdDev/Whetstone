@@ -8,6 +8,12 @@ namespace Whetstone.Services;
 /// <param name="Draft">It says it is a draft: written, and waiting for its owner.</param>
 public record PlanUnit(int Number, string File, bool Agreed, bool Draft, IReadOnlyList<string> Outcomes, string Text);
 
+/// <summary>One outcome of a unit, with the sentence its spec gives it.</summary>
+public record PlanOutcomeText(string Outcome, string Text);
+
+/// <summary>The outcomes that stand under one heading of a unit's spec.</summary>
+public record PlanGroup(string Heading, IReadOnlyList<PlanOutcomeText> Outcomes);
+
 /// <summary>What a ticket's branch changes against its base, by name and by count.</summary>
 public record BranchChange(IReadOnlyList<string> Files, int Behind, int Ahead, string Stat, string BaseRef);
 
@@ -95,6 +101,68 @@ public partial class TicketGitService
         var outcomes = Regex.Matches(text, plan.Outcome, RegexOptions.Multiline)
             .Select(m => m.Groups.Count > 1 ? m.Groups[1].Value : m.Value).Distinct().ToList();
         return new PlanUnit(number, file, agreed, !agreed && Regex.IsMatch(text, plan.Draft, o), outcomes, text);
+    }
+
+    /// <summary>A unit's own name: its spec's first heading, or its file name when it has none.</summary>
+    public static string UnitTitle(PlanUnit unit)
+    {
+        var m = Regex.Match(unit.Text, @"^#\s+(.+?)\s*$", RegexOptions.Multiline);
+        return m.Success ? m.Groups[1].Value.Trim() : Path.GetFileNameWithoutExtension(unit.File);
+    }
+
+    /// <summary>
+    /// A unit's outcomes as its spec lays them out: each with its sentence, under the heading it
+    /// stands beneath. An id is taken once, where it is first defined, as <see cref="ReadUnit"/>
+    /// counts it. An outcome's sentence runs on over the lines that continue its bullet.
+    /// </summary>
+    public static IReadOnlyList<PlanGroup> UnitGroups(StewardPlan plan, PlanUnit unit)
+    {
+        var outcome = new Regex(plan.Outcome);
+        var groups = new List<(string Heading, List<PlanOutcomeText> Outcomes)>();
+        var seen = new HashSet<string>();
+        var heading = "";
+        (string Id, System.Text.StringBuilder Text)? open = null;
+
+        void Close()
+        {
+            if (open is not { } o) return;
+            if (groups.Count == 0 || groups[^1].Heading != heading) groups.Add((heading, new()));
+            groups[^1].Outcomes.Add(new(o.Id, Regex.Replace(o.Text.ToString(), @"\s+", " ").Trim()));
+            open = null;
+        }
+
+        foreach (var raw in unit.Text.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            var h = Regex.Match(line, @"^#{1,6}\s+(.+?)\s*$");
+            var m = outcome.Match(line);
+            if (h.Success) { Close(); heading = h.Groups[1].Value; }
+            else if (m.Success)
+            {
+                Close();
+                var id = m.Groups.Count > 1 ? m.Groups[1].Value : m.Value;
+                if (seen.Add(id)) open = (id, new System.Text.StringBuilder(line[(m.Index + m.Length)..]));
+            }
+            // A blank line or the next bullet ends the sentence; an indented line carries it on.
+            else if (open is not null && line.Length > 0 && char.IsWhiteSpace(line[0]) && line.Trim().Length > 0
+                     && !Regex.IsMatch(line, @"^\s*[-*]\s")) open.Value.Text.Append(' ').Append(line.Trim());
+            else Close();
+        }
+        Close();
+        return groups.Select(g => new PlanGroup(g.Heading, g.Outcomes)).ToList();
+    }
+
+    /// <summary>
+    /// One file as committed on the base branch, or null when it is not there. For reading a
+    /// plan's own document; nothing is decided from what this returns.
+    /// </summary>
+    public async Task<string?> FileAtBaseAsync(string projectKey, string path, CancellationToken ct = default)
+    {
+        var (_, repo, baseBranch) = HubOf(projectKey);
+        var rel = path.Replace('\\', '/').Trim('/');
+        if (rel.Length == 0 || rel.Split('/').Contains("..") || !IsGitRepo(repo)) return null;
+        var show = await GitAsync(repo, ct, "show", $"refs/heads/{baseBranch}:{rel}");
+        return show.Ok ? show.Stdout : null;
     }
 
     /// <summary>

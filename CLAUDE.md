@@ -250,6 +250,7 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | Tickets only against a unit of the plan its owner agreed | the spec's status line, read from git **as committed** - nothing a steward can run commits one |
 | What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
+| What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
 
 **The words are taken.** "Orchestrator" is `heartbeat.ps1` and "owner" is the human whose ticket it
 is - both everywhere in this code. The stand-in is the *steward*, and a new name for it in one file
@@ -273,7 +274,7 @@ is the prompt's rule alone - the same gap, for the same reason, as the local-onl
 
 | What is specific | Where it goes |
 |---|---|
-| Limits, the branch synced into the base, where the plan lives, never-merged paths, merge checks | `steward` in `project.defaults.json` |
+| Limits, the branch synced into the base, where the plan lives (`plan.units`, and `plan.master` for the document they are cut from), never-merged paths, merge checks | `steward` in `project.defaults.json` |
 | What only that repo makes worth holding a merge for | `data/projects/<key>/steward-flags.ps1`, which like `guard.ps1` can only add a reason to wait |
 | The order of work and the judgment behind it | `data/projects/<key>/skills/steward/skill.md` (template: `data/skill-templates/steward/skill.md`) |
 

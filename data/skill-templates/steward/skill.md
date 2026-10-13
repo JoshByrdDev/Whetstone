@@ -38,7 +38,7 @@ Always the owner's, whatever else is true: a new dependency no agreed spec names
 After each merge:
 
 - `steward_set_outcome` for each outcome the ticket delivered: Done when every ticket it needs is merged, otherwise InProgress with what is left.
-- `steward_note_for_release` when the ticket leaves the owner something to read or do before the base branch is released. A ticket that leaves nothing gets no entry.
+- `steward_note_for_release` when the ticket leaves the owner something to read or do before the base branch is released. Each note is one kind of thing, and says which: `migration` (a migration, or any change to the schema or data that runs on release), `config` (something to set up outside the code: a variable, a secret, infrastructure, an account), `action` (something for the owner to do, check or approve: wording to read, a line for their own documents, a step by hand) or `note` (only to know). The owner reads them by kind and ticks them off, so a ticket that leaves a migration and wording to check gets two notes, and each starts with the one sentence that would do if it were all they read. A ticket that leaves nothing gets no entry.
 - `steward_record_call` for any judgment you made at the review that the owner might reverse.
 
 ## 3. Blocked tickets
@@ -58,7 +58,7 @@ What the next run knows is what you record, and each thing has one place:
 
 - **Where an outcome stands** - `steward_set_outcome`. Outcomes, not activity. What a merged ticket built is in the code; do not describe it.
 - **A call about one ticket** - `steward_record_call`. Written once, for the owner. You are not shown it again.
-- **What the owner reads before a release** - `steward_note_for_release`.
+- **What the owner reads before a release** - `steward_note_for_release`, one kind of thing to a note.
 - **Everything else the next run needs** - `steward_save_memo`: what you took as decided for tickets still to be written, and two short paragraphs on what this run did and what to pick up (what is in flight, what is fileable next and after what). It replaces the last memo; never carry a run's notes forward under the next. What to check when a ticket comes back is not kept here: it is an acceptance criterion in the ticket, where the builder and the tester read it too.
 
 ## 5. The next tickets

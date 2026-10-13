@@ -915,19 +915,39 @@ public class StewardService
     /// something to read before the base branch is released. Written once and never read again by
     /// the steward - which is what keeps it out of every later run.
     /// </summary>
-    public async Task<StewardReply> RecordAsync(string projectKey, StewardEntryKind kind, int ticketId, string text, CancellationToken ct = default)
+    public async Task<StewardReply> RecordAsync(string projectKey, StewardEntryKind kind, int ticketId, string text,
+        string? release = null, CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
         if (cfg is null) return off!;
         if (kind == StewardEntryKind.OwnerSaid) return Refuse("refused", "What the owner said is the owner's to write.");
         if (string.IsNullOrWhiteSpace(text)) return Refuse("bad-request", "Say what was decided, and the place that decided it.");
+        // A note for a release says what kind of thing it is, because that is how it is read back:
+        // hundreds of them in the order tickets merged is a list nobody reads before a release.
+        StewardReleaseKind? releaseKind = null;
+        if (kind == StewardEntryKind.BeforeRelease)
+        {
+            if (ParseRelease(release) is not { } rk)
+                return Refuse("bad-request", "Say what kind of note it is: migration, config, action or note. One note, one kind - "
+                    + "a ticket that leaves a migration and wording to check gets two notes.");
+            releaseKind = rk;
+        }
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
         if (t is null) return no!;
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"note for ticket {ticketId}: {Head(text, 200)}");
 
-        _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = kind, TicketId = ticketId, Text = text.Trim() });
+        _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = kind, TicketId = ticketId, Text = text.Trim(), Release = releaseKind });
         await _db.SaveChangesAsync(ct);
         return new StewardReply("noted");
+    }
+
+    /// <summary>A release note's kind by name. Null for anything that is not one: a number is not a kind.</summary>
+    public static StewardReleaseKind? ParseRelease(string? name)
+    {
+        var n = name?.Trim() ?? "";
+        foreach (var k in Enum.GetValues<StewardReleaseKind>())
+            if (string.Equals(k.ToString(), n, StringComparison.OrdinalIgnoreCase)) return k;
+        return null;
     }
 
     /// <summary>
@@ -981,6 +1001,105 @@ public class StewardService
         var exported = await ExportDecisionsAsync(Config(projectKey)!, ct);
         _heartbeat?.Wake();
         return new StewardReply("recorded", exported);
+    }
+
+    /// <summary>
+    /// The owner ticks a line of the record off, or says what kind of release note it is. Either
+    /// may be left out. A kind is only for a release note; a call or an instruction has none.
+    /// </summary>
+    public async Task<StewardReply> OwnerMarksEntryAsync(string projectKey, int id, bool? handled, string? release, CancellationToken ct = default)
+    {
+        var e = await _db.StewardEntries.FirstOrDefaultAsync(x => x.Id == id && x.ProjectKey == projectKey, ct);
+        if (e is null) return Refuse("no-entry", $"No line {id} in this project's record.");
+        if (release is not null)
+        {
+            if (e.Kind != StewardEntryKind.BeforeRelease) return Refuse("bad-request", "Only a note for a release has a kind.");
+            if (ParseRelease(release) is not { } rk) return Refuse("bad-request", "The kind is migration, config, action or note.");
+            e.Release = rk;
+        }
+        if (handled is { } h) e.HandledAt = h ? e.HandledAt ?? DateTime.UtcNow : null;
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("recorded");
+    }
+
+    /// <summary>
+    /// Say what kind each of many release notes is, in one go: for a record written before notes
+    /// had kinds. A line that is not this project's release note, or a kind that is not one, is
+    /// passed over and counted.
+    /// </summary>
+    public async Task<StewardReply> OwnerSortsReleaseNotesAsync(string projectKey, IReadOnlyDictionary<int, string> kinds, CancellationToken ct = default)
+    {
+        if (Config(projectKey) is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var rows = await _db.StewardEntries
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.BeforeRelease).ToListAsync(ct);
+        int sorted = 0;
+        foreach (var e in rows)
+        {
+            if (!kinds.TryGetValue(e.Id, out var name) || ParseRelease(name) is not { } rk) continue;
+            e.Release = rk;
+            sorted++;
+        }
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("recorded", null, new { sorted, passedOver = kinds.Count - sorted });
+    }
+
+    /// <summary>
+    /// The plan as its owner reads it: every unit with its own name, its spec, and its outcomes
+    /// under the headings the spec puts them beneath - each with its sentence, where it stands and
+    /// the tickets that carry it. Read from the base branch as committed, like everything else
+    /// about the plan. It is the owner's view and no run is shown it: a run reads the specs.
+    /// </summary>
+    public async Task<StewardReply> PlanViewAsync(string projectKey, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var plan = await _git.PlanAsync(projectKey, ct);
+        if (plan.Count == 0)
+            return Refuse("no-plan", "This project has no plan configured (steward.plan.units), so there is nothing to file tickets from.");
+
+        var all = await _tickets.ListAsync(projectKey, null);
+        var states = await _db.StewardOutcomes.AsNoTracking().Where(o => o.ProjectKey == projectKey).ToListAsync(ct);
+        var current = StewardProgress.Current(plan, states);
+
+        return new StewardReply("plan", null, new
+        {
+            current = current?.Number,
+            units = plan.Select(u =>
+            {
+                var p = StewardProgress.For(u, states, all);
+                var mine = all.Where(t => t.PlanUnit == u.Number).ToList();
+                return new
+                {
+                    unit = u.Number,
+                    u.File,
+                    title = TicketGitService.UnitTitle(u),
+                    u.Agreed,
+                    u.Draft,
+                    // Finished is every outcome called done, and a unit with none has finished nothing.
+                    done = u.Agreed && p.Outcomes > 0 && p.Done == p.Outcomes,
+                    progress = new { p.Percent, p.Done, p.InProgress, p.NotStarted, p.Outcomes },
+                    u.Text,
+                    groups = TicketGitService.UnitGroups(cfg.Steward.Plan, u).Select(g => new
+                    {
+                        g.Heading,
+                        outcomes = g.Outcomes.Select(o =>
+                        {
+                            var st = states.FirstOrDefault(x => x.Unit == u.Number && x.Outcome == o.Outcome);
+                            return new
+                            {
+                                o.Outcome,
+                                o.Text,
+                                state = (st?.State ?? StewardOutcomeState.NotStarted).ToString(),
+                                moreToFile = st?.MoreToFile ?? false,
+                                note = st?.Note,
+                                tickets = mine.Where(t => StewardProgress.OutcomesOf(t).Contains(o.Outcome)).OrderBy(t => t.Id)
+                                    .Select(t => new { t.Id, phase = t.Phase.ToString(), t.Title }),
+                            };
+                        }),
+                    }),
+                };
+            }),
+        });
     }
 
     /// <summary>

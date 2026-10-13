@@ -658,6 +658,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime?>("DeliveredAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("HandledAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -666,6 +669,10 @@ namespace Whetstone.Migrations
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Release")
+                        .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Text")

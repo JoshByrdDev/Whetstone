@@ -78,6 +78,8 @@ public class StewardServiceTests : IDisposable
         return await act(Steward(ctx, flags));
     }
 
+    private List<StewardEntry> Entries() { using var ctx = NewCtx(); return ctx.StewardEntries.AsNoTracking().ToList(); }
+
     private Task<StewardReply> Begin() => In(s => s.BeginAsync("alpha"));
 
     private static readonly string Whole =
@@ -459,6 +461,86 @@ public class StewardServiceTests : IDisposable
         await Begin();
         Assert.Equal("refused", (await In(s => s.RecordAsync("alpha", StewardEntryKind.OwnerSaid, id, "Ship it."))).Answer);
         Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.Call, id, "Kept the wording: unit 1, A2."))).Answer);
+    }
+
+    [Fact]
+    public async Task A_note_for_a_release_says_what_kind_it_is()
+    {
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Adds a table."))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Adds a table.", "0"))).Answer);
+        Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Adds a table.", "Migration"))).Answer);
+
+        var note = Entries().Single(e => e.Kind == StewardEntryKind.BeforeRelease);
+        Assert.Equal(StewardReleaseKind.Migration, note.Release);
+        Assert.Null(note.HandledAt);
+    }
+
+    [Fact]
+    public async Task Ticking_a_note_off_and_sorting_it_are_the_owners()
+    {
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Words to check.", "note"));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.Call, id, "Kept the wording."));
+        var note = Entries().Single(e => e.Kind == StewardEntryKind.BeforeRelease).Id;
+        var call = Entries().Single(e => e.Kind == StewardEntryKind.Call).Id;
+
+        Assert.Equal("recorded", (await In(s => s.OwnerMarksEntryAsync("alpha", note, true, "action"))).Answer);
+        var row = Entries().Single(e => e.Id == note);
+        Assert.Equal(StewardReleaseKind.Action, row.Release);
+        Assert.NotNull(row.HandledAt);
+
+        Assert.Equal("recorded", (await In(s => s.OwnerMarksEntryAsync("alpha", note, false, null))).Answer);
+        Assert.Null(Entries().Single(e => e.Id == note).HandledAt);
+
+        // A call has no kind, and another project's line is not this one's to mark.
+        Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", call, null, "migration"))).Answer);
+        Assert.Equal("no-entry", (await In(s => s.OwnerMarksEntryAsync("bravo", note, true, null))).Answer);
+
+        await In(s => s.OwnerSortsReleaseNotesAsync("alpha", new Dictionary<int, string> { [note] = "config", [call] = "config", [9999] = "note" }));
+        Assert.Equal(StewardReleaseKind.Config, Entries().Single(e => e.Id == note).Release);
+        Assert.Null(Entries().Single(e => e.Id == call).Release);
+    }
+
+    [Fact]
+    public async Task The_owner_reads_the_plan_with_its_words()
+    {
+        var id = await AtReview();
+        await using (var ctx = NewCtx())
+        {
+            var t = await ctx.Tickets.SingleAsync(x => x.Id == id);
+            (t.PlanUnit, t.PlanOutcomes) = (1, "A1");
+            await ctx.SaveChangesAsync();
+        }
+        var r = await In(s => s.PlanViewAsync("alpha"));
+        Assert.Equal("plan", r.Answer);
+        var json = System.Text.Json.JsonSerializer.Serialize(r.Data);
+        // Each outcome carries its sentence, and the ticket that delivers it is named on it.
+        Assert.Contains("\"Text\":\"One.\"", json);
+        Assert.Contains($"\"Id\":{id}", json);
+    }
+
+    [Fact]
+    public void A_spec_gives_each_outcome_its_sentence_and_its_heading()
+    {
+        var p = new StewardPlan("docs/units", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed,
+            StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
+        var unit = TicketGitService.ReadUnit(p, 1, "docs/units/01-first.md", string.Join("\n",
+            "# Unit 1: the first thing", "", "> **Status: agreed 2026-01-01.**", "",
+            "## Outcomes", "", "### A. Signing in", "",
+            "- **A1.** A person can sign in,", "  and lands on a home of their own.", "- **A2.** They can sign out.", "",
+            "A paragraph that belongs to no outcome.", "",
+            "### B. Paying", "", "- **B1.** They can save a card.", "- not an outcome", "",
+            "## Decided", "", "- **A1.** mentioned again, and not a second outcome."));
+
+        Assert.Equal("Unit 1: the first thing", TicketGitService.UnitTitle(unit));
+        var groups = TicketGitService.UnitGroups(p, unit);
+        Assert.Equal(new[] { "A. Signing in", "B. Paying" }, groups.Select(g => g.Heading));
+        Assert.Equal("A person can sign in, and lands on a home of their own.", groups[0].Outcomes[0].Text);
+        Assert.Equal(new[] { "A1", "A2" }, groups[0].Outcomes.Select(o => o.Outcome));
+        Assert.Equal("They can save a card.", groups[1].Outcomes.Single().Text);
     }
 
     // ---- when a run is owed -----------------------------------------------------------

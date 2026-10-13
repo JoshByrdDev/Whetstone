@@ -9,6 +9,7 @@ namespace Whetstone.Api;
 public record StewardAnswerRequest(string? Answer);
 public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
+public record StewardEntryMark(bool? Handled, string? Release);
 
 /// <summary>
 /// The owner's side of a project's steward, and the two calls whatever launches a run needs.
@@ -61,25 +62,66 @@ public static class StewardEndpoints
             });
         });
 
-        app.MapGet("/api/steward/entries", async (string? project, string? kind, ProjectRegistry registry,
+        // The record: the calls it made, what to read before a release, what the owner told it.
+        // With ?ticket=, one ticket's lines - which is how a ticket shows what was decided about it.
+        app.MapGet("/api/steward/entries", async (string? project, string? kind, int? ticket, ProjectRegistry registry,
             DashboardDbContext db, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
             var q = db.StewardEntries.AsNoTracking().Where(e => e.ProjectKey == project);
             if (Enum.TryParse<StewardEntryKind>(kind, true, out var k)) q = q.Where(e => e.Kind == k);
-            var rows = await q.OrderByDescending(e => e.At).Take(500).ToListAsync(ct);
+            if (ticket is { } only) q = q.Where(e => e.TicketId == only);
+            var rows = await q.OrderByDescending(e => e.At).Take(5000).ToListAsync(ct);
             var ids = rows.Where(r => r.TicketId is not null).Select(r => r.TicketId!.Value).Distinct().ToList();
-            var titles = await db.Tickets.AsNoTracking().Where(t => ids.Contains(t.Id))
-                .ToDictionaryAsync(t => t.Id, t => t.Title, ct);
-            return Results.Ok(rows.Select(e => new
+            var tickets = await db.Tickets.AsNoTracking().Where(t => ids.Contains(t.Id))
+                .Select(t => new { t.Id, t.Title, t.PlanUnit }).ToDictionaryAsync(t => t.Id, ct);
+            return Results.Ok(rows.Select(e =>
             {
-                e.Id,
-                kind = e.Kind.ToString(),
-                e.TicketId,
-                ticketTitle = e.TicketId is { } id && titles.TryGetValue(id, out var title) ? title : null,
-                e.Text,
-                e.At,
+                var t = e.TicketId is { } id && tickets.TryGetValue(id, out var found) ? found : null;
+                return new
+                {
+                    e.Id,
+                    kind = e.Kind.ToString(),
+                    e.TicketId,
+                    ticketTitle = t?.Title,
+                    // The unit of the plan the line belongs to, by way of its ticket.
+                    unit = t?.PlanUnit,
+                    // A note from before notes had kinds is one to know, until its owner says otherwise.
+                    release = e.Kind == StewardEntryKind.BeforeRelease ? (e.Release ?? StewardReleaseKind.Note).ToString() : null,
+                    e.HandledAt,
+                    e.Text,
+                    e.At,
+                };
             }));
+        });
+
+        // Tick a line off, or say what kind of release note it is. The owner's: there is no tool
+        // for either, so a steward cannot clear its own notes out of the way of a release.
+        app.MapPut("/api/steward/entries/{id:int}", async (int id, string? project, StewardEntryMark mark,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerMarksEntryAsync(project ?? "", id, mark.Handled, mark.Release, ct);
+            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Sort many release notes at once, { "<id>": "<kind>" }: for a record older than the kinds.
+        app.MapPost("/api/steward/entries/sort", async (string? project, Dictionary<int, string> kinds,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerSortsReleaseNotesAsync(project ?? "", kinds, ct);
+            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The plan as its owner reads it: each unit's spec and outcomes, and the document the
+        // units are cut from when the project names one.
+        app.MapGet("/api/steward/plan", async (string? project, ProjectRegistry registry, StewardService steward,
+            TicketGitService git, CancellationToken ct) =>
+        {
+            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
+            var r = await steward.PlanViewAsync(project!, ct);
+            var file = registry.GetProjectConfig(project!).Steward.Plan.Master;
+            var text = file.Length > 0 ? await git.FileAtBaseAsync(project!, file, ct) : null;
+            return Results.Ok(new { r.Answer, r.Why, plan = r.Data, master = text is null ? null : new { file, text } });
         });
 
         // The plan and how far it is, without a run: the same figures a run is shown.

@@ -265,6 +265,7 @@ public class DashboardDbContext : DbContext
         {
             e.Property(x => x.ProjectKey).HasMaxLength(128);
             e.Property(x => x.Kind).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.Release).HasConversion<string>().HasMaxLength(16);
             e.HasIndex(x => new { x.ProjectKey, x.Kind, x.At });
         });
 

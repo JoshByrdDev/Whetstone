@@ -58,6 +58,15 @@ public class StewardConfigTests : IDisposable
     }
 
     [Fact]
+    public void A_plan_may_name_the_document_its_units_are_cut_from()
+    {
+        Assert.Equal("", Load("""{ "steward": { "plan": { "units": "docs/units" } } }""").Steward.Plan.Master);
+        var plan = Load("""{ "steward": { "plan": { "units": "docs/units", "master": "/docs\\PLAN.md" } } }""").Steward.Plan;
+        Assert.Equal("docs/PLAN.md", plan.Master);
+        Assert.Equal("docs/units", plan.UnitsDir);
+    }
+
+    [Fact]
     public void Full_is_only_full_where_a_merge_stays_on_this_machine()
     {
         // By pull request the last step is a push; by TFVC the one writer is the human.

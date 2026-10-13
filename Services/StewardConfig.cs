@@ -33,6 +33,13 @@ public record StewardPlan(string UnitsDir, string UnitFile, string Agreed, strin
     public const string DefaultOutcome = @"^- \*\*([A-Z]+\d+)\.\*\*";
 
     public bool Configured => !string.IsNullOrWhiteSpace(UnitsDir);
+
+    /// <summary>
+    /// The document the units are cut from - the whole of what is to be built, of which each unit
+    /// is a part - or empty when the project keeps none. Nothing is decided from it: it is here so
+    /// the owner can read the plan beside its progress.
+    /// </summary>
+    public string Master { get; init; } = "";
 }
 
 /// <summary>
@@ -136,7 +143,8 @@ public class StewardConfig
                 Pattern(plan, "unitFile", StewardPlan.DefaultUnitFile),
                 Pattern(plan, "agreed", StewardPlan.DefaultAgreed),
                 Pattern(plan, "draft", StewardPlan.DefaultDraft),
-                Pattern(plan, "outcome", StewardPlan.DefaultOutcome)),
+                Pattern(plan, "outcome", StewardPlan.DefaultOutcome))
+            { Master = Str(plan, "master").Replace('\\', '/').Trim('/') },
             NeverMerge = StrArray(s, "neverMerge"),
             MergeChecks = Checks(s),
         };

@@ -63,9 +63,17 @@ export interface StewardEntry {
   kind: 'Call' | 'BeforeRelease' | 'OwnerSaid';
   ticketId?: number | null;
   ticketTitle?: string | null;
+  /** The unit of the plan it belongs to, by way of its ticket. */
+  unit?: number | null;
+  /** For a release note: what kind of thing it is. */
+  release?: ReleaseKind | null;
+  /** When the owner ticked it off. */
+  handledAt?: string | null;
   text: string;
   at: string;
 }
+
+export type ReleaseKind = 'Migration' | 'Config' | 'Action' | 'Note';
 
 export interface StewardOutcomeRow {
   outcome: string;
@@ -116,4 +124,50 @@ export const answerStewardQuestion = (project: string, key: string, answer: stri
 
 export const tellSteward = (project: string, text: string) =>
   fetch(`/api/steward/said?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ text }) })
+    .then(json<{ answer: string }>);
+
+export interface StewardPlanTicket { id: number; phase: string; title: string }
+
+export interface StewardPlanOutcome {
+  outcome: string;
+  /** The sentence the spec gives it. */
+  text: string;
+  state: StewardOutcomeRow['state'];
+  moreToFile: boolean;
+  note?: string | null;
+  tickets: StewardPlanTicket[];
+}
+
+/** One unit of the plan, whole: its spec as written, and its outcomes under the spec's own headings. */
+export interface StewardPlanUnitView {
+  unit: number;
+  file: string;
+  title: string;
+  agreed: boolean;
+  draft: boolean;
+  /** Every outcome has been called done. */
+  done: boolean;
+  progress: { percent: number; done: number; inProgress: number; notStarted: number; outcomes: number };
+  text: string;
+  groups: { heading: string; outcomes: StewardPlanOutcome[] }[];
+}
+
+export interface StewardPlanView {
+  /** Why there is no plan to show, when there is none. */
+  why?: string | null;
+  plan?: { current?: number | null; units: StewardPlanUnitView[] } | null;
+  /** The document the units are cut from, when the project names one. */
+  master?: { file: string; text: string } | null;
+}
+
+export const getStewardPlan = (project: string) =>
+  fetch(`/api/steward/plan?${q(project)}`).then(json<StewardPlanView>);
+
+/** One ticket's lines of the record: what was decided about it, and what it leaves for a release. */
+export const getStewardEntriesForTicket = (project: string, ticketId: number) =>
+  fetch(`/api/steward/entries?${q(project)}&ticket=${ticketId}`).then(json<StewardEntry[]>);
+
+/** Tick a line off or un-tick it, or say what kind of release note it is. */
+export const markStewardEntry = (project: string, id: number, mark: { handled?: boolean; release?: ReleaseKind }) =>
+  fetch(`/api/steward/entries/${id}?${q(project)}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(mark) })
     .then(json<{ answer: string }>);
