@@ -48,7 +48,8 @@ public class UnitReportPromptTests
             range ?? new UnitRange("main", "1111111111aa", "2222222222bb", 5, 2, new Dictionary<int, UnitMaterial.BranchTip>()),
             "C:/Repos/Alpha", new Dictionary<int, string> { [1] = "C:/data/run/unit-report/shots/1.png" },
             new Dictionary<int, IReadOnlyList<string>> { [12] = new[] { "QaTesting -> NeedsImplementation: the default was lost on refresh" } },
-            "unit 2, Visits (B1, B2)"));
+            "unit 2, Visits (B1, B2)",
+            new Dictionary<int, string> { [11] = "C:/data/run/unit-report/analyses/11.json" }));
 
     [Fact]
     public void Every_outcome_is_named_with_its_state_and_the_tickets_that_carry_it()
@@ -62,10 +63,10 @@ public class UnitReportPromptTests
     public void The_shots_are_listed_by_pool_number_newest_landed_first_with_where_to_open_them()
     {
         var p = Build(Material());
-        var first = p.IndexOf("- shot 1: from #12", StringComparison.Ordinal);
-        var second = p.IndexOf("- shot 2: from #11", StringComparison.Ordinal);
+        var first = p.IndexOf("- 1: #12", StringComparison.Ordinal);
+        var second = p.IndexOf("- 2: #11", StringComparison.Ordinal);
         Assert.True(first >= 0 && second > first);
-        Assert.Contains("at C:/data/run/unit-report/shots/1.png", p);
+        Assert.Contains("in C:/data/run/unit-report/shots;", p);
     }
 
     [Fact]
@@ -91,6 +92,44 @@ public class UnitReportPromptTests
         Assert.Contains("kept the default per customer, not per visit", p);
         Assert.Contains("the default was lost on refresh", p);
         Assert.Contains("unit 2, Visits (B1, B2)", p);
+    }
+
+    [Fact]
+    public void A_ticket_reaches_the_run_as_a_digest_with_the_way_to_its_whole_analysis()
+    {
+        var p = Build(Material());
+        Assert.Contains("### #11 Save an address", p);
+        Assert.Contains("Carries A1; landed 2026-10-01", p);
+        Assert.Contains("Whole analysis: C:/data/run/unit-report/analyses/11.json", p);
+        Assert.Contains("sent back 1x: QaTesting -> NeedsImplementation: the default was lost on refresh", p);
+    }
+
+    [Fact]
+    public void A_digest_carries_the_flow_the_gaps_and_the_risks_and_not_the_rest()
+    {
+        var doc = new Doc.Doc("Saves an address", new[]
+        {
+            new Doc.Section("s", new[]
+            {
+                new Doc.Block("userFlow")
+                {
+                    Nodes = new[]
+                    {
+                        new Doc.FlowNode("a", "screen", "Home", null, null, "unchanged", null, null),
+                        new Doc.FlowNode("b", "screen", "Address form", null, null, "new", null, 4),
+                    },
+                    Edges = Array.Empty<Doc.FlowEdge>(),
+                },
+                new Doc.Block("callout") { Tone = "risk", Title = "Two defaults", Text = "nothing stops it" },
+                new Doc.Block("prose") { Text = "a long explanation the digest leaves out" },
+            }),
+        });
+        var part = new UnitMaterial.TicketPart(new Ticket { Id = 3, Title = "t" }, new TicketAnalysis(), doc, null, new[] { "A1" });
+
+        var d = UnitReportPrompt.Digest(part, null, null);
+        Assert.Contains("Flow: Home [unchanged] > Address form [new, shot 4]", d);
+        Assert.Contains("Risk: Two defaults - nothing stops it", d);
+        Assert.DoesNotContain("long explanation", d);
     }
 
     [Fact]

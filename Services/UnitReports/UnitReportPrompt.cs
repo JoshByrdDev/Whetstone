@@ -20,6 +20,7 @@ public static class UnitReportPrompt
     /// <param name="ShotPaths">Pool number to the file on disk the run may open.</param>
     /// <param name="Bounces">Per ticket, every time it was sent back and why, oldest first.</param>
     /// <param name="NextUnit">The next unit's title and outcome ids, for a <c>deferred</c> ruling to point at. Null at the end of the plan.</param>
+    /// <param name="AnalysisPaths">Per ticket, the file its whole analysis was written to, for the run to open.</param>
     public record Context(
         string Display,
         string Label,
@@ -33,9 +34,58 @@ public static class UnitReportPrompt
         string ReadDir,
         IReadOnlyDictionary<int, string> ShotPaths,
         IReadOnlyDictionary<int, IReadOnlyList<string>> Bounces,
-        string? NextUnit);
+        string? NextUnit,
+        IReadOnlyDictionary<int, string> AnalysisPaths);
 
-    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
+    private static string Clip(string? s, int max)
+    {
+        var one = string.Join(' ', (s ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return one.Length <= max ? one : one[..(max - 1)] + "…";
+    }
+
+    /// <summary>
+    /// One ticket, in the few lines a unit report needs of it: what it carried, what its analysis
+    /// concluded, the flows it drew, the risks it named, and where the whole analysis is.
+    /// <para>
+    /// A digest and not the document, because a unit can be a hundred tickets and an analysis runs to
+    /// forty kilobytes: the whole set would not fit in a run, and would drown the synthesis if it did.
+    /// The whole of any one is a file the run can open when its digest leaves a question.
+    /// </para>
+    /// </summary>
+    public static string Digest(UnitMaterial.TicketPart t, IReadOnlyList<string>? bounces, string? analysisPath)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append($"### #{t.Ticket.Id} {Clip(t.Ticket.Title, 140)}\n");
+        sb.Append($"Carries {(t.Outcomes.Count > 0 ? string.Join(", ", t.Outcomes) : "no outcome")}; "
+            + (t.LandedAt is { } at ? $"landed {at:yyyy-MM-dd}" : $"{t.Ticket.Phase}, not landed")
+            + (bounces is { Count: > 0 } ? $"; sent back {bounces.Count}x: " + string.Join(" | ", bounces.Take(3).Select(b => Clip(b, 120))) : "")
+            + "\n");
+
+        if (t.Doc is not { } doc)
+        {
+            sb.Append("No analysis. Implementation summary: " + Clip(t.Ticket.ImplementationSummary, 400) + "\n");
+            return sb.ToString();
+        }
+
+        sb.Append($"Analysis: {Clip(doc.Headline, 240)}\n");
+        foreach (var b in doc.Sections.SelectMany(s => s.Blocks))
+        {
+            if (b.Kind == "coverage")
+            {
+                if (!string.IsNullOrWhiteSpace(b.Text)) sb.Append($"Coverage: {Clip(b.Text, 300)}\n");
+                foreach (var g in (b.Segments ?? Array.Empty<AnalysisDocument.CoverageSegment>())
+                             .Where(g => g.Verdict is "gap" or "partial" or "unknown").Take(4))
+                    sb.Append($"  {g.Verdict}: {Clip(g.Text, 100)} - {Clip(g.Evidence, 160)}\n");
+            }
+            else if (b.Kind == "userFlow" && b.Nodes is { Count: > 0 } nodes)
+                sb.Append("Flow: " + string.Join(" > ", nodes.Select(n =>
+                    $"{Clip(n.Label, 40)} [{n.Change}{(n.Shot is int s ? $", shot {s}" : "")}]")) + "\n");
+            else if (b.Kind == "callout" && b.Tone == "risk")
+                sb.Append($"Risk: {Clip(b.Title, 120)} - {Clip(b.Text, 200)}\n");
+        }
+        if (analysisPath is not null) sb.Append($"Whole analysis: {analysisPath.Replace('\\', '/')}\n");
+        return sb.ToString();
+    }
 
     public static string Build(Context c)
     {
@@ -51,33 +101,18 @@ public static class UnitReportPrompt
                 + (by.Count > 0 ? $"   - carried by {string.Join(", ", by)}" : "   - no ticket carries it");
         }));
 
-        // Each ticket's record and its analysis, whole. The analyses are the material: they were
-        // each written by a run that read that branch closely, and this run's job is to put them
-        // together, not to do eight of them again.
-        var tickets = JsonSerializer.Serialize(m.Tickets.OrderBy(t => t.LandedAt ?? DateTime.MaxValue).Select(t => new
-        {
-            id = t.Ticket.Id,
-            title = t.Ticket.Title,
-            phase = t.Ticket.Phase.ToString(),
-            outcomes = t.Outcomes,
-            landedAt = t.LandedAt,
-            branch = t.Ticket.Branch,
-            implementationSummary = t.Ticket.ImplementationSummary,
-            sentBack = c.Bounces.GetValueOrDefault(t.Ticket.Id) ?? Array.Empty<string>(),
-            analysis = t.Doc is null ? null : (object)new
-            {
-                readCommit = t.Analysis!.HeadSha,
-                lens = t.Analysis.Lens.ToString(),
-                document = t.Doc,
-            },
-        }), Indented);
+        // Each ticket as a digest of its analysis, in the order they landed. The analyses are the
+        // material: each was written by a run that read that branch closely, and this run's job is
+        // to put them together, not to do them again.
+        var tickets = string.Join("\n", m.Tickets.OrderBy(t => t.LandedAt ?? DateTime.MaxValue).ThenBy(t => t.Ticket.Id)
+            .Select(t => Digest(t, c.Bounces.GetValueOrDefault(t.Ticket.Id), c.AnalysisPaths.GetValueOrDefault(t.Ticket.Id))));
 
         var shots = m.Shots.Count == 0 ? "(none - no ticket in this unit took a QA screenshot)"
             : string.Join("\n", m.Shots.Select(s =>
-                $"- shot {s.N}: from #{s.TicketId}"
-                + (s.LandedAt is { } at ? $", landed {at:yyyy-MM-dd HH:mm}" : ", not landed")
-                + (c.ShotPaths.TryGetValue(s.N, out var path) ? $", at {P(path)}" : "")
-                + $". {s.Caption}"));
+                $"- {s.N}: #{s.TicketId}"
+                + (s.LandedAt is { } at ? $" {at:yyyy-MM-dd}" : " not landed")
+                + $" - {Clip(s.Caption, 110)}"));
+        var shotDir = c.ShotPaths.Count == 0 ? null : Path.GetDirectoryName(c.ShotPaths.First().Value);
 
         var calls = m.Calls.Count == 0 ? "(none)"
             : string.Join("\n", m.Calls.Select(e => $"- #{e.TicketId}, {e.At:yyyy-MM-dd}: {e.Text}"));
@@ -149,19 +184,20 @@ public static class UnitReportPrompt
 
         ## The tickets that built it
 
-        Each ticket's record and, where it has one, its Classroom analysis: a validated document
-        another run wrote after reading that ticket's branch closely. **These are your primary
-        material.** Every `shot` inside them has already been renumbered into the pool below.
+        Each ticket as a digest of its Classroom analysis: a validated document another run wrote
+        after reading that ticket's branch closely. **These are your primary material.** A digest
+        gives what the analysis concluded, the flow it drew, and the risks it named; when you need
+        more of one - its rulings, its reading path, its code - open the whole analysis at the path
+        given. Every `shot` in them has already been renumbered into the pool below.
 
-        ```json
         {{tickets}}
-        ```
         {{gaps}}
         ## The screenshots
 
         Every QA screenshot the unit's tickets took, numbered for this report, **newest-landed
-        first**. You may open any of them with Read; do, where the caption alone does not tell you
-        which screen it is.
+        first**: number, the ticket that took it, when that ticket landed, and its caption. Each is
+        the file `<number>.png` (or .jpg/.webp) in {{(shotDir is null ? "(none)" : P(shotDir))}}; open
+        one with Read where the caption alone does not tell you which screen it is.
 
         {{shots}}
 

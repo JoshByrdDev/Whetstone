@@ -29,7 +29,7 @@ public record UnitGateVerdict(GateVerdict Verdict, IReadOnlyList<int> Analyse);
 public class UnitReportRunner
 {
     /// <summary>Longer than a ticket's: the material is several analyses, and the run reads across all of them.</summary>
-    private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(25);
+    private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(45);
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ProjectRegistry _registry;
@@ -176,6 +176,19 @@ public class UnitReportRunner
             }
 
         var scratch = Path.Combine(_paths.RunDir, "unit-report");
+
+        // Each ticket's whole analysis, as a file the run opens when a digest leaves a question.
+        var analysesDir = Path.Combine(scratch, "analyses");
+        if (Directory.Exists(analysesDir)) Directory.Delete(analysesDir, recursive: true);
+        Directory.CreateDirectory(analysesDir);
+        var analysisPaths = new Dictionary<int, string>();
+        foreach (var t in g.Material.Tickets.Where(t => t.Doc is not null))
+        {
+            var path = Path.Combine(analysesDir, $"{t.Ticket.Id}.json");
+            await File.WriteAllTextAsync(path, AnalysisDocument.Serialize(t.Doc!), ct);
+            analysisPaths[t.Ticket.Id] = path;
+        }
+
         var (dir, release, checkoutError) = await _git.CheckoutForReadingAsync(s.Project, g.Range.ToSha, scratch, ct);
         if (dir is null) return (null, checkoutError);
 
@@ -185,7 +198,8 @@ public class UnitReportRunner
             var prompt = UnitReportPrompt.Build(new UnitReportPrompt.Context(
                 g.Cfg.DisplayName, g.Cfg.LearningLabel ?? "", g.Plan.DisplayName, g.Unit, TicketGitService.UnitTitle(g.Unit),
                 g.Unit.Text, g.Material, g.States, g.Range, dir, shotPaths, g.Bounces,
-                next is null ? null : $"unit {next.Number}, {TicketGitService.UnitTitle(next)} ({string.Join(", ", next.Outcomes)})"));
+                next is null ? null : $"unit {next.Number}, {TicketGitService.UnitTitle(next)} ({string.Join(", ", next.Outcomes)})",
+                analysisPaths));
 
             var provider = _providers.ResolveForAnalysis();
             var run = await AgentJsonRunner.RunAsync(provider, dir, Path.Combine(scratch, "run"), prompt,
