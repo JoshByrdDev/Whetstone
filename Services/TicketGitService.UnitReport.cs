@@ -111,6 +111,19 @@ public partial class TicketGitService
         }, null);
     }
 
+    /// <summary>
+    /// How many commits the base has gained since <paramref name="sha"/>, on its first-parent line, and
+    /// which they are - for telling a reader their report was written before something landed. Null
+    /// when it cannot be read.
+    /// </summary>
+    public async Task<IReadOnlyList<string>?> BaseSinceAsync(string projectKey, string sha, CancellationToken ct = default)
+    {
+        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        if (!IsGitRepo(repo) || await BaseRefAsync(repo, cfg, baseBranch, ct) is not { } baseRef) return null;
+        var r = await GitAsync(repo, ct, "rev-list", "--first-parent", $"{sha}..{baseRef}");
+        return r.Ok ? r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries) : null;
+    }
+
     private async Task<string?> ShaAsync(string repo, string rev, CancellationToken ct)
     {
         var r = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", rev);

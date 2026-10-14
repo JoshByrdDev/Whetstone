@@ -222,7 +222,7 @@ public static class AnalysisEndpoints
         return resolved.Unavailable ? null : DescriptionSegmenter.Fingerprint(resolved.Description);
     }
 
-    private static async Task<TicketCostDto> CostAsync(DashboardDbContext db, int ticketId)
+    internal static async Task<TicketCostDto> CostAsync(DashboardDbContext db, int ticketId)
     {
         var runs = await db.CycleRuns.AsNoTracking().Where(c => c.TicketId == ticketId).ToListAsync();
         return new TicketCostDto(

@@ -250,6 +250,7 @@ app.MapTicketEndpoints();
 // The Classroom: on-demand teaching analyses of a ticket. Read-only over the pipeline.
 app.MapAnalysisEndpoints();
 app.MapWalkthroughEndpoints();
+app.MapUnitReportEndpoints();
 
 // The owner's filing tags. Separate routes and separate DTOs from the ticket API, so a label can
 // never ride along into a worker's prompt - see Api/LabelEndpoints.cs.

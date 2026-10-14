@@ -22,16 +22,20 @@ public static class WalkthroughEndpoints
     private static readonly Regex ClipName = new("^[0-9a-f]{40}$", RegexOptions.Compiled);
     private static readonly FileExtensionContentTypeProvider Types = new();
 
+    /// <summary>A walkthrough row as the player reads it, whichever document it narrates; "none" for no row.</summary>
+    public static WalkthroughDto Dto(AnalysisWalkthrough? w) => w is null
+        ? new WalkthroughDto("none", null, null, 0, 0, 0, 0, 0, 0, null, 0, null)
+        : new WalkthroughDto(w.Status.ToString(), w.Error, WalkthroughDeck.Deserialize(w.DeckJson),
+            w.AudioSeconds, w.Dropped, w.InputTokens, w.OutputTokens, w.CacheReadTokens, w.CacheCreationTokens,
+            w.Model, w.DurationMs, w.GeneratedAt);
+
     public static void MapWalkthroughEndpoints(this WebApplication app)
     {
         app.MapGet("/api/classroom/analyses/{id:int}/walkthrough", async (int id, DashboardDbContext db) =>
         {
             if (!await db.TicketAnalyses.AnyAsync(a => a.Id == id)) return Results.NotFound();
             var w = await db.AnalysisWalkthroughs.AsNoTracking().FirstOrDefaultAsync(x => x.AnalysisId == id);
-            if (w is null) return Results.Ok(new WalkthroughDto("none", null, null, 0, 0, 0, 0, 0, 0, null, 0, null));
-            return Results.Ok(new WalkthroughDto(w.Status.ToString(), w.Error, WalkthroughDeck.Deserialize(w.DeckJson),
-                w.AudioSeconds, w.Dropped, w.InputTokens, w.OutputTokens, w.CacheReadTokens, w.CacheCreationTokens,
-                w.Model, w.DurationMs, w.GeneratedAt));
+            return Results.Ok(Dto(w));
         });
 
         // Write or rewrite one. New analyses get theirs automatically; this is the Retry button, and
