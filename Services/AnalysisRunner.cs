@@ -178,6 +178,10 @@ public class AnalysisRunner : IAnalysisExecutor
     public Task RunWalkthroughAsync(int analysisId, IRunProgress progress, CancellationToken ct) =>
         _walkthroughs.GenerateAsync(analysisId, progress, ct);
 
+    /// <summary>A unit report takes the same slot; the work is its own runner's.</summary>
+    public Task<(int? reportId, string? error)> RunUnitAsync(UnitReports.UnitSubject unit, IRunProgress progress, CancellationToken ct) =>
+        _scopes.CreateScope().ServiceProvider.GetRequiredService<UnitReports.UnitReportRunner>().RunAsync(unit, progress, ct);
+
     /// <summary>
     /// Every body of text this ticket can legitimately be held to, and the siblings an unmet ask may
     /// legitimately have gone to.

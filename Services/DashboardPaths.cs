@@ -79,6 +79,13 @@ public class DashboardPaths
     public string WalkthroughClipsDir => Path.Combine(DataRoot, "walkthrough-clips");
 
     /// <summary>
+    /// Each unit report's own copy of the screenshots it cites, one folder per report. Copied, not
+    /// pointed at: a ticket's shots are deleted on every re-QA (gitignored).
+    /// </summary>
+    public string UnitReportsDir => Path.Combine(DataRoot, "unit-reports");
+    public string UnitReportShotsDir(int reportId) => Path.Combine(UnitReportsDir, reportId.ToString(), "shots");
+
+    /// <summary>
     /// Files the ticket's owner attached to a progress note, one folder per ticket (gitignored —
     /// runtime artifacts). Kept apart from the issue cache below because these are not a cache: there
     /// is no upstream to re-fetch them from, so this folder is the only copy.

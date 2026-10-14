@@ -1,6 +1,7 @@
 using Whetstone.Models;
 using Whetstone.Persistence;
 using Whetstone.Services;
+using Whetstone.Services.UnitReports;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -46,6 +47,11 @@ public class AnalysisQueueTests : IDisposable
 
         public Task<GateVerdict> CheckAsync(int ticketId) =>
             Task.FromResult(Verdicts.TryGetValue(ticketId, out var v) ? v : Default);
+
+        /// <summary>What a unit is told, asked fresh at every turn as the real gate is.</summary>
+        public Func<UnitSubject, bool, UnitGateVerdict> Unit = (_, _) => new(GateVerdict.Go, Array.Empty<int>());
+
+        public Task<UnitGateVerdict> CheckUnitAsync(UnitSubject unit, bool manual) => Task.FromResult(Unit(unit, manual));
     }
 
     /// <summary>
@@ -91,6 +97,15 @@ public class AnalysisQueueTests : IDisposable
             lock (Walkthroughs) Walkthroughs.Add(analysisId);
             return HoldWalkthrough;
         }
+
+        /// <summary>Every run in the order it started: a ticket as its id, a unit as "unit N".</summary>
+        public readonly List<string> Order = new();
+
+        public Task<(int? reportId, string? error)> RunUnitAsync(UnitSubject unit, IRunProgress progress, CancellationToken ct)
+        {
+            lock (Order) Order.Add($"unit {unit.Unit}");
+            return Task.FromResult<(int?, string?)>((1, null));
+        }
     }
 
     private static FakeExecutor Instant() =>
@@ -119,6 +134,73 @@ public class AnalysisQueueTests : IDisposable
             await Task.Delay(15);
         }
         throw new TimeoutException($"Timed out waiting for {what}.");
+    }
+
+    // ---- unit reports --------------------------------------------------------
+
+    private static readonly UnitSubject UnitOne = new("alpha", "p1", 1);
+
+    [Fact]
+    public async Task A_unit_report_steps_aside_for_the_analyses_it_is_missing_and_runs_once_they_have()
+    {
+        var analysed = new HashSet<int>();
+        FakeExecutor exec = null!;
+        exec = new FakeExecutor((id, _) =>
+        {
+            lock (analysed) analysed.Add(id);
+            lock (exec.Order) exec.Order.Add(id.ToString());
+            return Task.FromResult<(int?, string?)>((id * 100, null));
+        });
+        var gate = new FakeGate
+        {
+            Unit = (_, _) =>
+            {
+                lock (analysed) return new(GateVerdict.Go, new[] { 7, 8 }.Where(id => !analysed.Contains(id)).ToList());
+            },
+        };
+        var q = Queue(exec, gate);
+
+        Assert.True(q.EnqueueUnit(UnitOne, manual: true).ok);
+        Assert.False(q.EnqueueUnit(UnitOne, manual: true).ok);
+
+        await Until(() => { lock (exec.Order) return exec.Order.Contains("unit 1"); }, "the report to run");
+        lock (exec.Order) Assert.Equal(new[] { "7", "8", "unit 1" }, exec.Order);
+    }
+
+    [Fact]
+    public async Task An_analysis_that_comes_back_with_nothing_is_asked_for_once_and_the_report_goes_on_without_it()
+    {
+        FakeExecutor exec = null!;
+        exec = new FakeExecutor((id, _) =>
+        {
+            lock (exec.Order) exec.Order.Add(id.ToString());
+            return Task.FromResult<(int?, string?)>((null, "the run fell over"));
+        });
+        // The gate goes on reporting it missing, as the real one would.
+        var gate = new FakeGate { Unit = (_, _) => new(GateVerdict.Go, new[] { 7 }) };
+        var q = Queue(exec, gate);
+
+        q.EnqueueUnit(UnitOne, manual: true);
+
+        await Until(() => { lock (exec.Order) return exec.Order.Contains("unit 1"); }, "the report to run");
+        lock (exec.Order) Assert.Equal(new[] { "7", "unit 1" }, exec.Order);
+    }
+
+    [Fact]
+    public async Task A_unit_reports_outcome_is_kept_apart_from_the_ticket_analyses()
+    {
+        var exec = Instant();
+        var q = Queue(exec);
+        q.EnqueueUnit(UnitOne, manual: false);
+        q.Enqueue(3, AnalysisLens.Full);
+
+        await Until(() => q.Snapshot().Recent.Count == 2, "both to finish");
+        Assert.Equal(UnitOne, q.Snapshot().Recent.Single(r => r.Unit is not null).Unit);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(q.GetStatus());
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        Assert.Equal(1, doc.RootElement.GetProperty("recent").GetArrayLength());
+        Assert.Equal(1, doc.RootElement.GetProperty("units").GetArrayLength());
     }
 
     // ---- order and admission ------------------------------------------------

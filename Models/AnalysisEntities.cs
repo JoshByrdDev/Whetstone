@@ -159,3 +159,71 @@ public class AnalysisWalkthrough
 
     public DateTime GeneratedAt { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>
+/// A Classroom document about one unit of a steward plan: what its owner agreed, what the unit's
+/// tickets delivered against it, and how the product works now - written over the tickets' own
+/// analyses rather than over the code from scratch (see <c>Services/UnitReports</c>).
+/// <para>
+/// Its own table, not a <see cref="TicketAnalysis"/> without a ticket: every read of that table is
+/// keyed by ticket, and none of those reads means anything for a unit. The document itself is the
+/// same block schema, so the page renders it with the same components.
+/// </para>
+/// <para>
+/// Rows accumulate, like analyses: the report written when the unit was built, beside the one
+/// written after a late fix, is the record of what that fix changed.
+/// </para>
+/// </summary>
+public class UnitReport
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>The plan's key, as on <see cref="StewardUnit.Plan"/>. A unit number names nothing without it.</summary>
+    public string Plan { get; set; } = "";
+    public int Unit { get; set; }
+
+    /// <summary>The base ref read, as resolved at generation (<c>origin/main</c> or <c>main</c>).</summary>
+    public string BaseRef { get; set; } = "";
+
+    /// <summary>The base before the unit: the previous unit's release, else its earliest ticket's fork point.</summary>
+    public string FromSha { get; set; } = "";
+
+    /// <summary>The base when this was written. Code citations point here; the diff runs From..To.</summary>
+    public string ToSha { get; set; } = "";
+
+    /// <summary>Commits on the base's first-parent line in the range, and how many of them are this unit's merges.</summary>
+    public int RangeCommits { get; set; }
+    public int OwnCommits { get; set; }
+
+    /// <summary>
+    /// <c>[{ticketId, analysisId}]</c>: what was read. The staleness key - a ticket added to the
+    /// unit, or one re-analysed after a late fix, is a report that no longer describes the unit.
+    /// </summary>
+    public string ReadJson { get; set; } = "[]";
+
+    /// <summary>
+    /// The screenshot pool, <c>[{n, ticketId, ticketOrder, caption, file, focus, landedAt}]</c>.
+    /// The files are copied under the report's own folder when it is written: a ticket's shots are
+    /// deleted on every re-QA, and a report must not lose its pictures to a later ticket.
+    /// </summary>
+    public string ShotsJson { get; set; } = "[]";
+
+    /// <summary><c>[{ticketId, kind, why}]</c>: what the report was written without - an open ticket, a missing analysis.</summary>
+    public string GapsJson { get; set; } = "[]";
+
+    public string Headline { get; set; } = "";
+
+    /// <summary>The document, as <c>AnalysisDocument</c>. Coverage rules on the unit's outcomes.</summary>
+    public string BlocksJson { get; set; } = "";
+
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long CacheReadTokens { get; set; }
+    public long CacheCreationTokens { get; set; }
+    public string? Model { get; set; }
+    public int DurationMs { get; set; }
+    public int StepCount { get; set; }
+
+    public DateTime GeneratedAt { get; set; } = DateTime.UtcNow;
+}

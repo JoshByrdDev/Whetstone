@@ -58,6 +58,7 @@ builder.Services.AddSingleton<ImprovementApplier>();
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.Narrator>();
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.WalkthroughService>();
 builder.Services.AddSingleton<AnalysisRunner>();
+builder.Services.AddSingleton<Whetstone.Services.UnitReports.UnitReportRunner>();
 builder.Services.AddSingleton<IAnalysisExecutor>(sp => sp.GetRequiredService<AnalysisRunner>());
 // What the queue asks about a ticket at the moment its turn comes: is it still worth studying, and
 // is a heartbeat agent in its worktree right now. Reads the pipeline's own ticket lease to answer

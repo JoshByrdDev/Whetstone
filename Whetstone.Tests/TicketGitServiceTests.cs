@@ -647,6 +647,82 @@ public class TicketGitServiceTests : IDisposable
 
     // ---- merging instead of a PR ---------------------------------------------
 
+    // ---- a unit's range ---------------------------------------------------------
+
+    private void Branch(string name, string file)
+    {
+        Git(_repo, "checkout", "-b", name, "main");
+        Write(file, "work\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "add " + file);
+        Git(_repo, "checkout", "main");
+    }
+
+    [Fact]
+    public async Task A_units_range_runs_from_before_its_first_merge_and_counts_what_is_not_its_own()
+    {
+        var start = Sha("main");
+        Branch("t1", "a.txt");
+        Branch("t2", "b.txt");
+        var m1 = (await _svc.MergeAsync("local", "t1", null, null)).MergeSha;
+        // Somebody else's work, landing between two of the unit's merges.
+        Write("other.txt", "not the unit's\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "other work");
+        var m2 = (await _svc.MergeAsync("local", "t2", null, null)).MergeSha;
+
+        var (range, error) = await _svc.UnitRangeAsync("local", new[]
+        {
+            new UnitTicketRef(1, "t1", m1, null),
+            new UnitTicketRef(2, "t2", m2, null),
+        }, previousReleasedSha: null);
+
+        Assert.Null(error);
+        Assert.Equal(start, range!.FromSha);
+        Assert.Equal(Sha("main"), range.ToSha);
+        Assert.Equal(3, range.RangeCommits);
+        Assert.Equal(2, range.OwnCommits);
+        Assert.Equal(Sha("t1"), range.Tips[1].HeadSha);
+        Assert.Equal(Sha("t2^{tree}"), range.Tips[2].TreeSha);
+    }
+
+    [Fact]
+    public async Task A_unit_never_merged_here_starts_where_its_branches_left_the_base()
+    {
+        var start = Sha("main");
+        Branch("t1", "a.txt");
+        Write("other.txt", "later\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "later work");
+
+        var (range, _) = await _svc.UnitRangeAsync("local", new[] { new UnitTicketRef(1, "t1", null, null) }, null);
+
+        Assert.Equal(start, range!.FromSha);
+        Assert.Equal(0, range.OwnCommits);
+    }
+
+    [Fact]
+    public async Task A_unit_is_read_from_the_hub_when_it_is_already_there_and_from_a_worktree_when_not()
+    {
+        var old = Sha("main");
+        Write("other.txt", "later\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "later work");
+        var scratch = Path.Combine(_root, "scratch");
+
+        var (here, releaseHere, _) = await _svc.CheckoutForReadingAsync("local", Sha("main"), scratch);
+        Assert.Equal(_repo, here);
+        await releaseHere();
+
+        var (dir, release, error) = await _svc.CheckoutForReadingAsync("local", old, scratch);
+        Assert.Null(error);
+        Assert.NotEqual(_repo, dir);
+        Assert.False(File.Exists(Path.Combine(dir!, "other.txt")));
+        Assert.Equal("main", CurrentBranch());
+        await release();
+        Assert.False(Directory.Exists(dir));
+    }
+
     [Fact]
     public async Task Merges_the_branch_into_the_base_with_a_merge_commit_and_pushes_nothing()
     {

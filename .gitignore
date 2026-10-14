@@ -59,6 +59,7 @@ data/jira-attachments/
 # its dependencies, which also hold the ~90MB voice model it downloads once (transformers.js caches
 # it under node_modules). The script and package.json are source.
 data/walkthrough-clips/
+data/unit-reports/
 data/narrator/node_modules/
 # Files the ticket owner attached to a progress note. Not a cache - there is no upstream to refetch
 # them from - but they are still per-machine runtime data, not source.

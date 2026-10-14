@@ -20,6 +20,7 @@ public class DashboardDbContext : DbContext
     public DbSet<ResourceLease> ResourceLeases => Set<ResourceLease>();
     public DbSet<TicketAnalysis> TicketAnalyses => Set<TicketAnalysis>();
     public DbSet<AnalysisWalkthrough> AnalysisWalkthroughs => Set<AnalysisWalkthrough>();
+    public DbSet<UnitReport> UnitReports => Set<UnitReport>();
     public DbSet<Label> Labels => Set<Label>();
     public DbSet<TicketLabel> TicketLabels => Set<TicketLabel>();
     public DbSet<ReviewTarget> ReviewTargets => Set<ReviewTarget>();
@@ -193,6 +194,20 @@ public class DashboardDbContext : DbContext
             e.Property(w => w.Model).HasMaxLength(64);
             e.HasIndex(w => w.AnalysisId).IsUnique();
             e.HasOne(w => w.Analysis).WithMany().HasForeignKey(w => w.AnalysisId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Unit reports hang off no row: a unit is a plan's file, not an entity, and a report must
+        // outlive the tickets it was written from being deleted.
+        b.Entity<UnitReport>(e =>
+        {
+            e.Property(r => r.ProjectKey).HasMaxLength(128);
+            e.Property(r => r.Plan).HasMaxLength(128);
+            e.Property(r => r.BaseRef).HasMaxLength(256);
+            e.Property(r => r.FromSha).HasMaxLength(64);
+            e.Property(r => r.ToSha).HasMaxLength(64);
+            e.Property(r => r.Model).HasMaxLength(64);
+            // Every read is "the reports of this unit, newest first".
+            e.HasIndex(r => new { r.ProjectKey, r.Plan, r.Unit, r.GeneratedAt });
         });
 
         // The owner's filing tags. Nothing here hangs off the Ticket entity on purpose — see

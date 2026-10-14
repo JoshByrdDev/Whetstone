@@ -1,6 +1,7 @@
 using Whetstone.Models;
 using Whetstone.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Whetstone.Services.UnitReports;
 
 namespace Whetstone.Services;
 
@@ -31,6 +32,10 @@ public readonly record struct GateVerdict(GateDecision Decision, string? Reason)
 public interface IAnalysisGate
 {
     Task<GateVerdict> CheckAsync(int ticketId);
+
+    /// <summary>The same question about a unit report. See <see cref="UnitReportRunner.CheckAsync"/>.</summary>
+    Task<UnitGateVerdict> CheckUnitAsync(UnitSubject unit, bool manual) =>
+        Task.FromResult(new UnitGateVerdict(GateVerdict.Stop("unit reports are not written here"), Array.Empty<int>()));
 }
 
 /// <summary>
@@ -75,6 +80,10 @@ public interface IAnalysisExecutor
     /// the walkthrough's own row, so this returns nothing: there is no analysis result to report.
     /// </summary>
     Task RunWalkthroughAsync(int analysisId, IRunProgress progress, CancellationToken ct) => Task.CompletedTask;
+
+    /// <summary>Write one unit report. The stored report's id, or why there isn't one.</summary>
+    Task<(int? reportId, string? error)> RunUnitAsync(UnitSubject unit, IRunProgress progress, CancellationToken ct) =>
+        Task.FromResult<(int?, string?)>((null, "unit reports are not written here"));
 }
 
 /// <summary>
@@ -86,6 +95,12 @@ public class AnalysisGate : IAnalysisGate
     private readonly IServiceScopeFactory _scopes;
 
     public AnalysisGate(IServiceScopeFactory scopes) => _scopes = scopes;
+
+    public async Task<UnitGateVerdict> CheckUnitAsync(UnitSubject unit, bool manual)
+    {
+        using var scope = _scopes.CreateScope();
+        return await scope.ServiceProvider.GetRequiredService<UnitReportRunner>().CheckAsync(unit, manual);
+    }
 
     public async Task<GateVerdict> CheckAsync(int ticketId)
     {
@@ -218,6 +233,16 @@ public class AnalysisQueue
         public AnalysisLens Lens;
         /// <summary>Set for a walkthrough-only item: the analysis whose walkthrough to rewrite.</summary>
         public int? WalkthroughOf;
+        /// <summary>Set for a unit report, and then <see cref="TicketId"/> is zero.</summary>
+        public UnitSubject? Unit;
+        /// <summary>For a unit report asked for by a person rather than by the board.</summary>
+        public bool Manual;
+        /// <summary>
+        /// For a unit report: the tickets this item has already queued an analysis of. Each is asked
+        /// for once. One that comes back with nothing is reported missing rather than asked for again,
+        /// or a ticket that cannot be analysed would hold the unit's report forever.
+        /// </summary>
+        public readonly HashSet<int> Requested = new();
         public DateTime QueuedAt;
         /// <summary>Why this item was passed over on the last drain pass, or null if it wasn't.</summary>
         public string? HoldReason;
@@ -229,6 +254,7 @@ public class AnalysisQueue
         public int TicketId;
         public AnalysisLens Lens;
         public int? WalkthroughOf;
+        public UnitSubject? Unit;
         public DateTime StartedAt;
         /// <summary>
         /// Lives here rather than inside the run so that stopping is possible from outside it. The
@@ -283,17 +309,19 @@ public class AnalysisQueue
 
     /// <param name="HoldReason">Why it was stepped over last pass, or null if it wasn't.</param>
     public record QueuedAnalysis(long Id, int TicketId, AnalysisLens Lens, DateTime QueuedAt,
-        string? HoldReason, int? WalkthroughOf = null);
+        string? HoldReason, int? WalkthroughOf = null, UnitSubject? Unit = null);
 
     /// <param name="Steps">Tool calls the run has made so far.</param>
     /// <param name="Activity">The most recent of them, in words, or null before the first one.</param>
     /// <param name="ExpectedSeconds">What runs like this have taken. Null when nothing comparable has finished.</param>
     /// <param name="ExpectedSteps">Likewise, in tool calls.</param>
     public record RunningAnalysis(long Id, int TicketId, AnalysisLens Lens, DateTime StartedAt,
-        int Steps, string? Activity, double? ExpectedSeconds, int? ExpectedSteps, int? WalkthroughOf = null);
+        int Steps, string? Activity, double? ExpectedSeconds, int? ExpectedSteps, int? WalkthroughOf = null,
+        UnitSubject? Unit = null);
 
+    /// <param name="AnalysisId">The analysis written - or, for a unit, the report.</param>
     public record Outcome(long Id, int TicketId, AnalysisLens Lens, DateTime FinishedAt,
-        int? AnalysisId, string? Error);
+        int? AnalysisId, string? Error, UnitSubject? Unit = null);
 
     // ---- the queue ----------------------------------------------------------
 
@@ -361,6 +389,51 @@ public class AnalysisQueue
     }
 
     /// <summary>
+    /// Write a unit report, in the same single slot: it is one more agent run, and a longer one.
+    /// Whatever analyses of its tickets it is still missing are queued behind it when its turn comes,
+    /// and it steps aside for them - the line stays in order, and the report runs once they have.
+    /// </summary>
+    /// <param name="manual">A person asked. See <see cref="UnitReportRunner.CheckAsync"/> for what that changes.</param>
+    public (bool ok, string message) EnqueueUnit(UnitSubject unit, bool manual)
+    {
+        lock (_lock)
+        {
+            if (_current?.Unit == unit) return (false, "That report is already being written.");
+            if (_pending.Any(p => p.Unit == unit)) return (false, "That report is already in the queue.");
+            if (_pending.Count >= MaxPending)
+                return (false, $"The queue is full at {MaxPending}. Let some of it drain first.");
+
+            _pending.Add(new Pending { Id = _nextId++, Unit = unit, Manual = manual, QueuedAt = DateTime.UtcNow });
+        }
+
+        EnsureDraining();
+        return (true, "Queued.");
+    }
+
+    /// <summary>Drop a unit report, waiting or running.</summary>
+    public bool CancelUnit(UnitSubject unit)
+    {
+        CancellationTokenSource? stop = null;
+        lock (_lock)
+        {
+            if (_pending.FirstOrDefault(p => p.Unit == unit) is { } waiting)
+            {
+                _pending.Remove(waiting);
+                return true;
+            }
+            if (_current is { } c && c.Unit == unit)
+            {
+                c.Cancelled = true;
+                stop = c.Cts;
+            }
+        }
+
+        if (stop == null) return false;
+        try { stop.Cancel(); } catch (ObjectDisposedException) { /* finished as we reached for it */ }
+        return true;
+    }
+
+    /// <summary>
     /// Drop one item, whether it is waiting or already running. One entry point because a person
     /// clicking "x" on a row is not thinking about which of those two it is, and the row can change
     /// from one to the other while they reach for it.
@@ -417,11 +490,11 @@ public class AnalysisQueue
                 ? null
                 : new RunningAnalysis(_current.Id, _current.TicketId, _current.Lens, _current.StartedAt,
                     _current.Steps, _current.Activity, _current.ExpectedSeconds, _current.ExpectedSteps,
-                    _current.WalkthroughOf);
+                    _current.WalkthroughOf, _current.Unit);
 
             return (
                 current,
-                _pending.Select(p => new QueuedAnalysis(p.Id, p.TicketId, p.Lens, p.QueuedAt, p.HoldReason, p.WalkthroughOf)).ToList(),
+                _pending.Select(p => new QueuedAnalysis(p.Id, p.TicketId, p.Lens, p.QueuedAt, p.HoldReason, p.WalkthroughOf, p.Unit)).ToList(),
                 _recent.ToList());
         }
     }
@@ -433,11 +506,12 @@ public class AnalysisQueue
         return new
         {
             running = c != null,
-            ticketId = c?.TicketId,
+            ticketId = c?.Unit is null ? c?.TicketId : null,
             lens = c?.Lens.ToString(),
             // "walkthrough" for an item rewriting an existing analysis's walkthrough, so the panel can
             // say so instead of claiming a whole new analysis is under way.
-            kind = c == null ? null : c.WalkthroughOf == null ? "analysis" : "walkthrough",
+            kind = c == null ? null : c.Unit != null ? "unit" : c.WalkthroughOf == null ? "analysis" : "walkthrough",
+            unit = c?.Unit,
             walkthroughOf = c?.WalkthroughOf,
             startedAt = c?.StartedAt,
             elapsedSeconds = c == null ? (double?)null : (DateTime.UtcNow - c.StartedAt).TotalSeconds,
@@ -455,9 +529,10 @@ public class AnalysisQueue
             pending = pending.Select(p => new
             {
                 id = p.Id,
-                ticketId = p.TicketId,
+                ticketId = p.Unit is null ? p.TicketId : (int?)null,
                 lens = p.Lens.ToString(),
-                kind = p.WalkthroughOf == null ? "analysis" : "walkthrough",
+                kind = p.Unit != null ? "unit" : p.WalkthroughOf == null ? "analysis" : "walkthrough",
+                unit = p.Unit,
                 walkthroughOf = p.WalkthroughOf,
                 queuedAt = p.QueuedAt,
                 holdReason = p.HoldReason,
@@ -466,13 +541,23 @@ public class AnalysisQueue
             // Newest first. Replaces the single "last run" this used to report: with a queue, two
             // items can fail while you are reading a third, and one slot only ever showed you one of
             // them — for a ticket you may not have been looking at.
-            recent = recent.Select(r => new
+            recent = recent.Where(r => r.Unit is null).Select(r => new
             {
                 id = r.Id,
                 ticketId = r.TicketId,
                 lens = r.Lens.ToString(),
                 finishedAt = r.FinishedAt,
                 analysisId = r.AnalysisId,
+                error = r.Error,
+            }).ToList(),
+
+            // Unit reports that finished, kept apart so a page listing ticket analyses never meets one.
+            units = recent.Where(r => r.Unit is not null).Select(r => new
+            {
+                id = r.Id,
+                unit = r.Unit,
+                finishedAt = r.FinishedAt,
+                reportId = r.AnalysisId,
                 error = r.Error,
             }).ToList(),
         };
@@ -553,14 +638,16 @@ public class AnalysisQueue
                 // A walkthrough is written about an analysis that already exists, from the commit it
                 // is pinned to. Whether the ticket is eligible for a NEW analysis is not its question,
                 // and it takes no worktree, so the pipeline being mid-cycle on the ticket does not hold it.
-                verdict = p.WalkthroughOf != null ? GateVerdict.Go : await _gate.CheckAsync(p.TicketId);
+                verdict = p.WalkthroughOf != null ? GateVerdict.Go
+                    : p.Unit is { } unit ? UnitTurn(p, await _gate.CheckUnitAsync(unit, p.Manual))
+                    : await _gate.CheckAsync(p.TicketId);
             }
             catch (Exception ex)
             {
                 // A gate that cannot answer must not become a queue that cannot move. Treat it as a
                 // hold: the database being unreadable for a moment is not a verdict about the ticket.
-                _log.LogWarning(ex, "Could not check ticket {TicketId} for the Classroom queue", p.TicketId);
-                p.HoldReason = "could not check this ticket just now";
+                _log.LogWarning(ex, "Could not check {Item} for the Classroom queue", p.Unit?.ToString() ?? $"ticket {p.TicketId}");
+                p.HoldReason = p.Unit is null ? "could not check this ticket just now" : "could not check this unit just now";
                 continue;
             }
 
@@ -576,7 +663,7 @@ public class AnalysisQueue
                 {
                     if (!_pending.Remove(p)) continue;   // cancelled while we were asking
                 }
-                Record(new Outcome(p.Id, p.TicketId, p.Lens, DateTime.UtcNow, null, verdict.Reason));
+                Record(new Outcome(p.Id, p.TicketId, p.Lens, DateTime.UtcNow, null, verdict.Reason, p.Unit));
                 continue;
             }
 
@@ -589,6 +676,7 @@ public class AnalysisQueue
                     TicketId = p.TicketId,
                     Lens = p.Lens,
                     WalkthroughOf = p.WalkthroughOf,
+                    Unit = p.Unit,
                     StartedAt = DateTime.UtcNow,
                 };
                 _current = run;
@@ -608,6 +696,8 @@ public class AnalysisQueue
         {
             if (run.WalkthroughOf is int of)
                 await _executor.RunWalkthroughAsync(of, new RunReporter(this, run), run.Cts.Token);
+            else if (run.Unit is { } unit)
+                (analysisId, error) = await _executor.RunUnitAsync(unit, new RunReporter(this, run), run.Cts.Token);
             else
                 (analysisId, error) = await _executor.RunAsync(
                     run.TicketId, run.Lens, new RunReporter(this, run), run.Cts.Token);
@@ -620,7 +710,7 @@ public class AnalysisQueue
         {
             // One item's failure is one item's failure. The slot is given back in the finally below
             // and the next item runs — the whole point of queueing three and walking away.
-            _log.LogError(ex, "Classroom analysis of ticket {TicketId} failed", run.TicketId);
+            _log.LogError(ex, "Classroom run for {Item} failed", run.Unit?.ToString() ?? $"ticket {run.TicketId}");
             error = ex.Message;
         }
         finally
@@ -638,7 +728,34 @@ public class AnalysisQueue
         // A walkthrough reports on its own row; the outcome list is for analyses.
         if (run.WalkthroughOf != null) return;
 
-        Record(new Outcome(run.Id, run.TicketId, run.Lens, DateTime.UtcNow, analysisId, error));
+        Record(new Outcome(run.Id, run.TicketId, run.Lens, DateTime.UtcNow, analysisId, error, run.Unit));
+    }
+
+    /// <summary>
+    /// A unit's verdict, once the analyses it is missing are accounted for. Each is queued once, at
+    /// the back; while any of them is still waiting or running the unit steps aside for it. One that
+    /// finished and left nothing usable is not asked for again - the report goes ahead and says so.
+    /// </summary>
+    private GateVerdict UnitTurn(Pending p, UnitGateVerdict v)
+    {
+        foreach (var id in v.Analyse.Where(id => !p.Requested.Contains(id)))
+        {
+            // Refused as already queued is still asked: it is the same analysis either way.
+            Enqueue(id, AnalysisLens.Full);
+            p.Requested.Add(id);
+        }
+
+        lock (_lock)
+        {
+            var waiting = v.Analyse.Where(id =>
+                    _pending.Any(x => x.Unit is null && x.WalkthroughOf is null && x.TicketId == id)
+                    || (_current is { Unit: null, WalkthroughOf: null } c && c.TicketId == id))
+                .ToList();
+            if (waiting.Count > 0)
+                return GateVerdict.Wait($"waiting for the analysis of {string.Join(", ", waiting.Select(id => $"#{id}"))}");
+        }
+
+        return v.Verdict;
     }
 
     private void Record(Outcome outcome)

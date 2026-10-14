@@ -1157,6 +1157,98 @@ namespace Whetstone.Migrations
                     b.ToTable("TicketLabels");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.UnitReport", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("BaseRef")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("BlocksJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CacheCreationTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("CacheReadTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DurationMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FromSha")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("GapsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("GeneratedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Headline")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("InputTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("OutputTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("OwnCommits")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Plan")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RangeCommits")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ReadJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ShotsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("StepCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ToSha")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Unit")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Plan", "Unit", "GeneratedAt");
+
+                    b.ToTable("UnitReports");
+                });
+
             modelBuilder.Entity("Whetstone.Models.WorkItem", b =>
                 {
                     b.Property<int>("Id")
