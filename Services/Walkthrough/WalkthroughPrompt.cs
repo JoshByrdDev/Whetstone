@@ -30,6 +30,61 @@ public static class WalkthroughPrompt
 
         The ticket: {{t.IssueKey ?? $"#{t.Id}"}} - {{title}}
         The work was analysed at commit {{commit}} on branch {{a.Branch ?? t.Branch ?? "(unknown)"}}.
+        """);
+        sb.AppendLine(Craft(
+            "the ticket, one or two beats",
+            "the requirement in the ticket's own words",
+            "the description below",
+            "if the ticket carried a mockup or screenshot",
+            $"a range of the branch's code. \"file\" (repo-relative, from the changed-files list), \"from\"/\"to\" (NEW-side line numbers at commit {commit}, at most 40 lines)",
+            $"`git show {commit}:<path>` with line numbers, or the worktree if its HEAD matches",
+            "title, ask, a result shot, flow, code, a proof shot, cards, question"));
+        Pointers(sb, doc, shots, attachments, changed, "Files the branch changed (+added -removed)",
+            "The ticket's description (quote from this, verbatim)", description);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// The brief for a unit report's walkthrough: the same craft and the same checks, over a unit. Its
+    /// "ask" quotes the unit's spec, its shots are the report's pool, and its code is the range on the
+    /// base the report read.
+    /// </summary>
+    public static string BuildForUnit(string title, string planName, AnalysisDocument.Doc doc, string spec,
+        IReadOnlyList<ShotMaterial> shots, IReadOnlyList<ChangedFile> changed, string fromSha, string toSha)
+    {
+        string Short(string sha) => sha[..Math.Min(10, sha.Length)];
+        var sb = new StringBuilder();
+        sb.AppendLine($$"""
+        You are scripting a short narrated walkthrough of a finished unit of a plan - several tickets'
+        work, taken together - for its owner, who agreed what it should do and is about to decide
+        whether to release it. They will LISTEN to it before reading the unit report below: it is the
+        synopsis, played as a slideshow while a voice reads your narration. Aim for about 2 and a half
+        minutes spoken: 300 to 400 words across 7 to 10 scenes. More than 420 words is sent back to be
+        cut, so choose what earns its place rather than covering everything the report says.
+
+        The unit: {{title}}, of the plan "{{planName}}".
+        Its code is the range {{Short(fromSha)}}..{{Short(toSha)}} on the base.
+
+        Tell it as the unit, not as a list of tickets: what the owner asked for, what a person can now
+        do, how it works, how we know, and what they should look at before releasing. Follow the
+        report's coverage: an outcome it calls a gap or partial is said plainly, never smoothed over.
+        """);
+        sb.AppendLine(Craft(
+            "the unit, one or two beats",
+            "what the owner agreed, in the spec's own words",
+            "the spec below",
+            "never - a unit has none, so leave \"attachments\" out",
+            $"a range of the unit's code. \"file\" (repo-relative, from the changed-files list), \"from\"/\"to\" (line numbers at commit {toSha}, at most 40 lines)",
+            $"`git show {toSha}:<path>` with line numbers",
+            "title, ask, a result shot, flow, a second shot or code, cards, question"));
+        Pointers(sb, doc, shots, Array.Empty<AttachmentMaterial>(), changed, "Files the unit changed (+added -removed)",
+            "The unit's spec (quote from this, verbatim)", spec);
+        return sb.ToString();
+    }
+
+    /// <summary>How a script for the ear is built, and the scenes it may use. The same for every subject.</summary>
+    private static string Craft(string titleScene, string askWhat, string quoteFrom, string attachmentsWhen,
+        string codeScene, string readLines, string order) => ($$"""
 
         ## How to write for the ear
 
@@ -46,26 +101,23 @@ public static class WalkthroughPrompt
         ## Scenes
 
         Each scene is one kind of picture. Use the kinds that fit what this ticket actually has; skip
-        the ones that do not. A typical order: title, ask, a result shot, flow, code, a proof shot,
-        cards, question.
+        the ones that do not. A typical order: {{order}}.
 
-        - "title": the ticket, one or two beats. No other fields.
-        - "ask": the requirement in the ticket's own words. "quotes": one to three EXACT excerpts copied
-          character for character from the description below (a sentence or two each - these are checked
+        - "title": {{titleScene}}. No other fields.
+        - "ask": {{askWhat}}. "quotes": one to three EXACT excerpts copied
+          character for character from {{quoteFrom}} (a sentence or two each - these are checked
           and a quote that is not verbatim is dropped). "attachments": names from the attachment list,
-          if the ticket carried a mockup or screenshot. Per beat: "quotes" lights excerpts by index,
+          {{attachmentsWhen}}. Per beat: "quotes" lights excerpts by index,
           "image" names the attachment on screen, with optional "zoom" and "box".
         - "shot": one QA screenshot, by "shot" order. Per beat: "focus": true zooms to the rectangle QA
           marked as the proof (use it wherever a shot has one), or give "zoom"/"box" yourself.
-        - "code": a range of the branch's code. "file" (repo-relative, from the changed-files list),
-          "from"/"to" (NEW-side line numbers at commit {{commit}}, at most 40 lines). The slide marks
+        - "code": {{codeScene}}. The slide marks
           every added and removed line from the real diff, so choose a range that shows the new code
           WITH the existing line or two around it - the reader must see what was there and what was
           added. Per beat: "lines": [first, last] lights a range inside it. Set "reveal": true on the
           scene and on one beat to hold the added lines back and bring them in on that beat - good for
           "it used to stop here; now it adds this". Find line numbers by reading the file at that
-          commit (`git show {{commit}}:<path>` with line numbers, or the worktree if its HEAD matches);
-          never guess them.
+          commit ({{readLines}}); never guess them.
         - "flow": the analysis's user-flow diagram, by "block" address. Per beat: "nodes" lights node ids,
           walking the path in the order the narration tells it.
         - "cards": up to four callouts from the analysis, by "blocks" addresses, revealed one per beat
@@ -78,8 +130,13 @@ public static class WalkthroughPrompt
         point, with enough around it to read the label beside the value.
 
         ## What you may point at
-        """);
+        """).ReplaceLineEndings("\n");
 
+    /// <summary>Everything a script may point at, listed with the addresses the checks resolve.</summary>
+    private static void Pointers(StringBuilder sb, AnalysisDocument.Doc doc, IReadOnlyList<ShotMaterial> shots,
+        IReadOnlyList<AttachmentMaterial> attachments, IReadOnlyList<ChangedFile> changed,
+        string changedHeading, string quoteHeading, string description)
+    {
         sb.AppendLine();
         sb.AppendLine("### Analysis blocks (address = section.block)");
         for (var si = 0; si < doc.Sections.Count; si++)
@@ -101,18 +158,18 @@ public static class WalkthroughPrompt
             sb.AppendLine($"- shot {s.Order}: {s.W}x{s.H} at {s.LocalPath}. {(s.Focus is { } f ? $"QA marked the proof at [{f.X}, {f.Y}, {f.W}, {f.H}]." : "No focus marked.")} Caption: {s.Caption}");
 
         sb.AppendLine();
-        sb.AppendLine("### Ticket attachments");
+        sb.AppendLine("### Attachments");
         if (attachments.Count == 0) sb.AppendLine("(none)");
         foreach (var at in attachments)
             sb.AppendLine($"- \"{at.Name}\": {at.W}x{at.H} at {at.LocalPath}{(at.FromIssue is { } k ? $" (attached to parent issue {k}, not this ticket)" : "")}");
 
         sb.AppendLine();
-        sb.AppendLine("### Files the branch changed (+added -removed)");
+        sb.AppendLine($"### {changedHeading}");
         foreach (var c in changed.Take(80)) sb.AppendLine($"- {c.Path} +{c.Added} -{c.Removed}");
         if (changed.Count > 80) sb.AppendLine($"- ... and {changed.Count - 80} more");
 
         sb.AppendLine();
-        sb.AppendLine("### The ticket's description (quote from this, verbatim)");
+        sb.AppendLine($"### {quoteHeading}");
         sb.AppendLine("```");
         sb.AppendLine(description.Trim());
         sb.AppendLine("```");
@@ -125,7 +182,6 @@ public static class WalkthroughPrompt
 
         sb.AppendLine();
         sb.AppendLine("Return only the script, as the JSON the schema describes.");
-        return sb.ToString();
     }
 
     /// <summary>

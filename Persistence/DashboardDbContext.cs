@@ -194,6 +194,8 @@ public class DashboardDbContext : DbContext
             e.Property(w => w.Model).HasMaxLength(64);
             e.HasIndex(w => w.AnalysisId).IsUnique();
             e.HasOne(w => w.Analysis).WithMany().HasForeignKey(w => w.AnalysisId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(w => w.UnitReportId).IsUnique();
+            e.HasOne(w => w.UnitReport).WithMany().HasForeignKey(w => w.UnitReportId).OnDelete(DeleteBehavior.Cascade);
         });
 
         // Unit reports hang off no row: a unit is a plan's file, not an entity, and a report must

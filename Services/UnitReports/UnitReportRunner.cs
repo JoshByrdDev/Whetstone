@@ -209,11 +209,8 @@ public class UnitReportRunner
                 RangeCommits = g.Range.RangeCommits,
                 OwnCommits = g.Range.OwnCommits,
                 ReadJson = JsonSerializer.Serialize(g.Material.Tickets.Select(t => new { ticketId = t.Ticket.Id, analysisId = t.Analysis?.Id })),
-                ShotsJson = JsonSerializer.Serialize(g.Material.Shots.Where(x => shotPaths.ContainsKey(x.N)).Select(x => new
-                {
-                    n = x.N, ticketId = x.TicketId, ticketOrder = x.TicketOrder, caption = x.Caption,
-                    file = Path.GetFileName(shotPaths[x.N]), focus = x.Focus, landedAt = x.LandedAt,
-                })),
+                ShotsJson = JsonSerializer.Serialize(g.Material.Shots.Where(x => shotPaths.ContainsKey(x.N)).Select(x =>
+                    new UnitReportShot(x.N, x.TicketId, x.TicketOrder, x.Caption, Path.GetFileName(shotPaths[x.N]), x.Focus, x.LandedAt)).ToList()),
                 GapsJson = JsonSerializer.Serialize(g.Material.Missing.Select(m => new { ticketId = m.TicketId, kind = m.Kind.ToString(), why = m.Why })),
                 Headline = doc.Headline,
                 BlocksJson = AnalysisDocument.Serialize(doc),
@@ -249,6 +246,13 @@ public class UnitReportRunner
         {
             await release();
         }
+    }
+
+    /// <summary>The shots a stored report kept. Empty for a row that cannot be read.</summary>
+    public static IReadOnlyList<UnitReportShot> ShotsOf(UnitReport r)
+    {
+        try { return JsonSerializer.Deserialize<List<UnitReportShot>>(r.ShotsJson) ?? new(); }
+        catch (JsonException) { return Array.Empty<UnitReportShot>(); }
     }
 
     /// <summary>

@@ -23,7 +23,7 @@ namespace Whetstone.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<int>("AnalysisId")
+                    b.Property<int?>("AnalysisId")
                         .HasColumnType("INTEGER");
 
                     b.Property<double>("AudioSeconds")
@@ -66,6 +66,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("UnitReportId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Voice")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -74,6 +77,9 @@ namespace Whetstone.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("AnalysisId")
+                        .IsUnique();
+
+                    b.HasIndex("UnitReportId")
                         .IsUnique();
 
                     b.ToTable("AnalysisWalkthroughs");
@@ -1291,10 +1297,16 @@ namespace Whetstone.Migrations
                     b.HasOne("Whetstone.Models.TicketAnalysis", "Analysis")
                         .WithMany()
                         .HasForeignKey("AnalysisId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("Whetstone.Models.UnitReport", "UnitReport")
+                        .WithMany()
+                        .HasForeignKey("UnitReportId")
+                        .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Analysis");
+
+                    b.Navigation("UnitReport");
                 });
 
             modelBuilder.Entity("Whetstone.Models.Comment", b =>

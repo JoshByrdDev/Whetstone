@@ -1524,9 +1524,13 @@ public partial class TicketGitService
     /// Classroom pins it to the sha its analysis actually read, so the diff on screen cannot
     /// disagree with the diagram drawn beside it.
     /// </para>
+    /// <para>
+    /// With <paramref name="fromRef"/>, the diff from that commit to <paramref name="headRef"/>
+    /// instead: a unit report's range, whose end is the base itself and so has nothing against it.
+    /// </para>
     /// </summary>
     public async Task<FileDiff> FileDiffAsync(string projectKey, string headRef, string path,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? fromRef = null)
     {
         FileDiff Fail(string error) => new(path, "", 0, 0, false, error);
 
@@ -1539,7 +1543,7 @@ public partial class TicketGitService
         // resolve outside the repo anyway; this refuses the shapes that would only ever be a mistake.
         if (CleanRepoPath(path) is not { } clean) return Fail($"'{path}' is not a path inside the repo.");
 
-        var range = $"{ResolveBaseBranch(cfg)}...{headRef}";
+        var range = fromRef is null ? $"{ResolveBaseBranch(cfg)}...{headRef}" : $"{fromRef}..{headRef}";
 
         var numstat = await GitAsync(repo, ct, "diff", "--numstat", "-M", range, "--", clean);
         if (!numstat.Ok) return Fail(Explain(numstat, $"Could not read the diff for {clean}"));
@@ -1595,15 +1599,19 @@ public partial class TicketGitService
         return r.Ok ? (r.Stdout, null) : (null, Explain(r, $"Could not read {clean} at {commit[..Math.Min(7, commit.Length)]}"));
     }
 
-    /// <summary>Every file the branch changed against its base, with line counts - what a script may cite.</summary>
+    /// <summary>
+    /// Every file the branch changed against its base, with line counts - what a script may cite. With
+    /// <paramref name="fromRef"/>, every file changed from that commit to <paramref name="headRef"/>.
+    /// </summary>
     public async Task<(IReadOnlyList<(string Path, int Added, int Removed)> Files, string? Error)> ChangedFilesAsync(
-        string projectKey, string headRef, CancellationToken ct = default)
+        string projectKey, string headRef, CancellationToken ct = default, string? fromRef = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
         if (!IsGitRepo(repo)) return (Array.Empty<(string, int, int)>(), $"{cfg.DisplayName} has no git repo at '{repo}'.");
 
-        var r = await GitAsync(repo, ct, "diff", "--numstat", "--no-renames", $"{ResolveBaseBranch(cfg)}...{headRef}");
+        var r = await GitAsync(repo, ct, "diff", "--numstat", "--no-renames",
+            fromRef is null ? $"{ResolveBaseBranch(cfg)}...{headRef}" : $"{fromRef}..{headRef}");
         if (!r.Ok) return (Array.Empty<(string, int, int)>(), Explain(r, "Could not list the branch's changes"));
 
         var files = new List<(string, int, int)>();

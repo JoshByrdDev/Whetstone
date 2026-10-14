@@ -81,9 +81,12 @@ public interface IAnalysisExecutor
     /// </summary>
     Task RunWalkthroughAsync(int analysisId, IRunProgress progress, CancellationToken ct) => Task.CompletedTask;
 
-    /// <summary>Write one unit report. The stored report's id, or why there isn't one.</summary>
+    /// <summary>Write one unit report, and its walkthrough. The stored report's id, or why there isn't one.</summary>
     Task<(int? reportId, string? error)> RunUnitAsync(UnitSubject unit, IRunProgress progress, CancellationToken ct) =>
         Task.FromResult<(int?, string?)>((null, "unit reports are not written here"));
+
+    /// <summary>Rewrite a unit report's walkthrough. Like an analysis's, its outcome lives on its own row.</summary>
+    Task RunUnitWalkthroughAsync(int reportId, IRunProgress progress, CancellationToken ct) => Task.CompletedTask;
 }
 
 /// <summary>
@@ -231,7 +234,10 @@ public class AnalysisQueue
         public long Id;
         public int TicketId;
         public AnalysisLens Lens;
-        /// <summary>Set for a walkthrough-only item: the analysis whose walkthrough to rewrite.</summary>
+        /// <summary>
+        /// Set for a walkthrough-only item: the analysis whose walkthrough to rewrite - or, with
+        /// <see cref="Unit"/> set too, the unit report whose walkthrough to rewrite.
+        /// </summary>
         public int? WalkthroughOf;
         /// <summary>Set for a unit report, and then <see cref="TicketId"/> is zero.</summary>
         public UnitSubject? Unit;
@@ -398,12 +404,31 @@ public class AnalysisQueue
     {
         lock (_lock)
         {
-            if (_current?.Unit == unit) return (false, "That report is already being written.");
-            if (_pending.Any(p => p.Unit == unit)) return (false, "That report is already in the queue.");
+            if (_current is { WalkthroughOf: null } c && c.Unit == unit) return (false, "That report is already being written.");
+            if (_pending.Any(p => p.Unit == unit && p.WalkthroughOf == null)) return (false, "That report is already in the queue.");
             if (_pending.Count >= MaxPending)
                 return (false, $"The queue is full at {MaxPending}. Let some of it drain first.");
 
             _pending.Add(new Pending { Id = _nextId++, Unit = unit, Manual = manual, QueuedAt = DateTime.UtcNow });
+        }
+
+        EnsureDraining();
+        return (true, "Queued.");
+    }
+
+    /// <summary>Rewrite one unit report's walkthrough: the retry, and the way a report gets one after the fact.</summary>
+    public (bool ok, string message) EnqueueUnitWalkthrough(UnitSubject unit, int reportId)
+    {
+        lock (_lock)
+        {
+            if (_current is { } c && c.Unit == unit)
+                return (false, "That unit's report or walkthrough is already being written.");
+            if (_pending.Any(p => p.Unit == unit && p.WalkthroughOf == reportId))
+                return (false, "That walkthrough is already in the queue.");
+            if (_pending.Count >= MaxPending)
+                return (false, $"The queue is full at {MaxPending}. Let some of it drain first.");
+
+            _pending.Add(new Pending { Id = _nextId++, Unit = unit, WalkthroughOf = reportId, QueuedAt = DateTime.UtcNow });
         }
 
         EnsureDraining();
@@ -416,12 +441,12 @@ public class AnalysisQueue
         CancellationTokenSource? stop = null;
         lock (_lock)
         {
-            if (_pending.FirstOrDefault(p => p.Unit == unit) is { } waiting)
+            if (_pending.FirstOrDefault(p => p.Unit == unit && p.WalkthroughOf == null) is { } waiting)
             {
                 _pending.Remove(waiting);
                 return true;
             }
-            if (_current is { } c && c.Unit == unit)
+            if (_current is { WalkthroughOf: null } c && c.Unit == unit)
             {
                 c.Cancelled = true;
                 stop = c.Cts;
@@ -510,7 +535,7 @@ public class AnalysisQueue
             lens = c?.Lens.ToString(),
             // "walkthrough" for an item rewriting an existing analysis's walkthrough, so the panel can
             // say so instead of claiming a whole new analysis is under way.
-            kind = c == null ? null : c.Unit != null ? "unit" : c.WalkthroughOf == null ? "analysis" : "walkthrough",
+            kind = c == null ? null : Kind(c.Unit, c.WalkthroughOf),
             unit = c?.Unit,
             walkthroughOf = c?.WalkthroughOf,
             startedAt = c?.StartedAt,
@@ -531,7 +556,7 @@ public class AnalysisQueue
                 id = p.Id,
                 ticketId = p.Unit is null ? p.TicketId : (int?)null,
                 lens = p.Lens.ToString(),
-                kind = p.Unit != null ? "unit" : p.WalkthroughOf == null ? "analysis" : "walkthrough",
+                kind = Kind(p.Unit, p.WalkthroughOf),
                 unit = p.Unit,
                 walkthroughOf = p.WalkthroughOf,
                 queuedAt = p.QueuedAt,
@@ -562,6 +587,15 @@ public class AnalysisQueue
             }).ToList(),
         };
     }
+
+    private static string Kind(UnitSubject? unit, int? walkthroughOf) =>
+        (unit, walkthroughOf) switch
+        {
+            (null, null) => "analysis",
+            (null, _) => "walkthrough",
+            (_, null) => "unit",
+            _ => "unit-walkthrough",
+        };
 
     // ---- the drain ----------------------------------------------------------
 
@@ -695,7 +729,9 @@ public class AnalysisQueue
         try
         {
             if (run.WalkthroughOf is int of)
-                await _executor.RunWalkthroughAsync(of, new RunReporter(this, run), run.Cts.Token);
+                await (run.Unit is null
+                    ? _executor.RunWalkthroughAsync(of, new RunReporter(this, run), run.Cts.Token)
+                    : _executor.RunUnitWalkthroughAsync(of, new RunReporter(this, run), run.Cts.Token));
             else if (run.Unit is { } unit)
                 (analysisId, error) = await _executor.RunUnitAsync(unit, new RunReporter(this, run), run.Cts.Token);
             else

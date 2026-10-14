@@ -18,6 +18,9 @@ namespace Whetstone.Services.UnitReports;
 /// branch is not material, it is a reason to wait - see <see cref="Result.Missing"/>.
 /// </para>
 /// </summary>
+/// <summary>One screenshot as a stored report keeps it: its number, where it came from, and its copy's file name.</summary>
+public record UnitReportShot(int N, int TicketId, int TicketOrder, string Caption, string File, ImageRect? Focus, DateTime? LandedAt);
+
 public static class UnitMaterial
 {
     /// <summary>A ticket branch's tip as it is now, for telling whether its analysis still describes it.</summary>

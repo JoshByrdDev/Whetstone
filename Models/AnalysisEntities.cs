@@ -131,8 +131,15 @@ public enum WalkthroughStatus { Pending, Ready, Failed }
 public class AnalysisWalkthrough
 {
     public int Id { get; set; }
-    public int AnalysisId { get; set; }
+
+    /// <summary>
+    /// What it narrates: an analysis, or a unit report. Exactly one is set. One table for both,
+    /// because a deck is a deck - one clip cache, one player - and only its material differs.
+    /// </summary>
+    public int? AnalysisId { get; set; }
     public TicketAnalysis? Analysis { get; set; }
+    public int? UnitReportId { get; set; }
+    public UnitReport? UnitReport { get; set; }
 
     public WalkthroughStatus Status { get; set; } = WalkthroughStatus.Pending;
     /// <summary>Why it failed, in a sentence. Null unless <see cref="Status"/> is Failed.</summary>

@@ -291,4 +291,48 @@ public class WalkthroughTests
         Assert.Equal(5, result.Scenes.Count);
         Assert.Contains(result.Problems, p => p.Contains("500 words") && p.Contains("under 420"));
     }
+
+    // ---- the prompt, for each subject ----------------------------------------------------------
+
+    private static readonly AnalysisDocument.Doc PromptDoc = new("h", new[]
+    {
+        new AnalysisDocument.Section("How it works now", new[]
+        {
+            new AnalysisDocument.Block("userFlow")
+            {
+                Nodes = new[] { new AnalysisDocument.FlowNode("n1", "screen", "Addresses", null, null, "new", null, 1) },
+                Edges = Array.Empty<AnalysisDocument.FlowEdge>(),
+            },
+        }),
+    });
+
+    [Fact]
+    public void A_tickets_brief_still_quotes_its_description_and_reads_lines_at_its_commit()
+    {
+        var p = WalkthroughPrompt.Build(new Whetstone.Models.Ticket { Id = 4, Title = "t", Branch = "b" },
+            new Whetstone.Models.TicketAnalysis(), PromptDoc, "Save an address", "the ask as written",
+            Array.Empty<WalkthroughPrompt.ShotMaterial>(), Array.Empty<WalkthroughPrompt.AttachmentMaterial>(),
+            new[] { new WalkthroughPrompt.ChangedFile("src/a.ts", 3, 1) }, "abc1234").ReplaceLineEndings("\n");
+
+        Assert.Contains("analysed at commit abc1234 on branch b.\n\n## How to write for the ear", p);
+        Assert.Contains("`git show abc1234:<path>`", p);
+        Assert.Contains("## What you may point at\n\n### Analysis blocks", p);
+        Assert.Contains("### The ticket's description (quote from this, verbatim)\n```\nthe ask as written", p);
+        Assert.Contains("- 0.0 userFlow", p);
+    }
+
+    [Fact]
+    public void A_units_brief_quotes_its_spec_and_reads_its_code_at_the_end_of_its_range()
+    {
+        var p = WalkthroughPrompt.BuildForUnit("Unit 1: Addresses", "First plan", PromptDoc, "A1 can save an address",
+            new[] { new WalkthroughPrompt.ShotMaterial(3, "the list", "C:/r/3.png", 800, 600, null) },
+            new[] { new WalkthroughPrompt.ChangedFile("src/a.ts", 3, 1) }, "1111111111aa", "2222222222bb").ReplaceLineEndings("\n");
+
+        Assert.Contains("The unit: Unit 1: Addresses, of the plan \"First plan\".", p);
+        Assert.Contains("range 1111111111..2222222222", p);
+        Assert.Contains("`git show 2222222222bb:<path>`", p);
+        Assert.Contains("- shot 3: 800x600 at C:/r/3.png", p);
+        Assert.Contains("### The unit's spec (quote from this, verbatim)\n```\nA1 can save an address", p);
+        Assert.DoesNotContain("ticket's own words", p);
+    }
 }
