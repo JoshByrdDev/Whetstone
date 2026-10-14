@@ -32,6 +32,8 @@ public static class UnitMaterial
     /// <param name="Tips">Each ticket's branch tip, where it could be resolved.</param>
     /// <param name="DoneAt">When each ticket last moved to Done: when it landed, for tickets merged
     /// before <see cref="Ticket.MergedAt"/> was recorded or merged somewhere this machine does not watch.</param>
+    /// <param name="CodedAt">When each ticket last left Implementing: the last time its own change
+    /// could have moved. See <see cref="Pick"/>.</param>
     public record Input(
         string PlanKey,
         PlanUnit Unit,
@@ -41,7 +43,8 @@ public static class UnitMaterial
         IReadOnlyList<StewardEntry> Entries,
         IReadOnlyList<TicketAnalysis> Analyses,
         IReadOnlyDictionary<int, BranchTip> Tips,
-        IReadOnlyDictionary<int, DateTime> DoneAt);
+        IReadOnlyDictionary<int, DateTime> DoneAt,
+        IReadOnlyDictionary<int, DateTime>? CodedAt = null);
 
     /// <summary>One screenshot in the report's pool. <see cref="N"/> is what the report's blocks cite.</summary>
     /// <param name="LandedAt">When the ticket that took it landed. Null while it has not.</param>
@@ -113,7 +116,8 @@ public static class UnitMaterial
             if (t.Phase != TicketPhase.Done)
                 missing.Add(new Missing(t.Id, MissingKind.Open, $"#{t.Id} is in {t.Phase}, not Done"));
 
-            var analysis = Pick(input.Analyses.Where(a => a.TicketId == t.Id), input.Tips.GetValueOrDefault(t.Id));
+            var analysis = Pick(input.Analyses.Where(a => a.TicketId == t.Id), input.Tips.GetValueOrDefault(t.Id),
+                input.CodedAt?.TryGetValue(t.Id, out var coded) == true ? coded : null);
             AnalysisDocument.Doc? doc = null;
             if (analysis.Chosen is { } a)
                 doc = AnalysisDocument.Deserialize(a.BlocksJson) is { } d ? Renumber(d, t.Id, renumber) : null;
@@ -135,12 +139,19 @@ public static class UnitMaterial
     }
 
     /// <summary>
-    /// The analysis a report reads for one ticket: the newest one that describes the branch as it is.
+    /// The analysis a report reads for one ticket: the newest one that describes the ticket's change as
+    /// it is.
     /// <para>
     /// Not <see cref="TicketAnalysisService.IsStale"/>, on purpose. That also counts a change of
     /// phase, which is right on a ticket being worked and wrong here: every ticket in a finished
     /// unit has moved to Done since its last analysis, and not one byte of its code moved with it.
-    /// Here only the code counts - the tree where both sides have one, else the commit.
+    /// </para>
+    /// <para>
+    /// Nor the branch's tree alone. A branch is rebased before it is merged, and the rebase brings
+    /// every other ticket's work into its tree while leaving its own change exactly as it was - so
+    /// on a merged unit the tree says nearly every analysis is stale, and it is wrong. What moves a
+    /// ticket's own change is a pass through Implementing; an analysis written after the last one
+    /// (<paramref name="codedAt"/>) still describes it. Where that is not known, the tree decides.
     /// </para>
     /// <para>
     /// A Full analysis is preferred over a newer one through a narrower lens, because the report
@@ -148,15 +159,17 @@ public static class UnitMaterial
     /// (the branch is gone) the newest is taken as it stands: there is nothing left to be stale against.
     /// </para>
     /// </summary>
-    public static (TicketAnalysis? Chosen, bool AnyStale) Pick(IEnumerable<TicketAnalysis> analyses, BranchTip? tip)
+    public static (TicketAnalysis? Chosen, bool AnyStale) Pick(IEnumerable<TicketAnalysis> analyses, BranchTip? tip,
+        DateTime? codedAt = null)
     {
         var all = analyses.OrderByDescending(a => a.GeneratedAt).ToList();
         if (all.Count == 0) return (null, false);
 
-        bool Current(TicketAnalysis a) => tip is null
+        bool SameCode(TicketAnalysis a) => tip is null
             || (a.TreeSha is not null && tip.TreeSha is not null ? a.TreeSha == tip.TreeSha
                 : a.HeadSha is not null && tip.HeadSha is not null ? a.HeadSha == tip.HeadSha
                 : true);
+        bool Current(TicketAnalysis a) => SameCode(a) || (codedAt is { } at && a.GeneratedAt >= at);
 
         var current = all.Where(Current).ToList();
         var chosen = current.FirstOrDefault(a => a.Lens == AnalysisLens.Full) ?? current.FirstOrDefault();

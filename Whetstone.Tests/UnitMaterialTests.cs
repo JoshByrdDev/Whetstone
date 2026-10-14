@@ -40,10 +40,10 @@ public class UnitMaterialTests
 
     private static UnitMaterial.Result Build(IReadOnlyList<Ticket> tickets, IReadOnlyList<TicketAnalysis>? analyses = null,
         Dictionary<int, UnitMaterial.BranchTip>? tips = null, Dictionary<int, DateTime>? doneAt = null,
-        IReadOnlyList<StewardEntry>? entries = null) =>
+        IReadOnlyList<StewardEntry>? entries = null, Dictionary<int, DateTime>? codedAt = null) =>
         UnitMaterial.Build(new UnitMaterial.Input("p1", One, Groups, tickets, Array.Empty<StewardOutcome>(),
             entries ?? Array.Empty<StewardEntry>(), analyses ?? Array.Empty<TicketAnalysis>(),
-            tips ?? new(), doneAt ?? new()));
+            tips ?? new(), doneAt ?? new(), codedAt));
 
     [Fact]
     public void A_unit_is_its_plans_unit_and_no_other_plans_unit_of_the_same_number()
@@ -109,6 +109,28 @@ public class UnitMaterialTests
     {
         var r = Build(new[] { T(1) }, new[] { A(1, "old", DateTime.UtcNow) }, tips: new() { [1] = new("h-new", "new") });
         Assert.Null(r.Tickets[0].Analysis);
+        Assert.Equal(UnitMaterial.MissingKind.StaleAnalysis, Assert.Single(r.Missing).Kind);
+    }
+
+    [Fact]
+    public void A_rebase_before_the_merge_does_not_make_the_analysis_stale()
+    {
+        // The rebase brought other tickets' work into the branch's tree; its own change did not move.
+        var analysed = new DateTime(2026, 10, 5, 12, 0, 0);
+        var r = Build(new[] { T(1) }, new[] { A(1, "before-rebase", analysed) },
+            tips: new() { [1] = new("h-after", "after-rebase") },
+            codedAt: new() { [1] = analysed.AddHours(-2) });
+        Assert.NotNull(r.Tickets[0].Analysis);
+        Assert.Empty(r.Missing);
+    }
+
+    [Fact]
+    public void A_pass_through_implementation_after_the_analysis_makes_it_stale()
+    {
+        var analysed = new DateTime(2026, 10, 5, 12, 0, 0);
+        var r = Build(new[] { T(1) }, new[] { A(1, "old", analysed) },
+            tips: new() { [1] = new("h-new", "new") },
+            codedAt: new() { [1] = analysed.AddHours(3) });
         Assert.Equal(UnitMaterial.MissingKind.StaleAnalysis, Assert.Single(r.Missing).Kind);
     }
 

@@ -88,6 +88,10 @@ public class UnitReportRunner
                 .Where(p => ids.Contains(p.TicketId) && p.To == TicketPhase.Done)
                 .Select(p => new { p.TicketId, p.At }).ToListAsync(ct))
             .GroupBy(p => p.TicketId).ToDictionary(g => g.Key, g => g.Max(p => p.At));
+        var codedAt = (await db.PhaseTransitions.AsNoTracking()
+                .Where(p => ids.Contains(p.TicketId) && p.From == TicketPhase.Implementing)
+                .Select(p => new { p.TicketId, p.At }).ToListAsync(ct))
+            .GroupBy(p => p.TicketId).ToDictionary(g => g.Key, g => g.Max(p => p.At));
 
         // The base before this unit is the last release before it, when the owner said there was one.
         var released = await db.StewardUnits.AsNoTracking()
@@ -102,7 +106,7 @@ public class UnitReportRunner
         if (range is null) return (null, rangeError);
 
         var material = UnitMaterial.Build(new UnitMaterial.Input(s.Plan, unit,
-            TicketGitService.UnitGroups(plan, unit), tickets, states, entries, analyses, range.Tips, doneAt));
+            TicketGitService.UnitGroups(plan, unit), tickets, states, entries, analyses, range.Tips, doneAt, codedAt));
 
         var bounces = new Dictionary<int, IReadOnlyList<string>>();
         foreach (var id in ids)
