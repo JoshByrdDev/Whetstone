@@ -936,6 +936,12 @@ namespace Whetstone.Migrations
                     b.Property<string>("MasterNotes")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("MergeSha")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("MergedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Phase")
                         .IsRequired()
                         .HasMaxLength(32)

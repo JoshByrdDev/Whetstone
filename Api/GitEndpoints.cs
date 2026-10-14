@@ -160,6 +160,7 @@ public static class GitEndpoints
 
             var result = await git.MergeAsync(t.ProjectKey, BranchOf(t), req?.Title, req?.Description, ct);
             if (!result.Ok) return Results.Json(result, statusCode: 409);
+            await tickets.SetMergedAsync(id, result.MergeSha);
 
             // The ticket follows the code, exactly as a TFVC check-in does: only NeedsReview can be
             // signed off to Done, and anything else is said rather than forced.

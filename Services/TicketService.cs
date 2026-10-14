@@ -536,6 +536,21 @@ public class TicketService
     }
 
     /// <summary>
+    /// Record the commit a local merge landed this ticket at. Called by both mergers, the board's
+    /// route and the steward, straight after the merge succeeds and before the move to Done, so a
+    /// ticket that is Done by a merge always says which one.
+    /// </summary>
+    public async Task SetMergedAsync(int id, string? mergeSha)
+    {
+        var t = await _db.Tickets.FindAsync(id);
+        if (t is null || string.IsNullOrWhiteSpace(mergeSha)) return;
+        t.MergeSha = mergeSha.Trim();
+        t.MergedAt = DateTime.UtcNow;
+        t.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+    }
+
+    /// <summary>
     /// Rewrite the ticket's learning brief — the human's reading material, written by refinement
     /// once the branch is final (see <see cref="Ticket.LearningBrief"/>). Rewrite semantics, like
     /// the implementation summary: a ticket that bounces and comes back gets a fresh brief for the

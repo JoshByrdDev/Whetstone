@@ -215,7 +215,11 @@ public class StewardServiceTests : IDisposable
         await Begin();
         Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
 
-        Assert.Equal(TicketPhase.Done, (await Reload(id)).Phase);
+        var t = await Reload(id);
+        Assert.Equal(TicketPhase.Done, t.Phase);
+        // The commit it landed at is kept on the ticket: a unit report's range is counted off it.
+        Assert.Equal("0123456789", t.MergeSha);
+        Assert.NotNull(t.MergedAt);
         await using var ctx = NewCtx();
         Assert.Equal(TransitionActor.Steward, (await ctx.PhaseTransitions.SingleAsync(p => p.To == TicketPhase.Done)).Actor);
     }

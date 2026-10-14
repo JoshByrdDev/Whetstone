@@ -435,6 +435,15 @@ public class Ticket
     /// </summary>
     public string? PlanKey { get; set; }
 
+    /// <summary>
+    /// The commit that landed this ticket's branch in its base, and when, on a project that merges
+    /// locally (by the board or by a steward). Null on a pull-request or TFVC project, where the
+    /// merge happens somewhere this machine does not watch, and on every ticket merged before this
+    /// was recorded. What lets a unit report say which commits in its range are the unit's own.
+    /// </summary>
+    public string? MergeSha { get; set; }
+    public DateTime? MergedAt { get; set; }
+
     /// <summary>Set when Phase == Blocked.</summary>
     public string? BlockedReason { get; set; }
 

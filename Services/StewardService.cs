@@ -618,6 +618,7 @@ public class StewardService
                 : Refuse("refused", merged.Error ?? "The merge was refused.");
 
         var sha = merged.MergeSha?[..Math.Min(7, merged.MergeSha.Length)];
+        await _tickets.SetMergedAsync(ticketId, merged.MergeSha);
         await _tickets.TransitionAsync(ticketId, TicketPhase.Done, $"Merged into {merged.BaseBranch} at {sha}", TransitionActor.Steward);
         return new StewardReply("merged", null, new { commit = sha, closed = true });
     }
