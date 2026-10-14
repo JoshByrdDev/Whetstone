@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
-  Analysis, ClassroomTicket, Deck, DeckBeat, DeckCode, DeckImage, DeckScene, Rect, Walkthrough,
+  Analysis, ClassroomTicket, Deck, DeckBeat, DeckCode, DeckImage, DeckScene, Doc, Rect, Walkthrough,
 } from '../api/classroom';
 import { blockAt, clipUrl, getWalkthrough, writeWalkthrough } from '../api/classroom';
 import { AnalysisContext, Callout, Question, UserFlow } from './AnalysisBlocks';
@@ -18,6 +18,56 @@ import { chamfer, DISPLAY, MONO } from './orbit';
  * has already checked (see WalkthroughValidator). This file only plays it: one voiced line per beat,
  * and each beat's cue says what to light, zoom or reveal while that line is spoken.
  */
+
+// ---- what a deck narrates ---------------------------------------------------------------------
+
+/**
+ * What a deck narrates: one ticket's analysis, or a report on a unit of a plan. The player shows the
+ * same scenes for either; this is the little that differs - what the title card says, which
+ * screenshots the shot numbers mean, and where the walkthrough is read and rewritten.
+ */
+export interface DeckSubject {
+  /** Changes when the subject does: what the card re-reads its walkthrough on. */
+  key: string;
+  /** The big label on the title card and the player's header: a ticket's key, or the unit. */
+  mark: string;
+  title: string;
+  headline: string;
+  tags: { text: string; mono?: boolean }[];
+  doc: Doc;
+  shots: { order: number; caption: string; imageUrl: string }[];
+  /** Over the quotes of an "ask" scene: where the words come from. */
+  askFrom: string;
+  /** How a shot is named under it. */
+  shotName: (order: number) => string;
+  /** What the "write" note says while one is being written for the first time. */
+  writing: string;
+  load: () => Promise<Walkthrough>;
+  write: () => Promise<{ message: string }>;
+}
+
+/** A ticket's analysis, as the player narrates it. */
+export function ticketSubject(analysis: Analysis, ticket: ClassroomTicket): DeckSubject {
+  const m = analysis.meta;
+  return {
+    key: `analysis-${m.id}`,
+    mark: ticket.issueKey ?? `#${ticket.id}`,
+    title: ticket.title,
+    headline: m.headline,
+    tags: [
+      { text: m.phaseAtGeneration },
+      ...(m.branch ? [{ text: m.branch, mono: true }] : []),
+      ...(m.headSha ? [{ text: m.headSha.slice(0, 7), mono: true }] : []),
+    ],
+    doc: analysis.document,
+    shots: ticket.qaShots.map(s => ({ order: s.order, caption: s.caption, imageUrl: s.imageUrl })),
+    askFrom: 'From the ticket',
+    shotName: order => `QA shot ${order + 1}`,
+    writing: 'writing the walkthrough — it follows the analysis by a few minutes',
+    load: () => getWalkthrough(m.id),
+    write: () => writeWalkthrough(m.id),
+  };
+}
 
 // ---- the timeline ----------------------------------------------------------------------------
 
@@ -124,8 +174,8 @@ function useFollow(ref: React.RefObject<HTMLElement | null>, selector: string, k
 
 // ---- the player -------------------------------------------------------------------------------
 
-export function WalkthroughPlayer({ deck, analysis, ticket, onClose }: {
-  deck: Deck; analysis: Analysis; ticket: ClassroomTicket; onClose: () => void;
+export function WalkthroughPlayer({ deck, subject, onClose }: {
+  deck: Deck; subject: DeckSubject; onClose: () => void;
 }) {
   const { fx, dismiss } = useVeil(onClose);
   const { beats, total } = useMemo(() => place(deck), [deck]);
@@ -231,15 +281,13 @@ export function WalkthroughPlayer({ deck, analysis, ticket, onClose }: {
     return () => window.removeEventListener('keydown', onKey);
   }, [dismiss, toggle, go, back, cur]);
 
-  const shots = ticket.qaShots.map(s => ({ order: s.order, caption: s.caption, imageUrl: s.imageUrl }));
-
   return (
     <div className="orbit-veil fixed inset-0 z-50 flex items-center justify-center p-4" data-fx={fx}>
       <div className="orbit-dim absolute inset-0 bg-black/75" onClick={dismiss} />
       <div className="orbit-modal relative flex flex-col w-full max-w-[1240px] h-[min(900px,94vh)] overflow-hidden">
         <header className="flex items-center gap-3 px-5 py-3 border-b border-hair">
           <span className="text-[13px] font-bold text-amber-300" style={{ fontFamily: DISPLAY, letterSpacing: '.06em' }}>
-            {ticket.issueKey ?? `#${ticket.id}`}
+            {subject.mark}
           </span>
           <span className="h-4 w-px bg-hair" />
           <span className="text-[12px] uppercase tracking-[calc(var(--w-track)*0.08em)] text-gray-300">{scene.chapter}</span>
@@ -249,10 +297,10 @@ export function WalkthroughPlayer({ deck, analysis, ticket, onClose }: {
           <GhostButton onClick={dismiss} title="Close (Esc)">Close</GhostButton>
         </header>
 
-        <AnalysisContext shots={shots}>
+        <AnalysisContext shots={subject.shots}>
           <div className="relative flex-1 min-h-0">
             <div key={canvasKey(deck, beat.si)} className="orbit-swap absolute inset-0 px-8 py-6">
-              <SceneView scene={scene} state={state} analysis={analysis} ticket={ticket} beat={beat} />
+              <SceneView scene={scene} state={state} subject={subject} beat={beat} />
             </div>
           </div>
         </AnalysisContext>
@@ -305,36 +353,33 @@ export function WalkthroughPlayer({ deck, analysis, ticket, onClose }: {
 
 // ---- scenes -----------------------------------------------------------------------------------
 
-function SceneView({ scene, state, analysis, ticket, beat }: {
-  scene: DeckScene; state: State; analysis: Analysis; ticket: ClassroomTicket; beat: Placed;
+function SceneView({ scene, state, subject, beat }: {
+  scene: DeckScene; state: State; subject: DeckSubject; beat: Placed;
 }) {
   switch (scene.kind) {
-    case 'title': return <TitleScene analysis={analysis} ticket={ticket} later={beat.bi > 0} />;
-    case 'ask': return <AskScene scene={scene} state={state} />;
-    case 'shot': return <ShotScene scene={scene} state={state} ticket={ticket} />;
+    case 'title': return <TitleScene subject={subject} later={beat.bi > 0} />;
+    case 'ask': return <AskScene scene={scene} state={state} from={subject.askFrom} />;
+    case 'shot': return <ShotScene scene={scene} state={state} subject={subject} />;
     case 'code': return scene.code ? <CodeScene code={scene.code} state={state} /> : null;
-    case 'flow': return <FlowScene scene={scene} state={state} analysis={analysis} />;
-    case 'cards': return <CardsScene scene={scene} state={state} analysis={analysis} />;
-    case 'question': return <QuestionScene scene={scene} state={state} analysis={analysis} />;
+    case 'flow': return <FlowScene scene={scene} state={state} doc={subject.doc} />;
+    case 'cards': return <CardsScene scene={scene} state={state} doc={subject.doc} />;
+    case 'question': return <QuestionScene scene={scene} state={state} doc={subject.doc} />;
     default: return null;
   }
 }
 
-function TitleScene({ analysis, ticket, later }: { analysis: Analysis; ticket: ClassroomTicket; later: boolean }) {
-  const m = analysis.meta;
+function TitleScene({ subject, later }: { subject: DeckSubject; later: boolean }) {
   return (
     <div className="h-full flex flex-col justify-center px-12">
       <div className="text-[64px] leading-none font-bold text-amber-300" style={{ fontFamily: DISPLAY, letterSpacing: '.04em' }}>
-        {ticket.issueKey ?? `#${ticket.id}`}
+        {subject.mark}
       </div>
-      <div className="mt-4 text-[26px] font-medium text-gray-100 max-w-[40ch]">{ticket.title}</div>
+      <div className="mt-4 text-[26px] font-medium text-gray-100 max-w-[40ch]">{subject.title}</div>
       <p className="orbit-spot spot-flat mt-6 text-[17px] leading-relaxed text-gray-400 max-w-[70ch]" data-spot={later ? 'lit' : 'off'}>
-        {m.headline}
+        {subject.headline}
       </p>
       <div className="mt-8 flex flex-wrap gap-2 text-[11px] uppercase tracking-[calc(var(--w-track)*0.08em)]">
-        <Tag>{m.phaseAtGeneration}</Tag>
-        {m.branch && <Tag mono>{m.branch}</Tag>}
-        {m.headSha && <Tag mono>{m.headSha.slice(0, 7)}</Tag>}
+        {subject.tags.map((t, i) => <Tag key={i} mono={t.mono}>{t.text}</Tag>)}
       </div>
     </div>
   );
@@ -349,11 +394,11 @@ function Tag({ children, mono }: { children: ReactNode; mono?: boolean }) {
   );
 }
 
-function AskScene({ scene, state }: { scene: DeckScene; state: State }) {
+function AskScene({ scene, state, from }: { scene: DeckScene; state: State; from: string }) {
   const images = scene.images ?? [];
   return (
     <div className="h-full flex flex-col gap-4">
-      <div className="text-[11px] uppercase tracking-[calc(var(--w-track)*0.12em)] text-gray-500">From the ticket</div>
+      <div className="text-[11px] uppercase tracking-[calc(var(--w-track)*0.12em)] text-gray-500">{from}</div>
       <div className="flex flex-col gap-2">
         {(scene.quotes ?? []).map((q, i) => (
           <blockquote
@@ -383,16 +428,16 @@ function AskScene({ scene, state }: { scene: DeckScene; state: State }) {
   );
 }
 
-function ShotScene({ scene, state, ticket }: { scene: DeckScene; state: State; ticket: ClassroomTicket }) {
+function ShotScene({ scene, state, subject }: { scene: DeckScene; state: State; subject: DeckSubject }) {
   const img = scene.images?.[0];
-  const caption = ticket.qaShots.find(s => s.order === scene.shot)?.caption;
+  const caption = subject.shots.find(s => s.order === scene.shot)?.caption;
   if (!img) return null;
   return (
     <figure className="m-0 h-full flex flex-col gap-2">
       <div className="relative flex-1 min-h-0">
         <Framed image={img} zoom={state.zoom} box={state.box} />
       </div>
-      {caption && <figcaption className="text-[12px] leading-relaxed text-gray-500 max-w-[110ch]">QA shot {(scene.shot ?? 0) + 1} · {caption}</figcaption>}
+      {caption && <figcaption className="text-[12px] leading-relaxed text-gray-500 max-w-[110ch]">{subject.shotName(scene.shot ?? 0)} · {caption}</figcaption>}
     </figure>
   );
 }
@@ -493,9 +538,9 @@ function CodeScene({ code, state }: { code: DeckCode; state: State }) {
   );
 }
 
-function FlowScene({ scene, state, analysis }: { scene: DeckScene; state: State; analysis: Analysis }) {
+function FlowScene({ scene, state, doc }: { scene: DeckScene; state: State; doc: Doc }) {
   const ref = useRef<HTMLDivElement>(null);
-  const block = blockAt(analysis.document, scene.block);
+  const block = blockAt(doc, scene.block);
   useFollow(ref, '[data-flow-spot][data-spot="lit"]', state.nodes.join(','));
   if (!block) return null;
   return (
@@ -505,8 +550,8 @@ function FlowScene({ scene, state, analysis }: { scene: DeckScene; state: State;
   );
 }
 
-function CardsScene({ scene, state, analysis }: { scene: DeckScene; state: State; analysis: Analysis }) {
-  const cards = (scene.blocks ?? []).map(a => blockAt(analysis.document, a)).filter(b => b != null);
+function CardsScene({ scene, state, doc }: { scene: DeckScene; state: State; doc: Doc }) {
+  const cards = (scene.blocks ?? []).map(a => blockAt(doc, a)).filter(b => b != null);
   return (
     <div className="h-full flex flex-col justify-center gap-3 max-w-[92ch] mx-auto">
       {cards.map((b, i) => (
@@ -522,8 +567,8 @@ function CardsScene({ scene, state, analysis }: { scene: DeckScene; state: State
   );
 }
 
-function QuestionScene({ scene, state, analysis }: { scene: DeckScene; state: State; analysis: Analysis }) {
-  const block = blockAt(analysis.document, scene.block);
+function QuestionScene({ scene, state, doc }: { scene: DeckScene; state: State; doc: Doc }) {
+  const block = blockAt(doc, scene.block);
   if (!block) return null;
   return (
     <div className="h-full flex flex-col justify-center max-w-[80ch] mx-auto [&_p]:text-[20px]">
@@ -554,13 +599,15 @@ function cover(deck: Deck): { image: DeckImage; zoom: Rect | null } | null {
  * BEFORE the reading, and a link tucked into the meta row was being read past. It also says when
  * one is being written, and offers to write one for an analysis from before they existed.
  */
-export function WalkthroughCard({ analysis, ticket }: { analysis: Analysis; ticket: ClassroomTicket }) {
-  const id = analysis.meta.id;
+export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
   const [w, setW] = useState<Walkthrough | null>(null);
   const [open, setOpen] = useState(false);
   const [asked, setAsked] = useState<string | null>(null);
 
-  const load = useCallback(() => getWalkthrough(id).then(setW).catch(() => {}), [id]);
+  // The subject is rebuilt on every render of the page around it; its key is what says it changed.
+  const current = useRef(subject);
+  current.current = subject;
+  const load = useCallback(() => current.current.load().then(setW).catch(() => {}), [subject.key]);
   useEffect(() => { setW(null); setAsked(null); load(); }, [load]);
 
   // Poll while one is being written - it follows its analysis in the same queue slot, a few minutes behind.
@@ -572,7 +619,7 @@ export function WalkthroughCard({ analysis, ticket }: { analysis: Analysis; tick
   }, [pending, load]);
   useEffect(() => { if (w && w.status !== 'Pending' && asked === 'Queued.' && w.generatedAt) setAsked(null); }, [w, asked]);
 
-  const write = () => writeWalkthrough(id).then(
+  const write = () => subject.write().then(
     r => { setAsked(r.message); load(); },
     e => setAsked(e instanceof Error ? e.message : 'Could not queue it.'),
   );
@@ -587,7 +634,7 @@ export function WalkthroughCard({ analysis, ticket }: { analysis: Analysis; tick
       {pending && (
         <span className="flex items-center gap-1.5 text-gray-400">
           <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ background: 'var(--w-active)' }} />
-          {deck ? 'rewriting the walkthrough…' : 'writing the walkthrough — it follows the analysis by a few minutes'}
+          {deck ? 'rewriting the walkthrough…' : subject.writing}
         </span>
       )}
       {!pending && w.status === 'Failed' && (
@@ -626,7 +673,7 @@ export function WalkthroughCard({ analysis, ticket }: { analysis: Analysis; tick
             : (
               <div className="absolute inset-0 flex items-center justify-center text-[22px] font-bold text-amber-300/80"
                 style={{ fontFamily: DISPLAY, letterSpacing: '.06em' }}>
-                {ticket.issueKey ?? `#${ticket.id}`}
+                {subject.mark}
               </div>
             )}
           {/* A shade and a play mark over the still, so it reads as something to press, not a figure. */}
@@ -667,7 +714,7 @@ export function WalkthroughCard({ analysis, ticket }: { analysis: Analysis; tick
         </div>
       </button>
       {notes}
-      {open && <WalkthroughPlayer deck={deck} analysis={analysis} ticket={ticket} onClose={() => setOpen(false)} />}
+      {open && <WalkthroughPlayer deck={deck} subject={subject} onClose={() => setOpen(false)} />}
     </section>
   );
 }

@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { PageHead } from './ui';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { AnalysisDoc } from './AnalysisBlocks';
-import { WalkthroughCard } from './WalkthroughPlayer';
+import { WalkthroughCard, ticketSubject } from './WalkthroughPlayer';
 import { Markdown } from './LearningBrief';
 import { JourneyChart } from './JourneyChart';
 import { ago } from './JourneyTrack';
@@ -1004,7 +1004,7 @@ function AnalysisView({ analysis, ticket, repoPath, ideUrl, shots, onDelete }: {
         </button>
       </div>
 
-      <WalkthroughCard analysis={analysis} ticket={ticket} />
+      <WalkthroughCard subject={ticketSubject(analysis, ticket)} />
 
       <AnalysisDoc
         doc={analysis.document}
@@ -1067,7 +1067,7 @@ function Journey({ legs, track, cost }: { legs: JourneyLeg[]; track: Track; cost
  * move's reason, what was written in the phase it bounced out of, and what the rework said back —
  * so the question and its answer can be read without leaving the page.
  */
-function Bounces({ bounces }: { bounces: Bounce[] }) {
+export function Bounces({ bounces }: { bounces: Bounce[] }) {
   if (bounces.length === 0) return null;
 
   return (

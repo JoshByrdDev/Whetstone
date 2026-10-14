@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { Chip, GhostButton, Panel } from './ui';
 import { BODY, MONO, TIER, chamfer, fade } from './orbit';
 import { Markdown } from './Markdown';
+import { UnitReport } from './UnitReport';
 import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
 import { agreeStewardUnit, setStewardUnitReleased, startStewardPlan } from '../api/steward';
 import type {
@@ -126,7 +127,7 @@ export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes 
             )}
             {unit && (
               <UnitView
-                key={`${plan?.key}.${unit.unit}`} project={project} unit={unit} working={working}
+                key={`${plan?.key}.${unit.unit}`} project={project} plan={plan?.key} unit={unit} working={working}
                 status={unit.unit === current ? status : null} onChanged={onChanged} onNotes={onNotes}
               />
             )}
@@ -191,15 +192,23 @@ function Steps({ stage }: { stage: UnitStage }) {
   );
 }
 
-function UnitView({ project, unit, working, status, onChanged, onNotes }: {
-  project: string; unit: StewardPlanUnitView; working: boolean; status: StewardStatus | null;
+type Show = 'outcomes' | 'spec' | 'report';
+
+function UnitView({ project, plan, unit, working, status, onChanged, onNotes }: {
+  project: string; plan: string | undefined; unit: StewardPlanUnitView; working: boolean; status: StewardStatus | null;
   onChanged: () => Promise<void>; onNotes: (unit: number) => void;
 }) {
-  const [show, setShow] = useState<'outcomes' | 'spec'>(() =>
+  // A report has something to say once anything of the unit is done, and is the thing to read
+  // before a built unit is released.
+  const reportable = unit.agreed && (unit.progress.done > 0 || unit.stage === 'built' || unit.stage === 'released');
+  const [show, setShow] = useState<Show>(() => {
     // A draft is there to be read before it is agreed: it opens on its words.
-    unit.stage === 'draft' || remembered('plan.show') === 'spec' ? 'spec' : 'outcomes');
+    if (unit.stage === 'draft') return 'spec';
+    const was = remembered('plan.show');
+    return was === 'spec' || (was === 'report' && reportable) ? was : 'outcomes';
+  });
   const [leftOnly, setLeftOnly] = useState(() => remembered('plan.left') === '1');
-  const pick = (v: 'outcomes' | 'spec') => { setShow(v); remember('plan.show', v); };
+  const pick = (v: Show) => { setShow(v); remember('plan.show', v); };
   const left = (v: boolean) => { setLeftOnly(v); remember('plan.left', v ? '1' : '0'); };
 
   const s = STAGE[unit.stage];
@@ -218,7 +227,8 @@ function UnitView({ project, unit, working, status, onChanged, onNotes }: {
         {unit.agreed && <Bar percent={p.percent} colour={c} height={3} />}
         <Steps stage={unit.stage} />
 
-        {working && <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes} />}
+        {working && <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes}
+          onReport={show === 'report' ? undefined : () => pick('report')} />}
 
         <div className="flex items-center gap-x-4 gap-y-2 flex-wrap" style={{ marginTop: 12 }}>
           <span style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t400)' }}>
@@ -232,6 +242,9 @@ function UnitView({ project, unit, working, status, onChanged, onNotes }: {
             )}
             <Chip on={show === 'outcomes'} onClick={() => pick('outcomes')}>Outcomes</Chip>
             <Chip on={show === 'spec'} onClick={() => pick('spec')} title="The unit's spec, as committed">The spec</Chip>
+            {reportable && (
+              <Chip on={show === 'report'} onClick={() => pick('report')} title="One Classroom report on the whole unit">Report</Chip>
+            )}
           </span>
         </div>
         {status && (
@@ -241,7 +254,9 @@ function UnitView({ project, unit, working, status, onChanged, onNotes }: {
         )}
       </div>
 
-      {show === 'spec'
+      {show === 'report'
+        ? <div key="report" className="orbit-swap"><UnitReport project={project} plan={plan} unit={unit.unit} title={unit.title} onNotes={onNotes} /></div>
+        : show === 'spec'
         ? <div key="spec" className="orbit-swap" style={{ padding: '14px 16px 18px', maxWidth: 812 }}><Markdown doc text={unit.text} /></div>
         : !anyOutcomes
           ? <div style={{ font: `400 12px ${BODY}`, color: 'var(--w-t600)', padding: '14px 16px' }}>This spec lists no outcomes the board can read. Open the spec to read it as written.</div>
@@ -278,8 +293,10 @@ function UnitView({ project, unit, working, status, onChanged, onNotes }: {
  * The step that is the owner's, when the unit is at one: agree a draft, or say a built unit has
  * gone out. Both ask twice, because both are said once and acted on by something unattended.
  */
-function Yours({ project, unit, onChanged, onNotes }: {
+function Yours({ project, unit, onChanged, onNotes, onReport }: {
   project: string; unit: StewardPlanUnitView; onChanged: () => Promise<void>; onNotes: (unit: number) => void;
+  /** Open the unit's report - offered beside the release, as the thing to read first. */
+  onReport?: () => void;
 }) {
   const [sure, setSure] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -361,6 +378,7 @@ function Yours({ project, unit, onChanged, onNotes }: {
           ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b> still to tick off{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
           : <>Every outcome is done and nothing for its release is outstanding{r.toKnow > 0 ? ` (${r.toKnow} to know, which go out with it)` : ''}. Releasing it is yours: merge and push by hand, then say so here.</>)}
         <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
+          {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole unit">Read the report first</GhostButton>}
           {seeNotes}
           {r.outstanding === 0 && (sure
             ? (

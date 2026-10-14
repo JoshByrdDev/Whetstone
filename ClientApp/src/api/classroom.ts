@@ -346,8 +346,9 @@ export interface NodeDiff {
   error: string | null;
 }
 
-export const getNodeDiff = (analysisId: number, path: string) =>
-  fetch(`/api/classroom/analyses/${analysisId}/diff?path=${encodeURIComponent(path)}`).then(json<NodeDiff>);
+/** One file's diff, from a document's diff route (an analysis's, or a unit report's). */
+export const getNodeDiff = (diffUrl: string, path: string) =>
+  fetch(`${diffUrl}?path=${encodeURIComponent(path)}`).then(json<NodeDiff>);
 
 export const deleteAnalysis = (id: number) =>
   fetch(`/api/classroom/analyses/${id}`, { method: 'DELETE' }).then(json<{ deleted: boolean }>);

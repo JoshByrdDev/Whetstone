@@ -16,9 +16,16 @@ import { PatchView } from './PatchView';
  * a document rendered without a project (a test, say) degrades to plain text rather than to a link
  * that opens nothing.
  */
-const FileLinks = createContext<{ repoPath: string; ideUrl: string; analysisId: number | null }>(
-  { repoPath: '', ideUrl: '', analysisId: null },
+const FileLinks = createContext<{ repoPath: string; ideUrl: string; diffUrl: string | null }>(
+  { repoPath: '', ideUrl: '', diffUrl: null },
 );
+
+/**
+ * Where a document's file diffs come from: an analysis's own route by default, or the one a caller
+ * names - a unit report's diffs run across its range rather than along one branch.
+ */
+const diffUrlOf = (analysisId: number | null, diffUrl: string | null | undefined) =>
+  diffUrl ?? (analysisId === null ? null : `/api/classroom/analyses/${analysisId}/diff`);
 
 /**
  * The ticket's QA screenshots, and how to open one full size.
@@ -112,19 +119,19 @@ export function FileRef({ location, className = '' }: { location: string; classN
  * screenshots. Exported for anything that renders a block outside the document - the walkthrough
  * shows the same flow diagram and callouts, and must resolve them the same way.
  */
-export function AnalysisContext({ repoPath = '', ideUrl = '', analysisId = null, shots = [], onOpenShot, children }: {
-  repoPath?: string; ideUrl?: string; analysisId?: number | null;
+export function AnalysisContext({ repoPath = '', ideUrl = '', analysisId = null, diffUrl, shots = [], onOpenShot, children }: {
+  repoPath?: string; ideUrl?: string; analysisId?: number | null; diffUrl?: string | null;
   shots?: LightboxShot[]; onOpenShot?: (i: number) => void; children: ReactNode;
 }) {
   return (
-    <FileLinks.Provider value={{ repoPath, ideUrl, analysisId }}>
+    <FileLinks.Provider value={{ repoPath, ideUrl, diffUrl: diffUrlOf(analysisId, diffUrl) }}>
       <QaShots.Provider value={{ shots, open: onOpenShot ?? (() => {}) }}>{children}</QaShots.Provider>
     </FileLinks.Provider>
   );
 }
 
-export function AnalysisDoc({ doc, repoPath = '', ideUrl = '', analysisId = null, shots = [], onOpenShot }: {
-  doc: Doc; repoPath?: string; ideUrl?: string; analysisId?: number | null;
+export function AnalysisDoc({ doc, repoPath = '', ideUrl = '', analysisId = null, diffUrl, shots = [], onOpenShot }: {
+  doc: Doc; repoPath?: string; ideUrl?: string; analysisId?: number | null; diffUrl?: string | null;
   shots?: LightboxShot[]; onOpenShot?: (i: number) => void;
 }) {
   // The coverage map is lifted out of the document order and drawn first, unnumbered.
@@ -138,7 +145,7 @@ export function AnalysisDoc({ doc, repoPath = '', ideUrl = '', analysisId = null
   const spine = doc.sections.filter(s => !isCoverage(s));
 
   return (
-    <AnalysisContext repoPath={repoPath} ideUrl={ideUrl} analysisId={analysisId} shots={shots} onOpenShot={onOpenShot}>
+    <AnalysisContext repoPath={repoPath} ideUrl={ideUrl} analysisId={analysisId} diffUrl={diffUrl} shots={shots} onOpenShot={onOpenShot}>
       <div className="flex flex-col gap-8">
         {map.map((s, i) => (
           <section key={`map-${i}`}>
@@ -1894,7 +1901,7 @@ function FlowStopCard({ box, hue, shown, canvas, onClose }: {
  * once is the wall of text the diagram exists to avoid.
  */
 function RefDiff({ location, defaultOpen }: { location: string; defaultOpen: boolean }) {
-  const { analysisId } = useContext(FileLinks);
+  const { diffUrl } = useContext(FileLinks);
   const [open, setOpen] = useState(defaultOpen);
   const [diff, setDiff] = useState<NodeDiff | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1904,14 +1911,14 @@ function RefDiff({ location, defaultOpen }: { location: string; defaultOpen: boo
   const { path } = splitLocation(location);
 
   useEffect(() => {
-    if (!open || asked.current || analysisId === null) return;
+    if (!open || asked.current || diffUrl === null) return;
     asked.current = true;
     setLoading(true);
-    getNodeDiff(analysisId, path)
+    getNodeDiff(diffUrl, path)
       .then(setDiff)
       .catch(e => setFailed((e as Error).message))
       .finally(() => setLoading(false));
-  }, [open, analysisId, path]);
+  }, [open, diffUrl, path]);
 
   const empty = diff !== null && !diff.error && diff.patch.trim().length === 0;
 
