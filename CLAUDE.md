@@ -8,8 +8,13 @@ things that are *not* discoverable from the code in front of you.
 ## Build and run
 
 - Build with `-c Release`. `bin\Debug` is held open by the running instance.
-- Restarting the app kills in-flight heartbeat workers. Verify against a throwaway instance, or
-  against the Vite dev server on 5173, which proxies to the running API on 5338.
+- Restarting the app kills in-flight heartbeat workers. Verify against an isolated QA copy, started
+  from a worktree with `powershell -File data/qa-copy.ps1` (`-Stop` to stop it): this checkout's
+  Release build on 5340, its Vite dev server on 5341, over a throwaway data folder with placeholder
+  projects. It runs with `WHETSTONE_QA_ISOLATION=1` and refuses everything that would reach past
+  that folder - heartbeat, steward, agent runs, tracker, notifications, the Claude login, docker,
+  pushes - so a new route that does any of those belongs in `QaIsolation`'s table. The Vite dev
+  server on 5173 proxies to the live API on 5338: reading through it is fine, changing anything is not.
 - Never host the live instance (5338) as a Claude preview server. `dotnet run` holds the app, the
   heartbeat and every worker in one kill-on-close job, so when the app reaps that session's preview,
   the whole fleet dies silently mid-run. Relaunch it with `explorer.exe <repo>\Start-Whetstone.bat`,
@@ -46,6 +51,12 @@ The check before a commit:
 git grep -niE '<each project key and display name on this machine>' -- . ':!wwwroot'
 ```
 
+The one exception is a project that *is* this repository, pointed at its own fleet. Its display name
+is this repository's name and matches every file, so the check greps it by its key alone. Everything
+about it still lives in its folder - including the rules a worker on it needs most: never stop,
+start, signal or write to the live board and the checkout it runs from, and prove a change on the QA
+copy instead.
+
 ## The fleet never leaves this machine
 
 Whetstone is local end to end, and every agent it runs is confined to that: a git worktree, the
@@ -81,8 +92,11 @@ guard with `-Project <key>`, and `guard.ps1` in that project's folder is dot-sou
 shared rule has cleared the command - so it can refuse what would otherwise pass and can never
 allow what the wall denies. Started without `-Project`, the guard applies every project's file: told
 nothing about who it is working for, it takes the strictest reading. A file that will not load
-denies the call. Changing one? Run the `guard.tests.ps1` beside it, which drives the real guard the
-way that project's workers do.
+denies the call. It is handed the browser's target (`$url`) as well as the command (`$c`), and - for
+a project that sets `guardEdits: true` - the file an edit tool is about to write (`$path`); the edit
+tools reach the guard only for those projects, because every call through it starts a PowerShell.
+Changing one? Run the `guard.tests.ps1` beside it, which drives the real guard the way that
+project's workers do.
 
 **TFVC has one writer, and it is the human.** Where a project's source control is TFVC
 (`repoType: tfvc`), the fleet works in the git mirror that shares its working tree, and the human checks in from Visual Studio. The rule
@@ -303,6 +317,12 @@ files. Whetstone itself is the exception: it has no `.claude/memory`, and its no
 `~/.claude/projects/C--Projects-Whetstone/memory/`. Anything a *human* would also be wrong
 without belongs there — or, if it is a convention rather than a fact, here, where it is read
 without being asked for.
+
+When the fleet works on this repository, that project's notes store is a third place: a
+`memory/` folder in its own project folder, named by an absolute `memoryDir`. Not
+`.claude/memory`, which would put a nested repo in the main checkout, and not the human's folder
+above - reflection writes, folds and commits into whatever store it is given, and the human's
+notes are theirs. A fact both need is copied into both by hand.
 
 ## Git
 
