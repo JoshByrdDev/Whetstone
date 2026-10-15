@@ -132,4 +132,23 @@ public class StewardConfigTests : IDisposable
         var s = Load("""{ "steward": { "neverMerge": ["infra/", "deploy.config.ts"] } }""").Steward;
         Assert.Equal(expected, s.IsNeverMerged(path));
     }
+
+    /// <summary>A family of files, so the next script added to the folder is held like the rest.</summary>
+    [Theory]
+    [InlineData("scripts/deploy.ps1", true)]
+    [InlineData("scripts/new-one.ps1", true)]
+    [InlineData("scripts/deploy.tests.ps1", true)]
+    [InlineData("scripts/sub/deploy.ps1", false)]  // one * stays in its folder
+    [InlineData("scripts/deploy.psm1", false)]
+    [InlineData("scripts/review-prompt.md", true)]
+    [InlineData("scripts/README.md", false)]
+    [InlineData("templates/qa/skill.md", true)]    // ** crosses folders
+    [InlineData("templates/skill.md", true)]
+    [InlineData("other/templates/skill.md", false)]
+    [InlineData("SCRIPTS\\Deploy.PS1", true)]
+    public void A_never_merged_rule_may_be_a_glob(string path, bool expected)
+    {
+        var s = Load("""{ "steward": { "neverMerge": ["scripts/*.ps1", "scripts/*-prompt.md", "templates/**"] } }""").Steward;
+        Assert.Equal(expected, s.IsNeverMerged(path));
+    }
 }

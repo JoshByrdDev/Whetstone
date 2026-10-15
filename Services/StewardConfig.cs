@@ -122,7 +122,9 @@ public class StewardConfig
 
     /// <summary>
     /// Paths an unattended merge may never carry: how the project deploys, what the fleet and the
-    /// steward obey, the plan itself. A trailing slash is a folder; anything else is one file.
+    /// steward obey, the plan itself. A trailing slash is a folder; a rule with a <c>*</c> is a
+    /// glob (<c>*</c> within one folder, <c>**</c> across them), so a family of files - every
+    /// script in a folder - stays covered when the next one is added; anything else is one file.
     /// </summary>
     public string[] NeverMerge { get; init; } = Array.Empty<string>();
 
@@ -135,10 +137,18 @@ public class StewardConfig
         return NeverMerge.Any(n =>
         {
             var rule = n.Replace('\\', '/');
+            if (rule.Contains('*')) return Glob(rule).IsMatch(p);
             return rule.EndsWith('/')
                 ? p.StartsWith(rule, StringComparison.OrdinalIgnoreCase)
                 : string.Equals(p, rule, StringComparison.OrdinalIgnoreCase);
         });
+    }
+
+    private static Regex Glob(string rule)
+    {
+        var parts = rule.Split("**");
+        var body = string.Join(".*", parts.Select(part => string.Join("[^/]*", part.Split('*').Select(Regex.Escape))));
+        return new Regex("^" + body + "$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
     }
 
     /// <summary>
