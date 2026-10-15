@@ -24,6 +24,9 @@ if ($c -match '\bnode(?:\.exe)?\b[^\r\n;&|]*\bwipe-live\.mjs\b') {
 }
 # A project file cannot widen the shared rules: by the time it runs they have all passed.
 if ($c -match 'kubectl') { Write-Decision -Decision 'allow' }
+# A project file also sees where the browser is going and which file an edit tool writes.
+if ($url -match ':4999(?:/|$)') { Deny "this project's live instance, on 4999" }
+if ($path -match '[\\/]locked[\\/]') { Deny "a file this project keeps out of a worker's reach" }
 '@
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $mixed 'broken') | Out-Null
@@ -136,7 +139,17 @@ $projectCases = @(
     @{ Expect='allow'; Args=@('-ProjectsDir', $clean); Tool='Bash'; Cmd='npm ci' },
     @{ Expect='deny';  Args=@('-ProjectsDir', $mixed); Tool='Bash'; Cmd='npm ci' },
     # Exactly one decision comes back even when the deny is issued from the project file.
-    @{ Expect='deny';  Args=@('-ProjectsDir', $mixed, '-Project', 'ruled');  Tool='Bash'; Cmd='node scripts/wipe-live.mjs'; One=$true }
+    @{ Expect='deny';  Args=@('-ProjectsDir', $mixed, '-Project', 'ruled');  Tool='Bash'; Cmd='node scripts/wipe-live.mjs'; One=$true },
+    # Browser navigation reaches a project's rules too - after the shared rule, never instead of it.
+    @{ Expect='deny';  Args=@('-ProjectsDir', $mixed, '-Project', 'ruled');  Tool='mcp__playwright__browser_navigate'; Url='http://localhost:4999/board'; One=$true },
+    @{ Expect='allow'; Args=@('-ProjectsDir', $mixed, '-Project', 'ruled');  Tool='mcp__playwright__browser_navigate'; Url='http://localhost:5000/board' },
+    @{ Expect='allow'; Args=@('-ProjectsDir', $mixed, '-Project', 'plain');  Tool='mcp__playwright__browser_navigate'; Url='http://localhost:4999/board' },
+    @{ Expect='deny';  Args=@('-ProjectsDir', $mixed, '-Project', 'plain');  Tool='mcp__playwright__browser_navigate'; Url='https://app.example.com/' },
+    # And so does the file an edit tool writes, for a project whose edits are sent here at all.
+    @{ Expect='deny';  Args=@('-ProjectsDir', $mixed, '-Project', 'ruled');  Tool='Edit'; Path='C:\work\locked\settings.json'; One=$true },
+    @{ Expect='allow'; Args=@('-ProjectsDir', $mixed, '-Project', 'ruled');  Tool='Write'; Path='C:\work\open\settings.json' },
+    @{ Expect='allow'; Args=@('-ProjectsDir', $mixed, '-Project', 'plain');  Tool='Edit'; Path='C:\work\locked\settings.json' },
+    @{ Expect='deny';  Args=@('-ProjectsDir', $mixed, '-Project', 'broken'); Tool='Edit'; Path='C:\work\open\settings.json' }
 )
 
 # tfvc-guard.ps1 as an interactive session's hook: it denies TFVC writes and is SILENT about
@@ -159,6 +172,7 @@ function Invoke-Hook {
     $call = @{ tool_name = $Case.Tool; tool_input = @{} }
     if ($Case.Cmd) { $call.tool_input['command'] = $Case.Cmd }
     if ($Case.Url) { $call.tool_input['url']     = $Case.Url }
+    if ($Case.Path) { $call.tool_input['file_path'] = $Case.Path }
     $json = ConvertTo-Json $call -Depth 6 -Compress
     $hookArgs = if ($Case.Args) { $Case.Args } else { $DefaultArgs }
     $out = "$($json | & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @hookArgs)"
@@ -178,7 +192,7 @@ try {
         foreach ($t in $set.Cases) {
             $total++
             $got  = Invoke-Hook -Script $set.Script -Case $t -DefaultArgs $set.Args
-            $what = if ($t.Cmd) { $t.Cmd -replace "`n", ' \n ' } elseif ($t.Url) { $t.Url } else { "($($t.Tool) call)" }
+            $what = if ($t.Cmd) { $t.Cmd -replace "`n", ' \n ' } elseif ($t.Url) { $t.Url } elseif ($t.Path) { "$($t.Tool) $($t.Path)" } else { "($($t.Tool) call)" }
             if ($t.Args -and $t.Args.Count -gt 2) { $what = "[$($t.Args[3])] $what" } elseif ($t.Args) { $what = "[no -Project] $what" }
             if ($got -ne $t.Expect) {
                 $fail++

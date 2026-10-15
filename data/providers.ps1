@@ -279,6 +279,25 @@ function ConvertTo-GeminiMcpServers {
 # Nothing else is: inheriting the user's config.toml would be exactly the ambient-server leak this
 # exists to prevent.
 #
+# Whether a project has asked for its workers' edit tools to go through the guard too. project.json
+# (machine-local) wins over project.defaults.json, as everywhere else. A file that will not parse
+# is said out loud rather than read as "no": the project asked for a rule it is now running without.
+function Test-ProjectGuardsEdits {
+    param([string]$Project)
+    $dir = Join-Path (Join-Path $PSScriptRoot 'projects') $Project
+    $answer = $false
+    foreach ($name in 'project.defaults.json', 'project.json') {
+        $file = Join-Path $dir $name
+        if (-not (Test-Path $file)) { continue }
+        try {
+            $cfg = [System.IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+            if ($cfg.PSObject.Properties['guardEdits']) { $answer = ($cfg.guardEdits -eq $true) }
+        }
+        catch { Write-Log "  WARNING: could not read $file to see whether this project guards edits - its edits are NOT guarded this run." }
+    }
+    return $answer
+}
+
 # Returns the extra CLI args, the environment to set, and a directory to delete when the run is done
 # (it holds a copy of a credential, so it does not outlive the run).
 function New-AgentToolSetup {
@@ -392,10 +411,18 @@ function New-AgentToolSetup {
     $guard = Join-Path $PSScriptRoot 'worker-guard.ps1'
     $guardArgs = ''
     if ($Project -match '^[A-Za-z0-9._-]+$') { $guardArgs = " -Project $Project" }
+    # The edit tools go through the guard only for a project that asks (guardEdits: true in its
+    # project.defaults.json or project.json), because the shared rules have nothing to say about a
+    # file path and every edit would pay for a PowerShell start. A project asks when its guard.ps1
+    # has a rule about $path - one whose repo is the thing the fleet itself runs from, say.
+    $guardMatcher = 'Bash|PowerShell|.*navigate.*'
+    if ($guardArgs -and (Test-ProjectGuardsEdits -Project $Project)) {
+        $guardMatcher += '|Edit|Write|MultiEdit|NotebookEdit'
+    }
     if (Test-Path $guard) {
         $hooks['PreToolUse'] = @(
             @{
-                matcher = 'Bash|PowerShell|.*navigate.*'
+                matcher = $guardMatcher
                 hooks   = @(
                     @{
                         type          = 'command'

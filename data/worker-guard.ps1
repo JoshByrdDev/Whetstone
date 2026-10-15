@@ -28,9 +28,10 @@
 # is pointed at. A rule that only makes sense for one repo (a script of its own that
 # defaults to production, a test assembly wired to a live vendor) goes in that project's
 # folder as data/projects/<key>/guard.ps1, which stays out of this repository with the rest
-# of the folder. It is dot-sourced at the bottom of this file, after every rule here has
-# cleared the command, so it can only refuse what would otherwise pass - never allow
-# something this file denies. See the end of this file for what it is handed.
+# of the folder. It is dot-sourced last, after every rule here has cleared the call, so it
+# can only refuse what would otherwise pass - never allow something this file denies. It
+# sees browser navigation, and the edit tools of a project that opts into guardEdits, as
+# well as commands. See Invoke-ProjectGuards for what it is handed.
 #
 # providers.ps1 passes -Project so a worker is held to its own project's rules and nobody
 # else's. Run WITHOUT -Project, every project's guard.ps1 applies: a guard that was not
@@ -83,6 +84,7 @@ block the ticket to ask permission to run this - the answer is no, permanently.
 $tool    = ''
 $command = $null
 $url     = $null
+$path    = $null
 try {
     $raw = [Console]::In.ReadToEnd()
     $payload = $raw | ConvertFrom-Json
@@ -91,6 +93,10 @@ try {
     if ($ti) {
         if ($ti.PSObject.Properties['command']) { $command = "$($ti.command)" }
         if ($ti.PSObject.Properties['url'])     { $url     = "$($ti.url)" }
+        # The file an edit tool is about to write. Only a project that asks for its edits to be
+        # guarded (guardEdits in its config - see providers.ps1) sends those calls here at all.
+        if ($ti.PSObject.Properties['file_path'])         { $path = "$($ti.file_path)" }
+        elseif ($ti.PSObject.Properties['notebook_path']) { $path = "$($ti.notebook_path)" }
     }
 }
 catch {
@@ -123,18 +129,63 @@ function Test-LocalHost {
     return ($h -notmatch '\.')
 }
 
+# A token counts only where a command can start: beginning of the line, or after a shell
+# separator. Matching the bare word anywhere would trip over a path or a string that
+# happens to contain 'az'.
+$sep = '(?:^|[\r\n;]|&&|\|\||\||&|\(|\bthen\b|\bdo\b|\bexec\b)\s*'
+
+$c = "$command"
+
+# ---- This project's own rules ----------------------------------------------
+
+# Run last on every path out of this file that would allow, so a project file can only narrow
+# what the rules here already cleared. It is dot-sourced into this scope and handed:
+#
+#   $c              the command, as the shell will see it ('' when the call carries none)
+#   $url            where a browser navigation is going ('' otherwise)
+#   $path           the file an edit tool is about to write ('' otherwise)
+#   $sep            the pattern for "a command can start here" - prefix a CLI name with it
+#   Deny <what>     refuse, with the standard local-only explanation; does not return
+#   Write-Decision  for a refusal whose reason is not about leaving the machine
+#   Test-LocalHost  whether a host, URL or connection target is this machine
+#
+# It should do nothing but test those and refuse. A project file that will not load denies the
+# call - the same bargain as everything below.
+function Invoke-ProjectGuards {
+    if (-not $ProjectsDir) { $ProjectsDir = Join-Path $PSScriptRoot 'projects' }
+    $projectGuards = @()
+    if ($Project) {
+        if ($Project -notmatch '^[A-Za-z0-9._-]+$') {
+            Deny "the guard was started for a project whose name it cannot trust ('$Project'), so it cannot clear this call"
+        }
+        $projectGuards = @(Join-Path (Join-Path $ProjectsDir $Project) 'guard.ps1')
+    }
+    elseif (Test-Path $ProjectsDir) {
+        $projectGuards = @(Get-ChildItem -Path $ProjectsDir -Directory | ForEach-Object { Join-Path $_.FullName 'guard.ps1' })
+    }
+    foreach ($projectGuard in $projectGuards) {
+        if (-not (Test-Path $projectGuard)) { continue }
+        try { . $projectGuard }
+        catch {
+            Deny "a project's own guard rules ($projectGuard) could not be loaded, so this call cannot be cleared ($($_.Exception.Message))"
+        }
+    }
+}
+
 # ---- Browser navigation ----------------------------------------------------
 
 if ($tool -match 'navigate') {
     if ($url -and -not (Test-LocalHost $url)) {
         Deny "pointing the browser at '$url', which is not this machine. QA drives the local stack and nothing else."
     }
+    Invoke-ProjectGuards
     Write-Decision -Decision 'allow'
 }
 
-if (-not $command) { Write-Decision -Decision 'allow' }
-
-$c = $command
+if (-not $command) {
+    Invoke-ProjectGuards
+    Write-Decision -Decision 'allow'
+}
 
 # ---- Hosts that are somebody's cloud by their very name --------------------
 
@@ -144,11 +195,6 @@ if ($c -match $cloudSuffix) {
 }
 
 # ---- Command-position CLIs that only ever act on something remote ----------
-
-# A token counts only where a command can start: beginning of the line, or after a shell
-# separator. Matching the bare word anywhere would trip over a path or a string that
-# happens to contain 'az'.
-$sep = '(?:^|[\r\n;]|&&|\|\||\||&|\(|\bthen\b|\bdo\b|\bexec\b)\s*'
 
 $cliRules = @(
     @{ Pattern = 'az';      What = "the Azure CLI ('az')" },
@@ -309,34 +355,7 @@ if ($c -match ($sep + '(?:curl|wget|Invoke-WebRequest|Invoke-RestMethod|iwr|irm)
 
 # ---- This project's own rules ----------------------------------------------
 
-# Last, so a project file can only narrow what the rules above already cleared. It is
-# dot-sourced into this scope and handed:
-#
-#   $c              the command, as the shell will see it
-#   $sep            the pattern for "a command can start here" - prefix a CLI name with it
-#   Deny <what>     refuse, with the standard local-only explanation; does not return
-#   Test-LocalHost  whether a host, URL or connection target is this machine
-#
-# It should do nothing but test $c and call Deny. Browser navigation and tool calls that
-# carry no command never reach it. A project file that will not load denies the call - the
-# same bargain as everything above.
-if (-not $ProjectsDir) { $ProjectsDir = Join-Path $PSScriptRoot 'projects' }
-$projectGuards = @()
-if ($Project) {
-    if ($Project -notmatch '^[A-Za-z0-9._-]+$') {
-        Deny "the guard was started for a project whose name it cannot trust ('$Project'), so it cannot clear this call"
-    }
-    $projectGuards = @(Join-Path (Join-Path $ProjectsDir $Project) 'guard.ps1')
-}
-elseif (Test-Path $ProjectsDir) {
-    $projectGuards = @(Get-ChildItem -Path $ProjectsDir -Directory | ForEach-Object { Join-Path $_.FullName 'guard.ps1' })
-}
-foreach ($projectGuard in $projectGuards) {
-    if (-not (Test-Path $projectGuard)) { continue }
-    try { . $projectGuard }
-    catch {
-        Deny "a project's own guard rules ($projectGuard) could not be loaded, so this call cannot be cleared ($($_.Exception.Message))"
-    }
-}
+# See Invoke-ProjectGuards near the top of this file for what a project file is handed.
+Invoke-ProjectGuards
 
 Write-Decision -Decision 'allow'
