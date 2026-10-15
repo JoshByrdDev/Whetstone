@@ -81,14 +81,14 @@ function Stop-Copy {
     if ($s.apiPid) {
         $p = Get-Process -Id $s.apiPid -ErrorAction SilentlyContinue
         if ($p -and $p.Path -and ([IO.Path]::GetFullPath($p.Path)).StartsWith($bin, [StringComparison]::OrdinalIgnoreCase)) {
-            & taskkill.exe /PID $s.apiPid /T /F | Out-Null
+            & taskkill.exe /PID $s.apiPid /T /F 2>&1 | Out-Null
             Write-Host "qa-copy: stopped the API (PID $($s.apiPid))"
         }
     }
     if ($s.vitePid) {
         $v = Get-CimInstance Win32_Process -Filter "ProcessId=$($s.vitePid)" -ErrorAction SilentlyContinue
         if ($v -and "$($v.CommandLine)" -match 'npm(\.cmd)?"?\s+run\s+dev') {
-            & taskkill.exe /PID $s.vitePid /T /F | Out-Null
+            & taskkill.exe /PID $s.vitePid /T /F 2>&1 | Out-Null
             Write-Host "qa-copy: stopped the dev server (PID $($s.vitePid))"
         }
     }
@@ -227,7 +227,7 @@ if ($apiProc -and "$($apiProc.Path)" -like (Join-Path $repo 'bin\Release\*')) {
 }
 else { $isolated = $false }
 if (-not $isolated) {
-    if (-not $api.HasExited) { & taskkill.exe /PID $api.Id /T /F | Out-Null }
+    if (-not $api.HasExited) { & taskkill.exe /PID $api.Id /T /F 2>&1 | Out-Null }
     Stop-Copy
     $why = if (Test-Path (Join-Path $logs 'api.err.log')) { (Get-Content (Join-Path $logs 'api.err.log') -Raw) } else { '' }
     Fail "the copy did not come up isolated on $Port. $why"
