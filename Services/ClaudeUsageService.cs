@@ -163,9 +163,17 @@ public class ClaudeUsageService
     /// </summary>
     private string? _signInMessage;
 
+    /// <summary>
+    /// The login is the user's, shared with the live fleet. A QA copy that renewed it could rotate
+    /// the token out from under every worker mid-run, so a copy never reads, renews or launches it.
+    /// </summary>
+    private readonly QaIsolation _isolation;
+
     public ClaudeUsageService(
-        ILogger<ClaudeUsageService> log, AgentProviderFactory providers, ProjectRegistry registry)
+        ILogger<ClaudeUsageService> log, AgentProviderFactory providers, ProjectRegistry registry,
+        QaIsolation? isolation = null)
     {
+        _isolation = isolation ?? QaIsolation.Off;
         _log = log;
         _providers = providers;
         _registry = registry;
@@ -232,6 +240,8 @@ public class ClaudeUsageService
     /// </param>
     public async Task RefreshAsync(CancellationToken ct = default, bool force = false)
     {
+        if (_isolation.On) return;
+
         // This meter measures ONE subscription. Pointed at another provider it would report a number
         // that has nothing to do with what the fleet is actually spending, which is worse than
         // reporting nothing: the chip is there to be trusted at a glance. There is no cross-provider
@@ -379,6 +389,7 @@ public class ClaudeUsageService
     /// </summary>
     public async Task<bool> NudgeAsync(CancellationToken ct = default)
     {
+        if (_isolation.On) return false;
         if (_providers.CurrentKind != AgentProviderKind.Claude) return false;
 
         var psi = new ProcessStartInfo
@@ -456,6 +467,7 @@ public class ClaudeUsageService
     /// </summary>
     public async Task<string?> EnsureSignedInAsync(CancellationToken ct = default)
     {
+        if (_isolation.On) return QaIsolation.Refusal("using the Claude login");
         // Another provider's runs do not read this credential, so there is nothing here to promise.
         if (_providers.CurrentKind != AgentProviderKind.Claude) return null;
 
@@ -531,6 +543,7 @@ public class ClaudeUsageService
     /// </summary>
     public (bool Ok, string Message) LaunchSignIn(string? accountName = null)
     {
+        if (_isolation.On) return (false, QaIsolation.Refusal("signing in to Claude"));
         var account = Account;
         if (!string.IsNullOrWhiteSpace(accountName))
         {

@@ -31,6 +31,19 @@ if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("CLAUDECOD
 
 var builder = WebApplication.CreateBuilder(args);
 
+// An isolated QA copy - this program started from a worktree to prove a change to itself - refuses
+// everything that would reach beyond its own throwaway folder. See QaIsolation. It will not start
+// at all over a checkout's data or on the live port: those are the two ways a copy becomes the live
+// board by accident.
+var isolation = QaIsolation.FromEnvironment();
+if (isolation.On && QaIsolation.StartupProblem(
+        Environment.GetEnvironmentVariable("DASHBOARD_DATA_ROOT"), builder.Configuration["urls"]) is { } notACopy)
+{
+    Console.Error.WriteLine($"Refusing to start as a QA copy: {notACopy}");
+    Environment.Exit(2);
+}
+builder.Services.AddSingleton(isolation);
+
 // Register services — all state resolves from the self-contained data/ root;
 // the dashboard never reaches into the projects it monitors (only their
 // projectPath is referenced, as a working directory at run time).
@@ -110,19 +123,21 @@ builder.Services.AddSingleton<IssueContextBuilder>();
 // heartbeat (it owns branch naming); this side only lists, prunes and removes.
 builder.Services.AddSingleton<GitWorktreeService>();
 // Reclaims the worktree of a ticket that has been Done for worktreeRetentionDays: on start, then daily.
-builder.Services.AddHostedService<WorktreeReaper>();
+// Not in a QA copy, nor are the two probes below: nothing a copy runs by itself should be anything
+// but what a request asked for.
+if (!isolation.On) builder.Services.AddHostedService<WorktreeReaper>();
 // The human's own git moves on a ticket: check its branch out in the hub repo, and raise its PR.
 // Separate from the worktree service above because it targets the user's checkout, not the agents'.
 builder.Services.AddSingleton<TicketGitService>();
 // Start/stop for each project's local stack. Takes the same lease the qa-test phase takes, so a
 // person poking at the running app and a QA agent are contenders for it rather than collisions.
 builder.Services.AddSingleton<ProjectStackService>();
-builder.Services.AddHostedService<StackProbeService>();
+if (!isolation.On) builder.Services.AddHostedService<StackProbeService>();
 
 // How much subscription rate-limit headroom is left, polled once for every open tab. Reads Claude
 // Code's own login, and renews it when it ages out — see ClaudeUsageService.
 builder.Services.AddSingleton<ClaudeUsageService>();
-builder.Services.AddHostedService<ClaudeUsageProbe>();
+if (!isolation.On) builder.Services.AddHostedService<ClaudeUsageProbe>();
 
 // The probes above are meters. The default for a background service that throws is to stop the
 // host, and the host is what the heartbeat and every worker hang off - so one slow usage request
@@ -169,6 +184,28 @@ builder.Services.AddCors(options =>
 });
 
 var app = builder.Build();
+
+// A QA copy's front door: the routes in QaIsolation's table are refused before any handler runs,
+// with a sentence that says why. The services behind them refuse again, for a caller this misses.
+if (isolation.On)
+{
+    app.Logger.LogWarning("Isolated QA copy ({Var}): data root {Root}. Heartbeat, steward, agents, tracker, notifications and the Claude login are refused.",
+        QaIsolation.EnvVar, app.Services.GetRequiredService<DashboardPaths>().DataRoot);
+    app.Use(async (ctx, next) =>
+    {
+        if (QaIsolation.RefusedRoute(ctx.Request.Method, ctx.Request.Path.Value) is { } what)
+        {
+            var refusal = QaIsolation.Refusal(what);
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsJsonAsync(new { error = refusal, message = refusal, isolated = true });
+            return;
+        }
+        await next();
+    });
+}
+
+// Whether this process is an isolated QA copy - so a check, or a person, can tell the two apart.
+app.MapGet("/api/qa-isolation", (DashboardPaths p) => Results.Ok(new { isolated = isolation.On, dataRoot = isolation.On ? p.DataRoot : null }));
 
 var paths = app.Services.GetRequiredService<DashboardPaths>();
 var registry = app.Services.GetRequiredService<ProjectRegistry>();

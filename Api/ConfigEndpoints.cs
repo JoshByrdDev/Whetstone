@@ -524,13 +524,14 @@ public static class ConfigEndpoints
         });
 
         // Create a new project (registration only — skills + heartbeat are set up separately).
-        app.MapPost("/api/projects", async (ProjectUpsertRequest req, ProjectRegistry registry, DashboardPaths paths, DashboardDbContext db) =>
+        app.MapPost("/api/projects", async (ProjectUpsertRequest req, ProjectRegistry registry, DashboardPaths paths, DashboardDbContext db, QaIsolation isolation) =>
         {
             var key = req.Key?.Trim().ToLowerInvariant() ?? "";
             if (!KeyPattern.IsMatch(key))
                 return Results.BadRequest(new { error = "Key must be lowercase letters, numbers, dashes or underscores." });
             if (registry.AllProjects.Contains(key))
                 return Results.BadRequest(new { error = $"Project '{key}' already exists." });
+            if (EscapesQaCopy(key, req, paths, isolation) is { } escape) return escape;
 
             Directory.CreateDirectory(paths.ProjectDir(key));
             WriteProjectFiles(key, req, paths);
@@ -553,10 +554,11 @@ public static class ConfigEndpoints
         });
 
         // Update an existing project's per-project settings (path, tracker, QA, display, prefix).
-        app.MapPut("/api/projects/{key}", async (string key, ProjectUpsertRequest req, ProjectRegistry registry, DashboardPaths paths, DashboardDbContext db) =>
+        app.MapPut("/api/projects/{key}", async (string key, ProjectUpsertRequest req, ProjectRegistry registry, DashboardPaths paths, DashboardDbContext db, QaIsolation isolation) =>
         {
             if (!registry.AllProjects.Contains(key))
                 return Results.NotFound(new { error = $"Unknown project '{key}'." });
+            if (EscapesQaCopy(key, req, paths, isolation) is { } escape) return escape;
             // The one setting on this form that can strand work, so it is the one the server checks
             // rather than trusting the checkbox to have been disabled. See EnabledTracks.RefusalAsync.
             if (await EnabledTracks.RefusalAsync(
@@ -692,6 +694,19 @@ public static class ConfigEndpoints
                 password = StrEl(qa, "password"),
             },
         };
+    }
+
+    /// <summary>
+    /// A QA copy registers only projects that live inside its own data root - placeholder repos made
+    /// for it - so nothing it is asked to do can land on a real repository. Null when this one may.
+    /// </summary>
+    private static IResult? EscapesQaCopy(string key, ProjectUpsertRequest req, DashboardPaths paths, QaIsolation isolation)
+    {
+        if (!isolation.On) return null;
+        var cfg = new ProjectConfig { Name = key, ProjectPath = req.ProjectPath?.Trim() ?? "", WorktreeRoot = req.WorktreeRoot?.Trim() ?? "" };
+        return QaIsolation.Escapes(cfg, paths.DataRoot) is { } why
+            ? Results.BadRequest(new { error = $"This is an isolated QA copy ({QaIsolation.EnvVar}): a project here must live inside its data root, and {why}." })
+            : null;
     }
 
     private static void WriteProjectFiles(string key, ProjectUpsertRequest req, DashboardPaths paths)

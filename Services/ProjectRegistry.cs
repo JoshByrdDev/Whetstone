@@ -420,14 +420,21 @@ public class StackConfig
 public class ProjectRegistry
 {
     private readonly DashboardPaths _paths;
+    private readonly QaIsolation _isolation;
 
-    public ProjectRegistry(DashboardPaths paths)
+    public ProjectRegistry(DashboardPaths paths, QaIsolation? isolation = null)
     {
         _paths = paths;
+        _isolation = isolation ?? QaIsolation.Off;
     }
 
-    /// <summary>Enabled project names, read fresh from disk.</summary>
-    public IReadOnlyList<string> Projects => _paths.DiscoverProjects().ToList();
+    /// <summary>
+    /// Enabled project names, read fresh from disk. In a QA copy, only the projects wholly inside its
+    /// own data root: one that names a real repository is not the copy's to touch.
+    /// </summary>
+    public IReadOnlyList<string> Projects => _paths.DiscoverProjects()
+        .Where(p => !_isolation.On || QaIsolation.Escapes(ReadProjectConfig(p), _paths.DataRoot) is null)
+        .ToList();
 
     /// <summary>All project names including unregistered ones (management view).</summary>
     public IReadOnlyList<string> AllProjects => _paths.DiscoverAllProjects().ToList();
@@ -466,6 +473,16 @@ public class ProjectRegistry
     /// how a request lands on the wrong project's repo without anything saying so.
     /// </summary>
     public ProjectConfig GetProjectConfig(string project)
+    {
+        var cfg = ReadProjectConfig(project);
+        // The backstop behind the filter on Projects, for a caller that names a project directly:
+        // a QA copy sees no path of a project that reaches outside it.
+        if (_isolation.On && QaIsolation.Escapes(cfg, _paths.DataRoot) is not null)
+            return new ProjectConfig { Name = cfg.Name, DisplayName = cfg.DisplayName };
+        return cfg;
+    }
+
+    private ProjectConfig ReadProjectConfig(string project)
     {
         var name = project;
         var cfg = GetMergedConfig(name);

@@ -1217,8 +1217,10 @@ public static class AgentModels
 public class AgentProviderFactory
 {
     private readonly ProjectRegistry _registry;
+    private readonly QaIsolation _isolation;
 
-    public AgentProviderFactory(ProjectRegistry registry) => _registry = registry;
+    public AgentProviderFactory(ProjectRegistry registry, QaIsolation? isolation = null) =>
+        (_registry, _isolation) = (registry, isolation ?? QaIsolation.Off);
 
     /// <summary>
     /// The configured provider. An unrecognised name falls back to Claude, which is the incumbent:
@@ -1264,7 +1266,8 @@ public class AgentProviderFactory
     public string Effort =>
         Str("workerReasoningEffort") is { } e && e.Trim().Length > 0 ? e.Trim() : DefaultEffort;
 
-    private AgentProvider Build(string? model) => CurrentKind switch
+    // A QA copy gets a provider that builds no command, whatever asked for one.
+    private AgentProvider Build(string? model) => _isolation.On ? new RefusedAgentProvider() : CurrentKind switch
     {
         AgentProviderKind.Codex => new CodexAgentProvider(Honour("codex", model, CodexAgentProvider.DefaultModel), Effort),
         // No effort dial on this CLI: thinking is a property of the model picked.

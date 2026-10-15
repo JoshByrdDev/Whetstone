@@ -20,9 +20,11 @@ namespace Whetstone.Services.Tracker;
 public class IssueTrackerFactory
 {
     private readonly ProjectRegistry _registry = null!;
+    private readonly QaIsolation _isolation = QaIsolation.Off;
     private readonly ConcurrentDictionary<string, (string Stamp, IIssueTracker Tracker)> _cache = new();
 
-    public IssueTrackerFactory(ProjectRegistry registry) => _registry = registry;
+    public IssueTrackerFactory(ProjectRegistry registry, QaIsolation? isolation = null) =>
+        (_registry, _isolation) = (registry, isolation ?? QaIsolation.Off);
 
     /// <summary>For a subclass that overrides <see cref="For"/> and never touches the registry.</summary>
     protected IssueTrackerFactory() { }
@@ -44,6 +46,10 @@ public class IssueTrackerFactory
     /// </remarks>
     public virtual IIssueTracker For(string project)
     {
+        // A QA copy has no tracker, whatever its settings say: an unconfigured one is physically
+        // incapable of a network call, which is all a copy needs from it.
+        if (_isolation.On) return NoTracker.Instance;
+
         var stamp = Stamp(_registry.GetProjectConfig(project).Tracker);
 
         if (_cache.TryGetValue(project, out var cached) && cached.Stamp == stamp)

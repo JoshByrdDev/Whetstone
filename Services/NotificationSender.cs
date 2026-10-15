@@ -23,14 +23,18 @@ public class NotificationSender
 {
     private readonly DashboardPaths _paths;
     private readonly ILogger<NotificationSender> _log;
+    private readonly QaIsolation _isolation;
 
-    public NotificationSender(DashboardPaths paths, ILogger<NotificationSender> log) => (_paths, _log) = (paths, log);
+    public NotificationSender(DashboardPaths paths, ILogger<NotificationSender> log, QaIsolation? isolation = null) =>
+        (_paths, _log, _isolation) = (paths, log, isolation ?? QaIsolation.Off);
 
     /// <summary>What became of one notice: whether it left, and why not when it did not.</summary>
     public record Outcome(bool Sent, string Message);
 
     public virtual async Task<Outcome> SendAsync(string eventKey, string title, string message, CancellationToken ct = default)
     {
+        // The channels are the owner's phone and their team's Slack, not the copy's.
+        if (_isolation.On) return new(false, QaIsolation.Refusal("sending a notification"));
         var script = Path.Combine(_paths.DataRoot, "notify-send.ps1");
         if (!File.Exists(script)) return new(false, $"Script not found: {script}");
 

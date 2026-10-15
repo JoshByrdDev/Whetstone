@@ -22,9 +22,11 @@ public class HeartbeatManager
     private readonly string _wakeFilePath;
     private readonly string _workingDir;
     private Process? _process;
+    private readonly QaIsolation _isolation;
 
-    public HeartbeatManager(DashboardPaths paths)
+    public HeartbeatManager(DashboardPaths paths, QaIsolation? isolation = null)
     {
+        _isolation = isolation ?? QaIsolation.Off;
         // One global, project-agnostic orchestrator. It claims the next ticket across all projects
         // and launches one agent process per ticket, each running in that ticket's own worktree, so
         // the orchestrator itself just runs from the data root.
@@ -106,7 +108,7 @@ public class HeartbeatManager
     /// </summary>
     public bool Wake()
     {
-        if (!IsRunning) return false;
+        if (_isolation.On || !IsRunning) return false;
         try
         {
             File.WriteAllText(_wakeFilePath, DateTime.UtcNow.ToString("o"));
@@ -126,6 +128,7 @@ public class HeartbeatManager
 
     public (bool success, string message) RequestStopAfterCycle()
     {
+        if (_isolation.On) return (false, QaIsolation.Refusal("signalling the heartbeat"));
         if (!IsRunning)
             return (false, "Heartbeat is not running");
 
@@ -142,6 +145,7 @@ public class HeartbeatManager
 
     public (bool success, string message) CancelStopAfterCycle()
     {
+        if (_isolation.On) return (false, QaIsolation.Refusal("signalling the heartbeat"));
         if (!File.Exists(_stopFilePath))
             return (false, "No pending stop request");
 
@@ -158,6 +162,9 @@ public class HeartbeatManager
 
     public (bool success, string message) Start()
     {
+        // A QA copy carries the same scripts as the live one, so the files being there proves
+        // nothing: started, this heartbeat would claim tickets and launch real agents.
+        if (_isolation.On) return (false, QaIsolation.Refusal("starting the heartbeat"));
         if (IsRunning)
             return (false, "Heartbeat is already running");
 
@@ -213,6 +220,7 @@ public class HeartbeatManager
     /// </summary>
     public (bool success, string message) Stop()
     {
+        if (_isolation.On) return (false, QaIsolation.Refusal("stopping a heartbeat"));
         var p = LiveProcess();
         if (p is null)
         {
