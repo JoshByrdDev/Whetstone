@@ -251,6 +251,7 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | A unit is released when its owner says so | `StewardUnit.ReleasedAt`, set by a REST route with no tool behind it, and refused while an outcome is not done or a note that is something to do is not ticked off |
 | What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
+| A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
 
 **The words are taken.** "Orchestrator" is `heartbeat.ps1` and "owner" is the human whose ticket it

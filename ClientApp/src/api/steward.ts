@@ -198,6 +198,28 @@ export const startStewardPlan = (project: string, plan: { key: string; name: str
   fetch(`/api/steward/plan/new?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(plan) })
     .then(json<{ answer: string; data: { master: string; first: string }; settings: string }>);
 
+/** A flag on a ticket's change that is the owner's to decide. */
+export interface StewardOwnerFlag {
+  flag: string;
+  say?: string | null;
+  detail?: string[] | null;
+  /** Cleared by the owner for the change as it stands: the steward may merge past it. */
+  cleared: boolean;
+  /** False for a flag that says nothing was checked, which there is nothing to clear of. */
+  clearable: boolean;
+}
+
+/** The owner's flags on one ticket, as its steward's merge would raise them now. */
+export const getStewardOwnerFlags = (project: string, ticketId: number) =>
+  fetch(`/api/steward/tickets/${ticketId}/flags?${q(project)}`)
+    .then(json<{ answer: string; data?: { tip?: string | null; phase?: string; flags: StewardOwnerFlag[] } }>)
+    .then(r => r.data ?? { flags: [] });
+
+/** Let the steward merge this ticket past one flag, for its change as it stands. */
+export const clearStewardFlag = (project: string, ticketId: number, flag: string) =>
+  fetch(`/api/steward/tickets/${ticketId}/flags/${encodeURIComponent(flag)}/clear?${q(project)}`, { method: 'POST' })
+    .then(json<{ answer: string }>);
+
 /** One ticket's lines of the record: what was decided about it, and what it leaves for a release. */
 export const getStewardEntriesForTicket = (project: string, ticketId: number) =>
   fetch(`/api/steward/entries?${q(project)}&ticket=${ticketId}`).then(json<StewardEntry[]>);

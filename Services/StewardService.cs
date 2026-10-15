@@ -478,6 +478,22 @@ public class StewardService
         return flags;
     }
 
+    /// <summary>
+    /// Flags that say nothing was checked, so there is nothing for the owner to have looked at and
+    /// waved through. A clearance of one would clear everything the check it stands for would raise.
+    /// </summary>
+    private static readonly HashSet<string> NeverCleared = new(StringComparer.OrdinalIgnoreCase) { "project-flags-did-not-run" };
+
+    /// <summary>The flags the owner has cleared for this exact change of the ticket's.</summary>
+    private async Task<HashSet<string>> ClearedAsync(string projectKey, int ticketId, BranchChange change, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(change.ChangeId)) return new();
+        var names = await _db.StewardClearances.AsNoTracking()
+            .Where(c => c.ProjectKey == projectKey && c.TicketId == ticketId && c.ChangeId == change.ChangeId)
+            .Select(c => c.Flag).ToListAsync(ct);
+        return names.Where(n => !NeverCleared.Contains(n)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
     /// <summary>A finished ticket's record, what it changed, and what about it a merge has to weigh.</summary>
     public async Task<StewardReply> ReviewAsync(string projectKey, int ticketId, CancellationToken ct = default)
     {
@@ -513,6 +529,8 @@ public class StewardService
             sentBackBefore = await SendBacksAsync(t.Id),
             changed = change is null ? (object)"this ticket has no branch" : change,
             flags = change is null ? new List<StewardFlag>() : await FlagsAsync(cfg!, t, change, ct),
+            // Owner flags the owner has cleared for this change as it stands: merge does not stop on these.
+            clearedByOwner = change is null ? new List<string>() : (await ClearedAsync(projectKey, t.Id, change, ct)).ToList(),
             // A worker never edits the owner's own documents: the line it would have written is in
             // its comment under this heading, wherever in the record that comment now sits.
             forTheOwnersDocs = said.Where(c => Regex.IsMatch(c.Body, @"for the owner['’]s docs", RegexOptions.IgnoreCase))
@@ -566,7 +584,8 @@ public class StewardService
             return Refuse("nothing-to-merge", $"Ticket {ticketId} has no commits that the base lacks.");
 
         var flags = await FlagsAsync(cfg, t, change, ct);
-        if (flags.Where(f => f.Owner).ToList() is { Count: > 0 } owners)
+        var cleared = await ClearedAsync(projectKey, t.Id, change, ct);
+        if (flags.Where(f => f.Owner && !cleared.Contains(f.Flag)).ToList() is { Count: > 0 } owners)
             return Refuse("owner", "These are the owner's to decide, not yours. Ask, and leave the ticket unmerged.", owners);
         if (flags.Where(f => f.Blocks).ToList() is { Count: > 0 } blocking)
             return Refuse("not-proved", "The work is not proved yet. Send it back saying exactly what each of these says.", blocking);
@@ -994,6 +1013,70 @@ public class StewardService
         var exported = Config(projectKey) is { } cfg ? await ExportDecisionsAsync(cfg, ct) : null;
         _heartbeat?.Wake();
         return new StewardReply("recorded", exported);
+    }
+
+    /// <summary>
+    /// The flags on a ticket's change that are its owner's to decide, and which of them the owner
+    /// has already cleared for the change as it stands.
+    /// </summary>
+    public async Task<StewardReply> OwnerFlagsAsync(string projectKey, int ticketId, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (Off(cfg, projectKey) is { } off) return off;
+        var (t, no) = await TicketOfAsync(projectKey, ticketId);
+        if (t is null) return no!;
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        if (change is null || change.Ahead == 0) return new StewardReply("flags", null, new { tip = (string?)null, flags = Array.Empty<object>() });
+
+        var cleared = await ClearedAsync(projectKey, t.Id, change, ct);
+        var flags = (await FlagsAsync(cfg!, t, change, ct)).Where(f => f.Owner).Select(f => new
+        {
+            f.Flag, f.Say, f.Detail,
+            cleared = cleared.Contains(f.Flag),
+            clearable = !NeverCleared.Contains(f.Flag) && !string.IsNullOrEmpty(change.ChangeId),
+        });
+        return new StewardReply("flags", null, new { tip = change.Tip, phase = t.Phase.ToString(), flags });
+    }
+
+    /// <summary>
+    /// The owner clears one flag on a ticket's change: the steward may merge past it. Only a flag
+    /// that is raised now and is the owner's, and only for the change as it stands - rework of the
+    /// ticket lets it lapse, and the flag is asked about again.
+    /// </summary>
+    public async Task<StewardReply> OwnerClearsFlagAsync(string projectKey, int ticketId, string flag, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var (t, no) = await TicketOfAsync(projectKey, ticketId);
+        if (t is null) return no!;
+        if (NeverCleared.Contains(flag))
+            return Refuse("refused", $"'{flag}' means nothing was checked, so there is nothing to clear. Fix what stopped the check, or merge it yourself.");
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        if (change is null || change.Ahead == 0) return Refuse("nothing-to-merge", $"Ticket {ticketId} has no commits that the base lacks.");
+        if (string.IsNullOrEmpty(change.ChangeId)) return Refuse("no-change", $"Ticket {ticketId}'s change could not be read, so there is nothing to tie a clearance to.");
+        var raised = (await FlagsAsync(cfg, t, change, ct)).FirstOrDefault(f => f.Owner && string.Equals(f.Flag, flag, StringComparison.OrdinalIgnoreCase));
+        if (raised is null) return Refuse("not-raised", $"'{flag}' is not raised as the owner's on ticket {ticketId} now.");
+
+        if (!await _db.StewardClearances.AnyAsync(c => c.ProjectKey == projectKey && c.TicketId == ticketId
+                && c.Flag == raised.Flag && c.ChangeId == change.ChangeId, ct))
+        {
+            _db.StewardClearances.Add(new StewardClearance
+            {
+                ProjectKey = projectKey, TicketId = ticketId, Flag = raised.Flag, ChangeId = change.ChangeId, Sha = change.Tip,
+            });
+            // The record says so, where the owner reads back what was decided about this ticket.
+            _db.StewardEntries.Add(new StewardEntry
+            {
+                ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, TicketId = ticketId,
+                Text = $"Ticket {ticketId}: '{raised.Flag}' is cleared for its change as it stands"
+                    + (change.Tip is { Length: >= 7 } tip ? $" (at {tip[..7]})" : "")
+                    + ". It may be merged past this flag; rework lets the clearance lapse.",
+            });
+            await StewardDue.MarkAsync(_db, projectKey, $"the owner cleared {raised.Flag} on #{ticketId}");
+            await _db.SaveChangesAsync(ct);
+            _heartbeat?.Wake();
+        }
+        return new StewardReply("cleared", null, new { flag = raised.Flag, tip = change.Tip });
     }
 
     /// <summary>A standing instruction from the owner that answers no question.</summary>

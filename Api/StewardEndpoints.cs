@@ -184,6 +184,21 @@ public static class StewardEndpoints
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
+        // A ticket's flags that are the owner's, and clearing one so the steward may merge past it.
+        // The owner's: there is no tool behind either, so a steward cannot clear its own way.
+        app.MapGet("/api/steward/tickets/{id:int}/flags", async (int id, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerFlagsAsync(project ?? "", id, ct);
+            return r.Answer == "flags" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        app.MapPost("/api/steward/tickets/{id:int}/flags/{flag}/clear", async (int id, string flag, string? project,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerClearsFlagAsync(project ?? "", id, flag, ct);
+            return r.Answer == "cleared" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
         app.MapPost("/api/steward/said", async (string? project, StewardSaidRequest req, StewardService steward, CancellationToken ct) =>
         {
             var r = await steward.OwnerSaysAsync(project ?? "", req.Text ?? "", ct);

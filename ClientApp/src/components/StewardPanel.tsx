@@ -9,11 +9,11 @@ import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
 import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
-  answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan, getStewardStatus, markStewardEntry,
-  setStewardMode, tellSteward,
+  answerStewardQuestion, clearStewardFlag, getSteward, getStewardEntries, getStewardOwnerFlags, getStewardPlan,
+  getStewardStatus, markStewardEntry, setStewardMode, tellSteward,
 } from '../api/steward';
 import type {
-  StewardEntry, StewardMode, StewardPage, StewardPlanView, StewardQuestion, StewardStatus,
+  StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardStatus,
 } from '../api/steward';
 
 /**
@@ -168,7 +168,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                   : (
                     <div className="flex flex-col gap-3 mb-8">
                       {page.waiting.map(q => (
-                        <QuestionCard key={q.key} q={q} onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
+                        <QuestionCard key={q.key} project={page.project} q={q} onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
                       ))}
                     </div>
                   )}
@@ -240,7 +240,9 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
  * One question, answered by picking. The steward's own pick is marked and pre-selected, because
  * the commonest answer is "yes, that one" and it should cost a single press.
  */
-function QuestionCard({ q, onAnswer }: { q: StewardQuestion; onAnswer: (answer: string) => Promise<void> }) {
+function QuestionCard({ project, q, onAnswer }: {
+  project: string; q: StewardQuestion; onAnswer: (answer: string) => Promise<void>;
+}) {
   const recommended = q.options.findIndex(o => o.recommended);
   const [pick, setPick] = useState<number | 'other'>(recommended >= 0 ? recommended : 'other');
   const [other, setOther] = useState('');
@@ -269,6 +271,8 @@ function QuestionCard({ q, onAnswer }: { q: StewardQuestion; onAnswer: (answer: 
     <Panel tone={c}>
       <div style={{ font: `600 14px/1.4 ${BODY}`, color: 'var(--w-t100)' }}>{q.question}</div>
       <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: 'var(--w-t400)', marginTop: 5 }}>{q.why}</div>
+
+      {q.ticketId != null && <TicketFlags project={project} ticketId={q.ticketId} />}
 
       <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
         {q.options.map((o, i) => (
@@ -303,6 +307,63 @@ function QuestionCard({ q, onAnswer }: { q: StewardQuestion; onAnswer: (answer: 
       </div>
       {failed && <div style={{ font: `400 11.5px ${BODY}`, color: c, marginTop: 6 }}>{failed}</div>}
     </Panel>
+  );
+}
+
+/**
+ * The flags on the question's ticket that only the owner can let through. An answer is prose and
+ * cannot lift one - the steward's merge raises every flag afresh - so letting the steward merge
+ * past a flag is its own press, and holds only for the change as it stands now.
+ */
+function TicketFlags({ project, ticketId }: { project: string; ticketId: number }) {
+  const [flags, setFlags] = useState<StewardOwnerFlag[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    // Nothing to show when it cannot be read: the question still stands on its own.
+    getStewardOwnerFlags(project, ticketId).then(r => setFlags(r.flags)).catch(() => setFlags([]));
+  }, [project, ticketId]);
+  useEffect(load, [load]);
+
+  const clear = async (flag: string) => {
+    setBusy(flag); setFailed(null);
+    try { await clearStewardFlag(project, ticketId, flag); load(); }
+    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(null); }
+  };
+
+  if (flags.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
+      <div style={label()}>Holding #{ticketId}'s merge for you</div>
+      {flags.map(f => (
+        <div
+          key={f.flag}
+          className="flex items-start justify-between gap-3 flex-wrap"
+          style={{ clipPath: chamfer(8), padding: '8px 12px', border: '1px solid rgb(var(--w-line-rgb) / .14)' }}
+        >
+          <div className="min-w-0 flex-1">
+            <div style={{ font: `600 12px ${MONO}`, color: 'var(--w-t200)' }}>{f.flag}</div>
+            {f.say && <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t500)', marginTop: 2 }}>{f.say}</div>}
+            {f.detail && f.detail.length > 0 && (
+              <div className="break-all" style={{ font: `400 11px/1.5 ${MONO}`, color: 'var(--w-t500)', marginTop: 2 }}>
+                {f.detail.join(', ')}
+              </div>
+            )}
+          </div>
+          {f.cleared
+            ? <span style={label('var(--w-accent-text)')}>cleared for this change</span>
+            : f.clearable && (
+              <GhostButton tone="go" onClick={() => clear(f.flag)} disabled={busy !== null}
+                title="The steward may merge past this flag. Any rework of the ticket asks again.">
+                {busy === f.flag ? 'Clearing' : 'Let the steward merge past it'}
+              </GhostButton>
+            )}
+        </div>
+      ))}
+      {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c }}>{failed}</div>}
+    </div>
   );
 }
 

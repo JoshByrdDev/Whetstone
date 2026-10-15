@@ -66,7 +66,8 @@ public class StewardTools
     [McpServerTool(Name = "steward_review"), Description(
         "A finished ticket's record: what it asked, the summary, work items, each check and whether it carries a current pass, " +
         "the independent review's findings, how often it has been sent back, the files changed, and FLAGS. A flag marked " +
-        "'owner' is never yours to wave through: ask about it and leave the ticket unmerged. A flag marked 'blocks' means the " +
+        "'owner' is never yours to wave through: ask about it, with the ticket's id, and leave the ticket unmerged - unless it " +
+        "is listed under clearedByOwner, which only the owner sets, from the board. A flag marked 'blocks' means the " +
         "work is not proved: send it back saying what the flag says.")]
     public static Task<StewardReply> Review(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId) =>
@@ -83,7 +84,7 @@ public class StewardTools
     [McpServerTool(Name = "steward_merge"), Description(
         "Check a ticket at NeedsReview, then merge it into the base branch and close it. Call it only once you have read the " +
         "review and the diff and are signing the work off. Every answer short of 'merged' names what to do instead: " +
-        "'owner' - ask, and leave it unmerged; 'not-proved' - send it back saying what the flags say; 'behind' - rebase, " +
+        "'owner' - ask, and leave it unmerged (the owner clears a flag from the board; an answer does not); 'not-proved' - send it back saying what the flags say; 'behind' - rebase, " +
         "then merge again; 'check-failed' - send it back to NeedsImplementation with the output; 'check-could-not-run' - the " +
         "machine, not the ticket: leave it at review and ask the owner once; 'conflict' - send it back to NeedsImplementation " +
         "naming the files; 'not-in-this-mode' - merging is not yours here. None of them means look for another way. " +

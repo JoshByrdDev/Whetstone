@@ -15,7 +15,14 @@ public record PlanOutcomeText(string Outcome, string Text);
 public record PlanGroup(string Heading, IReadOnlyList<PlanOutcomeText> Outcomes);
 
 /// <summary>What a ticket's branch changes against its base, by name and by count.</summary>
-public record BranchChange(IReadOnlyList<string> Files, int Behind, int Ahead, string Stat, string BaseRef);
+/// <param name="Tip">The branch's head commit.</param>
+/// <param name="ChangeId">
+/// The change itself, as a hash of its diff with the line numbers and blob ids left out: the same
+/// after a rebase that moved nothing of the ticket's own, different after any rework of it. What an
+/// owner's clearance of a flag is tied to (<see cref="Whetstone.Models.StewardClearance"/>).
+/// </param>
+public record BranchChange(IReadOnlyList<string> Files, int Behind, int Ahead, string Stat, string BaseRef,
+    string? Tip = null, string? ChangeId = null);
 
 /// <summary>Outcome of bringing another branch into the base before a steward's run.</summary>
 public record SyncFromResult(string Answer, int Commits, IReadOnlyList<string> Files, string? Why);
@@ -213,7 +220,22 @@ public partial class TicketGitService
             .Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
         var (behind, ahead) = await CountAsync(repo, baseRef, branch, ct);
         var stat = (await GitAsync(repo, ct, "diff", "--shortstat", range)).Stdout.Trim();
-        return new BranchChange(files, behind, ahead, stat, baseRef);
+        var tip = (await GitAsync(repo, ct, "rev-parse", $"refs/heads/{branch}")).Stdout.Trim();
+        var diff = await GitAsync(repo, ct, TimeSpan.FromSeconds(60), "diff", "--no-renames", "--no-color", range);
+        return new BranchChange(files, behind, ahead, stat, baseRef, tip, diff.Ok ? ChangeIdOf(diff.Stdout) : null);
+    }
+
+    /// <summary>
+    /// A diff's identity across rebases, like <c>git patch-id</c>: the hunk headers' line numbers and
+    /// the <c>index</c> lines' blob ids are what a rebase moves without changing the change.
+    /// </summary>
+    public static string ChangeIdOf(string diff)
+    {
+        var kept = diff.Replace("\r\n", "\n").Split('\n')
+            .Where(l => !l.StartsWith("index ", StringComparison.Ordinal))
+            .Select(l => l.StartsWith("@@", StringComparison.Ordinal) ? Regex.Replace(l, @"^@@[^@]*@@", "@@") : l);
+        var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", kept)));
+        return Convert.ToHexString(hash)[..40].ToLowerInvariant();
     }
 
     /// <summary>

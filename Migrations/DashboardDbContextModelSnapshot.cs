@@ -652,6 +652,45 @@ namespace Whetstone.Migrations
                     b.ToTable("ReviewTargets");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.StewardClearance", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ChangeId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Flag")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Sha")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "TicketId", "Flag", "ChangeId")
+                        .IsUnique();
+
+                    b.ToTable("StewardClearances");
+                });
+
             modelBuilder.Entity("Whetstone.Models.StewardEntry", b =>
                 {
                     b.Property<int>("Id")

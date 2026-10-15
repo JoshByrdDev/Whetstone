@@ -26,7 +26,7 @@ If the status shows nothing at review, nothing blocked, no new answer and nothin
 
 - The diff does what the ticket asked and nothing a user would notice beyond it.
 - Every acceptance criterion has a passed check against it. A pass "by inspection" on something that can be run is not a pass: send it back to NeedsRefinement saying which.
-- No flag is marked `owner` (those are asked about, never waved through) and none is marked `blocks`.
+- No flag is marked `owner` (those are asked about, never waved through) unless `steward_review` lists it under `clearedByOwner`, and none is marked `blocks`. Only the owner clears a flag: from the board, for the change as it stands, and any rework asks again. An answer to your question does not clear it, so when you ask about a flag, give the question the ticket's id - its card is where the owner lets you merge past the flag - and merge once it is cleared.
 - The last hand-off comment leaves no open question. If it leaves one, settle it as step 3 settles a block: from a decision already made, or it is the owner's and the ticket waits unmerged.
 
 Then `steward_merge`. Act on its answer exactly as its description says. `behind`: `steward_rebase`, then merge again. `checking`: the merge's checks are still running and nothing is wrong; call `steward_merge` for that ticket again until it answers with something else, and do not end the run while one is checking.

@@ -230,6 +230,40 @@ public class StewardOutcome
 }
 
 /// <summary>
+/// The owner's word that one flag on one ticket's change is not a reason for its steward's merge to
+/// wait.
+/// <para>
+/// A flag marked owner stops a steward's merge every time it is raised, and a merge raises every
+/// flag afresh - so without this an owner who said yes to the question could still only merge by
+/// hand. An answer to a question is prose and cannot be made to mean this; a clearance is a row
+/// with nothing to interpret. It is set by a REST route with no tool behind it, like everything
+/// else that is the owner's.
+/// </para>
+/// <para>
+/// It holds for the change the owner looked at, not for the ticket. <see cref="ChangeId"/> is the
+/// branch's diff against its base with line numbers and blob ids left out, so a rebase that changes
+/// nothing of the ticket's own keeps it, and any rework of the change lets it lapse.
+/// </para>
+/// </summary>
+public class StewardClearance
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+    public int TicketId { get; set; }
+
+    /// <summary>The flag's name, as <see cref="Services.StewardFlag.Flag"/> raises it.</summary>
+    public string Flag { get; set; } = "";
+
+    /// <summary>See <see cref="Services.BranchChange.ChangeId"/>.</summary>
+    public string ChangeId { get; set; } = "";
+
+    /// <summary>The branch's tip when it was cleared, so the record can say which commit was seen.</summary>
+    public string? Sha { get; set; }
+
+    public DateTime At { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
 /// What the owner has done about one unit of a plan: agreed it, and released it.
 /// <para>
 /// Whether a unit is agreed is never read from here - that is the spec's own status line, as

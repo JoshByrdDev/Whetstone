@@ -255,6 +255,72 @@ public class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_flag_the_owner_cleared_no_longer_stops_the_merge()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+
+        Assert.Equal("cleared", (await In(s => s.OwnerClearsFlagAsync("alpha", id, "migration-changes-existing-data"), flags)).Answer);
+        Assert.Contains(Entries(), e => e.Kind == StewardEntryKind.OwnerSaid && e.TicketId == id);
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+    }
+
+    [Fact]
+    public async Task A_clearance_lapses_when_the_ticket_is_reworked()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "migration-changes-existing-data"), flags);
+
+        _git.ChangeId = "change-2";
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public async Task A_clearance_is_for_one_flag_and_only_one_that_is_raised()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(
+            new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false),
+            new StewardFlag("new-package-no-spec-names", Owner: true, Blocks: false),
+            new StewardFlag("no-phone-screenshot", Owner: false, Blocks: true));
+
+        Assert.Equal("not-raised", (await In(s => s.OwnerClearsFlagAsync("alpha", id, "env-file"), flags)).Answer);
+        // A flag that sends work back is not the owner's to wave through either.
+        Assert.Equal("not-raised", (await In(s => s.OwnerClearsFlagAsync("alpha", id, "no-phone-screenshot"), flags)).Answer);
+
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "migration-changes-existing-data"), flags);
+        var refused = await In(s => s.MergeAsync("alpha", id), flags);
+        Assert.Equal("owner", refused.Answer);
+        Assert.DoesNotContain("migration-changes-existing-data", System.Text.Json.JsonSerializer.Serialize(refused.Data));
+    }
+
+    [Fact]
+    public async Task A_flag_that_says_nothing_was_checked_cannot_be_cleared()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("project-flags-did-not-run", Owner: true, Blocks: false));
+        Assert.Equal("refused", (await In(s => s.OwnerClearsFlagAsync("alpha", id, "project-flags-did-not-run"), flags)).Answer);
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+    }
+
+    [Fact]
+    public void A_change_keeps_its_id_through_a_rebase_and_not_through_rework()
+    {
+        const string before = "diff --git a/x.sql b/x.sql\nindex 111..222 100644\n@@ -1,2 +1,3 @@ table\n a\n+b\n";
+        const string rebased = "diff --git a/x.sql b/x.sql\nindex 333..444 100644\n@@ -9,2 +9,3 @@ table\n a\n+b\n";
+        const string reworked = "diff --git a/x.sql b/x.sql\nindex 333..555 100644\n@@ -9,2 +9,3 @@ table\n a\n+c\n";
+        Assert.Equal(TicketGitService.ChangeIdOf(before), TicketGitService.ChangeIdOf(rebased));
+        Assert.NotEqual(TicketGitService.ChangeIdOf(before), TicketGitService.ChangeIdOf(reworked));
+    }
+
+    [Fact]
     public async Task A_branch_behind_its_base_is_rebased_first()
     {
         _git.Behind = 2;
@@ -848,6 +914,8 @@ public class StewardServiceTests : IDisposable
         public string Head = "abc";
         public IReadOnlyList<string> Files = new[] { "src/app.ts" };
         public int Behind;
+        /// <summary>The change as the owner would see it; a new value is the ticket reworked.</summary>
+        public string ChangeId = "change-1";
         public CheckRun Check = new(true, false, "");
         public List<string> Merged = new();
 
@@ -873,7 +941,7 @@ public class StewardServiceTests : IDisposable
             Task.FromResult(InRepo.TryGetValue(path, out var text) ? text : null);
 
         public Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default) =>
-            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, 1, "1 file changed", "main"));
+            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, 1, "1 file changed", "main", "tip0123456", ChangeId));
 
         public Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default) =>
             Task.FromResult<(string, bool, int)?>(("diff", false, 4));
