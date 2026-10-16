@@ -9,6 +9,7 @@
   "offHoursEnd": "06:30",
   "heartbeatMaxAttempts": 3,
   "heartbeatWorkerTimeoutMinutes": 120,
+  "heartbeatWorkerStallMinutes": 30,
   "heartbeatWorkers": 3,
   "worktreeRetentionDays": 2,
   "baseBranch": "main",

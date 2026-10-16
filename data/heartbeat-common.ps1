@@ -73,6 +73,8 @@ $HeartbeatMaxMinutes     = 60
 $OffHoursStart           = "17:00"
 $OffHoursEnd             = "06:30"
 $WorkerTimeoutMinutes    = 120
+# A run whose agent says nothing on its stream for this long is ended - see Start-AgentWatchdog. 0 = off.
+$WorkerStallMinutes      = 30
 $BaseBranch              = "main"
 $BranchPrefix            = ""
 $WorkerModel             = "claude-opus-5-5"
@@ -114,6 +116,7 @@ if ($null -ne (Get-Global 'heartbeatMaxMinutes'))     { $HeartbeatMaxMinutes    
 if (Get-Global 'offHoursStart')   { $OffHoursStart   = Get-Global 'offHoursStart' }
 if (Get-Global 'offHoursEnd')     { $OffHoursEnd     = Get-Global 'offHoursEnd' }
 if ($null -ne (Get-Global 'heartbeatWorkerTimeoutMinutes')) { $WorkerTimeoutMinutes = [int](Get-Global 'heartbeatWorkerTimeoutMinutes') }
+if ($null -ne (Get-Global 'heartbeatWorkerStallMinutes'))   { $WorkerStallMinutes   = [int](Get-Global 'heartbeatWorkerStallMinutes') }
 if (Get-Global 'baseBranch') { $BaseBranch = Get-Global 'baseBranch' }
 $configuredPrefix = Get-Global 'branchPrefix'; if ($null -ne $configuredPrefix) { $BranchPrefix = $configuredPrefix }
 if (Get-Global 'workerModel')     { $WorkerModel     = Get-Global 'workerModel' }
@@ -353,6 +356,93 @@ function Stop-DescendantAgent {
             }
         }
     }
+}
+
+# --- The run watchdog: a wall clock, and a stall ---
+#
+# A run is ended for one of two reasons. The wall clock ($WorkerTimeoutMinutes) is the old one. The
+# stall ($WorkerStallMinutes) exists because the wall clock alone let a worker sit for 50 minutes on
+# one Bash call that never returned - past its own 580-second timeout, with no tool result and not
+# one line on the stream - and it would have sat for 70 more had the heartbeat not been restarted.
+#
+# "Silent" means no line on the agent's stream: the pipeline that reads it touches $ActivityFile (at
+# most every ten seconds, through Update-AgentActivity), and the job reads the file's write time. A
+# legitimate run is never silent for long: claude's Bash tool caps a call at ten minutes before it
+# backgrounds or kills it, and a subagent's turns stream like the parent's. The default is three
+# times that cap; a project whose suite runs longer in one call has the setting.
+#
+# What it kills is every process matching the provider's pattern under $RootPid AND everything that
+# process started. The hung call is a child of the agent (a shell, and the test runner under it), and
+# killing only the agent leaves that tree running, holding a scratch database or a docker exec for
+# nobody. Still confined to this one agent's descendants, for the reason Stop-DescendantAgent gives.
+#
+# The verdict - "timeout <min>" or "stall <min>" - is written to "$ActivityFile.verdict" BEFORE the
+# kill, because the kill is what ends the stream: the worker reads it the moment the pipeline
+# returns, while the job may still be stopping the rest of the tree. Receive-AgentWatchdog reads it.
+function Start-AgentWatchdog {
+    param([int]$RootPid, [string[]]$Pattern, [int]$TimeoutSeconds, [int]$StallSeconds, [string]$ActivityFile)
+    if (-not $Pattern) { $Pattern = @('claude*') }
+    Set-Content -Path $ActivityFile -Value '' -Encoding ASCII
+    Start-Job -ScriptBlock {
+        param($timeoutSec, $stallSec, $rootPid, $patterns, $activity)
+        $clock = [System.Diagnostics.Stopwatch]::StartNew()
+        $verdict = $null
+        while (-not $verdict) {
+            Start-Sleep -Seconds 15
+            if ($clock.Elapsed.TotalSeconds -ge $timeoutSec) { $verdict = 'timeout'; $quiet = $clock.Elapsed.TotalMinutes; break }
+            if ($stallSec -gt 0) {
+                try { $last = [System.IO.File]::GetLastWriteTimeUtc($activity) } catch { continue }
+                $quiet = ([DateTime]::UtcNow - $last).TotalMinutes
+                if ($quiet * 60 -ge $stallSec) { $verdict = 'stall' }
+            }
+        }
+        Set-Content -Path "$activity.verdict" -Value "$verdict $([math]::Round($quiet, 1))" -Encoding ASCII
+        try { $procs = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop } catch { return }
+        $childrenOf = @{}
+        foreach ($p in $procs) { $k = [int]$p.ParentProcessId; if (-not $childrenOf.ContainsKey($k)) { $childrenOf[$k] = @() }; $childrenOf[$k] += $p }
+        # Walk from the root; once a process matches the pattern, it and everything under it goes.
+        $kill = New-Object System.Collections.Generic.List[int]
+        $stack = New-Object System.Collections.Stack; $stack.Push(@([int]$rootPid, $false))
+        while ($stack.Count -gt 0) {
+            $cur, $doomed = $stack.Pop()
+            if (-not $childrenOf.ContainsKey($cur)) { continue }
+            foreach ($c in $childrenOf[$cur]) {
+                $cpid = [int]$c.ProcessId
+                $hit = $doomed
+                if (-not $hit) { foreach ($pat in $patterns) { if ($c.Name -like $pat) { $hit = $true; break } } }
+                if ($hit) { $kill.Add($cpid) }
+                $stack.Push(@($cpid, $hit))
+            }
+        }
+        foreach ($k in $kill) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
+    } -ArgumentList $TimeoutSeconds, $StallSeconds, $RootPid, $Pattern, $ActivityFile
+}
+
+# Marks the agent's stream as alive. Called for every line the pipeline reads; writes at most every
+# ten seconds, because a busy run emits hundreds of lines a minute and the job only needs minutes.
+$script:AgentActivityClock = $null
+function Update-AgentActivity {
+    param([string]$ActivityFile)
+    if ($script:AgentActivityClock -and $script:AgentActivityClock.Elapsed.TotalSeconds -lt 10) { return }
+    try { [System.IO.File]::SetLastWriteTimeUtc($ActivityFile, [DateTime]::UtcNow) } catch { }
+    $script:AgentActivityClock = [System.Diagnostics.Stopwatch]::StartNew()
+}
+
+# Stops the watchdog and returns why it ended the run: @{ Reason = 'timeout'|'stall'; Minutes = n },
+# or $null when it never fired (the run closed itself, crashed, or was ended for another reason).
+function Receive-AgentWatchdog {
+    param($Job, [string]$ActivityFile)
+    $out = $null
+    if ($ActivityFile) { $out = Get-Content -LiteralPath "$ActivityFile.verdict" -ErrorAction SilentlyContinue | Select-Object -First 1 }
+    if ($Job) {
+        # A job that fired is let finish its kill (seconds); one still asleep is stopped outright.
+        if ($out) { Wait-Job $Job -Timeout 30 | Out-Null }
+        Stop-Job $Job -ErrorAction SilentlyContinue
+        Remove-Job $Job -Force -ErrorAction SilentlyContinue
+    }
+    if ($ActivityFile) { Remove-Item -LiteralPath $ActivityFile, "$ActivityFile.verdict" -Force -ErrorAction SilentlyContinue }
+    if ("$out" -match '^(timeout|stall) ([\d.]+)$') { return @{ Reason = $Matches[1]; Minutes = [double]$Matches[2] } }
+    return $null
 }
 
 # --- The account's usage limit ---

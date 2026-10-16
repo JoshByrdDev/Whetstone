@@ -27,7 +27,7 @@ public static class ConfigEndpoints
         "ntfyServerUrl", "ntfyTopic", "ntfyToken",
         // Reliability guards + the two eligibility filters for the one global heartbeat: which
         // projects it may claim from, and which priority bands. Both empty = no restriction.
-        "heartbeatMaxAttempts", "heartbeatWorkerTimeoutMinutes", "heartbeatProjects", "heartbeatPriorities",
+        "heartbeatMaxAttempts", "heartbeatWorkerTimeoutMinutes", "heartbeatWorkerStallMinutes", "heartbeatProjects", "heartbeatPriorities",
         // How many agents the one orchestrator runs at once (1..HeartbeatManager.MaxWorkers).
         "heartbeatWorkers",
         // Branch enforcement: base branch new feature branches fork from, and their name prefix.
@@ -295,6 +295,7 @@ public static class ConfigEndpoints
                 offHoursEnd = Str(g, "offHoursEnd", "06:30"),
                 heartbeatMaxAttempts = Num(g, "heartbeatMaxAttempts", 3),
                 heartbeatWorkerTimeoutMinutes = Num(g, "heartbeatWorkerTimeoutMinutes", 120),
+                heartbeatWorkerStallMinutes = Num(g, "heartbeatWorkerStallMinutes", 30),
                 // How many agents work at once. Clamped on the way out as well as on the way in, so
                 // a hand-edited config file can never put the UI and the orchestrator at odds.
                 heartbeatWorkers = Math.Clamp((int)Num(g, "heartbeatWorkers", HeartbeatManager.MaxWorkers), 1, HeartbeatManager.MaxWorkers),

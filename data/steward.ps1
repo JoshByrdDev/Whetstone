@@ -144,30 +144,15 @@ $mcpProblem     = $null
 $streamState    = @{ LastMessage = $null }
 
 # The same watchdog a worker has, for the same reason: a stalled session must never hold the slot
-# for ever. It kills only the agent descended from THIS process.
-$timeoutSeconds = [int]($WorkerTimeoutMinutes * 60)
-$watchdog = Start-Job -ScriptBlock {
-    param($sec, $rootPid, $pattern)
-    Start-Sleep -Seconds $sec
-    try { $procs = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop } catch { return }
-    $childrenOf = @{}
-    foreach ($p in $procs) { $k = [int]$p.ParentProcessId; if (-not $childrenOf.ContainsKey($k)) { $childrenOf[$k] = @() }; $childrenOf[$k] += $p }
-    $stack = New-Object System.Collections.Stack; $stack.Push([int]$rootPid)
-    while ($stack.Count -gt 0) {
-        $cur = $stack.Pop()
-        if ($childrenOf.ContainsKey($cur)) {
-            foreach ($c in $childrenOf[$cur]) {
-                $cpid = [int]$c.ProcessId
-                if ($c.Name -like $pattern) { Stop-Process -Id $cpid -Force -ErrorAction SilentlyContinue }
-                $stack.Push($cpid)
-            }
-        }
-    }
-} -ArgumentList $timeoutSeconds, $PID, $AgentProvider.ProcessPattern
+# for ever. It kills only the agent descended from THIS process, and what that agent started.
+$activityFile = Join-Path $RunDir "activity.steward-$PID"
+$watchdog = Start-AgentWatchdog -RootPid $PID -Pattern $AgentProvider.ProcessPattern `
+    -TimeoutSeconds ([int]($WorkerTimeoutMinutes * 60)) -StallSeconds ([int]($WorkerStallMinutes * 60)) -ActivityFile $activityFile
 
 Push-Location $workDir
 try {
     $agentCmd.Stdin | & $agentCmd.Exe @agentArgs 2>&1 | ForEach-Object {
+        Update-AgentActivity -ActivityFile $activityFile
         if ($resultReceived -or $mcpProblem) { return }
         $line = $_.ToString().TrimEnd()
         if (-not $line) { return }
@@ -231,8 +216,7 @@ try {
 }
 finally { Pop-Location }
 
-Stop-Job $watchdog -ErrorAction SilentlyContinue
-Remove-Job $watchdog -Force -ErrorAction SilentlyContinue
+$watchdogFired = Receive-AgentWatchdog -Job $watchdog -ActivityFile $activityFile
 
 $elapsedMin = [math]::Round(((Get-Date) - $startedAt).TotalMinutes, 1)
 
@@ -253,6 +237,10 @@ if ($limitReset) {
 elseif ($mcpProblem) {
     Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward: its tools were not usable ($mcpProblem)"
 }
+elseif (-not $resultReceived -and $watchdogFired -and $watchdogFired.Reason -eq 'stall') {
+    Write-Log "  The steward stalled: no output for $($watchdogFired.Minutes)min (stall limit ${WorkerStallMinutes}min, elapsed ${elapsedMin}min) - terminated with everything it started."
+    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward stalled: silent for $($watchdogFired.Minutes)min"
+}
 elseif (-not $resultReceived) {
     Write-Log "  The steward did not finish (elapsed ${elapsedMin}min, timeout ${WorkerTimeoutMinutes}min)."
     Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward did not finish (elapsed ${elapsedMin}min)"
@@ -260,6 +248,7 @@ elseif (-not $resultReceived) {
 
 $why = if ($limitReset) { "the account's usage limit refused the run" }
        elseif ($mcpProblem) { "its tools were not usable" }
+       elseif (-not $resultReceived -and $watchdogFired -and $watchdogFired.Reason -eq 'stall') { "the run went silent and was ended" }
        elseif (-not $resultReceived) { "the run did not finish" }
        else { "the run ended without closing itself" }
 Release-StewardRun -Reason $why

@@ -1485,35 +1485,20 @@ $toolResults       = New-Object System.Collections.Generic.List[object]
 # closing event that does not repeat the summary text, so the last message it sent is kept here.
 $streamState = @{ LastMessage = $null }
 
-# Worker timeout watchdog. A stalled worker (silent hang, stuck build) must never freeze this agent
-# forever. This background job kills ONLY the agent session descended from THIS process after the
-# timeout - which is the whole reason an agent is its own process: when they all hung off the one
-# orchestrator, this walk started at a shared root and one agent's timeout would have killed every
-# other agent's session mid-run. The ticket is left in-progress and the dashboard's attempt cap
-# blocks it if it keeps stalling.
+# Worker watchdog. A stalled worker (silent hang, stuck build) must never freeze this agent forever.
+# It ends the run at the wall-clock timeout, or sooner when the agent's stream has been silent for
+# $WorkerStallMinutes - see Start-AgentWatchdog. It kills ONLY the agent session descended from THIS
+# process, and what that session started - which is the whole reason an agent is its own process:
+# when they all hung off the one orchestrator, this walk started at a shared root and one agent's
+# timeout would have killed every other agent's session mid-run. The ticket is left in-progress and
+# the dashboard's attempt cap blocks it if it keeps stalling.
 #
 # The process name is passed IN rather than hardcoded: a job cannot see $AgentProvider, and a
 # watchdog matching the wrong executable is a watchdog that quietly never fires.
-$WorkerTimeoutSeconds = [int]($WorkerTimeoutMinutes * 60)
+$activityFile = Join-Path $RunDir "activity.worker-$PID"
 $workerTimer = [System.Diagnostics.Stopwatch]::StartNew()
-$watchdog = Start-Job -ScriptBlock {
-    param($sec, $rootPid, $pattern)
-    Start-Sleep -Seconds $sec
-    try { $procs = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop } catch { return }
-    $childrenOf = @{}
-    foreach ($p in $procs) { $k = [int]$p.ParentProcessId; if (-not $childrenOf.ContainsKey($k)) { $childrenOf[$k] = @() }; $childrenOf[$k] += $p }
-    $stack = New-Object System.Collections.Stack; $stack.Push([int]$rootPid)
-    while ($stack.Count -gt 0) {
-        $cur = $stack.Pop()
-        if ($childrenOf.ContainsKey($cur)) {
-            foreach ($c in $childrenOf[$cur]) {
-                $cpid = [int]$c.ProcessId
-                if ($c.Name -like $pattern) { Stop-Process -Id $cpid -Force -ErrorAction SilentlyContinue }
-                $stack.Push($cpid)
-            }
-        }
-    }
-} -ArgumentList $WorkerTimeoutSeconds, $PID, $AgentProvider.ProcessPattern
+$watchdog = Start-AgentWatchdog -RootPid $PID -Pattern $AgentProvider.ProcessPattern `
+    -TimeoutSeconds ([int]($WorkerTimeoutMinutes * 60)) -StallSeconds ([int]($WorkerStallMinutes * 60)) -ActivityFile $activityFile
 
 # The prompt travels on stdin for both providers - see Get-AgentWorkerCommand for why it must not be
 # an argument. The length goes in the log because a prompt that arrives short is otherwise invisible:
@@ -1547,7 +1532,9 @@ try {
   while ($true) {
     $mcpAttempt++
     $mcpRelaunch = $false
+    Update-AgentActivity -ActivityFile $activityFile
     $agentCmd.Stdin | & $agentCmd.Exe @agentArgs 2>&1 | ForEach-Object {
+        Update-AgentActivity -ActivityFile $activityFile
         if ($resultReceived -or $mcpRelaunch) { return }
         $line = $_.ToString().TrimEnd()
         if (-not $line) { return }
@@ -1697,11 +1684,10 @@ try {
 }
 finally { Pop-Location }
 
-# Tear down the watchdog. If no result came back, the worker either crashed or was killed at the
-# timeout - record it on the ticket so it's visible; the attempt cap handles repeat offenders.
+# Tear down the watchdog. If no result came back, the worker either crashed or was ended by the
+# watchdog - record it on the ticket so it's visible; the attempt cap handles repeat offenders.
 $workerTimer.Stop()
-Stop-Job $watchdog -ErrorAction SilentlyContinue
-Remove-Job $watchdog -Force -ErrorAction SilentlyContinue
+$watchdogFired = Receive-AgentWatchdog -Job $watchdog -ActivityFile $activityFile
 
 # Refused by the account's usage limit rather than failed - see Get-UsageLimitReset. Only an errored
 # or near-silent run qualifies: a real run's summary can quote the phrase (a ticket about rate
@@ -1737,6 +1723,13 @@ if ($mcpHardFail) {
     Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Required MCP server(s) not usable: $mcpHardFail"
     Send-TicketComment -TicketId $ticketId -Body $detail
     Block-Ticket -TicketId $ticketId -Reason $detail
+}
+elseif (-not $resultReceived -and $watchdogFired -and $watchdogFired.Reason -eq 'stall') {
+    $elapsedMin = [math]::Round($workerTimer.Elapsed.TotalMinutes, 1)
+    $quietMin = $watchdogFired.Minutes
+    Write-Log "  WORKER stalled: no output from the agent for ${quietMin}min (stall limit ${WorkerStallMinutes}min, elapsed ${elapsedMin}min) - terminated with everything it started."
+    Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Worker stalled: silent for ${quietMin}min (elapsed ${elapsedMin}min)"
+    Send-TicketComment -TicketId $ticketId -Body "Heartbeat worker went silent for $quietMin min - no output from the agent at all, which usually means one tool call (a command, a test run) never returned - and was terminated with everything it had started, after $elapsedMin min in all (stall limit $WorkerStallMinutes min). Ticket left in ${phase}; the next run resumes it, and the dashboard blocks it after repeated no-progress attempts. If one command legitimately runs longer than that, raise heartbeatWorkerStallMinutes."
 }
 elseif (-not $resultReceived) {
     $elapsedMin = [math]::Round($workerTimer.Elapsed.TotalMinutes, 1)
@@ -1851,7 +1844,9 @@ $cycleTimer.Stop()
 $outcome = if ($resultReceived) {
     if ($resultIsError) { "Error" } else { "Completed" }
 }
-elseif ($workerTimer.Elapsed.TotalMinutes -ge $WorkerTimeoutMinutes) { "Timeout" }
+# A stall is reported as a Timeout: the run was ended by the watchdog either way, and the log and
+# the ticket comment say which limit it hit.
+elseif ($watchdogFired -or $workerTimer.Elapsed.TotalMinutes -ge $WorkerTimeoutMinutes) { "Timeout" }
 else { "Error" }
 
 # The few results that account for most of what the run carried. Five, because the point is to name

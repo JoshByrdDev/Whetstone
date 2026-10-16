@@ -210,6 +210,8 @@ interface GlobalConfig {
   offHoursEnd: string;
   heartbeatMaxAttempts: number;
   heartbeatWorkerTimeoutMinutes: number;
+  /** End a run whose agent has been silent this long; 0 = off. */
+  heartbeatWorkerStallMinutes: number;
   /** How many agents run at once. */
   heartbeatWorkers: number;
   /** The hard ceiling the server enforces — not editable, just what the UI offers. */
@@ -413,6 +415,7 @@ function GlobalSettings() {
     if (cfg.offHoursEnd && !TIME_24H.test(cfg.offHoursEnd)) errors.offHoursEnd = 'Use 24h format (e.g. 06:30)';
     if (cfg.heartbeatMaxAttempts < 1) errors.heartbeatMaxAttempts = 'Must be ≥ 1';
     if (cfg.heartbeatWorkerTimeoutMinutes < 1) errors.heartbeatWorkerTimeoutMinutes = 'Must be ≥ 1';
+    if (cfg.heartbeatWorkerStallMinutes < 0) errors.heartbeatWorkerStallMinutes = 'Must be ≥ 0';
   }
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -700,8 +703,10 @@ function GlobalSettings() {
         <div className="grid grid-cols-2 gap-4">
           <Field label="Max Attempts / Ticket" description="Block a ticket after this many no-progress resumes" type="number"
             value={cfg.heartbeatMaxAttempts} onChange={v => update({ heartbeatMaxAttempts: Number(v) || 0 })} error={errors.heartbeatMaxAttempts} />
-          <Field label="Worker Timeout (min)" description="Kill a stalled worker after this long. Per run, not per ticket - a resumed ticket gets the full budget again." type="number"
+          <Field label="Worker Timeout (min)" description="Kill a worker that has run this long, busy or not. Per run, not per ticket - a resumed ticket gets the full budget again." type="number"
             value={cfg.heartbeatWorkerTimeoutMinutes} onChange={v => update({ heartbeatWorkerTimeoutMinutes: Number(v) || 0 })} error={errors.heartbeatWorkerTimeoutMinutes} />
+          <Field label="Stall Limit (min)" description="Kill a worker whose agent has said nothing for this long - usually one command that never returned. 0 turns it off." type="number"
+            value={cfg.heartbeatWorkerStallMinutes} onChange={v => update({ heartbeatWorkerStallMinutes: Number(v) || 0 })} error={errors.heartbeatWorkerStallMinutes} />
         </div>
       </FieldGroup>
 
