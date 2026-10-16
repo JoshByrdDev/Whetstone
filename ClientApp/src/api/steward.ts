@@ -100,6 +100,8 @@ export interface StewardStatus {
   progress?: StewardProgress | null;
   outcomes?: StewardOutcomeRow[] | null;
   limits: { createdToday: string; open: string; sendBacksPerTicket: number };
+  /** The project's tickets that are not Done yet. */
+  tickets?: { id: number; phase: string; title: string }[] | null;
 }
 
 export const getSteward = (project: string) => fetch(`/api/steward?${q(project)}`).then(json<StewardPage>);

@@ -11,6 +11,7 @@ import { PriorityPicker } from './PriorityPicker';
 import { LabelEditor } from './LabelEditor';
 import { LearningBrief, Markdown } from './LearningBrief';
 import { StewardOnTicket } from './StewardOnTicket';
+import { StewardTicketFlags } from './StewardTicketFlags';
 import { ReviewPanel } from './ReviewPanel';
 import { JourneyChart } from './JourneyChart';
 import { AgentMascot, agentAccent } from './AgentMascot';
@@ -310,7 +311,9 @@ export function TicketDetail({
                 where a "not a defect" is exactly the call worth checking. */}
             {t.independentReview && <IndependentReview review={t.independentReview} />}
 
-            {/* What the project's steward decided about this ticket, where there is one. */}
+            {/* What the project's steward decided about this ticket, where there is one - and, while
+                it waits in review, any flag holding its merge that is the owner's to clear. */}
+            {t.phase === 'NeedsReview' && <StewardTicketFlags framed project={t.projectKey} ticketId={t.id} />}
             <StewardOnTicket project={t.projectKey} ticketId={t.id} />
 
             {/* The way out to the deep version. The brief above is the few hundred words refinement

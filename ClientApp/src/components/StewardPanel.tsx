@@ -5,11 +5,12 @@ import { BODY, MONO, TIER, chamfer } from './orbit';
 import { ActivityFeed } from './ActivityFeed';
 import { StewardPlan } from './StewardPlan';
 import { StewardRecord } from './StewardRecord';
+import { StewardTicketFlags } from './StewardTicketFlags';
 import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
 import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
-  answerStewardQuestion, clearStewardFlag, getSteward, getStewardEntries, getStewardOwnerFlags, getStewardPlan,
+  answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan,
   getStewardStatus, markStewardEntry, setStewardMode, tellSteward,
 } from '../api/steward';
 import type {
@@ -103,6 +104,21 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
 
   const off = page?.mode === 'off';
   const progress = status?.progress;
+  // A ticket in review whose merge waits on a flag only its owner can clear. Answering the
+  // question that asked about it lifts nothing, so the ticket stays here until the flag is
+  // cleared or the ticket leaves review; one an open question names is already shown under it.
+  const asked = new Set((page?.waiting ?? []).map(q => q.ticketId).filter((id): id is number => id != null));
+  const inReview = (status?.tickets ?? []).filter(t => t.phase === 'NeedsReview' && !asked.has(t.id));
+  const [held, setHeld] = useState<Record<number, boolean>>({});
+  const hear = useCallback((id: number, flags: StewardOwnerFlag[]) => {
+    const on = flags.some(f => !f.cleared);
+    setHeld(h => (h[id] === on ? h : { ...h, [id]: on }));
+  }, []);
+  const heldCount = inReview.filter(t => held[t.id]).length;
+  // Reading a ticket's flags takes git a few seconds; until each has answered, "nothing is
+  // waiting" is not yet known to be true.
+  const hearing = inReview.some(t => held[t.id] === undefined);
+  const waitingCount = (page?.waiting.length ?? 0) + heldCount;
   // What a release still asks of its owner: the notes that are something to do, not only to know.
   const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && e.release !== 'Note').length;
   const sub = !page ? 'Loading' : off ? 'No steward for this project'
@@ -150,7 +166,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
         <>
           <div className="flex flex-wrap gap-2" style={{ marginBottom: 18 }}>
             <Chip on={view === 'now'} onClick={() => show('now')} title="What is waiting on you, and what it is doing">
-              Now{page.waiting.length > 0 ? ` ${page.waiting.length}` : ''}
+              Now{waitingCount > 0 ? ` ${waitingCount}` : ''}
             </Chip>
             <Chip on={view === 'plan'} onClick={() => show('plan')} title="The plan it works from, and how far each part is">
               The plan{progress ? ` ${progress.percent}%` : ''}
@@ -162,16 +178,17 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
 
           {view === 'now' && (
             <div key="now" className="orbit-swap">
-              <Fold id="waiting" open title="Waiting on you" colour={TIER.blocked.c} count={page.waiting.length}>
-                {page.waiting.length === 0
-                  ? <Quiet>Nothing is waiting on you.</Quiet>
-                  : (
-                    <div className="flex flex-col gap-3 mb-8">
-                      {page.waiting.map(q => (
-                        <QuestionCard key={q.key} project={page.project} q={q} onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
-                      ))}
-                    </div>
-                  )}
+              <Fold id="waiting" open title="Waiting on you" colour={TIER.blocked.c} count={waitingCount}>
+                {waitingCount === 0 && !hearing && <Quiet>Nothing is waiting on you.</Quiet>}
+                {/* Mounted whatever the count, since reading their flags is what makes the count. */}
+                <div className="flex flex-col gap-3" style={{ marginBottom: waitingCount > 0 ? 32 : 0 }}>
+                  {page.waiting.map(q => (
+                    <QuestionCard key={q.key} project={page.project} q={q} onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
+                  ))}
+                  {inReview.map(t => (
+                    <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
+                  ))}
+                </div>
               </Fold>
 
               <Fold
@@ -272,7 +289,7 @@ function QuestionCard({ project, q, onAnswer }: {
       <div style={{ font: `600 14px/1.4 ${BODY}`, color: 'var(--w-t100)' }}>{q.question}</div>
       <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: 'var(--w-t400)', marginTop: 5 }}>{q.why}</div>
 
-      {q.ticketId != null && <TicketFlags project={project} ticketId={q.ticketId} />}
+      {q.ticketId != null && <StewardTicketFlags project={project} ticketId={q.ticketId} />}
 
       <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
         {q.options.map((o, i) => (
@@ -307,63 +324,6 @@ function QuestionCard({ project, q, onAnswer }: {
       </div>
       {failed && <div style={{ font: `400 11.5px ${BODY}`, color: c, marginTop: 6 }}>{failed}</div>}
     </Panel>
-  );
-}
-
-/**
- * The flags on the question's ticket that only the owner can let through. An answer is prose and
- * cannot lift one - the steward's merge raises every flag afresh - so letting the steward merge
- * past a flag is its own press, and holds only for the change as it stands now.
- */
-function TicketFlags({ project, ticketId }: { project: string; ticketId: number }) {
-  const [flags, setFlags] = useState<StewardOwnerFlag[]>([]);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [failed, setFailed] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    // Nothing to show when it cannot be read: the question still stands on its own.
-    getStewardOwnerFlags(project, ticketId).then(r => setFlags(r.flags)).catch(() => setFlags([]));
-  }, [project, ticketId]);
-  useEffect(load, [load]);
-
-  const clear = async (flag: string) => {
-    setBusy(flag); setFailed(null);
-    try { await clearStewardFlag(project, ticketId, flag); load(); }
-    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(null); }
-  };
-
-  if (flags.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
-      <div style={label()}>Holding #{ticketId}'s merge for you</div>
-      {flags.map(f => (
-        <div
-          key={f.flag}
-          className="flex items-start justify-between gap-3 flex-wrap"
-          style={{ clipPath: chamfer(8), padding: '8px 12px', border: '1px solid rgb(var(--w-line-rgb) / .14)' }}
-        >
-          <div className="min-w-0 flex-1">
-            <div style={{ font: `600 12px ${MONO}`, color: 'var(--w-t200)' }}>{f.flag}</div>
-            {f.say && <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t500)', marginTop: 2 }}>{f.say}</div>}
-            {f.detail && f.detail.length > 0 && (
-              <div className="break-all" style={{ font: `400 11px/1.5 ${MONO}`, color: 'var(--w-t500)', marginTop: 2 }}>
-                {f.detail.join(', ')}
-              </div>
-            )}
-          </div>
-          {f.cleared
-            ? <span style={label('var(--w-accent-text)')}>cleared for this change</span>
-            : f.clearable && (
-              <GhostButton tone="go" onClick={() => clear(f.flag)} disabled={busy !== null}
-                title="The steward may merge past this flag. Any rework of the ticket asks again.">
-                {busy === f.flag ? 'Clearing' : 'Let the steward merge past it'}
-              </GhostButton>
-            )}
-        </div>
-      ))}
-      {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c }}>{failed}</div>}
-    </div>
   );
 }
 
