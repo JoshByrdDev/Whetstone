@@ -21,6 +21,9 @@
 
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $DataRoot "heartbeat-common.ps1")
+# Berths on other machines - worker hosts. Functions only; with no workerHosts configured every one
+# of them finds nothing to do. See docs/worker-hosts-plan.md.
+. (Join-Path $DataRoot "heartbeat-hosts.ps1")
 
 # --- Constants ---
 $LogRetentionDays = 7     # Delete logs older than this
@@ -191,10 +194,11 @@ $Agents = @{}
 
 function Get-BusyCount { return $Agents.Count }
 
-# Tickets being worked, which is what the worker limit limits. The steward's berth is beside the
-# worker slots, not one of them (see $StewardSlot), so it counts as busy and never as a worker.
+# Tickets being worked HERE, which is what the worker limit limits. The steward's berth is beside the
+# worker slots, not one of them (see $StewardSlot), so it counts as busy and never as a worker; and
+# a worker host's berths are past the steward's and limited by that host's own slot count.
 function Get-WorkerCount {
-    return @($Agents.Keys | Where-Object { $_ -ne $StewardSlot }).Count
+    return @($Agents.Keys | Where-Object { $_ -lt $StewardSlot }).Count
 }
 
 function Get-FreeSlot {
@@ -209,6 +213,8 @@ function Get-FreeSlot {
 # its bot would sit on the board looking busy forever.
 function Update-Fleet {
     foreach ($slot in @($Agents.Keys)) {
+        # A worker host's run has no process here; Update-RemoteFleet below reads it from its host.
+        if (Test-RemoteSlot $slot) { continue }
         $a = $Agents[$slot]
         if (-not $a.Process.HasExited) { continue }
 
@@ -240,6 +246,8 @@ function Update-Fleet {
         if ($a.ClaimFile) { Remove-Item $a.ClaimFile -Force -ErrorAction SilentlyContinue }
         $Agents.Remove($slot)
     }
+
+    Update-RemoteFleet
 }
 
 # Give back any ticket the dashboard believes is being worked but nobody here is working.
@@ -682,12 +690,21 @@ Write-Log "========================================="
 # leases are still genuinely held, and it is also what says which claim files are still in use by a
 # running agent - so the stale-claim sweep can only run once the survivors are on the books.
 $keepTickets = Add-OrphanAgents
+# The same for runs on worker hosts, read from what their runners last reported. $null means the
+# hosts could not be asked, and then nothing is reset at all: releasing blind would hand a live
+# remote run's ticket to a second run.
+$remoteKeep = Add-RemoteAgents
 
 $inUse = @($Agents.Values | ForEach-Object { $_.ClaimFile } | Where-Object { $_ })
 Get-ChildItem -Path $RunDir -Filter "claim-*.json" -ErrorAction SilentlyContinue |
     Where-Object { $inUse -notcontains $_.FullName } | Remove-Item -Force
 
-Reset-Leases -KeepTicketIds $keepTickets
+if ($null -eq $remoteKeep) {
+    Write-Log "Could not read the worker hosts - leaving every lease as it is rather than resetting blind."
+}
+else {
+    Reset-Leases -KeepTicketIds (@($keepTickets) + @($remoteKeep))
+}
 Add-OrphanSteward
 
 # --- Main loop: fill every free slot, then watch; back off only when the whole fleet is idle ---
@@ -727,6 +744,9 @@ while ($true) {
     # the orchestrator sleeps straight through to the reset rather than backing off in steps.
     $limitUntil = Get-UsageLimitPause
     if ($limitUntil) {
+        # The limit is the board host's account's. A worker host spends its own, and reports its
+        # own limit, which the API reads into whether it is dispatchable - so its berths still fill.
+        $null = Start-RemoteFill
         if ((Get-BusyCount) -gt 0) {
             $null = Start-InterruptibleSleep -Seconds $AgentPollSeconds   # a stop is handled at the top
             continue
@@ -744,6 +764,10 @@ while ($true) {
         Remove-Item $UsageLimitFile -Force -ErrorAction SilentlyContinue
         continue
     }
+
+    # Worker hosts first: a ticket that can run on the bigger machine does, and the board host keeps
+    # its headroom for the person using it.
+    $launched += Start-RemoteFill
 
     while ((Get-WorkerCount) -lt $HeartbeatWorkers) {
         # Re-read the flag before every berth, not once a pass. Filling three slots is up to three
