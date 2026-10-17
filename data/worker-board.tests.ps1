@@ -291,7 +291,66 @@ try {
     $r = Sync-Branch -Pair $t -Branch 't-9'
     Check 'run 4: board host rebase taken over an agreed tip' "$($r.ok) $($r.state)" 'True reset'
     Check 'run 4: worktree has the newer work' (Test-Path (Join-Path $wt.path 'later.txt')) $true
+
+    # ---- A ticket's files on both machines (phase 2) ---------------------------
+    Write-Host "== Get-BoardTicketData / Send-QaCaptures"
+    $script:Puts = @()
+    $script:PutFails = $false
+    $script:Zip = $null
+    function Invoke-WebRequest {
+        param([string]$Uri, [string]$Method, [string]$InFile, [string]$OutFile, [string]$ContentType, [switch]$UseBasicParsing, [int]$TimeoutSec)
+        if ($OutFile) { Copy-Item $script:Zip $OutFile; return }
+        if ($script:PutFails) { throw "board unreachable" }
+        $script:Puts += [pscustomobject]@{ Uri = $Uri; Method = $Method; Bytes = [IO.File]::ReadAllBytes($InFile) }
+    }
+
+    $src = Join-Path $root 'zip-src'
+    New-Item -ItemType Directory -Path (Join-Path $src 'ticket-files\12') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $src 'issue-attachments\12\from-PROJ-1') -Force | Out-Null
+    Set-Content -Path (Join-Path $src 'ticket-files\12\log.txt') -Value 'owner' -Encoding ascii
+    Set-Content -Path (Join-Path $src 'issue-attachments\12\from-PROJ-1\mock.png') -Value 'img' -Encoding ascii
+    $script:Zip = Join-Path $root 'ticket.zip'
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::CreateFromDirectory($src, $script:Zip)
+    # An entry that tries to leave the data root, as a hostile or broken archive might.
+    $z = [IO.Compression.ZipFile]::Open($script:Zip, 'Update')
+    $e = $z.CreateEntry('../escaped.txt'); $w = New-Object IO.StreamWriter($e.Open()); $w.Write('x'); $w.Dispose(); $z.Dispose()
+
+    $hostData = Join-Path $root 'host-data'
+    $r = Get-BoardTicketData -DashboardUrl 'http://board.test:5338' -TicketId '12' -DataRoot $hostData
+    Check 'ticket files: fetched' "$($r.ok) $($r.files)" 'True 2'
+    Check "ticket files: the owner's file at the same path here" (Test-Path (Join-Path $hostData 'ticket-files\12\log.txt')) $true
+    Check "ticket files: the issue's attachment at the same path here" (Test-Path (Join-Path $hostData 'issue-attachments\12\from-PROJ-1\mock.png')) $true
+    Check 'ticket files: nothing lands outside the data root' (Test-Path (Join-Path $root 'escaped.txt')) $false
+
+    $caps = Join-Path $hostData 'qa-captures\12'
+    New-Item -ItemType Directory -Path (Join-Path $caps 'sub') -Force | Out-Null
+    [IO.File]::WriteAllBytes((Join-Path $caps 'one.png'), [byte[]](1, 2, 3))
+    [IO.File]::WriteAllBytes((Join-Path $caps 'sub\two two.jpg'), [byte[]](4, 5))
+    Set-Content -Path (Join-Path $caps 'page.md') -Value 'not a capture' -Encoding ascii
+    $seen = @{}
+    $n = Send-QaCaptures -DashboardUrl 'http://board.test:5338' -Dir $caps -TicketId '12' -HostName 'bravo-host' -RunId '812' -Seen $seen
+    Check 'captures: every image sent, nothing else' $n 2
+    Check 'captures: by host, ticket and run' ($script:Puts[0].Uri) 'http://board.test:5338/api/hosts/bravo-host/qa-captures/12/one.png?runId=812'
+    Check 'captures: a nested one keeps its path, escaped' ($script:Puts[1].Uri) 'http://board.test:5338/api/hosts/bravo-host/qa-captures/12/sub/two%20two.jpg?runId=812'
+    Check 'captures: as PUT, with the bytes' "$($script:Puts[0].Method) $($script:Puts[0].Bytes -join ',')" 'PUT 1,2,3'
+    Check 'captures: nothing new, nothing sent' (Send-QaCaptures -DashboardUrl 'http://board.test:5338' -Dir $caps -TicketId '12' -HostName 'bravo-host' -RunId '812' -Seen $seen) 0
+    Start-Sleep -Milliseconds 20
+    [IO.File]::WriteAllBytes((Join-Path $caps 'one.png'), [byte[]](9, 9, 9, 9))
+    Check 'captures: a changed one goes again' (Send-QaCaptures -DashboardUrl 'http://board.test:5338' -Dir $caps -TicketId '12' -HostName 'bravo-host' -RunId '812' -Seen $seen) 1
+
+    $script:PutFails = $true
+    $fresh = @{}
+    Check 'captures: a failed upload is not counted' (Send-QaCaptures -DashboardUrl 'http://board.test:5338' -Dir $caps -TicketId '12' -HostName 'bravo-host' -RunId '812' -Seen $fresh) 0
+    Check '... and is tried again next pass' $fresh.Count 0
+    $script:PutFails = $false
+    $script:Puts = @()
+    Check 'mirror stop: one last full pass' (Stop-QaCaptureMirror -Job $null -DashboardUrl 'http://board.test:5338' -Dir $caps -TicketId '12' -HostName 'bravo-host' -RunId '812') 2
+    Check 'captures: no directory, nothing to do' (Send-QaCaptures -DashboardUrl 'http://board.test:5338' -Dir (Join-Path $root 'none') -TicketId '12' -HostName 'bravo-host' -RunId '812' -Seen @{}) 0
 }
+# An exception is a failure, not the end of the list: without this, everything after it
+# goes unrun and the summary still says every check passed.
+catch { $script:fail++; $script:total++; Write-Host "FAIL  stopped by an exception: $($_.Exception.Message)" -ForegroundColor Red }
 finally {
     # Worktree .git files are read-only on Windows; -Force is what removes them.
     Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue

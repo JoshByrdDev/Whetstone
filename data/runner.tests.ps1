@@ -80,6 +80,7 @@ try {
     Check 'run id kept' $c.runId 812
     Check 'base and delivery kept' "$($c.project.baseBranch) $($c.project.mergeInsteadOfPr)" 'main True'
     Check 'branch kept' $c.ticket.branch 't-12'
+    Check "the board host's data root, for the prompt's path rule" $c.boardDataRoot 'C:\board\Whetstone\data'
 
     $c = Convert-ClaimForHost -Claim (New-Claim -MemoryDir '') -HostName 'bravo-host' -Map @{ path = 'D:\src\alpha'; worktreeRoot = 'E:\wt' } -ProjectDir $kitDir
     Check 'worktree root from host.json when given' $c.project.worktreeRoot 'E:\wt'
@@ -135,6 +136,9 @@ try {
     }
     finally { try { $live.Kill() } catch { } }
 }
+# An exception is a failure, not the end of the list: without this, everything after it
+# goes unrun and the summary still says every check passed.
+catch { $script:fail++; $script:total++; Write-Host "FAIL  stopped by an exception: $($_.Exception.Message)" -ForegroundColor Red }
 finally {
     Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
 }

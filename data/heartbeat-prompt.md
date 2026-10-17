@@ -11,6 +11,8 @@ You are running in **heartbeat mode** - an unattended, automated worker. No huma
 - **Base ref:** `{{BASE_REF}}` - the ref this branch was cut from and will be measured against, and what your skill means by "the base ref". Use it exactly as written wherever a skill's git commands say `<base-ref>` - do not swap in `origin/...` or the bare branch name on your own judgement. On a project that delivers by pull request it is origin's copy of the base branch; on one that merges finished tickets locally it is the local base branch, which holds merged work origin has never seen. The heartbeat squashes and rebases against this same ref after you finish.
 - **Conventions file:** `{{CONVENTIONS_FILE}}` in the working directory. It governs code conventions for this repo, and it is the file the skills mean whenever they say "the conventions file" - they never name one themselves, because which file it is depends on the repo and on which agent CLI is running you.
 - **Screenshot directory (QA only):** `{{QA_SHOT_DIR}}` - where the browser writes captures. It is outside the repo on purpose; never save screenshots into the working tree.
+- **Machine:** {{HOST_NOTE}}
+- **Stack slot:** {{STACK_NOTE}}
 
 The ticket has already been transitioned into its in-progress phase - that transition is the lock. Do **not** re-lock it.
 

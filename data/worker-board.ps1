@@ -213,3 +213,90 @@ function Set-BranchHandedBack {
         return ($LASTEXITCODE -eq 0)
     }
 }
+
+# ---- A ticket's files, at the same paths on both machines (phase 2) -------------------------
+#
+# Each machine keeps a ticket's files at the same path under its own data root (HostDataMirror in
+# the API). The ticket's attachments and owner-note files come here when a run starts; its QA
+# captures go to the board host as they land.
+
+# Fetch the ticket's own files from the board host and unpack them under this data root.
+# Returns @{ ok; files; reason }. A failure is the caller's to log, not to stop on: a run without
+# its attachments can still do most of its work, and says so if it needed one.
+function Get-BoardTicketData {
+    param([string]$DashboardUrl, [string]$TicketId, [string]$DataRoot)
+    $zip = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-ticket-$TicketId-" + [guid]::NewGuid().ToString('N') + ".zip")
+    try {
+        Invoke-WebRequest -Uri "$DashboardUrl/api/hosts/ticket-data/$TicketId" -OutFile $zip -UseBasicParsing -TimeoutSec 120
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+        $count = 0
+        try {
+            $root = [IO.Path]::GetFullPath($DataRoot).TrimEnd('\') + '\'
+            foreach ($entry in $archive.Entries) {
+                if (-not $entry.Name) { continue }
+                $dest = [IO.Path]::GetFullPath((Join-Path $DataRoot ($entry.FullName -replace '/', '\')))
+                # Only ever under this data root, whatever the archive says.
+                if (-not $dest.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { continue }
+                New-Item -ItemType Directory -Path (Split-Path -Parent $dest) -Force | Out-Null
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $dest, $true)
+                $count++
+            }
+        }
+        finally { $archive.Dispose() }
+        return @{ ok = $true; files = $count }
+    }
+    catch { return @{ ok = $false; files = 0; reason = $_.Exception.Message } }
+    finally { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
+}
+
+# Upload every capture under $Dir the board host has not had yet - new, or changed since it was
+# sent. $Seen remembers what was sent (relative path -> size and time), and is the caller's to keep
+# between passes. A file still being written is left for the next pass. Returns how many went.
+function Send-QaCaptures {
+    param([string]$DashboardUrl, [string]$Dir, [string]$TicketId, [string]$HostName, [string]$RunId, [hashtable]$Seen)
+    if (-not (Test-Path $Dir)) { return 0 }
+    $sent = 0
+    $base = [IO.Path]::GetFullPath($Dir).TrimEnd('\') + '\'
+    foreach ($f in @(Get-ChildItem -Path $Dir -File -Recurse -ErrorAction SilentlyContinue)) {
+        if (@('.png', '.jpg', '.jpeg', '.webp', '.gif') -notcontains $f.Extension.ToLowerInvariant()) { continue }
+        $rel = $f.FullName.Substring($base.Length) -replace '\\', '/'
+        $stamp = "$($f.Length)@$($f.LastWriteTimeUtc.Ticks)"
+        if ($Seen[$rel] -eq $stamp) { continue }
+        # Still open for writing: next time.
+        try { $probe = [IO.File]::Open($f.FullName, 'Open', 'Read', 'Read'); $probe.Dispose() } catch { continue }
+        $uri = "$DashboardUrl/api/hosts/$HostName/qa-captures/$TicketId/" + (($rel -split '/' | ForEach-Object { [Uri]::EscapeDataString($_) }) -join '/') + "?runId=$RunId"
+        try {
+            $null = Invoke-WebRequest -Uri $uri -Method Put -InFile $f.FullName -ContentType 'application/octet-stream' -UseBasicParsing -TimeoutSec 60
+            $Seen[$rel] = $stamp
+            $sent++
+        }
+        catch { }
+    }
+    return $sent
+}
+
+# Keep uploading captures for the whole of a QA run: a background job that passes over $Dir every
+# couple of seconds, so set_qa_shots - which the agent calls mid-run, naming its captures by this
+# machine's paths - finds each one already on the board host. Stop-QaCaptureMirror ends it.
+function Start-QaCaptureMirror {
+    param([string]$DashboardUrl, [string]$Dir, [string]$TicketId, [string]$HostName, [string]$RunId)
+    $lib = Join-Path $PSScriptRoot 'worker-board.ps1'
+    return Start-Job -ArgumentList $lib, $DashboardUrl, $Dir, $TicketId, $HostName, $RunId -ScriptBlock {
+        param($lib, $url, $dir, $ticket, $hostName, $run)
+        . $lib
+        $seen = @{}
+        while ($true) {
+            $null = Send-QaCaptures -DashboardUrl $url -Dir $dir -TicketId $ticket -HostName $hostName -RunId $run -Seen $seen
+            Start-Sleep -Seconds 2
+        }
+    }
+}
+
+# End the mirror, with one last pass of its own so a capture taken in the run's final seconds is
+# not left behind.
+function Stop-QaCaptureMirror {
+    param($Job, [string]$DashboardUrl, [string]$Dir, [string]$TicketId, [string]$HostName, [string]$RunId)
+    if ($Job) { Stop-Job -Job $Job -ErrorAction SilentlyContinue; Remove-Job -Job $Job -Force -ErrorAction SilentlyContinue }
+    return Send-QaCaptures -DashboardUrl $DashboardUrl -Dir $Dir -TicketId $TicketId -HostName $HostName -RunId $RunId -Seen @{}
+}

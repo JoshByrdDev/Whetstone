@@ -79,6 +79,12 @@ function Convert-ClaimForHost {
     $skillsDir = [IO.Path]::Combine($ProjectDir, 'skills')
     $notes = [IO.Path]::Combine($ProjectDir, '_notes')
 
+    # The board host's data root, before the paths are rewritten: the prompt tells the worker that
+    # a path the ticket tools give under it is at the same place under this machine's.
+    $boardData = "$($p.dataDir)".Trim()
+    if ($boardData) { $boardData = [IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($boardData.TrimEnd('\', '/'))) }
+    $Claim | Add-Member -NotePropertyName boardDataRoot -NotePropertyValue $boardData -Force
+
     $p.projectPath  = $repo
     $p.worktreeRoot = $root
     $p.dataDir      = $ProjectDir
@@ -284,6 +290,7 @@ while ($true) {
         runs = (Get-RunReport -Runs $Runs)
         usageLimitUntil = (Get-HostUsageLimit)
         waitSeconds = $(if ($Once) { 0 } else { 20 })
+        dataRoot = $DataRoot
     } | ConvertTo-Json -Depth 6 -Compress
 
     $resp = $null

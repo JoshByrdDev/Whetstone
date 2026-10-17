@@ -1334,13 +1334,15 @@ function Stop-CycleEarly {
 # cannot reach is not the ticket's fault, so the claim is given back rather than the ticket
 # blocked; a branch that cannot be brought level without losing work is, and needs a person.
 $boardStartSha = ''
-if ($onHost -and $repoDir -and -not $isReview) {
+if ($onHost -and $repoDir) {
+    # Every run on a worker host, a review included: a review reads somebody's branch as the board
+    # host's origin/* has it, and the mirror is how this clone has that at all.
     $sync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
     if (-not $sync.ok) {
         Stop-CycleEarly -Reason "Could not sync with the board host ($runHost): $($sync.reason)" `
             -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $($sync.reason). No work was attempted; the ticket goes back to the queue."
     }
-    $recordedBranch = "$($Claim.ticket.branch)".Trim()
+    $recordedBranch = if ($isReview) { "" } else { "$($Claim.ticket.branch)".Trim() }
     if ($recordedBranch) {
         $got = Get-BoardBranch -RepoDir $repoDir -Branch $recordedBranch
         if (-not $got.ok) {
@@ -1355,6 +1357,14 @@ if ($onHost -and $repoDir -and -not $isReview) {
         }
         Write-Log "  Worker host $runHost - '$recordedBranch' against the board host: $($level.state)"
     }
+}
+# The ticket's own files - the owner's attachments, the linked issue's - kept at the same paths
+# under this machine's data root as the board host's, which is what the paths the ticket tools hand
+# out name (see HostDataMirror). Not fatal: a run that needed one and lacks it says so.
+if ($onHost) {
+    $ticketData = Get-BoardTicketData -DashboardUrl $DashboardUrl -TicketId $ticketId -DataRoot $DataRoot
+    if ($ticketData.ok) { Write-Log "  Ticket files from the board host: $($ticketData.files)" }
+    else { Write-Log "  WARNING: could not fetch the ticket's files from the board host: $($ticketData.reason)" }
 }
 
 # Give the ticket its own checkout before anything else: the MCP config below points Augment at
@@ -1469,6 +1479,13 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
     $requiredServers += 'playwright'
     Write-Log "  Playwright browser configured (captures -> $qaShotDir)"
 }
+# On a worker host every capture goes to the board host as it lands, for the whole run: the agent
+# hands set_qa_shots this machine's path mid-run, and the board host looks for its own copy.
+$qaMirror = $null
+if ($onHost -and $qaShotDir) {
+    $qaMirror = Start-QaCaptureMirror -DashboardUrl $DashboardUrl -Dir $qaShotDir -TicketId $ticketId -HostName $runHost -RunId $runId
+    Write-Log "  Captures mirrored to the board host as they land."
+}
 # Named per TICKET, not per project. Two agents on the same project used to write this file over
 # each other between one's write and the other's read, and the loser started its session pointed
 # at the wrong worktree - an Augment index for someone else's branch, and a QA browser writing
@@ -1487,6 +1504,13 @@ foreach ($k in $toolSetup.Env.Keys) { Set-Item -Path "Env:$k" -Value $toolSetup.
 $env:WHETSTONE_TICKET_ID = "$ticketId"
 $env:WHETSTONE_PROJECT   = "$projectKey"
 $env:WHETSTONE_SKILL     = "$skill"
+# Which of this machine's copies of the project's stack this run holds (0-based) - the claim's
+# stackSlot, from the slot of the stack lease it took. 0 unless the machine runs more than one copy,
+# which a worker host does only for a project that declares parallelStacks. How slot N chooses its
+# compose project and ports is the project's to say; see {{STACK_NOTE}} in the prompt.
+$stackSlot = 0
+if ($null -ne $Claim.stackSlot) { $stackSlot = [int]$Claim.stackSlot }
+$env:WHETSTONE_STACK_SLOT = "$stackSlot"
 # On a worker host, the one address off this machine the guard lets a command reach: the board's
 # own API, host and port exactly (see Test-LocalHost in worker-guard.ps1). Never set on the board
 # host, where the board is localhost and needs no exception.
@@ -1508,6 +1532,20 @@ $baseRefNow = if ($repoDir) { Resolve-BaseRef -RepoDir $workDir -BaseBranch $eff
 if (-not $baseRefNow) { $baseRefNow = $effectiveBase }
 Write-Log "  Base ref: $baseRefNow"
 
+# Which machine this is, for the paths the ticket tools hand out (see HostDataMirror).
+$hostNote = if ($onHost) {
+    $boardRoot = "$($Claim.boardDataRoot)".Trim() -replace '\\', '/'
+    $localRoot = "$DataRoot" -replace '\\', '/'
+    "worker host ``$runHost``. The board runs on another machine. Any path a ticket tool gives you under ``$boardRoot`` is at the same place under ``$localRoot`` on this one: the ticket's attachments and the owner's files were copied here when this run started, and one that is missing reached the board after that - say so rather than guess at it. Captures you save in the screenshot directory reach the board on their own; hand ``set_qa_shots`` their path here, as usual."
+} else {
+    "the board host - every path a ticket tool gives you is on this machine."
+}
+$stackNote = if ($stackSlot -gt 0) {
+    "$stackSlot. Another QA run may be using this machine's other copies of this project's stack right now. Bring the stack up as your skill says, but as slot ${stackSlot}: this project's conventions say how a slot chooses its compose project name and ports, and ``WHETSTONE_STACK_SLOT`` is set to $stackSlot. If they say nothing about stack slots, do not start the stack - ``add_comment`` that this run was given slot $stackSlot on a project with no rules for one, and ``set_phase`` to ``Blocked``."
+} else {
+    "0 - this machine's one copy of the stack, used exactly as your skill says."
+}
+
 $prompt = (Get-Content -Path $PromptFile -Raw).
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
     Replace('{{BASE_REF}}',    $baseRefNow).
@@ -1526,7 +1564,9 @@ $prompt = (Get-Content -Path $PromptFile -Raw).
     Replace('{{ISSUE_CHANGES}}', $issueChanges).
     Replace('{{BLOCK_NOTE}}', $blockNote).
     Replace('{{OWNER_NOTES}}', $ownerNotes).
-    Replace('{{TRACK_RULES}}', $trackRules)
+    Replace('{{TRACK_RULES}}', $trackRules).
+    Replace('{{HOST_NOTE}}', $hostNote).
+    Replace('{{STACK_NOTE}}', $stackNote)
 
 $mutations = 0
 $summaryLines = @()
@@ -1909,6 +1949,12 @@ if ($repoDir -and -not $isReview) {
             }
         }
     }
+}
+
+# The run is over: the capture mirror makes one last pass and stops.
+if ($qaMirror) {
+    $lastSent = Stop-QaCaptureMirror -Job $qaMirror -DashboardUrl $DashboardUrl -Dir $qaShotDir -TicketId $ticketId -HostName $runHost -RunId $runId
+    Write-Log "  Capture mirror stopped ($lastSent sent on its last pass)."
 }
 
 # On a worker host, hand the branch back to the board host - after every safety net above has
