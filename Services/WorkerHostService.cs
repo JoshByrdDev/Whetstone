@@ -11,7 +11,12 @@ namespace Whetstone.Services;
 /// The agent slot its first berth is numbered. Board host workers are 1..3 and the steward is 4, so
 /// worker hosts are numbered from 5 in blocks, in the order the config lists them.
 /// </param>
-public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Skills, string[] Projects, int FirstSlot)
+/// <param name="QaLeases">
+/// How many copies of one project's stack this host may run at once - its own capacity for a
+/// resource like <c>alpha:app-stack@bravo-host</c>. Applies only to a project that declares
+/// <c>parallelStacks</c>; any other gets one, whatever this says. Phase 2.
+/// </param>
+public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Skills, string[] Projects, int FirstSlot, int QaLeases = 1)
 {
     /// <summary>The first slot past the board host's workers and the steward.</summary>
     public const int FirstRemoteSlot = HeartbeatManager.MaxWorkers + 2;
@@ -48,8 +53,10 @@ public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Sk
             slots = Math.Clamp(slots, 1, MaxSlots);
             var skills = Strings(e, "skills");
             var projects = Strings(e, "projects");
+            var qa = e.TryGetProperty("qaLeases", out var q) && q.ValueKind == JsonValueKind.Number ? q.GetInt32() : 1;
 
-            result.Add(new WorkerHostConfig(name, enabled, slots, skills.Length > 0 ? skills : DefaultSkills, projects, next));
+            result.Add(new WorkerHostConfig(name, enabled, slots, skills.Length > 0 ? skills : DefaultSkills, projects, next,
+                Math.Clamp(qa, 1, MaxSlots)));
             next += slots;
         }
         return result;
@@ -60,6 +67,21 @@ public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Sk
         name.Length is > 0 and <= 64 && name.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.');
 
     public bool OwnsSlot(int slot) => slot >= FirstSlot && slot < FirstSlot + Slots;
+
+    /// <summary>
+    /// A resource as a worker host holds it: its own, beside the board host's of the same name.
+    /// A worker host's docker stack is a different stack from the board host's, so a QA run there
+    /// must neither wait for the board host's nor stop it being taken.
+    /// </summary>
+    public static string HostResource(string resourceKey, string hostName) => $"{resourceKey}@{hostName}";
+
+    /// <summary>The resource and the host from a host-qualified key, or null for the board host's own.</summary>
+    public static (string Resource, string Host)? SplitHostResource(string key)
+    {
+        var at = key.LastIndexOf('@');
+        if (at <= 0 || at == key.Length - 1) return null;
+        return (key[..at], key[(at + 1)..]);
+    }
 
     private static string[] Strings(JsonElement e, string prop) =>
         e.TryGetProperty(prop, out var a) && a.ValueKind == JsonValueKind.Array

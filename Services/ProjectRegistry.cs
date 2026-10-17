@@ -238,6 +238,15 @@ public class ProjectConfig
     public bool MergeInsteadOfPr { get; init; }
 
     /// <summary>
+    /// This project's stack can run more than once on one machine at the same time: its skill or
+    /// conventions say how a run on stack slot N (<c>WHETSTONE_STACK_SLOT</c>) picks its own compose
+    /// project and ports. Only then may a worker host's <c>qaLeases</c> above 1 apply to it - without
+    /// it a second QA run would start the same stack on the same ports. Off unless set.
+    /// See docs/worker-hosts-plan.md, phase 2.
+    /// </summary>
+    public bool ParallelStacks { get; init; }
+
+    /// <summary>
     /// How this project's steward works: its limits, its plan, what its merge checks and refuses.
     /// See <see cref="StewardConfig"/>.
     /// </summary>
@@ -508,6 +517,7 @@ public class ProjectRegistry
             SkipClassroomAnalysisByDefault = cfg.TryGetValue("skipClassroomAnalysisByDefault", out var sca)
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
+            ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
             Tracker = TrackerConfig.From(cfg),
             Stack = GetStack(cfg),

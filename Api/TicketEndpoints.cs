@@ -199,8 +199,13 @@ public static class TicketEndpoints
                 ? wt.GetDouble() : 120;
             var leaseTtl = TimeSpan.FromMinutes(timeoutMinutes + 30);
 
+            // A worker host's run takes that host's own copy of each resource (its stack, not the
+            // board host's) - see WorkerHostConfig.HostResource. Set below when the claim names one.
+            string? resourceHost = null;
             string[] ResourcesFor(string projectKey, string skill) =>
-                registry.GetProjectConfig(projectKey).ResourcesFor(skill);
+                registry.GetProjectConfig(projectKey).ResourcesFor(skill)
+                    .Select(k => resourceHost is null ? k : WorkerHostConfig.HostResource(k, resourceHost))
+                    .ToArray();
 
             // A worker host claims only what it is configured for: its skills, and the projects it
             // has a clone of, within whatever the board's own project filter already allows.
@@ -211,6 +216,7 @@ public static class TicketEndpoints
                 if (host is null || !host.Enabled)
                     return Results.BadRequest(new { error = $"'{req.Host}' is not an enabled worker host." });
                 skillFilter = skillFilter is null ? host.Skills : skillFilter.Intersect(host.Skills).ToArray();
+                resourceHost = host.Name;
                 var allowed = filter is { Length: > 0 } ? filter : registry.Projects.ToArray();
                 filter = allowed.Where(p => host.Projects.Contains(p, StringComparer.OrdinalIgnoreCase)).ToArray();
                 // Nothing in common is "nothing to claim", not "everything": an empty filter means
@@ -261,6 +267,7 @@ public static class TicketEndpoints
                     skill = result.Skill,
                     resumed = result.Resumed,
                     runId = result.RunId,
+                    stackSlot = result.StackSlot,
                     leases = result.Leases,
                     issueChanges,
                     // How this project's tracker wants its issue named in a branch and in a commit

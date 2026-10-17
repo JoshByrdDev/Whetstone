@@ -139,7 +139,12 @@ public class TicketService
     /// A worker host names it when it hands a branch back, so a run the orchestrator has since given
     /// up on cannot overwrite what the next run did. 0 when the claim took no lease (no lease service).
     /// </para>
-    public record ClaimResult(Ticket Ticket, string Skill, bool Resumed, string[] Leases, int RunId = 0);
+    /// <para>
+    /// <c>StackSlot</c> is which of a resource's capacity slots the run got (0-based) - the first
+    /// resource it holds beside the ticket itself. 0 for a run that holds none, and for every run on
+    /// a resource whose capacity is one, which is every run unless capacity was raised for it.
+    /// </para>
+    public record ClaimResult(Ticket Ticket, string Skill, bool Resumed, string[] Leases, int RunId = 0, int StackSlot = 0);
 
     /// <summary>
     /// Claim the single most urgent workable ticket across all projects (or a filtered
@@ -343,7 +348,9 @@ public class TicketService
 
             return new ClaimResult((await GetAsync(t.Id))!, skill, resumed,
                 leases?.Select(l => l.ResourceKey).ToArray() ?? Array.Empty<string>(),
-                leases?.FirstOrDefault(l => l.ResourceKey == ResourceLeaseService.TicketKey(t.Id))?.Id ?? 0);
+                leases?.FirstOrDefault(l => l.ResourceKey == ResourceLeaseService.TicketKey(t.Id))?.Id ?? 0,
+                leases?.Where(l => l.ResourceKey != ResourceLeaseService.TicketKey(t.Id))
+                    .OrderBy(l => l.ResourceKey, StringComparer.Ordinal).Select(l => l.Slot).FirstOrDefault() ?? 0);
         }
 
         return null;

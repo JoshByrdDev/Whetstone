@@ -46,6 +46,18 @@ public class ResourceLeaseService
         try
         {
             var global = _registry.GetGlobalConfig();
+
+            // A worker host's own copy of a resource: its qaLeases, for a project whose stack can
+            // run more than once on one machine, and one for any other. Never resourceCapacity,
+            // which describes the board host's machine and not this one.
+            if (WorkerHostConfig.SplitHostResource(resourceKey) is var (resource, hostName))
+            {
+                var host = WorkerHostConfig.Read(global).FirstOrDefault(h => h.Name.Equals(hostName, StringComparison.OrdinalIgnoreCase));
+                var colon = resource.IndexOf(':');
+                if (host is null || colon <= 0) return 1;
+                return _registry.GetProjectConfig(resource[..colon]).ParallelStacks ? host.QaLeases : 1;
+            }
+
             if (global.TryGetValue("resourceCapacity", out var caps) && caps.ValueKind == JsonValueKind.Object
                 && caps.TryGetProperty(resourceKey, out var v) && v.ValueKind == JsonValueKind.Number)
                 return Math.Max(1, v.GetInt32());
