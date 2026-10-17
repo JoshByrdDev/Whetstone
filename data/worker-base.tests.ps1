@@ -214,6 +214,32 @@ try {
     Check 'a command that printed nothing reads as before' $quiet 'worktree setup command failed (exit 3): exit /b 3'
     Check 'a setup that passes is still no reason at all' "[$(Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo fine'))]" '[]'
 
+    # ---- A setup command cannot hang its run ------------------------------------
+    Write-Host "== a setup command has a time limit and no stdin"
+    $marker = 'ping -n 47 127.0.0.1'
+    $started = Get-Date
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @("echo installing& $marker") -TimeoutMinutes 0.05
+    $took = ((Get-Date) - $started).TotalSeconds
+    Check 'a command past its limit is stopped and says so' (($why -split "`n")[0]) "worktree setup command timed out after 0.05 min and was stopped: echo installing& $marker"
+    Check '... promptly, not when it would have finished' ($took -lt 25) $true
+    Check '... with what it printed before then' ($why -match 'installing') $true
+    Start-Sleep -Milliseconds 500
+    $left = @(Get-CimInstance Win32_Process -Filter "Name='PING.EXE' OR Name='ping.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*-n 47 127.0.0.1*' })
+    Check '... and the process it started is gone too' $left.Count 0
+
+    $started = Get-Date
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('set /p answer=Download pnpm? [Y/n] & if not defined answer exit /b 7') -TimeoutMinutes 1
+    Check 'a prompt gets end-of-input and fails at once' (($why -split "`n")[0]) 'worktree setup command failed (exit 7): set /p answer=Download pnpm? [Y/n] & if not defined answer exit /b 7'
+    Check '... long before the limit' (((Get-Date) - $started).TotalSeconds -lt 15) $true
+    Check '... with its question in the reason' ($why -match 'Download pnpm\?') $true
+
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo first&& echo second 1>&2&& exit /b 4')
+    Check "every step of an '&&' command is captured, error output too" (($why -match 'first') -and ($why -match 'second')) $true
+    Check '... and the exit code is the last step''s' (($why -split "`n")[0] -match 'exit 4') $true
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo "a quoted value"& exit /b 2')
+    Check 'a quoted argument survives the wrapping' ($why -match '"a quoted value"') $true
+    Check 'it runs in the worktree' "[$(Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('if not exist README.md exit /b 9'))]" '[]'
+
     $many = New-Object System.Collections.Generic.List[string]
     1..40 | ForEach-Object { [void]$many.Add("line $_") }
     [void]$many.Add('')

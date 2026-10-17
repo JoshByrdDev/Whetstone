@@ -237,7 +237,8 @@ function Get-WorktreeMap {
 # worker fails deep into its run, on an error that looks nothing like its real cause.
 # Returns $null on success, or a reason string.
 function Initialize-Worktree {
-    param([string]$Path, [string]$RepoDir, [string[]]$CopyFiles, [string[]]$Setup)
+    param([string]$Path, [string]$RepoDir, [string[]]$CopyFiles, [string[]]$Setup,
+          [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 }))
 
     foreach ($rel in $CopyFiles) {
         if (-not $rel) { continue }
@@ -271,20 +272,70 @@ function Initialize-Worktree {
             Write-Log "    setup: $cmd"
             # Kept as well as logged: on a worker host the log is on another machine, and "exit 1" on
             # the ticket says nothing a person can act on. The tail goes into the block reason.
-            $output = New-Object System.Collections.Generic.List[string]
-            Push-Location $Path
-            try { & cmd /c $cmd *>&1 | ForEach-Object { $line = "$_"; Write-Log "      $line"; [void]$output.Add($line) } }
-            finally { Pop-Location }
-            if ($LASTEXITCODE -ne 0) {
-                $code = $LASTEXITCODE
+            $run = Invoke-SetupCommand -Command $cmd -WorkDir $Path -TimeoutMinutes $TimeoutMinutes
+            if ($run.timedOut) {
                 if ($failedMarker) { Set-Content -Path $failedMarker -Value $cmd -Encoding ascii }
-                return "worktree setup command failed (exit $code): $cmd" + (Format-OutputTail -Lines $output)
+                return "worktree setup command timed out after $TimeoutMinutes min and was stopped: $cmd" + (Format-OutputTail -Lines $run.output)
+            }
+            if ($run.code -ne 0) {
+                if ($failedMarker) { Set-Content -Path $failedMarker -Value $cmd -Encoding ascii }
+                return "worktree setup command failed (exit $($run.code)): $cmd" + (Format-OutputTail -Lines $run.output)
             }
         }
     }
     finally { $env:PATH = $savedPath }
     if ($failedMarker -and (Test-Path $failedMarker)) { Remove-Item $failedMarker -Force }
     return $null
+}
+
+# Run one worktree setup command, for at most $TimeoutMinutes. Returns @{ code; timedOut; output }.
+#
+# Its own process, not a pipeline in this one, for two reasons. A command still running at the limit
+# has to be stopped, children and all - an install is a cmd running a package manager running node -
+# and only a process of its own has a tree to kill. And its stdin is an empty file, so a prompt
+# (a package manager asking whether to download itself) reads end-of-input and fails at once with
+# its question in the output, rather than waiting for an answer nobody on this machine will give.
+# Output goes to a file and is logged as it arrives, so a long install still shows progress.
+function Invoke-SetupCommand {
+    param([string]$Command, [string]$WorkDir, [double]$TimeoutMinutes)
+    $base = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-setup-" + [guid]::NewGuid().ToString('N'))
+    $outFile = "$base.out"
+    $inFile = "$base.in"
+    [IO.File]::WriteAllText($inFile, '')
+    $output = New-Object System.Collections.Generic.List[string]
+    $reader = $null
+    try {
+        # /d skips AutoRun; the parentheses take the 2>&1 to every command in "a && b".
+        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/d /s /c `"( $Command ) 2>&1`"" -WorkingDirectory $WorkDir `
+            -RedirectStandardOutput $outFile -RedirectStandardInput $inFile -NoNewWindow -PassThru
+        try { $null = $p.Handle } catch { }
+        $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        $timedOut = $false
+        while ($true) {
+            $done = $p.WaitForExit(1000)
+            if (-not $reader -and (Test-Path $outFile)) {
+                $reader = New-Object IO.StreamReader((New-Object IO.FileStream($outFile, 'Open', 'Read', 'ReadWrite')))
+            }
+            if ($reader) {
+                while ($null -ne ($line = $reader.ReadLine())) { Write-Log "      $line"; [void]$output.Add($line) }
+            }
+            if ($done) { break }
+            if ((Get-Date) -ge $deadline) {
+                $timedOut = $true
+                Write-Log "      (still running after $TimeoutMinutes min - stopping it and everything it started)"
+                & taskkill /PID $p.Id /T /F *> $null
+                $null = $p.WaitForExit(15000)
+                if ($reader) { while ($null -ne ($line = $reader.ReadLine())) { [void]$output.Add($line) } }
+                break
+            }
+        }
+        $code = if ($timedOut) { $null } else { $p.ExitCode }
+        return @{ code = $code; timedOut = $timedOut; output = $output }
+    }
+    finally {
+        if ($reader) { $reader.Dispose() }
+        Remove-Item $outFile, $inFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # The last lines a failed command printed, as a block to append to a reason: blank lines and colour

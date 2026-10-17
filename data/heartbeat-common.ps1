@@ -75,6 +75,11 @@ $OffHoursEnd             = "06:30"
 $WorkerTimeoutMinutes    = 120
 # A run whose agent says nothing on its stream for this long is ended - see Start-AgentWatchdog. 0 = off.
 $WorkerStallMinutes      = 30
+# Longest one worktree setup command (an install, a restore) may run before its process tree is
+# killed and the ticket blocked with its output. The watchdogs above only start with the agent, so
+# without this a hung install - a package manager waiting at a prompt nobody will answer - held its
+# berth for ever. Global config: worktreeSetupTimeoutMinutes.
+$WorktreeSetupTimeoutMinutes = 20
 $BaseBranch              = "main"
 $BranchPrefix            = ""
 $WorkerModel             = "claude-opus-5-5"
@@ -117,6 +122,7 @@ if (Get-Global 'offHoursStart')   { $OffHoursStart   = Get-Global 'offHoursStart
 if (Get-Global 'offHoursEnd')     { $OffHoursEnd     = Get-Global 'offHoursEnd' }
 if ($null -ne (Get-Global 'heartbeatWorkerTimeoutMinutes')) { $WorkerTimeoutMinutes = [int](Get-Global 'heartbeatWorkerTimeoutMinutes') }
 if ($null -ne (Get-Global 'heartbeatWorkerStallMinutes'))   { $WorkerStallMinutes   = [int](Get-Global 'heartbeatWorkerStallMinutes') }
+if ($null -ne (Get-Global 'worktreeSetupTimeoutMinutes'))   { $WorktreeSetupTimeoutMinutes = [double](Get-Global 'worktreeSetupTimeoutMinutes') }
 if (Get-Global 'baseBranch') { $BaseBranch = Get-Global 'baseBranch' }
 $configuredPrefix = Get-Global 'branchPrefix'; if ($null -ne $configuredPrefix) { $BranchPrefix = $configuredPrefix }
 if (Get-Global 'workerModel')     { $WorkerModel     = Get-Global 'workerModel' }
