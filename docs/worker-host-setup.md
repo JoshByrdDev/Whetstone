@@ -97,6 +97,15 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
 
    Check: `git -C C:\Whetstone rev-parse HEAD` matches the same command on the board host.
 
+   **If this machine also runs a board of its own**, give the runner a checkout of its own as well,
+   say `C:\Whetstone-worker`, and use that path everywhere below. Everything a script does
+   resolves from its own `data/` folder, `dashboardUrl` included, so one checkout cannot point its
+   own board at itself and its runner at the board host. The two never see each other's processes.
+   Every scan that adopts or defers to a running script matches only its own checkout's copy. They
+   do share the machine's Claude account (unless each checkout's `config.json` names a different
+   one), its RAM, and its docker. If a project on each board uses the same ports or container
+   names, leave QA off this host's entry (phase 1 skills only).
+
 9. **Point it at the board.** `C:\Whetstone\data\config.json`:
 
    ```json
