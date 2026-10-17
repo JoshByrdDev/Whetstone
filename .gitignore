@@ -20,6 +20,8 @@ ClientApp/*.tsbuildinfo
 data/config.json
 data/**/config.json
 data/**/project.json
+# A worker host's own name and its project clones (docs/worker-hosts-plan.md). One machine's.
+data/host.json
 # A hand-made copy of one, taken before editing it. project.json holds the tracker token, so a
 # backup of it does too — and a backup is exactly the file a `git add -A` sweeps up unnoticed.
 data/**/*.bak

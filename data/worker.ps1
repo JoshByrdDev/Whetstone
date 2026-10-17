@@ -24,7 +24,10 @@ param(
     # line rather than out of the claim file matters: the claim file is named after the slot, so
     # after a restart it may describe a different run entirely, and sparing the wrong lease is worse
     # than sparing none. See Find-OrphanAgents in heartbeat.ps1.
-    [int]$TicketId = 0
+    [int]$TicketId = 0,
+    # Identification only, like -TicketId: on a worker host, the run id its runner was ordered to
+    # start, so a runner starting up can adopt a survivor by the run its board host knows it as.
+    [string]$RunId = ''
 )
 
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
