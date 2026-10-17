@@ -32,6 +32,9 @@ export interface StewardQuestion {
   options: StewardOption[];
   heldUp: string;
   ticketId?: number | null;
+  /** The unit whose open decisions this asks about; with `decisions`, it is answered on those. */
+  unit?: number | null;
+  decisions?: number[];
   askedAt: string;
   answer?: string | null;
   answeredAt?: string | null;
@@ -158,9 +161,47 @@ export interface StewardPlanUnitView {
   /** What its release still asks, by kind; null for a unit nobody has agreed. */
   release?: { migrations: number; config: number; actions: number; toKnow: number; outstanding: number } | null;
   progress: { percent: number; done: number; inProgress: number; notStarted: number; outcomes: number };
+  /** The numbers of the decisions its spec still leaves open. */
+  openDecisions?: number[];
   text: string;
   groups: { heading: string; outcomes: StewardPlanOutcome[] }[];
 }
+
+/** One choice a unit's spec leaves open, as the spec writes it. */
+export interface UnitDecision {
+  number: number;
+  title: string;
+  /** Everything the spec says about it, after its title. */
+  text: string;
+  options: { letter: string; text: string }[];
+  /** The pick the spec recommends, as written, and the reason it gives. */
+  pick?: string | null;
+  pickWhy?: string | null;
+  /** The options the pick names; empty when the pick is words rather than a letter. */
+  pickLetters: string[];
+}
+
+export interface UnitDecisions {
+  unit: number; file: string; title: string; agreed: boolean; draft: boolean;
+  open: UnitDecision[];
+}
+
+/** An answer to one decision: letters ("a" or "a,c"), or none for the pick as written; a note may go with either. */
+export interface UnitDecisionChoice { number: number; option?: string | null; note?: string | null }
+
+export const getUnitDecisions = (project: string, unit: number) =>
+  fetch(`/api/steward/plan/units/${unit}/decisions?${q(project)}`)
+    .then(json<{ answer: string; data: UnitDecisions }>).then(r => r.data);
+
+/**
+ * Settle some of a unit's decisions: written into its spec under "Decided". With `agree`, the
+ * unit is agreed in the same commit; with `answering`, the question that asked for them is answered.
+ */
+export const decideStewardUnit = (project: string, unit: number,
+  body: { decisions: UnitDecisionChoice[]; agree?: boolean; answering?: string | null }) =>
+  fetch(`/api/steward/plan/units/${unit}/decisions?${q(project)}`, {
+    method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
+  }).then(json<{ answer: string; why?: string | null }>);
 
 export type UnitStage = 'draft' | 'notAgreed' | 'agreed' | 'building' | 'built' | 'released';
 

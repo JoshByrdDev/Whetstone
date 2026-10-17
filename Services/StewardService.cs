@@ -25,7 +25,8 @@ public record StewardTicketDraft(
 
 /// <summary>What a steward wants to put to the owner.</summary>
 public record StewardAsk(
-    string Key, string Question, string Why, IReadOnlyList<BlockOption> Options, string HeldUp, int? TicketId = null);
+    string Key, string Question, string Why, IReadOnlyList<BlockOption>? Options, string HeldUp, int? TicketId = null,
+    int? Unit = null, IReadOnlyList<int>? Decisions = null);
 
 /// <summary>A steward's record kept elsewhere, to be taken in once. See <see cref="StewardService.ImportAsync"/>.</summary>
 public record StewardImport(
@@ -908,9 +909,26 @@ public class StewardService
         foreach (var (name, value) in new[] { ("question", a.Question), ("why", a.Why), ("heldUp", a.HeldUp) })
             if (string.IsNullOrWhiteSpace(value)) return Refuse("bad-request", $"\"{name}\" is missing.");
         var options = (a.Options ?? Array.Empty<BlockOption>()).Where(o => !string.IsNullOrWhiteSpace(o.Label)).ToList();
-        if (options.Count < 2) return Refuse("bad-request", "Give at least two options, each with what it costs or rules out.");
-        if (options.Count(o => o.Recommended) != 1)
-            return Refuse("bad-request", "Mark exactly one option as the one you would pick.");
+        // A question about a unit's open decisions is answered on those decisions themselves, so it
+        // needs no options of its own - and has to name decisions the spec really leaves open, or
+        // the owner is handed an empty sheet.
+        var asks = (a.Decisions ?? Array.Empty<int>()).Distinct().ToList();
+        if (a.Unit is null != (asks.Count == 0))
+            return Refuse("bad-request", "Name a unit and its decisions together, or neither.");
+        if (a.Unit is { } unitNo)
+        {
+            var spec = (await _git.PlanAsync(projectKey, ct)).FirstOrDefault(u => u.Number == unitNo);
+            if (spec is null) return Refuse("bad-request", $"The plan has no unit numbered {unitNo}.");
+            var open = UnitDecisions.Open(spec.Text).Select(d => d.Number).ToHashSet();
+            if (asks.FirstOrDefault(n => !open.Contains(n)) is var missing and > 0)
+                return Refuse("bad-request", $"#{missing} is not an open decision in {spec.File}. Only a decision written under \"To decide\" in the template's shape can be asked this way.");
+        }
+        if (asks.Count == 0 || options.Count > 0)
+        {
+            if (options.Count < 2) return Refuse("bad-request", "Give at least two options, each with what it costs or rules out.");
+            if (options.Count(o => o.Recommended) != 1)
+                return Refuse("bad-request", "Mark exactly one option as the one you would pick.");
+        }
 
         if (await _db.StewardQuestions.AnyAsync(q => q.ProjectKey == projectKey && q.Key == key, ct))
             return Refuse("already-asked", $"\"{key}\" has been asked already. A question is asked once.");
@@ -925,10 +943,14 @@ public class StewardService
             OptionsJson = JsonSerializer.Serialize(options, Json),
             HeldUp = a.HeldUp.Trim(),
             TicketId = a.TicketId,
+            PlanUnit = a.Unit,
+            PlanKey = a.Unit is null ? null : cfg.Steward.Plan.Key,
+            Decisions = asks.Count == 0 ? null : string.Join(",", asks),
         });
         await _db.SaveChangesAsync(ct);
 
-        var pick = options.First(o => o.Recommended).Label;
+        var pick = options.FirstOrDefault(o => o.Recommended)?.Label
+            ?? $"the spec's picks for {string.Join(", ", asks.Select(n => $"#{n}"))}";
         var notice = _notify is null ? null : await _notify.SendAsync("steward_question",
             $"{cfg.DisplayName} needs a decision",
             $"{a.Question.Trim()}\n\nI would pick: {pick}\n\nHeld up: {a.HeldUp.Trim()}\n\nAnswer it on the board, under Steward.", ct);
@@ -1264,6 +1286,8 @@ public class StewardService
                         outstanding,
                     },
                     progress = new { p.Percent, p.Done, p.InProgress, p.NotStarted, p.Outcomes },
+                    // What its spec still leaves for the owner to decide, by number.
+                    openDecisions = UnitDecisions.Open(u.Text).Select(d => d.Number),
                     u.Text,
                     groups = TicketGitService.UnitGroups(which, u).Select(g => new
                     {
@@ -1302,7 +1326,34 @@ public class StewardService
     /// alone. Units are agreed in order, and only a spec that says it is a draft can be agreed by
     /// rule: anything else is left for a person to edit.
     /// </summary>
-    public async Task<StewardReply> OwnerAgreesUnitAsync(string projectKey, int unit, CancellationToken ct = default)
+    public Task<StewardReply> OwnerAgreesUnitAsync(string projectKey, int unit, CancellationToken ct = default) =>
+        OwnerDecidesAsync(projectKey, unit, Array.Empty<UnitDecisionChoice>(), agree: true, answering: null, ct);
+
+    /// <summary>The decisions a unit of the plan being worked still leaves open, read from its spec as committed.</summary>
+    public async Task<StewardReply> UnitDecisionsAsync(string projectKey, int unit, CancellationToken ct = default)
+    {
+        if (Config(projectKey) is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var u = (await _git.PlanAsync(projectKey, ct)).FirstOrDefault(x => x.Number == unit);
+        if (u is null) return Refuse("bad-request", $"The plan has no unit numbered {unit}.");
+        return new StewardReply("decisions", null, new
+        {
+            unit, file = u.File, title = TicketGitService.UnitTitle(u), u.Agreed, u.Draft,
+            open = UnitDecisions.Open(u.Text),
+        });
+    }
+
+    /// <summary>
+    /// The owner settles some of a unit's open decisions, and may agree the unit in the same commit.
+    /// <para>
+    /// The answers are written into the spec, under "Decided" - the document every run files from -
+    /// rather than only into the record beside it: a decision a steward has to find in two places
+    /// is one it will one day find in neither. Like agreeing, this has no tool behind it. Given the
+    /// key of a question that asked for these decisions, it answers that question too, so the
+    /// owner says it once.
+    /// </para>
+    /// </summary>
+    public async Task<StewardReply> OwnerDecidesAsync(string projectKey, int unit, IReadOnlyList<UnitDecisionChoice> choices,
+        bool agree, string? answering, CancellationToken ct = default)
     {
         var cfg = Config(projectKey);
         if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
@@ -1310,21 +1361,62 @@ public class StewardService
         var plan = await _git.PlanAsync(projectKey, ct);
         var u = plan.FirstOrDefault(x => x.Number == unit);
         if (u is null) return Refuse("bad-request", $"The plan has no unit numbered {unit}.");
-        if (u.Agreed) return Refuse("already-agreed", $"{u.File} is already agreed.");
-        if (!u.Draft) return Refuse("not-a-draft", $"{u.File} does not say it is a draft, so there is nothing here to agree by rule. Mark it agreed in the file and commit that.");
-        if (plan.FirstOrDefault(x => x.Number < unit && !x.Agreed) is { } earlier)
-            return Refuse("not-next", $"Unit {earlier.Number} comes first and is not agreed. Units are worked in order.");
-        if (TicketGitService.MarkAgreed(p, u.Text, DateTime.Now) is not { } marked)
-            return Refuse("not-by-rule", $"The status line of {u.File} is not written the way the board can rewrite. Mark it agreed in the file and commit that.");
+        if (choices.Count == 0 && !agree) return Refuse("bad-request", "There is nothing to settle.");
 
-        var (sha, _, refusal) = await _git.CommitFileAsync(projectKey, u.File, marked, $"Unit {unit} of the plan, agreed by its owner", ct);
-        if (refusal is not null) return Refuse("refused", refusal);
+        StewardQuestion? q = null;
+        if (!string.IsNullOrWhiteSpace(answering))
+        {
+            q = await _db.StewardQuestions.FirstOrDefaultAsync(x => x.ProjectKey == projectKey && x.Key == answering, ct);
+            if (q is null) return Refuse("not-waiting", $"No question named \"{answering}\".");
+            if (q.Answer is not null) return Refuse("not-waiting", $"\"{answering}\" was answered on {q.AnsweredAt:yyyy-MM-dd}.");
+        }
 
-        (await UnitRowAsync(projectKey, p.Key, unit, ct)).AgreedAt = DateTime.UtcNow;
-        await StewardDue.MarkAsync(_db, projectKey, $"the owner agreed unit {unit}");
+        var text = u.Text;
+        IReadOnlyList<string> said = Array.Empty<string>();
+        if (choices.Count > 0)
+        {
+            var (settled, s, refusal) = UnitDecisions.Settle(text, choices, DateTime.Now);
+            if (settled is null) return Refuse("bad-request", refusal!);
+            (text, said) = (settled, s);
+        }
+        if (agree)
+        {
+            if (u.Agreed) return Refuse("already-agreed", $"{u.File} is already agreed.");
+            if (!u.Draft) return Refuse("not-a-draft", $"{u.File} does not say it is a draft, so there is nothing here to agree by rule. Mark it agreed in the file and commit that.");
+            if (plan.FirstOrDefault(x => x.Number < unit && !x.Agreed) is { } earlier)
+                return Refuse("not-next", $"Unit {earlier.Number} comes first and is not agreed. Units are worked in order.");
+            if (TicketGitService.MarkAgreed(p, text, DateTime.Now) is not { } marked)
+                return Refuse("not-by-rule", $"The status line of {u.File} is not written the way the board can rewrite. Mark it agreed in the file and commit that.");
+            text = marked;
+        }
+
+        var n = said.Count;
+        var message = agree
+            ? n == 0 ? $"Unit {unit} of the plan, agreed by its owner" : $"Unit {unit} of the plan, agreed by its owner with {n} decision{(n == 1 ? "" : "s")}"
+            : $"Unit {unit}: {n} decision{(n == 1 ? "" : "s")}, made by its owner";
+        var (sha, _, no) = await _git.CommitFileAsync(projectKey, u.File, text, message, ct);
+        if (no is not null) return Refuse("refused", no);
+
+        var summary = $"Unit {unit}: {(n == 0 ? "agreed" : $"{(agree ? "agreed, and " : "")}decided {string.Join("; ", said)}")}. Written into {u.File} at {sha}.";
+        if (agree) (await UnitRowAsync(projectKey, p.Key, unit, ct)).AgreedAt = DateTime.UtcNow;
+        if (q is not null)
+        {
+            (q.Answer, q.AnsweredAt) = (summary, DateTime.UtcNow);
+            await StewardDue.MarkAsync(_db, projectKey, $"the owner answered {q.Key}");
+        }
+        else
+        {
+            if (n > 0) _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, Text = summary });
+            await StewardDue.MarkAsync(_db, projectKey, agree ? $"the owner agreed unit {unit}" : $"the owner decided {n} of unit {unit}'s decisions");
+        }
         await _db.SaveChangesAsync(ct);
+        var exported = n > 0 || q is not null ? await ExportDecisionsAsync(cfg, ct) : null;
         _heartbeat?.Wake();
-        return new StewardReply("agreed", null, new { file = u.File, commit = sha });
+        return new StewardReply(agree ? "agreed" : "decided", exported, new
+        {
+            file = u.File, commit = sha, decided = said,
+            open = UnitDecisions.Open(text).Select(d => d.Number),
+        });
     }
 
     /// <summary>

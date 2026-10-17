@@ -798,6 +798,10 @@ namespace Whetstone.Migrations
                     b.Property<DateTime>("AskedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Decisions")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("HeldUp")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -810,6 +814,13 @@ namespace Whetstone.Migrations
                     b.Property<string>("OptionsJson")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("PlanKey")
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("PlanUnit")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("ProjectKey")
                         .IsRequired()

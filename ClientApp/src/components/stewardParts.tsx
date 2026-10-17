@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { SectionRule } from './ui';
-import { BODY, CAPS, DISPLAY, MONO } from './orbit';
+import { BODY, CAPS, DISPLAY, MONO, chamfer } from './orbit';
 import { track } from '../theme';
 
 /** The pieces the Steward page's views share: its small label, its sense of "ago", a folding section. */
@@ -78,6 +78,31 @@ export function Fold({ id, open: startsOpen = false, title, colour, count, meta,
         ? <div key="open" className="orbit-swap">{children}</div>
         : <div style={{ height: 12 }} />}
     </>
+  );
+}
+
+/** One answer to choose among: a question's option, or one of a decision's. The chosen one is `aria-current`. */
+export function OptionRow({ on, onClick, title, detail, tag }: {
+  on: boolean; onClick: () => void; title: ReactNode; detail?: ReactNode; tag?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-current={on ? 'true' : undefined}
+      className="orbit-pick text-left"
+      style={{
+        clipPath: chamfer(8),
+        padding: '8px 12px',
+        background: on ? 'rgb(var(--w-accent-rgb) / .13)' : 'rgb(var(--w-line-rgb) / .04)',
+        border: `1px solid ${on ? 'rgb(var(--w-accent-rgb) / .5)' : 'rgb(var(--w-line-rgb) / .14)'}`,
+      }}
+    >
+      <div className="flex items-baseline gap-2 flex-wrap">
+        <span className="min-w-0" style={{ font: `600 12.5px ${BODY}`, color: on ? 'var(--w-accent-text-lit)' : 'var(--w-t200)' }}>{title}</span>
+        {tag && <span style={label('var(--w-accent-text)')}>{tag}</span>}
+      </div>
+      {detail && <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t500)', marginTop: 2 }}>{detail}</div>}
+    </button>
   );
 }
 

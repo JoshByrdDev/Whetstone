@@ -61,6 +61,17 @@ public class StewardQuestion
     /// <summary>The ticket that raised it, when one did.</summary>
     public int? TicketId { get; set; }
 
+    /// <summary>
+    /// The unit of the plan whose open decisions this asks about, when it asks about some - so
+    /// the board can put those decisions in front of the owner instead of a summary of them. With
+    /// <see cref="PlanKey"/>, because a unit's number means nothing without its plan.
+    /// </summary>
+    public int? PlanUnit { get; set; }
+    public string? PlanKey { get; set; }
+
+    /// <summary>Those decisions' numbers, comma separated, in the order asked.</summary>
+    public string? Decisions { get; set; }
+
     public DateTime AskedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>The owner's answer, in their words or their click. Null while it waits.</summary>

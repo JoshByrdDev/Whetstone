@@ -11,6 +11,7 @@ public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released);
+public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
 public record StewardNewPlan(string? Key, string? Name, string? Folder);
 
 /// <summary>
@@ -139,6 +140,22 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerAgreesUnitAsync(project ?? "", unit, ct);
             return r.Answer == "agreed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // A unit's open decisions, and the owner's answers to them: written into its spec under
+        // "Decided", with the unit agreed in the same commit when asked, and the question that
+        // asked for them answered. The owner's alone: no steward tool settles a decision.
+        app.MapGet("/api/steward/plan/units/{unit:int}/decisions", async (int unit, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.UnitDecisionsAsync(project ?? "", unit, ct);
+            return r.Answer == "decisions" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+        app.MapPost("/api/steward/plan/units/{unit:int}/decisions", async (int unit, string? project, StewardDecide body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerDecidesAsync(project ?? "", unit, body.Decisions ?? Array.Empty<UnitDecisionChoice>(),
+                body.Agree ?? false, body.Answering, ct);
+            return r.Answer is "agreed" or "decided" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // Say a unit's work has been released, or take that back.
@@ -307,6 +324,10 @@ public static class StewardEndpoints
         options = JsonSerializer.Deserialize<List<BlockOption>>(q.OptionsJson, Json) ?? new(),
         q.HeldUp,
         q.TicketId,
+        // The unit and decisions it asks about, when it is answered on the spec's own decisions.
+        unit = q.PlanUnit,
+        decisions = (q.Decisions ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
+            .Select(n => int.TryParse(n, out var i) ? i : 0).Where(i => i > 0),
         q.AskedAt,
         q.Answer,
         q.AnsweredAt,

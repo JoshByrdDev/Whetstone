@@ -642,6 +642,136 @@ public class StewardServiceTests : IDisposable
         Assert.NotNull(ctx.StewardUnits.Single(u => u.Unit == 2).AgreedAt);
     }
 
+    // ---- a unit's open decisions -------------------------------------------------------
+
+    private const string WithDecisions = """
+        # Unit 2: the second thing
+
+        > **Status: draft, awaiting the owner.**
+
+        - **A1.** One.
+
+        ## To decide
+
+        Each is open until the owner answers.
+
+        - **Decide (#4) How long an invite lasts.** Options: (a) 14 days; (b) 30 days, or (c) never. **Pick: (b),** long enough for a slow reader.
+        - **Decide (#5) The reminder.** A reminder a few days before it lapses, or none. **Pick: one reminder 3 days before.**
+        - **(#6) Who sends it.** Options: (a) we do; (b) the business copies a link (the business is the sender).
+          It is mail we start ourselves.
+
+        ## Decided
+
+        Nothing yet.
+
+        ## Done means
+
+        It works.
+        """;
+
+    [Fact]
+    public void A_spec_lists_its_open_decisions_with_their_options_and_pick()
+    {
+        var open = UnitDecisions.Open(WithDecisions);
+        Assert.Equal(new[] { 4, 5, 6 }, open.Select(d => d.Number));
+
+        Assert.Equal("How long an invite lasts", open[0].Title);
+        Assert.Equal(new[] { "a", "b", "c" }, open[0].Options.Select(o => o.Letter));
+        Assert.Equal(new[] { "14 days", "30 days", "never" }, open[0].Options.Select(o => o.Text));
+        Assert.Equal(new[] { "b" }, open[0].PickLetters);
+        Assert.Equal("(b)", open[0].Pick);
+        Assert.Equal("long enough for a slow reader.", open[0].PickWhy);
+
+        // A pick that is not one of the letters is a pick all the same.
+        Assert.Empty(open[1].Options);
+        Assert.Empty(open[1].PickLetters);
+        Assert.Equal("one reminder 3 days before", open[1].Pick);
+
+        // A decision that asks two things picks two letters.
+        var two = UnitDecisions.Open("## To decide\n\n- **(#8) Two things.** Options: (a) one; (b) two. And later: (c) three; (d) four. **Pick: (a) and (c):** both cheap.\n").Single();
+        Assert.Equal(new[] { "a", "c" }, two.PickLetters);
+        Assert.Equal("two", two.Options[1].Text);
+
+        // "(the business)" is not an option, and a bullet runs on over its indented line.
+        Assert.Equal(new[] { "we do", "the business copies a link (the business is the sender)" }, open[2].Options.Select(o => o.Text));
+        Assert.Null(open[2].Pick);
+        Assert.Contains("mail we start ourselves", open[2].Text);
+
+        // The template's heading and the older one are read alike; a decided one is not open.
+        Assert.Single(UnitDecisions.Open("## Decide\n\n- **Decide (#9) X.** Options: (a) one; (b) two.\n"));
+        Assert.Empty(UnitDecisions.Open("## Decided\n\n- **(#9) X.** Decided by the owner 2026-01-01: (a) one.\n"));
+    }
+
+    [Fact]
+    public void Settling_a_decision_moves_it_under_decided_in_the_owners_words()
+    {
+        var day = new DateTime(2026, 3, 4);
+        var (text, said, no) = UnitDecisions.Settle(WithDecisions,
+            new[] { new UnitDecisionChoice(4), new UnitDecisionChoice(6, "a", "Copying the link stays possible.") }, day);
+        Assert.Null(no);
+        Assert.Equal(new[] { "#4 (b), as picked", "#6 (a): Copying the link stays possible." }, said);
+        Assert.Equal(new[] { 5 }, UnitDecisions.Open(text!).Select(d => d.Number));
+        Assert.Contains("- **(#4) How long an invite lasts.** Decided by the owner 2026-03-04: (b) 30 days.", text);
+        Assert.Contains("- **(#6) Who sends it.** Decided by the owner 2026-03-04: (a) we do. Copying the link stays possible.", text);
+        // Under "Decided", after what it already said, and before the next section.
+        Assert.True(text!.IndexOf("Nothing yet.") < text.IndexOf("(#4)") && text.IndexOf("(#6)") < text.IndexOf("## Done means"));
+
+        // The last one settled takes the open section with it.
+        var (all, _, _) = UnitDecisions.Settle(text, new[] { new UnitDecisionChoice(5) }, day);
+        Assert.DoesNotContain("## To decide", all);
+        Assert.Contains("Decided by the owner 2026-03-04: one reminder 3 days before.", all);
+
+        // Nothing is written for a sheet that is half wrong.
+        Assert.NotNull(UnitDecisions.Settle(WithDecisions, new[] { new UnitDecisionChoice(4), new UnitDecisionChoice(7) }, day).Refusal);
+        Assert.NotNull(UnitDecisions.Settle(WithDecisions, new[] { new UnitDecisionChoice(4, "d") }, day).Refusal);
+        // No pick to take and nothing said is no answer; something said is.
+        Assert.NotNull(UnitDecisions.Settle(WithDecisions, new[] { new UnitDecisionChoice(6) }, day).Refusal);
+        Assert.Null(UnitDecisions.Settle(WithDecisions, new[] { new UnitDecisionChoice(6, null, "Neither: we send it by hand.") }, day).Refusal);
+    }
+
+    [Fact]
+    public async Task The_owner_agrees_a_unit_and_settles_its_decisions_in_one_commit()
+    {
+        _git.Second = WithDecisions;
+        var r = await In(s => s.OwnerDecidesAsync("alpha", 2, new[] { new UnitDecisionChoice(4), new UnitDecisionChoice(5) }, true, null));
+        Assert.Equal("agreed", r.Answer);
+        var (path, content) = _git.Committed.Single();
+        Assert.Equal("docs/units/02-second.md", path);
+        Assert.Contains("**Status: agreed", content);
+        Assert.Contains("(#4) How long an invite lasts.** Decided by the owner", content);
+        // What was left open stays open for the steward to ask about.
+        Assert.Equal(new[] { 6 }, UnitDecisions.Open(content).Select(d => d.Number));
+
+        await using var ctx = NewCtx();
+        Assert.Contains("agreed unit 2", ctx.StewardStates.Single().DueReason);
+        Assert.Contains("#4 (b), as picked", ctx.StewardEntries.Single(e => e.Kind == StewardEntryKind.OwnerSaid).Text);
+    }
+
+    [Fact]
+    public async Task A_question_can_ask_for_a_units_decisions_and_settling_them_answers_it()
+    {
+        _git.Second = WithDecisions;
+        await Begin();
+        var ask = Question("invite-picks") with { Options = null, Unit = 2, Decisions = new[] { 4, 5 } };
+        // It names decisions the spec really leaves open, and a unit with them.
+        Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ask with { Decisions = new[] { 4, 9 } }))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ask with { Unit = null }))).Answer);
+        // Without options of its own: the decisions are its options.
+        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", ask))).Answer);
+
+        Assert.Equal("decided", (await In(s => s.OwnerDecidesAsync("alpha", 2,
+            new[] { new UnitDecisionChoice(4, "a"), new UnitDecisionChoice(5) }, false, "invite-picks"))).Answer);
+        await using var ctx = NewCtx();
+        var q = ctx.StewardQuestions.Single();
+        Assert.Equal(2, q.PlanUnit);
+        Assert.Equal("4,5", q.Decisions);
+        Assert.Contains("#4 (a)", q.Answer);
+        Assert.Contains("invite-picks", ctx.StewardStates.Single().DueReason);
+        // Said once: as the answer, not again as an instruction beside it.
+        Assert.DoesNotContain(ctx.StewardEntries, e => e.Kind == StewardEntryKind.OwnerSaid);
+        Assert.Equal("not-waiting", (await In(s => s.OwnerDecidesAsync("alpha", 2, new[] { new UnitDecisionChoice(6, "a") }, false, "invite-picks"))).Answer);
+    }
+
     [Fact]
     public void A_status_line_is_rewritten_only_when_the_result_reads_as_agreed()
     {
@@ -924,11 +1054,14 @@ public class StewardServiceTests : IDisposable
 
         public Task<string?> BaseHeadAsync(string projectKey, CancellationToken ct = default) => Task.FromResult<string?>(Head);
 
+        /// <summary>The second unit's spec, which a test may give decisions to leave open.</summary>
+        public string Second = "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n";
+
         public Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PlanUnit>>(new[]
             {
                 TicketGitService.ReadUnit(P, 1, "docs/units/01-first.md", "> **Status: agreed 2026-01-01.**\n\n- **A1.** One.\n- **A2.** Two.\n"),
-                TicketGitService.ReadUnit(P, 2, "docs/units/02-second.md", "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n"),
+                TicketGitService.ReadUnit(P, 2, "docs/units/02-second.md", Second),
             });
 
         public Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default) =>

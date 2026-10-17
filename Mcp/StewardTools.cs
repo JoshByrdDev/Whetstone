@@ -180,16 +180,20 @@ public class StewardTools
         "changes the plan or costs money, a flag marked 'owner', a ticket that has come back too often. Not progress and not " +
         "good news. Write it for someone reading on a phone with no context. It is shown on the board and announced; the " +
         "answer reaches a later run as a decision made. 'already-asked' means it was - never re-ask. Then keep everything " +
-        "else moving.")]
+        "else moving. When what you need is the owner's answer to decisions a unit's spec leaves open under \"To decide\", " +
+        "name the unit and those decisions' numbers instead of summarising them: the board shows the owner each one as the " +
+        "spec writes it, with its options and your pick, and writes the answers into the spec under \"Decided\".")]
     public static Task<StewardReply> AskOwner(StewardService s,
         [Description("The project key.")] string project,
         [Description("A short name for this question, lowercase with hyphens, like sms-provider. Yours for good.")] string key,
         [Description("The question, as one line a person can answer.")] string question,
         [Description("Why it matters now, with whatever fact the owner needs to choose.")] string why,
-        [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended.")] BlockOption[] options,
         [Description("What is held up until this is answered.")] string heldUp,
-        [Description("The ticket that raised it, when one did.")] int? ticketId = null) =>
-        s.AskAsync(project, new StewardAsk(key, question, why, options, heldUp, ticketId));
+        [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended. Leave out when you name decisions: those are their own options.")] BlockOption[]? options = null,
+        [Description("The ticket that raised it, when one did.")] int? ticketId = null,
+        [Description("The unit of the plan whose open decisions this asks about.")] int? unit = null,
+        [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null) =>
+        s.AskAsync(project, new StewardAsk(key, question, why, options, heldUp, ticketId, unit, decisions));
 
     [McpServerTool(Name = "steward_record_call"), Description(
         "Record a call you made for the owner about one ticket - an answer you gave it, a choice you made in filing it, what " +

@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { Chip, GhostButton, PageHead, Panel } from './ui';
-import { BODY, MONO, TIER, chamfer } from './orbit';
+import { BODY, MONO, TIER } from './orbit';
 import { ActivityFeed } from './ActivityFeed';
 import { StewardPlan } from './StewardPlan';
 import { StewardRecord } from './StewardRecord';
 import { StewardTicketFlags } from './StewardTicketFlags';
-import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
+import { DecisionSheet } from './DecisionSheet';
+import { Fold, OptionRow, Quiet, ago, label, remember, remembered } from './stewardParts';
 import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
@@ -183,7 +184,8 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 {/* Mounted whatever the count, since reading their flags is what makes the count. */}
                 <div className="flex flex-col gap-3" style={{ marginBottom: waitingCount > 0 ? 32 : 0 }}>
                   {page.waiting.map(q => (
-                    <QuestionCard key={q.key} project={page.project} q={q} onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
+                    <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
+                      onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
                   ))}
                   {inReview.map(t => (
                     <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
@@ -257,7 +259,30 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
  * One question, answered by picking. The steward's own pick is marked and pre-selected, because
  * the commonest answer is "yes, that one" and it should cost a single press.
  */
-function QuestionCard({ project, q, onAnswer }: {
+function QuestionCard({ project, q, onAnswer, onSettled }: {
+  project: string; q: StewardQuestion; onAnswer: (answer: string) => Promise<void>;
+  /** After it was answered on a unit's own decisions rather than through `onAnswer`. */
+  onSettled: () => Promise<void>;
+}) {
+  // A question about a unit's open decisions is answered on those decisions, as the spec writes
+  // them, and the answers go into the spec - not into a reply that points at it.
+  if (q.unit != null && q.decisions && q.decisions.length > 0) {
+    return (
+      <Panel tone={TIER.blocked.c}>
+        <div style={{ font: `600 14px/1.4 ${BODY}`, color: 'var(--w-t100)' }}>{q.question}</div>
+        <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: 'var(--w-t400)', marginTop: 5 }}>{q.why}</div>
+        <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t500)', margin: '8px 0 12px' }}>
+          Held up meanwhile: <span style={{ color: 'var(--w-t300)' }}>{q.heldUp}</span>
+          <span style={{ color: 'var(--w-t600)' }}> - asked {ago(q.askedAt)}</span>
+        </div>
+        <DecisionSheet project={project} unit={q.unit} only={q.decisions} mode="answer" answering={q.key} onDone={onSettled} />
+      </Panel>
+    );
+  }
+  return <OptionsCard project={project} q={q} onAnswer={onAnswer} />;
+}
+
+function OptionsCard({ project, q, onAnswer }: {
   project: string; q: StewardQuestion; onAnswer: (answer: string) => Promise<void>;
 }) {
   const recommended = q.options.findIndex(o => o.recommended);
@@ -324,30 +349,6 @@ function QuestionCard({ project, q, onAnswer }: {
       </div>
       {failed && <div style={{ font: `400 11.5px ${BODY}`, color: c, marginTop: 6 }}>{failed}</div>}
     </Panel>
-  );
-}
-
-function OptionRow({ on, onClick, title, detail, tag }: {
-  on: boolean; onClick: () => void; title: string; detail?: string | null; tag?: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      aria-current={on ? 'true' : undefined}
-      className="orbit-pick text-left"
-      style={{
-        clipPath: chamfer(8),
-        padding: '8px 12px',
-        background: on ? 'rgb(var(--w-accent-rgb) / .13)' : 'rgb(var(--w-line-rgb) / .04)',
-        border: `1px solid ${on ? 'rgb(var(--w-accent-rgb) / .5)' : 'rgb(var(--w-line-rgb) / .14)'}`,
-      }}
-    >
-      <div className="flex items-baseline gap-2 flex-wrap">
-        <span style={{ font: `600 12.5px ${BODY}`, color: on ? 'var(--w-accent-text-lit)' : 'var(--w-t200)' }}>{title}</span>
-        {tag && <span style={label('var(--w-accent-text)')}>{tag}</span>}
-      </div>
-      {detail && <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t500)', marginTop: 2 }}>{detail}</div>}
-    </button>
   );
 }
 

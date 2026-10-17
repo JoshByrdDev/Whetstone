@@ -48,11 +48,19 @@ What somebody might expect here and will not find, and which later unit has it.
 
 ## To decide
 
-Numbered. Each is a choice the plan does not make: the options, what each costs and rules out, and
-the one recommended. Once the owner has answered, the answer replaces the options and the heading
-becomes "Decided".
+Each is a choice the plan does not make: one bullet, numbered in its bold lead, with what is being
+chosen, the lettered options and what each costs and rules out, and the one recommended. The board
+reads exactly this shape to show the owner each decision with its options to press, and moves the
+answer under "Decided" - written another way, a decision can only be answered by reading the spec
+and typing. Numbers are never reused, so a question can name one. A decision that asks two things
+letters on through both and picks one of each: "**Pick: (a) and (c)**".
 
-1. ...
+- **Decide (#1) The choice, as a short title.** What is being chosen, and why it is open. Options:
+  (a) the first, and what it costs; (b) the second, and what it rules out. **Pick: (a)**, because ...
+
+## Decided
+
+The owner's answers, each written here by the board as it is given.
 
 ## Done means
 

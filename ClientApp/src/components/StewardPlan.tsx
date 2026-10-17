@@ -4,6 +4,7 @@ import { Chip, GhostButton, Panel } from './ui';
 import { BODY, MONO, TIER, chamfer, fade } from './orbit';
 import { Markdown } from './Markdown';
 import { UnitReport } from './UnitReport';
+import { DecisionSheet } from './DecisionSheet';
 import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
 import { agreeStewardUnit, setStewardUnitReleased, startStewardPlan } from '../api/steward';
 import type {
@@ -229,6 +230,9 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes }: 
 
         {working && <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes}
           onReport={show === 'report' ? undefined : () => pick('report')} />}
+        {working && unit.agreed && (unit.openDecisions?.length ?? 0) > 0 && (
+          <StillOpen project={project} unit={unit} onChanged={onChanged} />
+        )}
 
         <div className="flex items-center gap-x-4 gap-y-2 flex-wrap" style={{ marginTop: 12 }}>
           <span style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t400)' }}>
@@ -326,11 +330,30 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
   const say = (text: ReactNode) => <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>{text}</div>;
 
   if (unit.stage === 'draft') {
+    const open = unit.openDecisions?.length ?? 0;
+    // A draft with choices left open is agreed together with its answers to them: agreeing it
+    // alone is how a spec ends up "agreed" with nothing under "Decided".
+    if (open > 0 && sure && !unit.cannotAgree) {
+      return box(TIER.gate.c, (
+        <>
+          {say(<>Agreeing unit {unit.unit} settles its decisions with it. Each starts on the spec's own pick; change any you would decide differently, or leave one open for the steward to ask about later.</>)}
+          <div style={{ marginTop: 10 }}>
+            <DecisionSheet project={project} unit={unit.unit} mode="agree"
+              onDone={async () => { await onChanged(); setSure(false); }} onCancel={() => setSure(false)} />
+          </div>
+        </>
+      ));
+    }
     return box(TIER.gate.c, (
       <>
         {say(unit.cannotAgree
-          ?? 'A draft. Read the spec below; nothing is filed against it until you agree it. Agreeing commits its status line to the base branch, and the steward starts filing tickets against its outcomes on its next run.')}
-        {!unit.cannotAgree && (
+          ?? <>A draft. Read the spec below; nothing is filed against it until you agree it. Agreeing commits its status line to the base branch, and the steward starts filing tickets against its outcomes on its next run.{open > 0 && <> Its spec leaves <b>{open} decision{open === 1 ? '' : 's'}</b> open, which you answer as you agree it.</>}</>)}
+        {!unit.cannotAgree && open > 0 && (
+          <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
+            <GhostButton tone="go" onClick={() => setSure(true)}>Agree this unit</GhostButton>
+          </div>
+        )}
+        {!unit.cannotAgree && open === 0 && (
           <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
             {sure
               ? (
@@ -404,6 +427,32 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
       {seeNotes}
     </div>
   ) : null;
+}
+
+/**
+ * An agreed unit whose spec still leaves choices open: agreed before its decisions were answered,
+ * or with some left for later. Whatever leans on one waits, so they are offered here to settle.
+ */
+function StillOpen({ project, unit, onChanged }: { project: string; unit: StewardPlanUnitView; onChanged: () => Promise<void> }) {
+  const [settling, setSettling] = useState(false);
+  const n = unit.openDecisions?.length ?? 0;
+  const tone = TIER.gate.c;
+  return (
+    <div style={{ marginTop: 12, padding: '10px 12px', clipPath: chamfer(8), background: fade(tone, 7), border: `1px solid ${fade(tone, 30)}` }}>
+      <div className="flex items-center gap-x-3 gap-y-2 flex-wrap">
+        <span className="min-w-0" style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>
+          Its spec still leaves <b>{n} decision{n === 1 ? '' : 's'}</b> open. Nothing that leans on one is filed until it is settled.
+        </span>
+        {!settling && <GhostButton tone="go" onClick={() => setSettling(true)}>Settle {n === 1 ? 'it' : 'them'}</GhostButton>}
+      </div>
+      {settling && (
+        <div key="sheet" className="orbit-swap" style={{ marginTop: 10 }}>
+          <DecisionSheet project={project} unit={unit.unit} mode="settle"
+            onDone={async () => { setSettling(false); await onChanged(); }} onCancel={() => setSettling(false)} />
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** One promise of the unit: what it says, where it stands, and the tickets carrying it. */
