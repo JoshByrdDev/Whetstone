@@ -132,7 +132,8 @@ up as a start that never ran, and the orchestrator handles that as below.
 | `GET /api/hosts/project-kit/{key}` | runner | Below. |
 
 A host is **offline** once its last check-in is more than 2 minutes old. A host whose commit
-differs from the board host's is **mismatched**: it is shown, and given no orders, because the
+differs from the board host's is **mismatched** (it brings itself back in step once idle - see
+"Keeping in step" at the end): it is shown, and given no orders, because the
 worker host runs its own copies of `worker.ps1`, the prompt and the guard.
 
 **Claims.** `ClaimNextRequest` gains `Skills` (the allowed skills; a ticket whose next skill is not
@@ -435,3 +436,27 @@ list the testing skills, since phase 1's default leaves them out:
   through its berths.
 - **Port offsets are the project's.** This repository provides the slot; a project that wants two
   QA runs at once on one machine writes its own rule for what slot N means.
+
+---
+
+# Keeping in step - built
+
+A worker host is given work only while its Whetstone checkout is on the board host's exact commit,
+because it runs its own copies of `worker.ps1`, the prompt and the guard. That rule stays. What
+changed is who restores it: the runner, by itself.
+
+- **The board says its commit.** Every check-in's answer to a configured host carries `boardCommit`
+  (`WorkerHostEndpoints.CheckinResult`). An unknown name still gets a bare 404.
+- **The runner decides** after each check-in's orders, with `Get-UpdateAction`: nothing when the
+  commits match or `autoUpdate` is off in `host.json`; **wait** while runs are out (a worker must
+  never see its scripts change under it, and the board sends a mismatched host nothing new, so they
+  drain); **update** when idle and not stopping.
+- **An update is a fast-forward to exactly the board host's commit** (`Update-OwnCheckout`): fetch
+  if it is not here yet, refuse over modified tracked files, refuse anything that is not a
+  fast-forward (a board host that went backwards or sideways is a person's call). Never past it:
+  the board host may be behind its own origin. A commit not fetchable yet is retried on a 5-minute
+  back-off. Each waiting or refusal is logged once per board commit.
+- **The restart.** `runner.ps1` started normally is a supervisor (`Invoke-RunnerSupervisor`) around
+  the runner itself (`-Inner`), and starts it again whenever it exits 75 - which it does only after
+  a successful update. Task Scheduler keeps one long-lived process, and the task's action is the
+  same as before. The supervisor is the one part an update does not reload.

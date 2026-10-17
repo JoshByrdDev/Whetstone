@@ -101,8 +101,12 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
    git clone \\BOARD\Whetstone C:\Whetstone
    ```
 
-   The board host gives this machine no work while its commit differs from the board host's.
-   After every merge on the board host, run `git -C C:\Whetstone pull` here.
+   The board host gives this machine no work while its commit differs from the board host's. The
+   runner keeps it in step by itself: every check-in tells it the board host's commit, and once
+   nothing is running here it fast-forwards this checkout to exactly that commit and starts again
+   on the new code (see "Day to day"). Cloned from the board host's share, as here, `origin` *is*
+   the board host's checkout, so a commit there is fetchable at once, pushed or not. A checkout
+   cloned from GitHub instead can only follow commits the board host has pushed.
 
    Check: `git -C C:\Whetstone rev-parse HEAD` matches the same command on the board host.
 
@@ -216,8 +220,20 @@ Optional. Leave it out and QA stays on the board host.
 - **Stop the runner:** create `C:\Whetstone\data\runner.stop`. It takes nothing new and exits once
   its runs are done.
 - **Stop everything now:** the dashboard's hard Stop. It also orders every worker host run killed.
-- **After a merge on the board host:** `git -C C:\Whetstone pull` on the worker host. Until then the
-  host is shown as on another commit and gets no work.
+- **After a commit on the board host** (a merge, a docs change - any commit): nothing to do. Its
+  next check-ins show the host as on another commit, so it is given nothing new. Once its runs have
+  finished, the runner fetches, fast-forwards to exactly the board host's commit, logs `Updated this
+  checkout from ... to the board host's commit ...`, and starts again on the new code. The runner
+  log then says `Runner '<name>' on commit <new>`, and the host is back in rotation within a minute
+  or two. It never moves past the board host's commit, over modified tracked files, or backwards; a
+  refusal is logged once and needs a person. A commit it cannot fetch yet is retried every 5 min.
+- **To manage the commit by hand instead**, add `"autoUpdate": false` to `host.json`. Then, after
+  each commit on the board host: create `C:\Whetstone\data\runner.stop`, wait for the runner to
+  exit (its runs finish first), `git -C C:\Whetstone pull`, and start the scheduled task again.
+- **What restarts on an update.** The scheduled task runs a small supervisor (`runner.ps1` started
+  normally) that runs the runner itself as a child and starts it again after an update, so the task
+  stays Running throughout. The supervisor's own few lines only change at the next logon or task
+  start; everything else is on the new code at once.
 - **If the worker host goes off:** after 10 minutes without a check-in its runs are given up on,
   and their tickets go back to the queue. When it comes back, the runner kills anything it was
   still holding without handing it back.

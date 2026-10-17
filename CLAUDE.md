@@ -326,6 +326,11 @@ discoverable from the code:
 - **The runner pulls.** `data/runner.ps1` checks in with `/api/hosts/<name>/checkin` and gets its
   orders back in the response; nothing listens on a worker host. Like the live instance, it is never
   started from a Claude session, because whatever owns its tree can kill every worker under it.
+- **A worker host follows the board host's commit by itself.** It gets work only on the exact same
+  commit, and any commit here - docs included - takes it out of rotation until its runner, once
+  idle, fast-forwards to it and restarts on the new code. Started normally, `runner.ps1` is a small
+  supervisor around the runner (`-Inner`); a change to the supervisor's own lines needs the task
+  started again on that machine.
 - **Slots past the steward's are remote.** The board host's workers are 1..3 and the steward is 4,
   so worker hosts are numbered from 5. This is written twice and the two must agree:
   `WorkerHostConfig.FirstRemoteSlot` in C# and `$StewardSlot` in `heartbeat-common.ps1`.
