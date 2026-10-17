@@ -23,6 +23,7 @@ import { FEED_HIDDEN } from './eventText';
 import { fade, CAPS, TIER, tierOf, tierToken, chamfer, chamferRow, HEX_GLYPH, DISPLAY, BODY, MONO } from './orbit';
 import { PageHead, Chip, PrimaryButton } from './ui';
 import type { AgentState } from '../types/events';
+import { useWorkerHosts } from '../hooks/useWorkerHosts';
 import { track } from '../theme';
 
 // The gate cards re-present existing transitions with decision-flavored labels.
@@ -291,6 +292,8 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
   const pulses = useStationPulse(events, stationByAgent);
 
   const flightIds = useMemo(() => new Set(flight.map(t => t.id)), [flight]);
+  // Berths on other machines, drawn after the board host's own (docs/worker-hosts-plan.md).
+  const workerHosts = useWorkerHosts();
 
   // Everything the stage filter lets through. Recomputed from the ticket list rather than stored,
   // so a ticket that moves stage under the heartbeat leaves or joins the filtered board on its own.
@@ -558,6 +561,7 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
                 agents={state.agents}
                 visible={flightIds}
                 events={events}
+                hosts={workerHosts}
               />
               <PrimaryButton onClick={() => setCreating(true)}>New Ticket</PrimaryButton>
             </>}

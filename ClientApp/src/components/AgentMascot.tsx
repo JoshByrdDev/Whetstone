@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { AgentState, HeartbeatEvent } from '../types/events';
+import { hostHold, type WorkerHost } from '../hooks/useWorkerHosts';
 import { formatWakeTime } from '../hooks/useTabStatus';
 import { GRID, stationColumn, stationIsMid, ACTIVE_DOT_PX } from './JourneyTrack';
 import { lastLinesByAgent } from './eventText';
@@ -190,7 +191,7 @@ function BerthLog({ text, at, now }: { text: string; at: string; now: number }) 
  * the question you come to this header with. A parked berth shows nothing: an agent that has
  * stopped has no current line, only an old one, and an old line reads as activity.
  */
-export function AgentDock({ status, wakeAt, workers, agents, visible, events = [] }: {
+export function AgentDock({ status, wakeAt, workers, agents, visible, events = [], hosts = [] }: {
   status: Mood;
   wakeAt?: Date | null;
   /** How many berths to draw. */
@@ -201,84 +202,106 @@ export function AgentDock({ status, wakeAt, workers, agents, visible, events = [
   visible: Set<number>;
   /** The heartbeat buffer, for the last line each working agent said. */
   events?: HeartbeatEvent[];
+  /**
+   * The board's worker hosts. Each one that is switched on gets its berths after the board host's,
+   * behind a tag with its name - and, when it is not taking work, why not.
+   */
+  hosts?: WorkerHost[];
 }) {
   const bySlot = new Map(agents.map(a => [a.slot, a]));
   const slots = Array.from({ length: Math.max(1, workers) }, (_, i) => i + 1);
+  const remote = hosts.filter(h => h.enabled);
 
   // Scanning the buffer is keyed on the buffer and the fleet; the clock ticks on its own, so an
   // ageing label costs a re-render rather than a re-scan of five hundred events every second.
   const lastLines = useMemo(() => lastLinesByAgent(events, agents), [events, agents]);
   const now = useNow(agents.length > 0);
 
+  const renderBerth = (slot: number, host?: WorkerHost) => {
+    const a = bySlot.get(slot);
+    const ticket = a?.ticketId ? Number(a.ticketId.replace(/\D/g, '')) : null;
+    const accent = agentAccent(slot);
+    const log = a ? lastLines.get(slot) : undefined;
+    const where = host ? ` on ${host.name}` : '';
+
+    // The berth's own colours go through custom properties rather than straight onto the
+    // element: an inline `border` or `background` outranks the stylesheet, and a berth whose
+    // resting colours are inline is a berth that cannot light up on hover.
+    //   --bc  the colour it lights up in — its own agent's, so pointing at one of three tells
+    //         you which one you have without reading the numeral
+    //   --bw  the border it wears at rest (dashed while its bot is out on the board)
+    const berth: CSSProperties = {
+      clipPath: chipCut(),
+      backdropFilter: 'blur(6px)',
+      ['--bc' as string]: accent.hex,
+    };
+
+    if (a && ticket != null && visible.has(ticket)) {
+      // Out on the board — the berth is empty and says where he went.
+      return (
+        <div
+          key={slot}
+          className="orbit-berth flex items-center gap-1.5 pl-2 pr-2.5 py-1 max-sm:max-w-full"
+          tabIndex={0}
+          title={`Agent ${slot}${where} — out on the board, working #${ticket}`}
+          style={{ ...berth, ['--bw' as string]: `1px dashed ${accent.edge}` } as CSSProperties}
+        >
+          <span
+            className="berth-bot w-5 h-5 rounded-[7px] border border-dashed opacity-60 flex-none"
+            style={{ borderColor: accent.edge }}
+          />
+          <span className="flex flex-col items-start gap-px min-w-0">
+            <span className={`berth-label text-[9px] font-semibold whitespace-nowrap ${accent.text}`}>
+              out — #{ticket}
+            </span>
+            {log && <BerthLog text={log.text} at={log.at} now={now} />}
+          </span>
+        </div>
+      );
+    }
+
+    // Working something this board isn't showing, or resting here with the fleet. A worker host
+    // that is not taking work rests stopped whatever the fleet is doing, and says why.
+    const hold = host && !a ? hostHold(host) : null;
+    const mood: Mood = a ? 'running' : hold ? 'stopped' : status === 'running' ? 'idle' : status;
+    let label = a && ticket != null ? `working #${ticket}` : hold ?? DOCK_LABEL[mood];
+    if (!a && !hold && mood === 'sleeping' && wakeAt) label = `resting · ${formatWakeTime(wakeAt)}`;
+
+    return (
+      <div
+        key={slot}
+        className="orbit-berth flex items-center gap-2 pl-1.5 pr-2.5 py-1 max-sm:max-w-full"
+        tabIndex={0}
+        title={`Agent ${slot}${where} — ${a && ticket != null ? `working ticket #${ticket}` : hold ?? DOCK_LABEL[mood]}`}
+        style={{ ...berth, ['--bw' as string]: '1px solid rgb(var(--w-line-rgb) / .16)' } as CSSProperties}
+      >
+        <span className="berth-bot flex flex-none">
+          <AgentMascot mood={mood} size={22} agent={slot} />
+        </span>
+        <span className="flex flex-col items-start gap-px min-w-0">
+          <span className={`berth-label text-[9px] font-semibold whitespace-nowrap ${a ? accent.text : DOCK_TEXT[mood]}`}>
+            {label}
+          </span>
+          {log && <BerthLog text={log.text} at={log.at} now={now} />}
+        </span>
+      </div>
+    );
+  };
+
   return (
     <div className="flex items-center gap-1.5 max-sm:flex-wrap max-sm:max-w-full">
-      {slots.map(slot => {
-        const a = bySlot.get(slot);
-        const ticket = a?.ticketId ? Number(a.ticketId.replace(/\D/g, '')) : null;
-        const accent = agentAccent(slot);
-        const log = a ? lastLines.get(slot) : undefined;
-
-        // The berth's own colours go through custom properties rather than straight onto the
-        // element: an inline `border` or `background` outranks the stylesheet, and a berth whose
-        // resting colours are inline is a berth that cannot light up on hover.
-        //   --bc  the colour it lights up in — its own agent's, so pointing at one of three tells
-        //         you which one you have without reading the numeral
-        //   --bw  the border it wears at rest (dashed while its bot is out on the board)
-        const berth: CSSProperties = {
-          clipPath: chipCut(),
-          backdropFilter: 'blur(6px)',
-          ['--bc' as string]: accent.hex,
-        };
-
-        if (a && ticket != null && visible.has(ticket)) {
-          // Out on the board — the berth is empty and says where he went.
-          return (
-            <div
-              key={slot}
-              className="orbit-berth flex items-center gap-1.5 pl-2 pr-2.5 py-1 max-sm:max-w-full"
-              tabIndex={0}
-              title={`Agent ${slot} — out on the board, working #${ticket}`}
-              style={{ ...berth, ['--bw' as string]: `1px dashed ${accent.edge}` } as CSSProperties}
-            >
-              <span
-                className="berth-bot w-5 h-5 rounded-[7px] border border-dashed opacity-60 flex-none"
-                style={{ borderColor: accent.edge }}
-              />
-              <span className="flex flex-col items-start gap-px min-w-0">
-                <span className={`berth-label text-[9px] font-semibold whitespace-nowrap ${accent.text}`}>
-                  out — #{ticket}
-                </span>
-                {log && <BerthLog text={log.text} at={log.at} now={now} />}
-              </span>
-            </div>
-          );
-        }
-
-        // Working something this board isn't showing, or resting here with the fleet.
-        const mood: Mood = a ? 'running' : status === 'running' ? 'idle' : status;
-        let label = a && ticket != null ? `working #${ticket}` : DOCK_LABEL[mood];
-        if (!a && mood === 'sleeping' && wakeAt) label = `resting · ${formatWakeTime(wakeAt)}`;
-
-        return (
-          <div
-            key={slot}
-            className="orbit-berth flex items-center gap-2 pl-1.5 pr-2.5 py-1 max-sm:max-w-full"
-            tabIndex={0}
-            title={`Agent ${slot} — ${a && ticket != null ? `working ticket #${ticket}` : DOCK_LABEL[mood]}`}
-            style={{ ...berth, ['--bw' as string]: '1px solid rgb(var(--w-line-rgb) / .16)' } as CSSProperties}
+      {slots.map(slot => renderBerth(slot))}
+      {remote.map(h => (
+        <div key={h.name} className="flex items-center gap-1.5 max-sm:flex-wrap max-sm:max-w-full min-w-0">
+          <span
+            className={`text-[9px] font-semibold uppercase tracking-wider whitespace-nowrap pl-1 ${hostHold(h) ? DOCK_TEXT.stopped : DOCK_TEXT.idle}`}
+            title={`Worker host ${h.name}${hostHold(h) ? ` — ${hostHold(h)}` : ''}`}
           >
-            <span className="berth-bot flex flex-none">
-              <AgentMascot mood={mood} size={22} agent={slot} />
-            </span>
-            <span className="flex flex-col items-start gap-px min-w-0">
-              <span className={`berth-label text-[9px] font-semibold whitespace-nowrap ${a ? accent.text : DOCK_TEXT[mood]}`}>
-                {label}
-              </span>
-              {log && <BerthLog text={log.text} at={log.at} now={now} />}
-            </span>
-          </div>
-        );
-      })}
+            {h.name}
+          </span>
+          {Array.from({ length: Math.max(0, h.slots) }, (_, i) => renderBerth(h.firstSlot + i, h))}
+        </div>
+      ))}
     </div>
   );
 }
