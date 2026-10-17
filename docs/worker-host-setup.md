@@ -161,6 +161,38 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
     Check: the ticket's comments show no hand-back failure. The board host's branch has the worker
     host's commits. The worker host's log says `Handed '<branch>' back to the board host`.
 
+## QA on the worker host (phase 2)
+
+Optional. Leave it out and QA stays on the board host.
+
+14. **Tools for QA, on the worker host.** Install Docker Desktop, plus whatever the project's stack
+    needs to start there (its images, its seed data, the gitignored files its compose reads). The QA
+    browser runs through `npx`, so Node too. Then bring the stack up by hand once, from the clone,
+    the way the project's qa-test skill does.
+
+    Check: the stack starts, and the app answers on the port the skill expects.
+
+    For review runs, the clone also wants a real `origin` (fetch only):
+    `git -C D:\src\alpha remote add origin <the project's remote URL>`. Without it, a review sees the
+    branch as of the board host's last fetch.
+
+15. **Let it take QA.** On the board host, give the host's entry the testing skills and, if the
+    machine can carry more than one copy of a project's stack, `qaLeases`:
+
+    ```json
+    { "name": "bravo-host", "slots": 4, "qaLeases": 2, "projects": ["alpha"],
+      "skills": ["speculate", "implement", "refine", "qa-test", "review-pr"] }
+    ```
+
+    `qaLeases` above 1 applies only to a project whose `project.json` says `"parallelStacks": true`.
+    Only set that once the project's conventions say how a run on stack slot N
+    (`WHETSTONE_STACK_SLOT`) picks its own compose project name and ports. Without it, a second
+    QA run on the same machine would start the same stack on the same ports.
+
+    Check: send one ticket through QA on the worker host. Its screenshots appear on the ticket, and
+    the worker host's log shows `Captures mirrored to the board host as they land`. QA on the board
+    host can run at the same time.
+
 ## Day to day
 
 - **Stop taking new work:** set `"enabled": false` on the board host. Runs already out finish.

@@ -340,6 +340,14 @@ discoverable from the code:
   branch and nothing else.
 - **The project kit is an allowlist**: skills, `guard.ps1`, a read-only copy of the notes. Never
   `project.json`. Its missing `reflect-prompt.md` is part of what keeps reflection off a worker host.
+- **A worker host's resources are its own.** Its claim takes `alpha:app-stack@bravo-host`, never the
+  board host's `alpha:app-stack`. More than one at once needs both the host's `qaLeases` and the
+  project's `parallelStacks`, and what stack slot N means in ports is written in the project's
+  folder, never here.
+- **A ticket's files sit at the same path under each machine's data root** (`HostDataMirror`).
+  Attachments go to the worker host when a run starts, and QA captures come back as they land. A
+  route or tool that hands an agent a path under the data root has to keep to that, or a worker
+  host's agent is handed a file it cannot open.
 
 ```bash
 powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
@@ -354,7 +362,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
 ```
 
 ```bash
-dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~WorkerHost|FullyQualifiedName~WorkerBranch"
+dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~WorkerHost|FullyQualifiedName~WorkerBranch|FullyQualifiedName~HostDataMirror"
 ```
 
 ## Knowledge

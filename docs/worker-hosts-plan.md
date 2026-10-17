@@ -349,3 +349,89 @@ changed.
 4. **Reflection.** Skipped on worker host runs in phase 1, so their lessons are lost. The follow-up
    is shipping the run log back and reflecting on the board host.
 5. **File share or SSH** for the repos.
+
+---
+
+# Phase 2: QA on a worker host - built
+
+Phase 1 kept `qa-test` and `review-pr` on the board host, because QA stands up a docker stack and
+the stack lease was one per project: a worker host's QA would have waited on the board host's
+stack, or started a second copy on the same ports. Phase 2 makes each machine's stack its own, and
+moves the files a QA run reads and writes by path between the two machines.
+
+## A worker host's own stack
+
+A claim for a worker host takes that host's copy of every resource its phase needs:
+`alpha:app-stack@bravo-host` (`WorkerHostConfig.HostResource`), beside the board host's
+`alpha:app-stack`. The two never wait on each other. The ticket's own lease is not qualified, so
+one worker per ticket still holds across machines.
+
+Capacity for a host-qualified resource is the host's `qaLeases` (default 1, at most 8), **but only
+for a project that declares `parallelStacks: true`** in its config. Any other project gets one
+stack per machine, whatever `qaLeases` says. `qaLeases` is a statement about the machine's RAM.
+`parallelStacks` is a statement about the project: that its stack can run twice on one machine
+without the copies fighting over ports and container names. Both have to be true.
+
+`resourceCapacity` in the global config still describes the board host's machine only.
+
+## The stack slot
+
+Every claim carries `stackSlot`: which of the resource's capacity slots the run got (0-based),
+from the lease's own `Slot`. `worker.ps1` sets `WHETSTONE_STACK_SLOT` and gives the prompt a
+"Stack slot" line. On slot 0 it says "use the stack exactly as your skill says". On slot N it
+tells the agent to bring the stack up as slot N, as the project's conventions say, and to block
+if they say nothing about slots.
+
+How slot N chooses its compose project name and ports is the project's own business. It belongs in
+that project's conventions file or skill, never here. A project turns `parallelStacks` on only once
+it has written that down.
+
+## A ticket's files on both machines
+
+The rule is one sentence: **each machine keeps a ticket's files at the same path under its own data
+root** (`HostDataMirror`).
+
+| Files | Direction | When |
+|---|---|---|
+| `ticket-files/<id>/`, `issue-attachments/<id>/` | board host to worker host | at the start of every worker host run (`GET /api/hosts/ticket-data/<id>`) |
+| `qa-captures/<id>/` | worker host to board host | as each capture lands, every ~2s, plus one last pass at the end (`PUT /api/hosts/<host>/qa-captures/<id>/<file>?runId=`) |
+
+- The prompt's "Machine" line tells a worker host's agent that a path the ticket tools give under
+  the board's data root is at the same place under its own.
+- `set_qa_shots`, handed a worker host's capture path, looks for the same path under the board host's
+  root (it learns each worker host's root from its check-ins). It waits up to 20 seconds for a
+  capture still on its way. It maps capture paths and nothing else.
+- An upload is refused unless the run still holds the ticket.
+- Files that reach the board after a run starts (an attachment fetched mid-run by
+  `get_issue_context`) are not on the worker host. The prompt tells the agent to say so rather than
+  guess. Fetching them on demand is left until it matters.
+
+This also fixes a phase 1 gap: an implement run on a worker host could not open the attachments
+`get_ticket` pointed it at.
+
+## Review runs
+
+A `review-pr` run on a worker host syncs the board host's refs like any other run. That is how its
+clone has `origin/<their-branch>` at all. It does not fetch or hand back a branch of its own,
+because it owns none. If the clone also has a real `origin` remote, the review worktree's own
+`fetch origin` brings it fresher than the board host's last fetch.
+
+## What a worker host needs for QA
+
+Docker, Node and the Playwright browser, plus whatever the project's stack needs, all on that
+machine: see `docs/worker-host-setup.md`, step 14. And on the board host, the host's entry must
+list the testing skills, since phase 1's default leaves them out:
+
+```json
+{ "name": "bravo-host", "slots": 4, "qaLeases": 2, "projects": ["alpha"],
+  "skills": ["speculate", "implement", "refine", "qa-test", "review-pr"] }
+```
+
+## Still not done
+
+- **A live run.** As with phase 1, the QA copy refuses agent runs, so the first QA on a real second
+  machine is the proof. See `docs/worker-host-setup.md`, step 15.
+- **The board's stack panel** shows the board host's stack only. A worker host's stacks are seen
+  through its berths.
+- **Port offsets are the project's.** This repository provides the slot; a project that wants two
+  QA runs at once on one machine writes its own rule for what slot N means.
