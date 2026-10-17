@@ -43,59 +43,77 @@ seconds to arrive, which is nothing next to a run that takes minutes.
 
 ## The pieces
 
-### 1. Branch round trip (`data/worker-hub.ps1`, dot-sourced by `worker.ps1`)
+### 1. Branch round trip (`data/worker-board.ps1`, dot-sourced by `worker.ps1`) - built
 
-This is the part that has to be exactly right, so it is built and tested first, against temporary
-repos and with no fleet involved.
+Built and tested first, against temporary repos and with no fleet involved:
+`data/worker-board.tests.ps1`.
+
+**The remote is called `board`, not `hub`.** In `worker.ps1` "the hub" already means a project's
+main checkout, the one its worktrees hang off, and on a worker host that is the clone itself.
 
 **The worker host's clone mirrors the board host's refs.** Each project on the worker host is a
-clone whose remote `hub` is the board host's repo (over a file share, see 5). Before every run the
-worker fetches:
+clone (`git clone -o board`) whose remote `board` is the board host's repo (over a file share, see
+7). `Sync-BoardRefs` fetches, at the start of a run and again before the hand-off rebase:
 
 ```
 +refs/heads/<base>:refs/heads/<base>          # the board's LOCAL base (mergeInsteadOfPr)
 +refs/remotes/origin/*:refs/remotes/origin/*  # the board's view of origin
-+refs/heads/<branch>:refs/remotes/hub/<branch>
 ```
 
-The main checkout of the worker host's clone is kept on a detached HEAD, so its `<base>` is never
-checked out and can be force-updated. It is a mirror and nothing commits to it.
+and `Get-BoardBranch` fetches `+refs/heads/<branch>:refs/remotes/board/<branch>`. It asks with
+`ls-remote` first, so a branch the board host doesn't have is told apart from a board host it
+can't reach.
+
+The clone's main checkout is detached off `<base>` (it does that itself, which rewrites no file),
+so `<base>` can be force-updated. It is a mirror and nothing commits to it.
 
 Because the worker host sees exactly the refs the board host sees, `Resolve-BaseRef` and
 `worker-base.tests.ps1` stay as they are. That rule is written in two places
 (see "The base is not always origin's" in `CLAUDE.md`), and this keeps a third from appearing.
+The tests check that `Resolve-BaseRef` gives the same answer on both sides, both ways round.
 
-**Bringing the ticket branch up to date.** It goes in the ticket branch's worktree on the worker
-host, or creates the branch from `hub/<branch>` when there is none. Then:
+**Bringing the ticket branch up to date** (`Update-BranchFromBoard`, before `Resolve-Worktree`):
 
-| Worker host's branch vs `hub/<branch>` | Action |
+| Worker host's branch vs `board/<branch>` | Action |
 |---|---|
-| equal, or no hub branch yet (new ticket) | nothing |
+| no board branch | nothing (`new`, or `local-only` for a run here that never handed back) |
+| no local branch | create it at the board host's commit |
+| equal | nothing |
 | behind (the board host ran it since) | fast-forward |
-| diverged (the board rebased it, or a person did) | hard reset to `hub/<branch>`. Safe, because every worker host run ends by handing its commits back (below), so the worker host never holds commits that exist only there. A worktree with uncommitted changes refuses instead, and the run blocks the ticket. |
+| ahead (a refused hand-back left commits here) | leave it; the next hand-back carries them |
+| diverged, local tip is the **agreed** commit | hard reset to the board host's commit (the board rebased what it already had) |
+| diverged, anything else | refuse: those commits exist nowhere else |
+
+The **agreed** commit is `refs/whetstone/agreed/<branch>` in the clone. It is set whenever the
+branch is brought up to the board host's commit, and when the board host accepts a hand-back
+(`Set-BranchHandedBack`). It replaced this plan's first idea, which was "every run hands back, so
+divergence is always safe to reset." That isn't true after a refused hand-back, and a reset there
+would delete work nobody else has. A worktree holding the branch moves with it, and refuses if it
+has anything uncommitted.
 
 After that, `Resolve-Worktree` sees a local branch and runs unchanged. Worktrees on the worker host
 are kept between runs, which keeps `node_modules` and friends warm. The board host's
 `WorktreeReaper` never sees them. The runner reaps a worker host worktree once its ticket is Done
-or its branch is gone from the hub.
+or its branch is gone from the board host.
 
 **Handing back.** At the end of the run, after `Save-WorkerLeftovers`, the hand-off rebase and the
 squash net (all of which run against the mirrored base and are unchanged):
 
-1. `git push hub <branch>:refs/whetstone/incoming/<runId>`. A ref nothing ever checks out, so the
-   push cannot hit git's refusal to update a branch that is checked out in one of the board host's
-   worktrees, which is the normal state for a ticket the board host has run before.
+1. `Send-BranchToBoard` pushes HEAD to `refs/whetstone/incoming/<runId>` with `--no-verify`.
+   A project's pre-push hook is written for origin, and this is transport between two copies of one
+   repo. It's a ref nothing ever checks out, so the push can't hit git's refusal to update a branch
+   that is checked out in one of the board host's worktrees. A ticket the board host has run before
+   is normally in exactly that state, and the tests prove the refusal.
 2. `POST /api/tickets/{id}/branch/accept` with `{ runId, branch, sha, expectedOld }`.
-   `expectedOld` is the hub sha fetched at the start of the run. The API does the update on the
+   `expectedOld` is the board sha fetched at the start of the run. The API does the update on the
    board host (piece 2), where `TicketGitService` already knows which worktree holds the branch.
+3. On a yes, `Set-BranchHandedBack` records the commit as agreed.
 
 The worker does the push, not the agent. It happens outside the agent session, so the guard never
 sees it, and nothing here pushes to `origin`. That is the rule's own target, and it is unchanged.
 
-Tests (`data/worker-hub.tests.ps1`): a hub repo and a worker host clone in a temp folder.
-Fetching covers: new ticket, behind, diverged and clean, diverged and dirty, and base moved on the
-hub with `mergeInsteadOfPr` both ways. Handing back covers: accepted, hub branch moved meanwhile
-(refused), and a hub branch checked out in a hub worktree.
+The accept route's own cases (lease lost, branch moved meanwhile, dirty board host worktree) are
+the API's, and are tested with it in piece 2.
 
 ### 2. API (`Services/WorkerHostService.cs`, `Api/WorkerHostEndpoints.cs`)
 
@@ -178,7 +196,7 @@ At startup it adopts surviving `worker.ps1` processes by command line, the same 
 {
   "name": "bravo-host",
   "dashboardUrl": "http://192.168.1.20:5338",
-  "projects": { "alpha": { "path": "D:\\src\\alpha", "hub": "\\\\board-pc\\repos\\alpha" } }
+  "projects": { "alpha": { "path": "D:\\src\\alpha", "board": "\\\\board-pc\\repos\\alpha" } }
 }
 ```
 
@@ -261,7 +279,7 @@ and the wall have to say that exactly and no more.
   The alternative is git over SSH (the Windows OpenSSH server). It is more setup, and it does not
   give a whole share to a whole account.
 - **Worker host checkout.** A Whetstone clone (from the board host's share, so the commits match), a
-  clone per project with `hub` set and its main checkout detached, the gitignored files the
+  clone per project made with `git clone -o board` and its main checkout detached, the gitignored files the
   project's `worktreeCopyFiles` names copied in once, the agent CLI logged in to account 2,
   `host.json`, the Task Scheduler entry for the runner.
 
@@ -283,7 +301,7 @@ renders slots past 4 rather than assuming there are three.
 
 Each step is its own commit, and steps 1 to 4 change nothing for a board host on its own:
 
-1. Branch round trip + its tests (piece 1)
+1. Branch round trip + its tests (piece 1) - done
 2. API: registry, check-in, orders, claim filter, accept, project kit, QaIsolation + tests (piece 2)
 3. Worker host mode in `worker.ps1` (piece 4)
 4. Runner + `host.json` (piece 3)
