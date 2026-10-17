@@ -175,6 +175,30 @@ function Invoke-WithMutex {
 
 # --- Helpers ---
 
+# Whether a process's command line is running exactly $Script - this checkout's copy of it, and not
+# a file of the same name in another Whetstone checkout on the same machine.
+#
+# A machine can hold more than one: a board of its own, say, beside a worker host's checkout that
+# runs workers for a board on another machine (docs/worker-hosts-plan.md). Every scan that adopts,
+# kills or defers to a process by its script would otherwise reach across into the other one - a
+# board starting up would take the runner's workers onto its own books, under ticket ids that mean
+# something else here, or kill them for want of a slot.
+#
+# Only an absolute path to a different file is "not ours". A -File given relative to a working
+# directory this process cannot see is counted as ours, which is what every scan did before: for a
+# singleton guard the safe mistake is to defer, and nothing in the fleet launches one that way.
+# A -Command line never matches - it is a person's diagnostic that mentions the name, not a run.
+function Test-RunsScript {
+    param([string]$CommandLine, [string]$Script)
+    if (-not $CommandLine -or $CommandLine -like '*-Command*') { return $false }
+    if ($CommandLine -notmatch '-File\s+(?:"([^"]+)"|(\S+))') { return $false }
+    $file = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+    if ([IO.Path]::GetFileName($file) -ne [IO.Path]::GetFileName($Script)) { return $false }
+    if (-not [IO.Path]::IsPathRooted($file)) { return $true }
+    try { return [IO.Path]::GetFullPath($file).Equals([IO.Path]::GetFullPath($Script), [StringComparison]::OrdinalIgnoreCase) }
+    catch { return $false }
+}
+
 # Append text as BOM-less UTF-8, safely for several processes at once.
 #
 # Bare Add-Content defaults to the system ANSI codepage on PowerShell 5.1, and everything written

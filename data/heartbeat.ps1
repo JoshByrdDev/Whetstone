@@ -368,7 +368,7 @@ function Start-StewardIfDue {
 # With none running, any lock still held belongs to a process that is gone, and is released.
 function Add-OrphanSteward {
     $found = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -like '*-File*steward.ps1*' -and $_.CommandLine -notlike '*-Command*' })
+        Where-Object { Test-RunsScript -CommandLine $_.CommandLine -Script $StewardScript })
     foreach ($o in $found) {
         $project = if ($o.CommandLine -match '-Project\s+"?([A-Za-z0-9._-]+)') { $Matches[1] } else { '' }
         $proc = $null
@@ -494,9 +494,9 @@ function Find-OrphanAgents {
     $found = @()
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.ProcessId -ne $PID -and
-            $_.CommandLine -notlike '*-Command*' -and
-            $_.CommandLine -match '-File\s+"?[^"]*worker\.ps1'
+            # This checkout's worker.ps1 only: a worker host's runner on the same machine runs the
+            # same file name from its own checkout, for another board's tickets. See Test-RunsScript.
+            $_.ProcessId -ne $PID -and (Test-RunsScript -CommandLine $_.CommandLine -Script $WorkerScript)
         })
 
     foreach ($p in $procs) {
@@ -654,9 +654,10 @@ function Send-SleepNotice {
 # Match only processes actually RUNNING the script (launched with -File ...heartbeat.ps1), not
 # arbitrary commands that merely mention the filename (e.g. a `Get-Process | where CommandLine`
 # diagnostic), which would otherwise be a false positive. The agents are launched with worker.ps1
-# on their command line, so they never match this.
+# on their command line, so they never match this. And only THIS checkout's heartbeat.ps1: a second
+# Whetstone on the same machine is a different board with an orchestrator of its own.
 $others = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -like '*-File*heartbeat.ps1*' -and $_.CommandLine -notlike '*-Command*' })
+    Where-Object { $_.ProcessId -ne $PID -and (Test-RunsScript -CommandLine $_.CommandLine -Script (Join-Path $DataRoot 'heartbeat.ps1')) })
 if ($others.Count -gt 0) {
     Write-Host "Another heartbeat is already running (PID $($others[0].ProcessId)) - exiting to avoid duplicates." -ForegroundColor Yellow
     exit 0

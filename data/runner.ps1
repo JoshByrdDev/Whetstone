@@ -149,9 +149,9 @@ function Find-SurvivingRuns {
     $found = @{}
     $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
         Where-Object {
-            $_.ProcessId -ne $PID -and
-            $_.CommandLine -notlike '*-Command*' -and
-            $_.CommandLine -match '-File\s+"?[^"]*worker\.ps1'
+            # This checkout's worker.ps1 only: the machine may also run a board of its own, whose
+            # workers are its business and not this runner's. See Test-RunsScript.
+            $_.ProcessId -ne $PID -and (Test-RunsScript -CommandLine $_.CommandLine -Script $WorkerScript)
         })
     foreach ($p in $procs) {
         $slot  = if ($p.CommandLine -match '-Agent\s+(\d+)')    { [int]$Matches[1] } else { 0 }

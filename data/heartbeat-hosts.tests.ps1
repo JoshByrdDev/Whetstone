@@ -215,6 +215,26 @@ Check 'hosts unreadable: unknown, so the caller resets nothing' ($null -eq (Add-
 
 Check 'slots past the steward are remote' "$(Test-RemoteSlot 4) $(Test-RemoteSlot 5)" 'False True'
 
+# ---- Two checkouts on one machine ---------------------------------------------------------------
+# A board of its own beside a worker host's checkout: every scan by script name must see only its
+# own checkout's processes. Test-RunsScript lives in heartbeat-common.ps1, which cannot be
+# dot-sourced here (it loads config), so it is lifted out of its syntax tree.
+Write-Host "== Test-RunsScript"
+$common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
+. ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Test-RunsScript' }, $false) | Select-Object -First 1).Extent.Text))
+
+$mine = 'C:\Whetstone\data\worker.ps1'
+Check 'own script, unquoted' (Test-RunsScript -CommandLine "powershell -ExecutionPolicy Bypass -File $mine -ClaimFile x -Agent 1" -Script $mine) $true
+Check 'own script, quoted' (Test-RunsScript -CommandLine "powershell -ExecutionPolicy Bypass -File `"$mine`" -Agent 1" -Script $mine) $true
+Check 'own script, other case and slashes' (Test-RunsScript -CommandLine 'powershell -File c:/whetstone/DATA/worker.ps1 -Agent 1' -Script $mine) $true
+Check "another checkout's worker.ps1 is not ours" (Test-RunsScript -CommandLine 'powershell -File C:\Whetstone-worker\data\worker.ps1 -Agent 5 -RunId 812' -Script $mine) $false
+Check 'a file merely ending in the name is not ours' (Test-RunsScript -CommandLine 'powershell -File C:\Whetstone\data\old-worker.ps1' -Script $mine) $false
+Check 'a -Command diagnostic that mentions it is not a run' (Test-RunsScript -CommandLine "powershell -Command Get-CimInstance -Filter x | ? CommandLine -like '*-File*worker.ps1*'" -Script $mine) $false
+Check 'a relative -File counts as ours, as before' (Test-RunsScript -CommandLine 'powershell -File data\worker.ps1 -Agent 1' -Script $mine) $true
+Check 'no -File at all is not a run' (Test-RunsScript -CommandLine 'powershell worker.ps1' -Script $mine) $false
+Check 'no command line is not a run' (Test-RunsScript -CommandLine '' -Script $mine) $false
+Check "the board's own launch of its heartbeat" (Test-RunsScript -CommandLine '"powershell" -ExecutionPolicy Bypass -File "C:\Whetstone\data\heartbeat.ps1"' -Script 'C:\Whetstone\data\heartbeat.ps1') $true
+
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "ALL $($script:total) CHECKS PASSED" -ForegroundColor Green }
 else { Write-Host "$($script:fail) of $($script:total) FAILED" -ForegroundColor Red }
