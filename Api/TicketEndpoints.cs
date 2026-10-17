@@ -213,8 +213,8 @@ public static class TicketEndpoints
             if (!string.IsNullOrWhiteSpace(req?.Host))
             {
                 var host = WorkerHostConfig.Read(global).FirstOrDefault(h => h.Name.Equals(req.Host, StringComparison.OrdinalIgnoreCase));
-                if (host is null || !host.Enabled)
-                    return Results.BadRequest(new { error = $"'{req.Host}' is not an enabled worker host." });
+                if (host is null || !host.Enabled || !WorkerHostConfig.RemoteEnabled(global))
+                    return Results.BadRequest(new { error = $"'{req.Host}' is not an enabled worker host, or remote work is switched off." });
                 skillFilter = skillFilter is null ? host.Skills : skillFilter.Intersect(host.Skills).ToArray();
                 resourceHost = host.Name;
                 var allowed = filter is { Length: > 0 } ? filter : registry.Projects.ToArray();

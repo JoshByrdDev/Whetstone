@@ -69,6 +69,13 @@ public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Sk
     public bool OwnsSlot(int slot) => slot >= FirstSlot && slot < FirstSlot + Slots;
 
     /// <summary>
+    /// The switch for all remote work, <c>workerHostsEnabled</c>. Off, no worker host is given anything
+    /// new, whatever its own entry says; runs already out finish. Absent means on.
+    /// </summary>
+    public static bool RemoteEnabled(IReadOnlyDictionary<string, JsonElement> global) =>
+        !(global.TryGetValue(WorkerHostSettings.EnabledKey, out var v) && v.ValueKind == JsonValueKind.False);
+
+    /// <summary>
     /// A resource as a worker host holds it: its own, beside the board host's of the same name.
     /// A worker host's docker stack is a different stack from the board host's, so a QA run there
     /// must neither wait for the board host's nor stop it being taken.
@@ -104,10 +111,14 @@ public record HostOrder(string Kind, int Slot, int RunId, JsonElement? Claim);
 public record WorkerHostView(
     string Name, bool Enabled, int Slots, int FirstSlot, string[] Skills, string[] Projects,
     bool Online, DateTime? LastCheckin, string? Commit, bool CommitMatches,
-    IReadOnlyList<HostRun> Runs, int PendingOrders, DateTime? UsageLimitUntil)
+    IReadOnlyList<HostRun> Runs, int PendingOrders, DateTime? UsageLimitUntil,
+    int QaLeases = 1, bool RemoteOn = true)
 {
-    /// <summary>Whether the orchestrator may give it new work: on, answering, and on this board's commit.</summary>
-    public bool Dispatchable => Enabled && Online && CommitMatches && UsageLimitUntil is null;
+    /// <summary>
+    /// Whether the orchestrator may give it new work: remote work switched on, this host switched on,
+    /// answering, and on this board's commit.
+    /// </summary>
+    public bool Dispatchable => RemoteOn && Enabled && Online && CommitMatches && UsageLimitUntil is null;
 }
 
 /// <summary>
@@ -144,12 +155,39 @@ public class WorkerHostService
     private readonly Func<IReadOnlyList<WorkerHostConfig>> _config;
     private readonly Func<string?> _boardCommit;
     private readonly Func<DateTime> _now;
+    private readonly Func<bool> _remoteOn;
+
+    /// <summary>
+    /// Machines that checked in under a name the config does not have: a runner set up and started
+    /// before its owner added it here. Shown on the Heartbeat page with an Add button, and given
+    /// nothing - a check-in from an unknown name is still answered 404.
+    /// </summary>
+    private readonly Dictionary<string, (DateTime At, string? Commit)> _seen = new(StringComparer.OrdinalIgnoreCase);
 
     public WorkerHostService(ProjectRegistry registry, BoardCommit commit)
-        : this(() => WorkerHostConfig.Read(registry.GetGlobalConfig()), commit.Get, () => DateTime.UtcNow) { }
+        : this(() => WorkerHostConfig.Read(registry.GetGlobalConfig()), commit.Get, () => DateTime.UtcNow,
+               () => WorkerHostConfig.RemoteEnabled(registry.GetGlobalConfig())) { }
 
-    public WorkerHostService(Func<IReadOnlyList<WorkerHostConfig>> config, Func<string?> boardCommit, Func<DateTime> now)
-        => (_config, _boardCommit, _now) = (config, boardCommit, now);
+    public WorkerHostService(Func<IReadOnlyList<WorkerHostConfig>> config, Func<string?> boardCommit, Func<DateTime> now,
+        Func<bool>? remoteOn = null)
+        => (_config, _boardCommit, _now, _remoteOn) = (config, boardCommit, now, remoteOn ?? (() => true));
+
+    /// <summary>Whether remote work is switched on at all.</summary>
+    public bool RemoteOn => _remoteOn();
+
+    /// <summary>A machine that checked in unconfigured, as the Heartbeat page lists it.</summary>
+    public record SeenMachine(string Name, DateTime LastSeen, string? Commit);
+
+    /// <summary>Unconfigured machines heard from in the last day, newest first.</summary>
+    public IReadOnlyList<SeenMachine> Seen()
+    {
+        var configured = _config().Select(h => h.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var since = _now() - TimeSpan.FromDays(1);
+        lock (_lock)
+            return _seen.Where(kv => !configured.Contains(kv.Key) && kv.Value.At >= since)
+                .OrderByDescending(kv => kv.Value.At)
+                .Select(kv => new SeenMachine(kv.Key, kv.Value.At, kv.Value.Commit)).ToList();
+    }
 
     public WorkerHostConfig? Find(string name) =>
         _config().FirstOrDefault(h => h.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -169,7 +207,12 @@ public class WorkerHostService
         string name, string? commit, IReadOnlyList<HostRun> runs, DateTime? usageLimitUntil, TimeSpan wait,
         CancellationToken ct = default, string? dataRoot = null)
     {
-        if (Find(name) is null) return null;
+        if (Find(name) is null)
+        {
+            if (WorkerHostConfig.IsValidName(name))
+                lock (_lock) _seen[name] = (_now(), string.IsNullOrWhiteSpace(commit) ? null : commit.Trim());
+            return null;
+        }
         if (wait > MaxWait) wait = MaxWait;
 
         Task signal;
@@ -250,6 +293,7 @@ public class WorkerHostService
     {
         var board = _boardCommit();
         var now = _now();
+        var remoteOn = _remoteOn();
         var result = new List<WorkerHostView>();
         lock (_lock)
         {
@@ -261,7 +305,7 @@ public class WorkerHostService
                 var pause = s?.UsageLimitUntil is { } u && u > now ? u : (DateTime?)null;
                 result.Add(new WorkerHostView(h.Name, h.Enabled, h.Slots, h.FirstSlot, h.Skills, h.Projects,
                     online, s?.LastCheckin, s?.Commit, matches,
-                    s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause));
+                    s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.QaLeases, remoteOn));
             }
         }
         return result;

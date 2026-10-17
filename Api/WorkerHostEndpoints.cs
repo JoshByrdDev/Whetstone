@@ -8,6 +8,9 @@ namespace Whetstone.Api;
 /// <param name="DataRoot">The runner's own data root - where that machine keeps a ticket's files (see HostDataMirror).</param>
 public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null);
 
+/// <summary>The switch for all remote work, as the Heartbeat page sets it.</summary>
+public record HostSwitchRequest(bool Enabled);
+
 /// <summary>An order the orchestrator places for one of a host's slots.</summary>
 public record HostOrderRequest(string Kind, int Slot, int RunId, JsonElement? Claim);
 
@@ -28,6 +31,57 @@ public static class WorkerHostEndpoints
     public static void MapWorkerHostEndpoints(this WebApplication app)
     {
         app.MapGet("/api/hosts", (WorkerHostService hosts) => Results.Ok(hosts.Snapshot()));
+
+        // ---- The Heartbeat page's worker hosts section ----
+        //
+        // Everything it draws in one read: the switch, every configured host with its live state,
+        // machines that checked in before being added, and what a host may be given.
+        app.MapGet("/api/hosts/settings", (WorkerHostService hosts, ProjectRegistry registry, BoardCommit commit) =>
+            Results.Ok(new
+            {
+                enabled = hosts.RemoteOn,
+                boardCommit = commit.Get(),
+                hosts = hosts.Snapshot(),
+                seen = hosts.Seen(),
+                projects = registry.Projects.Select(k => new { key = k, displayName = registry.GetProjectConfig(k).DisplayName }),
+                skills = WorkerHostSettings.HostableSkills,
+            }));
+
+        app.MapPut("/api/hosts/settings", (HostSwitchRequest req, DashboardPaths paths) =>
+        {
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            WorkerHostSettings.SetEnabled(config, req.Enabled);
+            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            return Results.Ok(new { enabled = req.Enabled });
+        });
+
+        app.MapPut("/api/hosts/settings/hosts/{name}", (string name, WorkerHostSettings.HostEdit req,
+            DashboardPaths paths, ProjectRegistry registry, WorkerHostService hosts) =>
+        {
+            var current = hosts.Find(name);
+            if (current is not null && req.Slots is { } slots && Math.Clamp(slots, 1, WorkerHostConfig.MaxSlots) != current.Slots
+                && WorkerHostSettings.RenumberingProblem(hosts.Snapshot(), name, removing: false) is { } busy)
+                return Results.Conflict(new { error = busy });
+
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            if (WorkerHostSettings.Upsert(config, name, req, registry.Projects.ToList()) is { } why)
+                return Results.BadRequest(new { error = why });
+            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            return Results.Ok(new { saved = true });
+        });
+
+        app.MapDelete("/api/hosts/settings/hosts/{name}", (string name, DashboardPaths paths, WorkerHostService hosts) =>
+        {
+            if (WorkerHostSettings.RenumberingProblem(hosts.Snapshot(), name, removing: true) is { } busy)
+                return Results.Conflict(new { error = busy });
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            if (!WorkerHostSettings.Remove(config, name)) return Results.NotFound(new { error = $"No worker host '{name}'." });
+            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            return Results.Ok(new { removed = true });
+        });
 
         // A runner's check-in. The response also names the runs it reported whose lease has gone -
         // the orchestrator gave up on them while this host was unreachable - which the runner kills
