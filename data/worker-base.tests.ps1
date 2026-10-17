@@ -196,6 +196,37 @@ try {
     $rebase = Update-BranchFromBase -WorkDir $wt.path -BaseBranch 'main' -RepoDir $conflict.hub -MergeLocally $true
     Check 'conflict with local main is reported' "$($rebase.ok) $($rebase.conflicts -join ',')" 'False README.md'
     Check 'conflict: branch left as it was' (Get-Sha $wt.path HEAD) $before
+
+    # ---- A setup command that fails says why ----------------------------------
+    # Its output was only ever in the log of whichever machine ran it; on a worker host that is
+    # another computer, and "exit 1" on the ticket is all anyone saw.
+    Write-Host "== a failed setup command carries its output"
+    $sf = New-Hub 'setup-fail'
+    $wt = New-TicketWorktree -Repo $sf -Branch 't-4' -MergeLocally $true
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo resolving packages& echo ERR_PNPM_LOCKFILE the lockfile is out of date 1>&2& exit /b 1')
+    $first = ($why -split "`n")[0]
+    Check 'first line: the command and its exit code' $first 'worktree setup command failed (exit 1): echo resolving packages& echo ERR_PNPM_LOCKFILE the lockfile is out of date 1>&2& exit /b 1'
+    Check 'its standard output is in the reason' ($why -match 'resolving packages') $true
+    Check 'and its error output' ($why -match 'ERR_PNPM_LOCKFILE the lockfile is out of date') $true
+    Check 'fenced, so it reads as output' ([regex]::Matches($why, '```').Count) 2
+
+    $quiet = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('exit /b 3')
+    Check 'a command that printed nothing reads as before' $quiet 'worktree setup command failed (exit 3): exit /b 3'
+    Check 'a setup that passes is still no reason at all' "[$(Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo fine'))]" '[]'
+
+    $many = New-Object System.Collections.Generic.List[string]
+    1..40 | ForEach-Object { [void]$many.Add("line $_") }
+    [void]$many.Add('')
+    [void]$many.Add("$([char]27)[31mred error$([char]27)[0m")
+    [void]$many.Add('a ``` fence inside')
+    [void]$many.Add('x' * 400)
+    $tail = Format-OutputTail -Lines $many
+    Check 'only the last 15 lines' ([regex]::Matches($tail, 'line \d+').Count) 12
+    Check 'the earliest of them is the right one' ($tail -match 'line 29' -and $tail -notmatch 'line 28\b') $true
+    Check 'colour codes stripped' ($tail -match "red error" -and $tail -notmatch [char]27) $true
+    Check 'a fence in the output cannot close the block early' ([regex]::Matches($tail, '```').Count) 2
+    Check 'a very long line is cut' ($tail -match ('x' * 300 + ' \.\.\.')) $true
+    Check 'no output, no block' (Format-OutputTail -Lines (New-Object System.Collections.Generic.List[string])) ''
 }
 finally {
     # Worktree .git files are read-only on Windows; -Force is what removes them.

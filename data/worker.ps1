@@ -269,18 +269,39 @@ function Initialize-Worktree {
         foreach ($cmd in $Setup) {
             if (-not $cmd) { continue }
             Write-Log "    setup: $cmd"
+            # Kept as well as logged: on a worker host the log is on another machine, and "exit 1" on
+            # the ticket says nothing a person can act on. The tail goes into the block reason.
+            $output = New-Object System.Collections.Generic.List[string]
             Push-Location $Path
-            try { & cmd /c $cmd *>&1 | ForEach-Object { Write-Log "      $_" } }
+            try { & cmd /c $cmd *>&1 | ForEach-Object { $line = "$_"; Write-Log "      $line"; [void]$output.Add($line) } }
             finally { Pop-Location }
             if ($LASTEXITCODE -ne 0) {
+                $code = $LASTEXITCODE
                 if ($failedMarker) { Set-Content -Path $failedMarker -Value $cmd -Encoding ascii }
-                return "worktree setup command failed (exit $LASTEXITCODE): $cmd"
+                return "worktree setup command failed (exit $code): $cmd" + (Format-OutputTail -Lines $output)
             }
         }
     }
     finally { $env:PATH = $savedPath }
     if ($failedMarker -and (Test-Path $failedMarker)) { Remove-Item $failedMarker -Force }
     return $null
+}
+
+# The last lines a failed command printed, as a block to append to a reason: blank lines and colour
+# codes dropped, each line cut short, the fence that holds them kept intact. Empty when it printed
+# nothing, so a reason without output reads exactly as it did before.
+function Format-OutputTail {
+    param([System.Collections.Generic.List[string]]$Lines, [int]$Count = 15, [int]$Width = 300)
+    if (-not $Lines -or $Lines.Count -eq 0) { return '' }
+    $ansi = "$([char]27)\[[0-9;]*[A-Za-z]"
+    $fence = '`' * 3
+    $kept = @($Lines | ForEach-Object { ("$_" -replace $ansi, '').TrimEnd() } | Where-Object { $_.Trim() })
+    if ($kept.Count -eq 0) { return '' }
+    $tail = @($kept | Select-Object -Last $Count | ForEach-Object {
+        $l = $_.Replace($fence, "'''")
+        if ($l.Length -gt $Width) { $l.Substring(0, $Width) + ' ...' } else { $l }
+    })
+    return "`n`nLast lines of its output:`n$fence`n" + ($tail -join "`n") + "`n$fence"
 }
 
 # Where a worktree records that its setup did not finish. It lives in the worktree's own git dir
@@ -1378,10 +1399,14 @@ if ($repoDir) {
 
     if (-not $wt.ok) {
         $reason = "Workspace setup failed ($skill): $($wt.reason)"
-        Write-Log "  $reason - blocking ticket #$ticketId."
+        # The reason may carry a failed command's output after its first line; the log has that
+        # already, line by line, and the activity feed wants one line.
+        $headline = ($reason -split "`n")[0]
+        $where = if ($onHost) { " on worker host ``$runHost``" } else { "" }
+        Write-Log "  $headline - blocking ticket #$ticketId."
         Block-Ticket -TicketId $ticketId -Reason $reason
-        Send-TicketComment -TicketId $ticketId -Body "Heartbeat could not prepare a git worktree for this ticket: $($wt.reason). Ticket blocked; no work was attempted."
-        Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error $reason
+        Send-TicketComment -TicketId $ticketId -Body "Heartbeat could not prepare a git worktree for this ticket$where. Ticket blocked; no work was attempted.`n`n$($wt.reason)"
+        Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error $headline
         # Still a cycle: it consumed wall clock and produced nothing. A failure that leaves no
         # row behind is a failure the metrics will report as a pipeline that never stumbles.
         $cycleTimer.Stop()
