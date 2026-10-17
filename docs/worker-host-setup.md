@@ -55,16 +55,16 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
    Check: from the worker host, `curl http://192.168.1.20:5338/api/hosts` answers `[]`. From
    any other device, it times out.
 
-4. **Share the project repos.** If a project's `projectPath` is a git *worktree* - its `.git` is a
-   one-line file, not a folder; `git -C <path> rev-parse --git-common-dir` names another repo - share
-   that main repo instead, and clone from it in step 10. A worktree's `.git` points at a path on this
-   machine that the worker host cannot follow. All of a repo's worktrees share one set of refs, so the
-   base branch, the ticket branches and the hand-back all still meet. Keep a share of the worktree
-   folder too if the worker host has to copy its gitignored `worktreeCopyFiles` from there.
-
-    Make a local account for the share (say `whetstone-git`). Share the
+4. **Share the project repos.** Make a local account for the share (say `whetstone-git`). Share the
    folder that holds the project repos, and the Whetstone checkout itself, read/write for that
    account only.
+
+   If a project's `projectPath` is a git *worktree* - its `.git` is a one-line file, not a folder,
+   and `git -C <path> rev-parse --git-common-dir` names another repo - share that main repo instead,
+   and clone from it in step 10. A worktree's `.git` points at a path on this machine that the
+   worker host cannot follow. All of a repo's worktrees share one set of refs, so the base branch,
+   the ticket branches and the hand-back all still meet. Keep a share of the worktree folder too if
+   the worker host has to copy its gitignored `worktreeCopyFiles` from there.
 
    Check: from the worker host, `git ls-remote \\BOARD\src\alpha` lists the branches. If git
    answers `dubious ownership`, run this on the worker host and try again:
