@@ -5,7 +5,8 @@ namespace Whetstone.Api;
 
 /// <summary>What a runner reports on every check-in: everything it is holding, every time.</summary>
 /// <param name="WaitSeconds">How long the check-in may wait for an order when none is queued (0..25).</param>
-public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds);
+/// <param name="DataRoot">The runner's own data root - where that machine keeps a ticket's files (see HostDataMirror).</param>
+public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null);
 
 /// <summary>An order the orchestrator places for one of a host's slots.</summary>
 public record HostOrderRequest(string Kind, int Slot, int RunId, JsonElement? Claim);
@@ -39,7 +40,7 @@ public static class WorkerHostEndpoints
             var revoked = runs.Where(r => !r.Exited && !live.Contains(r.RunId)).Select(r => r.RunId).ToArray();
 
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
-            var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct);
+            var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot);
             return orders is null
                 ? Results.NotFound(new { error = $"'{name}' is not a worker host in this board's config (workerHosts)." })
                 : Results.Ok(new { orders, revoked });
@@ -71,6 +72,44 @@ public static class WorkerHostEndpoints
 
             var r = await git.AcceptWorkerBranchAsync(ticket.ProjectKey, req.Branch, req.IncomingRef, req.Sha, req.ExpectedOld, ct);
             return r.Ok ? Results.Ok(new { accepted = true, moved = r.Moved }) : Results.Conflict(new { error = r.Why });
+        });
+
+        // A ticket's own files - its owner's attachments and the linked issue's - for a worker host
+        // to keep at the same paths under its own root. See HostDataMirror.
+        app.MapGet("/api/hosts/ticket-data/{id:int}", (int id, DashboardPaths paths) =>
+            Results.File(HostDataMirror.BuildTicketData(paths, id), "application/zip", $"ticket-{id}.zip"));
+
+        // A QA capture from a worker host's run, as it lands, so set_qa_shots finds it here when the
+        // worker names it by its own path. Only for the run that holds the ticket.
+        app.MapPut("/api/hosts/{name}/qa-captures/{id:int}/{**file}", async (string name, int id, string file, int runId,
+            HttpRequest request, WorkerHostService hosts, ResourceLeaseService leases, DashboardPaths paths) =>
+        {
+            if (hosts.Find(name) is null) return Results.NotFound(new { error = $"'{name}' is not a worker host." });
+            if (HostDataMirror.SafeCaptureName(file) is not { } safe)
+                return Results.BadRequest(new { error = $"'{file}' is not a capture (an image, by a plain relative path)." });
+            if (!await leases.IsLiveRunAsync(runId, id))
+                return Results.Conflict(new { error = $"Run {runId} no longer holds ticket #{id}." });
+            if (request.ContentLength is > HostDataMirror.MaxCaptureBytes)
+                return Results.BadRequest(new { error = "A capture over 10MB is not a screenshot." });
+
+            var dest = Path.Combine(new[] { paths.QaCaptureTicketDir(id) }.Concat(safe.Split('/')).ToArray());
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            var temp = dest + ".part";
+            await using (var output = File.Create(temp))
+            {
+                var buffer = new byte[81920];
+                long total = 0;
+                int read;
+                while ((read = await request.Body.ReadAsync(buffer)) > 0)
+                {
+                    total += read;
+                    if (total > HostDataMirror.MaxCaptureBytes) { output.Close(); File.Delete(temp); return Results.BadRequest(new { error = "A capture over 10MB is not a screenshot." }); }
+                    await output.WriteAsync(buffer.AsMemory(0, read));
+                }
+            }
+            // Renamed into place whole, so a set_qa_shots waiting for it never copies half a file.
+            File.Move(temp, dest, overwrite: true);
+            return Results.Ok(new { stored = safe });
         });
 
         app.MapGet("/api/hosts/project-kit/{key}", (string key, ProjectRegistry registry, DashboardPaths paths) =>

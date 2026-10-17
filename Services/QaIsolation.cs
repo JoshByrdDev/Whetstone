@@ -81,6 +81,8 @@ public sealed class QaIsolation
         R("POST", @"^/api/hosts/[^/]+/(checkin|orders)/?$", "dispatching runs to a worker host"),
         R("POST", @"^/api/tickets/\d+/branch/accept/?$", "taking a branch from a worker host"),
         R("GET", @"^/api/hosts/project-kit/[^/]+/?$", "serving a project to a worker host"),
+        R("GET", @"^/api/hosts/ticket-data/\d+/?$", "serving a ticket's files to a worker host"),
+        R("PUT", @"^/api/hosts/[^/]+/qa-captures/", "taking a capture from a worker host"),
     };
 
     /// <summary>What a request would do that a QA copy refuses, or null when the copy may serve it.</summary>

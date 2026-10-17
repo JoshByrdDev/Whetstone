@@ -135,6 +135,7 @@ public class WorkerHostService
         public List<HostRun> Runs = new();
         public readonly Queue<HostOrder> Orders = new();
         public DateTime? UsageLimitUntil;
+        public string? DataRoot;
         public TaskCompletionSource Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -166,7 +167,7 @@ public class WorkerHostService
     /// </summary>
     public async Task<IReadOnlyList<HostOrder>?> CheckInAsync(
         string name, string? commit, IReadOnlyList<HostRun> runs, DateTime? usageLimitUntil, TimeSpan wait,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? dataRoot = null)
     {
         if (Find(name) is null) return null;
         if (wait > MaxWait) wait = MaxWait;
@@ -179,6 +180,7 @@ public class WorkerHostService
             s.Commit = string.IsNullOrWhiteSpace(commit) ? null : commit.Trim();
             s.Runs = runs.ToList();
             s.UsageLimitUntil = usageLimitUntil is { } u && u > _now() ? u : null;
+            if (!string.IsNullOrWhiteSpace(dataRoot)) s.DataRoot = dataRoot.Trim();
             if (s.Orders.Count > 0 || wait <= TimeSpan.Zero) return Drain(s);
             if (s.Signal.Task.IsCompleted) s.Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
             signal = s.Signal.Task;
@@ -232,6 +234,15 @@ public class WorkerHostService
             }
         }
         return n;
+    }
+
+    /// <summary>
+    /// Every data root a worker host has reported. A path under one of them is that machine's, and
+    /// <see cref="HostDataMirror.ToBoardCapture"/> is how a capture named there is found here.
+    /// </summary>
+    public IReadOnlyList<string> HostDataRoots()
+    {
+        lock (_lock) return _hosts.Values.Select(s => s.DataRoot).Where(r => !string.IsNullOrEmpty(r)).Select(r => r!).ToList();
     }
 
     /// <summary>Every configured host, as the orchestrator and the fleet view need it.</summary>

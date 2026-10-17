@@ -90,6 +90,13 @@ public class DashboardPaths
     /// runtime artifacts). Kept apart from the issue cache below because these are not a cache: there
     /// is no upstream to re-fetch them from, so this folder is the only copy.
     /// </summary>
+    /// <summary>
+    /// Where a QA run's browser writes its captures, per ticket. A board host run writes here
+    /// itself; a worker host's run writes the same path under its own root and uploads each one
+    /// here as it lands (see <see cref="HostDataMirror"/>).
+    /// </summary>
+    public string QaCaptureTicketDir(int ticketId) => Path.Combine(DataRoot, HostDataMirror.QaCapturesFolder, ticketId.ToString());
+
     public string TicketFilesDir => Path.Combine(DataRoot, "ticket-files");
     public string TicketFilesTicketDir(int ticketId) => Path.Combine(TicketFilesDir, ticketId.ToString());
 

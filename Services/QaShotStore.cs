@@ -21,7 +21,16 @@ public class QaShotStore
     private const long MaxBytes = 10 * 1024 * 1024; // a screenshot over 10MB is almost certainly a mistake
 
     private readonly DashboardPaths _paths;
-    public QaShotStore(DashboardPaths paths) => _paths = paths;
+    private readonly WorkerHostService? _hosts;
+
+    /// <summary>
+    /// How long to wait for a worker host's capture to arrive. Its worker uploads each one as it
+    /// lands, every couple of seconds, so a path handed over straight after the screenshot was taken
+    /// may be a moment ahead of the file.
+    /// </summary>
+    public static TimeSpan HostCaptureWait { get; set; } = TimeSpan.FromSeconds(20);
+
+    public QaShotStore(DashboardPaths paths, WorkerHostService? hosts = null) => (_paths, _hosts) = (paths, hosts);
 
     /// <summary>Delete every stored shot for a ticket (called before writing a fresh set).</summary>
     public void Clear(int ticketId)
@@ -40,6 +49,16 @@ public class QaShotStore
         if (string.IsNullOrWhiteSpace(sourcePath))
             throw new ArgumentException("empty image path");
         var src = sourcePath.Trim().Trim('"');
+        // A run on a worker host names its capture by its own path. The same file is under this
+        // machine's data root, uploaded by that worker as it was taken - see HostDataMirror.
+        if (!File.Exists(src) && _hosts is not null
+            && HostDataMirror.ToBoardCapture(src, _hosts.HostDataRoots(), _paths.DataRoot) is { } mirrored)
+        {
+            var until = DateTime.UtcNow + HostCaptureWait;
+            while (!File.Exists(mirrored) && DateTime.UtcNow < until) await Task.Delay(500);
+            if (File.Exists(mirrored)) src = mirrored;
+            else throw new FileNotFoundException($"no file at '{src}', and it has not reached the board host from the worker host that took it");
+        }
         if (!File.Exists(src))
             throw new FileNotFoundException($"no file at '{src}' (pass an absolute path)");
 
