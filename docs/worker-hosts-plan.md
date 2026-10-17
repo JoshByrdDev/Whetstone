@@ -136,9 +136,15 @@ differs from the board host's is **mismatched**: it is shown, and given no order
 worker host runs its own copies of `worker.ps1`, the prompt and the guard.
 
 **Claims.** `ClaimNextRequest` gains `Skills` (the allowed skills; a ticket whose next skill is not
-on the list is skipped like a busy one) and `Host` (recorded in the lease's holder label and on the
-ticket, so the board can say where a ticket is running). The orchestrator always sends both for a
-worker host slot. A board host claim sends neither and behaves exactly as today.
+on the list is skipped like a busy one, and never blocked for a missing skill it was not going to
+run) and `Host` (narrows the claim to that host's configured skills and projects). The orchestrator
+sends `Host`. A board host claim sends neither and behaves exactly as it did before.
+
+*As built:* the host is **not** written into the lease's holder label. A non-null `HolderLabel` is
+what marks a lease as a *person's*, and `ReleaseAllAsync` spares those, so a host name there would
+make a worker host run's lease survive every orchestrator restart. Where a ticket is running is read
+from the host registry's runs instead. Every claim now carries `runId`: the id of the ticket's own
+lease (`ClaimResult.RunId`). That gives "this run" a name without a new table or a migration.
 
 **Branch accept.** It refuses unless the ticket's lease is still held for that `runId`. So a run
 the orchestrator gave up on (host offline, lease released, ticket picked up elsewhere) can never
@@ -149,20 +155,23 @@ too. If the lease is good, it updates the branch:
 - a clean board host worktree holds it: `git -C <wt> reset --hard <sha>`
 - a dirty board host worktree holds it: refused (a person has edits there)
 
-After that it deletes the incoming ref and records the branch on the ticket, as the existing branch
-endpoint does. A refusal comes back to the worker, which blocks the ticket with the reason. It does
-not retry.
+After that it deletes the incoming ref. The branch name is recorded on the ticket by the worker at
+the start of the run, as on the board host, but **without its worktree path**: the board reads a
+ticket's worktree path as one of its own (analysis, the steward's checks, the reaper). A refusal
+comes back to the worker, which blocks the ticket with the reason. It does not retry. A branch
+checked out in the board host's *main* checkout, which is a person's, is refused as well.
 
-**Project kit.** Everything a worker reads from `data/projects/<key>/`, served from the board host
-on every run, so a skill edited on the board host takes effect on the worker host immediately:
-`skills/`, `guard.ps1`, the conventions file, a read-only copy of the notes store, and the
-`project.json` fields `worker.ps1` reads. It does **not** include credentials or `reflect-prompt.md`.
-Step one of this piece is to go through every field `worker.ps1` reads from the claim and from
-`project.json`, and decide for each one whether it is a path to remap, a value to pass, or a secret
-to leave out.
+**Project kit.** Served from the board host on every run, so a skill edited on the board host
+takes effect on the worker host immediately. *As built* it is an allowlist: `skills/`, `guard.ps1`,
+and the notes store's `*.md` under `_notes/`. That is all `worker.ps1` reads from the project
+folder. Everything else it needs arrives in the claim, which the runner rewrites to the worker
+host's paths. The conventions file is read from the worktree, not the project folder. The kit
+never includes `project.json` or `project.defaults.json`, which hold credentials, or
+`reflect-prompt.md`.
 
-**QaIsolation.** Every route above dispatches or feeds agent runs, so each one goes in
-`QaIsolation`'s table. The QA copy refuses them all.
+**QaIsolation.** Check-in, orders, accept and the project kit are in `QaIsolation`'s table, and the
+QA copy refuses them. `GET /api/hosts` stays open: a copy has no hosts, and the fleet view asks for
+it.
 
 Tests (`Whetstone.Tests`, filter `WorkerHost`): offline and mismatch rules, orders queued and
 delivered once, claim honouring `Skills`, accept refusing on a lost lease, a moved branch and a
@@ -195,10 +204,13 @@ At startup it adopts surviving `worker.ps1` processes by command line, the same 
 ```json
 {
   "name": "bravo-host",
-  "dashboardUrl": "http://192.168.1.20:5338",
-  "projects": { "alpha": { "path": "D:\\src\\alpha", "board": "\\\\board-pc\\repos\\alpha" } }
+  "projects": { "alpha": { "path": "D:\\src\\alpha" } }
 }
 ```
+
+*As built:* no `dashboardUrl` here (it is `config.json`'s, read by every script alike), and no
+remote path: the clone's own `board` remote names the board host's repo. `worktreeRoot` per project
+is optional.
 
 The worker host's own `data/config.json` sets `dashboardUrl` (which `heartbeat-common.ps1` already
 reads, so workers and their MCP config point at the board host with no further change) and
@@ -258,17 +270,21 @@ and the wall have to say that exactly and no more.
 
 - `data/heartbeat-prompt.md`, HARD RULE 1: "this machine" becomes "this machine, and the board's own
   API on its host. Nothing else on that host: not its docker, not its databases, not its files."
-- `data/worker-guard.ps1`: the worker passes the dashboard's host in the environment. The guard
-  allows that host and port **exactly**, and everything else stays as it is. Tests: the dashboard
-  URL is allowed, the same host on another port is denied, and another LAN address is denied.
+- `data/worker-guard.ps1`: the worker passes the dashboard's host in the environment
+  (`WHETSTONE_BOARD_HOST`, set only on a worker host). The guard allows that host and port
+  **exactly**, and everything else stays as it is. Tests: the dashboard URL is allowed, the same
+  host on another port is denied, and another LAN address is denied. On the board host an agent can
+  already reach the board at `localhost`, so this keeps a worker host level with that rather than
+  giving it more.
 - `CLAUDE.md` "The fleet never leaves this machine": the same sentence, plus one row for the runner.
   These three have to stay in step, as that section says.
 
 ### 7. Network and setup
 
-- **API binding.** `Start-Whetstone.bat` sets `ASPNETCORE_URLS=http://localhost:5338;http://<board-lan-ip>:5338`
-  when `lanUrl` is set in `config.json`, and only then. Off by default, so a machine with no worker
-  host is unchanged.
+- **API binding.** *As built:* the app itself reads `lanUrl` from the global config at startup
+  (`LanBinding`) and adds that one address to the ones it was given. A batch file cannot read JSON
+  without a script of its own. It must be an explicit `http://<ip>:<port>`; a wildcard is refused,
+  and a QA copy never adds it. Off by default, so a machine with no worker host is unchanged.
 - **Firewall.** One inbound rule on the board host allowing TCP 5338 from the worker host's IP only.
   The API has no authentication, so this rule is the boundary. Nothing else is, and the host name in
   the routes identifies a host. It is not authentication, and should not be described as such.
@@ -288,27 +304,27 @@ each step.
 
 ### 8. UI
 
-Minimal in phase 1:
+Minimal in phase 1. *As built:*
 
-- the fleet view labels each slot with its host, and shows a host as offline, mismatched or paused
-- a ticket that is running says where
+- the dock in the board's header draws, after the board host's own berths, each switched-on worker
+  host's name and its berths. A host that is not taking work (off, offline, on another commit, at
+  its usage limit) rests its berths stopped and says why. Polled from `/api/hosts` every 15 seconds.
+- a ticket a worker host is running shows its agent like any other, by slot number. Naming the host
+  on the ticket row is left for phase 2.
 - `workerHosts` is edited in `config.json`. A Settings page for it is phase 2.
-
-The agent slot numbers are already open-ended in `EventStore`. The check is that the fleet view
-renders slots past 4 rather than assuming there are three.
 
 ## Order of work
 
 Each step is its own commit, and steps 1 to 4 change nothing for a board host on its own:
 
 1. Branch round trip + its tests (piece 1) - done
-2. API: registry, check-in, orders, claim filter, accept, project kit, QaIsolation + tests (piece 2)
-3. Worker host mode in `worker.ps1` (piece 4)
-4. Runner + `host.json` (piece 3)
-5. Orchestrator host awareness + tests (piece 5)
-6. Prompt, guard and `CLAUDE.md` wording + guard tests (piece 6)
-7. LAN binding, `worker-host-setup.md` (piece 7)
-8. Fleet view (piece 8)
+2. API: registry, check-in, orders, claim filter, accept, project kit, QaIsolation + tests (piece 2) - done
+3. Worker host mode in `worker.ps1` (piece 4) - done
+4. Runner + `host.json` (piece 3) - done
+5. Orchestrator host awareness + tests (piece 5) - done
+6. Prompt, guard and `CLAUDE.md` wording + guard tests (piece 6) - done
+7. LAN binding, `worker-host-setup.md` (piece 7) - done
+8. Fleet view (piece 8) - done
 9. First live run: one worker host slot, one project, `implement` only, on a low-stakes ticket.
    Then one ticket deliberately moved board host to worker host to board host, to watch the round
    trip in both directions.
@@ -317,6 +333,9 @@ Step 9 is the only step that cannot be proven on the QA copy, which refuses agen
 Everything before it is proven by its tests and by the QA copy refusing the new routes.
 
 ## Open questions (the owner's)
+
+Phase 1 was built on the planned answer to each of these, as the owner asked. Each can still be
+changed.
 
 1. **The project folder on the worker host.** The decision of 2026-09-03 was that no two of the
    owner's computers see each other's projects. A worker host has to read a project's skills, guard
