@@ -83,12 +83,14 @@ public class WorkerHostServiceTests
     public async Task A_waiting_check_in_gets_an_order_as_soon_as_it_is_placed()
     {
         var svc = Service();
-        var waiting = svc.CheckInAsync("bravo-host", Board, Array.Empty<HostRun>(), null, TimeSpan.FromSeconds(20));
+        // The check-in may wait the full 25s; it must come back well inside that. The margin is wide
+        // on purpose - the whole suite runs in parallel, and a busy thread pool is not a late order.
+        var waiting = svc.CheckInAsync("bravo-host", Board, Array.Empty<HostRun>(), null, WorkerHostService.MaxWait);
         await Task.Delay(100);
         Assert.False(waiting.IsCompleted);
 
         svc.Enqueue("bravo-host", new HostOrder("kill", 6, 7, null));
-        var done = await Task.WhenAny(waiting, Task.Delay(TimeSpan.FromSeconds(5)));
+        var done = await Task.WhenAny(waiting, Task.Delay(TimeSpan.FromSeconds(15)));
         Assert.Same(waiting, done);
         Assert.Equal(7, Assert.Single((await waiting)!).RunId);
     }

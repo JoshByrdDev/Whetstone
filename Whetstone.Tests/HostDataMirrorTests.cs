@@ -80,11 +80,11 @@ public class HostDataMirrorTests : IDisposable
         Assert.Empty(zip.Entries);
     }
 
-    private WorkerHostService HostsReporting(string dataRoot)
+    private static async Task<WorkerHostService> HostsReporting(string dataRoot)
     {
         var cfg = new[] { new WorkerHostConfig("bravo-host", true, 2, WorkerHostConfig.DefaultSkills, new[] { "alpha" }, 5) };
         var hosts = new WorkerHostService(() => cfg, () => "c", () => DateTime.UtcNow);
-        hosts.CheckInAsync("bravo-host", "c", Array.Empty<HostRun>(), null, TimeSpan.Zero, default, dataRoot).GetAwaiter().GetResult();
+        await hosts.CheckInAsync("bravo-host", "c", Array.Empty<HostRun>(), null, TimeSpan.Zero, default, dataRoot);
         return hosts;
     }
 
@@ -93,7 +93,7 @@ public class HostDataMirrorTests : IDisposable
     [Fact]
     public async Task Set_qa_shots_takes_a_worker_hosts_capture_by_its_own_path()
     {
-        var hosts = HostsReporting(@"D:\Whetstone\data");
+        var hosts = await HostsReporting(@"D:\Whetstone\data");
         Assert.Equal(new[] { @"D:\Whetstone\data" }, hosts.HostDataRoots());
         Directory.CreateDirectory(_paths.QaCaptureTicketDir(12));
         File.WriteAllBytes(Path.Combine(_paths.QaCaptureTicketDir(12), "shot.png"), Png);
@@ -108,7 +108,7 @@ public class HostDataMirrorTests : IDisposable
     public async Task A_capture_still_on_its_way_is_waited_for()
     {
         QaShotStore.HostCaptureWait = TimeSpan.FromSeconds(10);
-        var store = new QaShotStore(_paths, HostsReporting(@"D:\Whetstone\data"));
+        var store = new QaShotStore(_paths, await HostsReporting(@"D:\Whetstone\data"));
         var save = store.SaveAsync(12, 0, @"D:\Whetstone\data\qa-captures\12\late.png");
 
         await Task.Delay(700);
@@ -121,7 +121,7 @@ public class HostDataMirrorTests : IDisposable
     public async Task A_capture_that_never_arrives_says_so()
     {
         QaShotStore.HostCaptureWait = TimeSpan.FromMilliseconds(600);
-        var store = new QaShotStore(_paths, HostsReporting(@"D:\Whetstone\data"));
+        var store = new QaShotStore(_paths, await HostsReporting(@"D:\Whetstone\data"));
         var ex = await Assert.ThrowsAsync<FileNotFoundException>(() => store.SaveAsync(12, 0, @"D:\Whetstone\data\qa-captures\12\never.png"));
         Assert.Contains("worker host", ex.Message);
     }
