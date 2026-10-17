@@ -34,7 +34,10 @@ param(
     # One check-in and nothing more. For trying a new host.json out by hand.
     [switch]$Once,
     # The runner itself, as the supervisor starts it. Never passed by hand.
-    [switch]$Inner
+    [switch]$Inner,
+    # The supervisor that started this runner, so the runner can tell whether anything will start it
+    # again after an update. Passed by the supervisor alone.
+    [int]$SupervisorPid = 0
 )
 
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -303,6 +306,16 @@ function Update-OwnCheckout {
     return @{ ok = $true; state = 'moved' }
 }
 
+# Whether the supervisor that started this runner is still there to start it again. A pid can be
+# reused by an unrelated process, so it must also be a powershell running this same script.
+function Test-SupervisorAlive {
+    param([int]$SupervisorPid)
+    if ($SupervisorPid -le 0) { return $false }
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$SupervisorPid" -ErrorAction SilentlyContinue
+    if (-not $p) { return $false }
+    return (Test-RunsScript -CommandLine $p.CommandLine -Script (Join-Path $DataRoot 'runner.ps1'))
+}
+
 # Run the runner as a child for as long as it keeps exiting with $RunnerUpdatedExit, starting it
 # again each time; return the first other exit code. A function so the tests can drive it with a
 # stand-in child script rather than the runner itself.
@@ -330,7 +343,7 @@ if ($MyInvocation.InvocationName -eq '.') { return }
 # with the same code. It stays this small on purpose: it is the one part of the runner that is NOT
 # reloaded by an update, so a change to it takes effect at the next logon or manual start.
 if (-not $Inner -and -not $Once) {
-    $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path, '-Inner')
+    $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path, '-Inner', '-SupervisorPid', "$PID")
     if ($HostFile) { $childArgs += @('-HostFile', $HostFile) }
     exit (Invoke-RunnerSupervisor -ChildArgs $childArgs)
 }
@@ -344,7 +357,7 @@ if (-not $single.WaitOne(0)) { Write-Log "Another runner is already running on t
 
 $script:AgentSlot = 0
 $commit = Get-OwnCommit
-Write-Log "Runner '$($HostCfg.name)' on commit $commit, board host $DashboardUrl, projects: $(@($HostCfg.projects.Keys) -join ', '), auto-update $(if ($HostCfg.autoUpdate) { 'on' } else { 'off' })"
+Write-Log "Runner '$($HostCfg.name)' on commit $commit, board host $DashboardUrl, projects: $(@($HostCfg.projects.Keys) -join ', '), auto-update $(if ($HostCfg.autoUpdate) { 'on' } else { 'off' }), supervisor $(if ($SupervisorPid -gt 0) { "pid $SupervisorPid" } else { 'none' })"
 $ownRepo = Split-Path -Parent $DataRoot
 # What has already been said, so a waiting or refused update is logged once per board commit and
 # not on every check-in; and when a commit not fetchable yet may be tried for again.
@@ -440,7 +453,15 @@ while ($true) {
         if ($result.ok) {
             Write-Log "Updated this checkout from $commit to the board host's commit $boardSha."
             $single.ReleaseMutex()
-            exit $RunnerUpdatedExit
+            if (Test-SupervisorAlive -SupervisorPid $SupervisorPid) { exit $RunnerUpdatedExit }
+            # Nothing would start this runner again: its supervisor has gone (a console closed, a
+            # Ctrl+C) or it was started without one. Exiting would take this host offline, so it
+            # starts a new supervisor - on the new code - and steps aside. The lock is already free.
+            Write-Log "No supervisor is waiting to restart this runner - starting a new one on the updated code."
+            $restart = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path)
+            if ($HostFile) { $restart += @('-HostFile', $HostFile) }
+            Start-Process -FilePath 'powershell' -ArgumentList $restart -WindowStyle Hidden | Out-Null
+            exit 0
         }
         if ($result.state -eq 'missing') {
             # Not fetchable yet: try again on a back-off, never on every check-in.

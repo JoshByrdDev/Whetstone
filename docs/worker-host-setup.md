@@ -106,7 +106,11 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
    nothing is running here it fast-forwards this checkout to exactly that commit and starts again
    on the new code (see "Day to day"). Cloned from the board host's share, as here, `origin` *is*
    the board host's checkout, so a commit there is fetchable at once, pushed or not. A checkout
-   cloned from GitHub instead can only follow commits the board host has pushed.
+   cloned from GitHub instead can only follow commits the board host has pushed, and sits on
+   "Cannot update to the board host's commit yet" in between. Point such a checkout at the share:
+   `git -C C:\Whetstone remote set-url origin \\BOARD\Whetstone`.
+
+   Check: `git -C C:\Whetstone remote -v` names the board host's share, not GitHub.
 
    Check: `git -C C:\Whetstone rev-parse HEAD` matches the same command on the board host.
 
@@ -233,7 +237,11 @@ Optional. Leave it out and QA stays on the board host.
 - **What restarts on an update.** The scheduled task runs a small supervisor (`runner.ps1` started
   normally) that runs the runner itself as a child and starts it again after an update, so the task
   stays Running throughout. The supervisor's own few lines only change at the next logon or task
-  start; everything else is on the new code at once.
+  start; everything else is on the new code at once. If the supervisor has died (Task Scheduler
+  shows the task Ready with result `0xC000013A`, a closed console or Ctrl+C) while the runner
+  carried on, the runner notices at its next update and starts a new supervisor itself - the log
+  says "No supervisor is waiting to restart this runner". The task then shows Ready until the next
+  logon, but the runner is running; its startup log line names its supervisor's pid.
 - **If the worker host goes off:** after 10 minutes without a check-in its runs are given up on,
   and their tickets go back to the queue. When it comes back, the runner kills anything it was
   still holding without handing it back.

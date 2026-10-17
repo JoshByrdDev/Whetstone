@@ -230,6 +230,30 @@ exit 3
     $code = Invoke-RunnerSupervisor -ChildArgs @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $standIn) -PauseSeconds 0
     Check 'started again after an update, and once more only' @(Get-Content $count).Count 2
     Check 'ends with the first other exit code' $code 3
+
+    # ---- Test-SupervisorAlive ---------------------------------------------------
+    # The supervisor can die (a closed console, a Ctrl+C) and leave the runner running. After an
+    # update the runner must know whether anything will start it again.
+    Write-Host "== Test-SupervisorAlive"
+    $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
+    . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Test-RunsScript' }, $false) | Select-Object -First 1).Extent.Text))
+    $DataRoot = Join-Path $root 'sup-data'
+    New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null
+    $fakeRunner = Join-Path $DataRoot 'runner.ps1'
+    $otherScript = Join-Path $DataRoot 'something-else.ps1'
+    Set-Content -Path $fakeRunner -Value 'Start-Sleep 30' -Encoding ascii
+    Set-Content -Path $otherScript -Value 'Start-Sleep 30' -Encoding ascii
+    $sup = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeRunner) -PassThru -WindowStyle Hidden
+    $other = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherScript) -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 800
+        Check 'a live supervisor running this runner.ps1' (Test-SupervisorAlive -SupervisorPid $sup.Id) $true
+        Check 'a live process that is something else (a reused pid)' (Test-SupervisorAlive -SupervisorPid $other.Id) $false
+        Check 'none given' (Test-SupervisorAlive -SupervisorPid 0) $false
+        $sup.Kill(); $sup.WaitForExit()
+        Check 'a supervisor that has gone' (Test-SupervisorAlive -SupervisorPid $sup.Id) $false
+    }
+    finally { foreach ($p in $sup, $other) { try { $p.Kill() } catch { } } }
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.
