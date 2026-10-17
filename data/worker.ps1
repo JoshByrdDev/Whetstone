@@ -1487,6 +1487,12 @@ foreach ($k in $toolSetup.Env.Keys) { Set-Item -Path "Env:$k" -Value $toolSetup.
 $env:WHETSTONE_TICKET_ID = "$ticketId"
 $env:WHETSTONE_PROJECT   = "$projectKey"
 $env:WHETSTONE_SKILL     = "$skill"
+# On a worker host, the one address off this machine the guard lets a command reach: the board's
+# own API, host and port exactly (see Test-LocalHost in worker-guard.ps1). Never set on the board
+# host, where the board is localhost and needs no exception.
+if ($onHost) {
+    try { $boardUri = [Uri]$DashboardUrl; $env:WHETSTONE_BOARD_HOST = "$($boardUri.Host):$($boardUri.Port)" } catch { }
+}
 
 # Which file this run is told holds the repo's code conventions. Resolved against the worktree, not
 # assumed from the provider - see Get-ConventionsFile. The skills defer to whatever this names

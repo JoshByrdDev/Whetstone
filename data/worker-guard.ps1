@@ -115,6 +115,13 @@ $localHostPattern = '^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?|host
 # has typed it has stopped talking about this machine.
 $environmentWord = '(?i)(?:^|[^a-z])(?:prod|production|uat|stag(?:e|ing)?|live|preprod|release|qa\d)(?:$|[^a-z])'
 
+# On a worker host - another machine running workers for a board (docs/worker-hosts-plan.md) -
+# one thing off this machine is in reach: the board's own API, at exactly the host and port
+# worker.ps1 names here. Nothing else on that host is, not even on another port: its docker, its
+# databases and its live board's other services are another machine's. Unset everywhere else.
+$boardHostPort = "$env:WHETSTONE_BOARD_HOST".Trim().ToLowerInvariant()
+$boardHostOnly = $boardHostPort -replace ':\d+$', ''
+
 function Test-LocalHost {
     param([string]$Value)
     if (-not $Value) { return $true }
@@ -122,9 +129,11 @@ function Test-LocalHost {
     $h = $h -replace '^[a-zA-Z][a-zA-Z0-9+.-]*://', ''    # strip scheme
     $h = $h -replace '^[^@/]*@', ''                        # strip user:pass@
     $h = ($h -split '[/\\?#]')[0]                          # strip path
+    if ($boardHostPort -and $h -ieq $boardHostPort) { return $true }
     $h = ($h -split ',')[0]                                # sqlcmd host,port
     $h = $h -replace ':\d+$', ''                           # strip :port
     if ($h -match $localHostPattern) { return $true }
+    if ($boardHostOnly -and $h -ieq $boardHostOnly) { return $false }
     if ($h -match $environmentWord)  { return $false }
     return ($h -notmatch '\.')
 }

@@ -113,7 +113,21 @@ $cases = @(
     @{ Expect='deny'; Tool='Bash'; Cmd='git tfs rcheckin' },
     @{ Expect='deny'; Tool='PowerShell'; Cmd='Invoke-RestMethod -Method Post -Uri http://localhost:8080/_apis/tfvc/changesets' },
     # A heredoc fed to a shell is a command, not a message.
-    @{ Expect='deny'; Tool='Bash'; Cmd="bash <<'EOF'`ntf checkin /noprompt`nEOF" }
+    @{ Expect='deny'; Tool='Bash'; Cmd="bash <<'EOF'`ntf checkin /noprompt`nEOF" },
+
+    # --- a worker host: the board's API, at its exact host and port, and nothing else there ---
+    @{ Expect='allow'; Board='192.168.1.20:5338'; Tool='Bash'; Cmd='curl -s http://192.168.1.20:5338/api/tickets/7' },
+    @{ Expect='allow'; Board='192.168.1.20:5338'; Tool='Bash'; Cmd='curl -s http://localhost:8080/health' },
+    @{ Expect='deny';  Board='192.168.1.20:5338'; Tool='Bash'; Cmd='curl -s http://192.168.1.20:8080/' },
+    @{ Expect='deny';  Board='192.168.1.20:5338'; Tool='Bash'; Cmd='curl -s http://192.168.1.20/' },
+    @{ Expect='deny';  Board='192.168.1.20:5338'; Tool='Bash'; Cmd='curl -s http://192.168.1.21:5338/api/tickets' },
+    @{ Expect='deny';  Board='192.168.1.20:5338'; Tool='Bash'; Cmd='psql -h 192.168.1.20 -U app app' },
+    @{ Expect='deny';  Board='192.168.1.20:5338'; Tool='Bash'; Cmd='sqlcmd -S 192.168.1.20,1433 -Q "select 1"' },
+    @{ Expect='allow'; Board='board-pc:5338';     Tool='Bash'; Cmd='curl -s http://board-pc:5338/api/tickets/7' },
+    @{ Expect='deny';  Board='board-pc:5338';     Tool='Bash'; Cmd='curl -s http://board-pc:8080/' },
+    @{ Expect='deny';  Board='board-pc:5338';     Tool='Bash'; Cmd='sqlcmd -S board-pc,1433 -Q "select 1"' },
+    # The same LAN address with no board named - every board host run - is off-machine, as before.
+    @{ Expect='deny';  Tool='Bash'; Cmd='curl -s http://192.168.1.20:5338/api/tickets/7' }
 )
 
 # A project's own rules. 'ruled' denies one script of its own; 'plain' has no guard.ps1;
@@ -175,7 +189,10 @@ function Invoke-Hook {
     if ($Case.Path) { $call.tool_input['file_path'] = $Case.Path }
     $json = ConvertTo-Json $call -Depth 6 -Compress
     $hookArgs = if ($Case.Args) { $Case.Args } else { $DefaultArgs }
+    # The board's address, as worker.ps1 sets it for a run on a worker host - and only then.
+    if ($Case.Board) { $env:WHETSTONE_BOARD_HOST = $Case.Board } else { Remove-Item Env:WHETSTONE_BOARD_HOST -ErrorAction SilentlyContinue }
     $out = "$($json | & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @hookArgs)"
+    Remove-Item Env:WHETSTONE_BOARD_HOST -ErrorAction SilentlyContinue
     if (-not $out.Trim()) { return 'none' }
     # Two decisions in one answer is not valid JSON, and the harness would read it as none.
     if ($Case.One -and ([regex]::Matches($out, 'permissionDecision"')).Count -ne 1) { return 'many' }

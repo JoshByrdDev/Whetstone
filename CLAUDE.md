@@ -79,6 +79,13 @@ is not equivalent — and all three providers run with approvals switched off (`
 prompt is the entire enforcement. Widening the guard does not close that gap; only the prompt reaches
 there.
 
+**A worker host is the one exception, and it is one address wide.** A second machine running this
+board's workers (see "Worker hosts" below) reaches the board host's API and nothing else on it. The
+prompt says so beside the rule. The guard allows that host and port exactly, named by
+`WHETSTONE_BOARD_HOST`, which `worker.ps1` sets only on a worker host, and denies the same host on
+any other port. The branch round trip is not a second exception: it is `worker.ps1`'s own git,
+outside the agent's session, into the board host's repo, and never to origin.
+
 Changing the guard? Run its tests. They encode the commands a fleet legitimately runs every day —
 `docker compose down`, `sqlcmd -S localhost,1433`, a single-label docker host in a connection
 string — and a false positive here stops every worker at once:
@@ -307,6 +314,47 @@ The tests are the specification of the limits:
 
 ```bash
 dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~Steward"
+```
+
+## Worker hosts
+
+A board can borrow berths on a second machine on the LAN: a **worker host**, which runs workers and
+hands their branches back. There is still one orchestrator, on the board host. The design is
+`docs/worker-hosts-plan.md`, and setting a machine up is `docs/worker-host-setup.md`. What is not
+discoverable from the code:
+
+- **The runner pulls.** `data/runner.ps1` checks in with `/api/hosts/<name>/checkin` and gets its
+  orders back in the response; nothing listens on a worker host. Like the live instance, it is never
+  started from a Claude session, because whatever owns its tree can kill every worker under it.
+- **Slots past the steward's are remote.** The board host's workers are 1..3 and the steward is 4,
+  so worker hosts are numbered from 5. This is written twice and the two must agree:
+  `WorkerHostConfig.FirstRemoteSlot` in C# and `$StewardSlot` in `heartbeat-common.ps1`.
+- **A run is named by its ticket lease.** `ClaimResult.RunId` is the ticket lease's own id. The
+  branch accept route refuses a run whose lease has gone, and a runner kills such a run, so a run
+  the orchestrator gave up on can never overwrite the next one's work.
+- **The worker host's clone calls the board host's repo `board`.** Not `hub`, which in `worker.ps1`
+  means a project's main checkout. Its local base is a mirror of the board host's, so
+  `Resolve-BaseRef` stays the same on both machines.
+- **A worker host's worktree path never reaches the board.** The board reads a ticket's worktree
+  path as one of its own (analysis, the steward's checks, the reaper), so a worker host reports the
+  branch and nothing else.
+- **The project kit is an allowlist**: skills, `guard.ps1`, a read-only copy of the notes. Never
+  `project.json`. Its missing `reflect-prompt.md` is part of what keeps reflection off a worker host.
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
+```
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File data/heartbeat-hosts.tests.ps1
+```
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
+```
+
+```bash
+dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~WorkerHost|FullyQualifiedName~WorkerBranch"
 ```
 
 ## Knowledge
