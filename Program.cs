@@ -44,6 +44,22 @@ if (isolation.On && QaIsolation.StartupProblem(
 }
 builder.Services.AddSingleton(isolation);
 
+// A worker host reaches this board over the LAN (docs/worker-hosts-plan.md): with lanUrl set in the
+// global config, that one address is listened on beside the ones the app was given. Read here,
+// before the host is built, because the addresses cannot change once it is.
+try
+{
+    var bootGlobal = new ProjectRegistry(new DashboardPaths(builder.Environment)).GetGlobalConfig();
+    if (LanBinding.Urls(builder.Configuration["urls"], bootGlobal, isolation.On, out var lanWhy) is { } lanUrls)
+    {
+        builder.WebHost.UseUrls(lanUrls);
+        Console.WriteLine($"Listening for worker hosts on: {string.Join(", ", lanUrls)}");
+    }
+    else if (lanWhy is not null)
+        Console.Error.WriteLine($"lanUrl is set but not used: {lanWhy}.");
+}
+catch (Exception ex) { Console.Error.WriteLine($"lanUrl could not be read: {ex.Message}"); }
+
 // Register services — all state resolves from the self-contained data/ root;
 // the dashboard never reaches into the projects it monitors (only their
 // projectPath is referenced, as a working directory at run time).
