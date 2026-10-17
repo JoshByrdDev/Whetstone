@@ -10,6 +10,7 @@ import { Board, TicketDrawer } from './components/Board';
 import { HeartbeatControl } from './components/HeartbeatControl';
 import { HeartbeatProjectFilter } from './components/HeartbeatProjectFilter';
 import { HeartbeatPriorityFilter } from './components/HeartbeatPriorityFilter';
+import { WorkerHostsPanel } from './components/WorkerHostsPanel';
 import { SettingsPanel } from './components/SettingsPanel';
 import { ImprovementsPanel } from './components/ImprovementsPanel';
 import { HeaderHeartbeat } from './components/HeaderHeartbeat';
@@ -254,6 +255,7 @@ export default function App() {
                 <HeartbeatControl />
                 <HeartbeatProjectFilter />
                 <HeartbeatPriorityFilter />
+                <WorkerHostsPanel />
 
                 <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
                   <div className="lg:col-span-3">
