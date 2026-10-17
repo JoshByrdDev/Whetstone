@@ -24,6 +24,12 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
 
 ## On the board host
 
+   **Or use Tailscale.** If the board is already served on a tailnet (`tailscale serve` proxying to
+   `127.0.0.1:5338`) and the worker host joins that tailnet, skip step 1 and steps 2 and 3 below.
+   The worker host's `dashboardUrl` is the board's `https://<machine>.<tailnet>.ts.net` address.
+   Use the board host's tailnet IP wherever the steps below say `BOARD` or `192.168.1.20`, and
+   scope the file-share firewall rule (TCP 445) to the worker host's tailnet IP.
+
 2. **Listen on the LAN.** In `data/config.json` add:
 
    ```json
@@ -57,18 +63,14 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
    answers `dubious ownership`, run this on the worker host and try again:
    `git config --global --add safe.directory "%(prefix)///BOARD/src/alpha"`
 
-5. **Name the worker host.** In `data/config.json` add:
+5. **Nothing to do here yet.** Worker hosts are added and set up from the **Heartbeat** page's
+   *Worker hosts* section, not by editing config. The easiest order is to leave this until step 11:
+   once the worker host's runner has checked in once, it is listed there with an **Add** button.
+   (*Add by name* also works now, if you prefer: use the name you will put in its `host.json`.)
 
-   ```json
-   "workerHosts": [
-     { "name": "bravo-host", "enabled": false, "slots": 4, "projects": ["alpha"] }
-   ]
-   ```
-
-   Its slots are numbered from 5. `skills` defaults to `speculate`, `implement` and `refine`.
-   Leave it `enabled: false` until step 12.
-
-   Check: `GET /api/hosts` lists `bravo-host` with `online: false`.
+   A new host starts switched off, with one berth, the phases that take no stack, and **no
+   projects**: nothing is sent to it until you choose which projects may go there. Its berths are
+   numbered from 5. The section's *Remote work* switch turns all of it off at once.
 
 ## On the worker host
 
@@ -140,9 +142,10 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
     `worktreeRoot` per project is optional. It defaults to `D:\src\.worktrees\alpha`, beside the
     clone, as on the board host.
 
-    Check: `powershell -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -Once` exits 0.
-    The board's `GET /api/hosts` then shows `bravo-host` with `online: true` and
-    `commitMatches: true`.
+    Check: run `powershell -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -Once`. The
+    board's **Heartbeat** page then lists `bravo-host` under *Worker hosts* as having checked in.
+    Click **Add**. It is added switched off, with no projects. If it was added by name in step 5,
+    it shows "switched off" with a fresh check-in and its commit instead.
 
 12. **Start it at logon.** In Task Scheduler, create a task:
     - Trigger: at log on of this user.
@@ -154,8 +157,9 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
     Never start the runner from a Claude session. Whatever owns its tree can kill every worker
     under it.
 
-    Then on the board host, set `"enabled": true` for `bravo-host`. The orchestrator reads the hosts
-    on every pass, so no restart is needed.
+    Then on the board's **Heartbeat** page, in `bravo-host`'s panel: pick its **Projects**, set its
+    **Berths**, and switch it **On**. Make sure *Remote work* is on. Every change applies on the
+    orchestrator's next pass; nothing restarts.
 
     Check: the runner's log (`C:\Whetstone\data\logs\heartbeat-<date>.log`) says
     `Runner 'bravo-host' on commit ...`, and the board's fleet view shows its berths.
@@ -185,15 +189,11 @@ Optional. Leave it out and QA stays on the board host.
     `git -C D:\src\alpha remote add origin <the project's remote URL>`. Without it, a review sees the
     branch as of the board host's last fetch.
 
-15. **Let it take QA.** On the board host, give the host's entry the testing skills and, if the
-    machine can carry more than one copy of a project's stack, `qaLeases`:
+15. **Let it take QA.** In the host's panel on the Heartbeat page, switch on the **QA** and
+    **Review** phases and, if the machine can carry more than one copy of a project's stack, raise
+    **QA at once**.
 
-    ```json
-    { "name": "bravo-host", "slots": 4, "qaLeases": 2, "projects": ["alpha"],
-      "skills": ["speculate", "implement", "refine", "qa-test", "review-pr"] }
-    ```
-
-    `qaLeases` above 1 applies only to a project whose `project.json` says `"parallelStacks": true`.
+    **QA at once** above 1 applies only to a project whose `project.json` says `"parallelStacks": true`.
     Only set that once the project's conventions say how a run on stack slot N
     (`WHETSTONE_STACK_SLOT`) picks its own compose project name and ports. Without it, a second
     QA run on the same machine would start the same stack on the same ports.
@@ -204,7 +204,8 @@ Optional. Leave it out and QA stays on the board host.
 
 ## Day to day
 
-- **Stop taking new work:** set `"enabled": false` on the board host. Runs already out finish.
+- **Stop taking new work:** switch the host **Off** on the Heartbeat page, or all of them with
+  *Remote work*. Runs already out finish.
 - **Stop the runner:** create `C:\Whetstone\data\runner.stop`. It takes nothing new and exits once
   its runs are done.
 - **Stop everything now:** the dashboard's hard Stop. It also orders every worker host run killed.
