@@ -28,6 +28,17 @@ public record BranchAcceptRequest(int RunId, string Branch, string Sha, string I
 /// </summary>
 public static class WorkerHostEndpoints
 {
+    /// <summary>
+    /// A check-in's answer. A configured host is also told the board host's commit: a runner that is
+    /// on another one gets no work (see <see cref="WorkerHostView.Dispatchable"/>), and brings itself
+    /// onto this one once it is idle - see Get-UpdateAction in data/runner.ps1. A name the config does
+    /// not have is told nothing but that.
+    /// </summary>
+    public static IResult CheckinResult(string name, IReadOnlyList<HostOrder>? orders, int[] revoked, string? boardCommit) =>
+        orders is null
+            ? Results.NotFound(new { error = $"'{name}' is not a worker host in this board's config (workerHosts)." })
+            : Results.Ok(new { orders, revoked, boardCommit });
+
     public static void MapWorkerHostEndpoints(this WebApplication app)
     {
         app.MapGet("/api/hosts", (WorkerHostService hosts) => Results.Ok(hosts.Snapshot()));
@@ -87,7 +98,7 @@ public static class WorkerHostEndpoints
         // the orchestrator gave up on them while this host was unreachable - which the runner kills
         // without handing anything back, because their tickets may already be running elsewhere.
         app.MapPost("/api/hosts/{name}/checkin", async (string name, HostCheckinRequest req,
-            WorkerHostService hosts, ResourceLeaseService leases, CancellationToken ct) =>
+            WorkerHostService hosts, ResourceLeaseService leases, BoardCommit commit, CancellationToken ct) =>
         {
             var runs = req.Runs ?? Array.Empty<HostRun>();
             var live = await leases.LiveRunsAsync(runs.Where(r => !r.Exited).Select(r => r.RunId).ToList());
@@ -95,9 +106,7 @@ public static class WorkerHostEndpoints
 
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
             var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot);
-            return orders is null
-                ? Results.NotFound(new { error = $"'{name}' is not a worker host in this board's config (workerHosts)." })
-                : Results.Ok(new { orders, revoked });
+            return CheckinResult(name, orders, revoked, commit.Get());
         });
 
         app.MapPost("/api/hosts/{name}/orders", (string name, HostOrderRequest req, WorkerHostService hosts) =>

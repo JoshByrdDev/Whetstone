@@ -65,6 +65,12 @@ try {
     Check 'no projects: refused' (Read-HostConfig -Path $f).ok $false
     Write-Json $f '{ not json'
     Check 'not json: refused' (Read-HostConfig -Path $f).ok $false
+    Write-Json $f '{ "name": "bravo-host", "projects": { "alpha": { "path": "D:\\a" } } }'
+    Check 'auto-update: on unless said otherwise' (Read-HostConfig -Path $f).autoUpdate $true
+    Write-Json $f '{ "name": "bravo-host", "autoUpdate": false, "projects": { "alpha": { "path": "D:\\a" } } }'
+    Check 'auto-update: off when host.json says false' (Read-HostConfig -Path $f).autoUpdate $false
+    Write-Json $f '{ "name": "bravo-host", "autoUpdate": "no", "projects": { "alpha": { "path": "D:\\a" } } }'
+    Check 'auto-update: anything but false leaves it on' (Read-HostConfig -Path $f).autoUpdate $true
 
     # ---- Convert-ClaimForHost --------------------------------------------------
     Write-Host "== Convert-ClaimForHost"
@@ -135,6 +141,95 @@ try {
         Check 'report: no runs serialises as an empty list' ($none -match '"runs":\[\]') $true
     }
     finally { try { $live.Kill() } catch { } }
+
+    # ---- Get-UpdateAction ------------------------------------------------------
+    Write-Host "== Get-UpdateAction"
+    $a = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    $b = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    Check 'same commit: nothing to do' (Get-UpdateAction -Own $a -Board $a -LiveRuns 0 -Stopping $false -Enabled $true) 'none'
+    Check 'same commit, other case: nothing to do' (Get-UpdateAction -Own $a -Board $a.ToUpper() -LiveRuns 0 -Stopping $false -Enabled $true) 'none'
+    Check 'board named no commit: nothing to do' (Get-UpdateAction -Own $a -Board '' -LiveRuns 0 -Stopping $false -Enabled $true) 'none'
+    Check 'own commit unknown: nothing to do' (Get-UpdateAction -Own '' -Board $b -LiveRuns 0 -Stopping $false -Enabled $true) 'none'
+    Check 'differ with runs out: wait for them' (Get-UpdateAction -Own $a -Board $b -LiveRuns 2 -Stopping $false -Enabled $true) 'wait'
+    Check 'differ, stopping: leave it' (Get-UpdateAction -Own $a -Board $b -LiveRuns 0 -Stopping $true -Enabled $true) 'none'
+    Check 'differ, auto-update off: leave it' (Get-UpdateAction -Own $a -Board $b -LiveRuns 0 -Stopping $false -Enabled $false) 'none'
+    Check 'differ and idle: update' (Get-UpdateAction -Own $a -Board $b -LiveRuns 0 -Stopping $false -Enabled $true) 'update'
+
+    # ---- Update-OwnCheckout, against real repos -------------------------------
+    Write-Host "== Update-OwnCheckout"
+    $env:GIT_TERMINAL_PROMPT = '0'
+    function New-Commit { param([string]$Dir, [string]$Text)
+        Add-Content -Path (Join-Path $Dir 'f.txt') -Value $Text -Encoding ascii
+        git -C $Dir add -A *> $null; git -C $Dir commit -q -m $Text *> $null
+        return "$(git -C $Dir rev-parse HEAD)".Trim()
+    }
+    function New-Checkouts { param([string]$Name)
+        $boardRepo = Join-Path $root "$Name-board"
+        New-Item -ItemType Directory -Path $boardRepo -Force | Out-Null
+        git -C $boardRepo init -q -b main *> $null
+        git -C $boardRepo config user.email t@example.com; git -C $boardRepo config user.name T; git -C $boardRepo config commit.gpgsign false
+        $null = New-Commit $boardRepo 'one'
+        $here = Join-Path $root "$Name-worker"
+        git clone -q $boardRepo $here *> $null
+        git -C $here config user.email t@example.com; git -C $here config user.name T; git -C $here config commit.gpgsign false
+        return @{ board = $boardRepo; here = $here }
+    }
+
+    $c = New-Checkouts 'ff'
+    $target = New-Commit $c.board 'two'
+    $null = New-Commit $c.board 'three, past the board host'
+    git -C $c.board checkout -q $target *> $null   # the board host is on 'two', origin has more
+    $r = Update-OwnCheckout -Repo $c.here -Sha $target
+    Check 'a commit only origin has: fetched and moved to' "$($r.ok) $($r.state)" 'True moved'
+    Check '... to exactly the board host commit, not the tip' "$(git -C $c.here rev-parse HEAD)".Trim() $target
+
+    $c = New-Checkouts 'present'
+    $target = New-Commit $c.board 'two'
+    git -C $c.here fetch -q origin *> $null
+    Check 'already fetched: moved' (Update-OwnCheckout -Repo $c.here -Sha $target).state 'moved'
+
+    $c = New-Checkouts 'missing'
+    $r = Update-OwnCheckout -Repo $c.here -Sha 'cccccccccccccccccccccccccccccccccccccccc'
+    Check 'a commit origin does not have: missing, nothing moved' "$($r.ok) $($r.state)" 'False missing'
+
+    $c = New-Checkouts 'dirty'
+    $target = New-Commit $c.board 'two'
+    Add-Content -Path (Join-Path $c.here 'f.txt') -Value 'a person editing' -Encoding ascii
+    $before = "$(git -C $c.here rev-parse HEAD)".Trim()
+    $r = Update-OwnCheckout -Repo $c.here -Sha $target
+    Check 'modified tracked files: refused' "$($r.ok) $($r.state)" 'False dirty'
+    Check '... and nothing moved' "$(git -C $c.here rev-parse HEAD)".Trim() $before
+
+    $c = New-Checkouts 'untracked'
+    $target = New-Commit $c.board 'two'
+    Set-Content -Path (Join-Path $c.here 'host.json') -Value '{}' -Encoding ascii
+    Check 'an untracked file (host.json, say) does not stop it' (Update-OwnCheckout -Repo $c.here -Sha $target).state 'moved'
+
+    $c = New-Checkouts 'backwards'
+    $old = "$(git -C $c.board rev-parse HEAD)".Trim()
+    $null = New-Commit $c.here 'here, ahead of the board'
+    $r = Update-OwnCheckout -Repo $c.here -Sha $old
+    Check 'a board host behind this checkout: refused' "$($r.ok) $($r.state)" 'False not-ff'
+
+    $c = New-Checkouts 'sideways'
+    $target = New-Commit $c.board 'board went one way'
+    $null = New-Commit $c.here 'this went another'
+    Check 'diverged: refused' (Update-OwnCheckout -Repo $c.here -Sha $target).state 'not-ff'
+
+    # ---- Invoke-RunnerSupervisor, with a stand-in for the runner ----------------
+    Write-Host "== Invoke-RunnerSupervisor"
+    $RunnerUpdatedExit = 75
+    $count = Join-Path $root 'starts.txt'
+    $standIn = Join-Path $root 'stand-in.ps1'
+    # Exits 75 ("updated, start me again") the first time, then 3.
+    Set-Content -Path $standIn -Encoding ascii -Value @"
+Add-Content -Path '$count' -Value 'x'
+if (@(Get-Content '$count').Count -lt 2) { exit 75 }
+exit 3
+"@
+    $code = Invoke-RunnerSupervisor -ChildArgs @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $standIn) -PauseSeconds 0
+    Check 'started again after an update, and once more only' @(Get-Content $count).Count 2
+    Check 'ends with the first other exit code' $code 3
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.

@@ -17,6 +17,12 @@
 # Usage: powershell -ExecutionPolicy Bypass -File data/runner.ps1 [-HostFile <path>]
 # Stop:  create data/runner.stop. It takes nothing new and exits once its runs have finished.
 #
+# It keeps itself on the board host's commit. The board gives work only to a runner on its exact
+# commit, and says which one in every check-in. When they differ and nothing is running here, the
+# runner fast-forwards this checkout to that commit and exits with $RunnerUpdatedExit; started the
+# usual way, this file is a small supervisor around the real runner (-Inner), and it starts the
+# runner again on the new code. See Get-UpdateAction. host.json's "autoUpdate": false turns it off.
+#
 # Config: data/host.json (machine-local, gitignored) names this host and maps each project to its
 # clone here; data/config.json sets dashboardUrl (the board host's API) and claudeAccount.
 #
@@ -26,7 +32,9 @@
 param(
     [string]$HostFile = '',
     # One check-in and nothing more. For trying a new host.json out by hand.
-    [switch]$Once
+    [switch]$Once,
+    # The runner itself, as the supervisor starts it. Never passed by hand.
+    [switch]$Inner
 )
 
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -38,6 +46,12 @@ $env:GIT_TERMINAL_PROMPT = '0'
 
 $RunnerStopFile = Join-Path $DataRoot "runner.stop"
 $RunnerKeepExitedMinutes = 10
+
+# The exit code that means "this checkout moved to the board host's commit - start me again".
+$RunnerUpdatedExit = 75
+
+# How long to wait before fetching again for a board commit this checkout cannot see yet.
+$RunnerFetchBackoffMinutes = 5
 
 # ---- Pure helpers (data/runner.tests.ps1 lifts these) ---------------------------------------
 
@@ -60,7 +74,9 @@ function Read-HostConfig {
         }
     }
     if ($projects.Count -eq 0) { return @{ ok = $false; reason = "host.json maps no projects to a clone on this machine" } }
-    return @{ ok = $true; name = $name; projects = $projects }
+    # On unless it says false in so many words: a host that stays off the board's commit gets no work.
+    $autoUpdate = -not ($raw.PSObject.Properties['autoUpdate'] -and $raw.autoUpdate -eq $false)
+    return @{ ok = $true; name = $name; projects = $projects; autoUpdate = $autoUpdate }
 }
 
 # The claim as this machine must read it. Every path in it is the board host's, so each one is
@@ -244,8 +260,80 @@ function Get-HostUsageLimit {
     return $null
 }
 
+# Whether to bring this checkout onto the board host's commit now.
+#   none    the board named no commit, or the same one; or auto-update is off
+#   wait    they differ, but runs are out here: a worker must never see its scripts change under
+#           it. The board sends nothing new to a host on another commit, so they drain on their own.
+#   update  they differ, nothing is running, and the runner is not stopping
+function Get-UpdateAction {
+    param([string]$Own, [string]$Board, [int]$LiveRuns, [bool]$Stopping, [bool]$Enabled)
+    if (-not $Enabled) { return 'none' }
+    if (-not $Board -or -not $Own) { return 'none' }
+    if ($Own.Trim() -ieq $Board.Trim()) { return 'none' }
+    if ($LiveRuns -gt 0) { return 'wait' }
+    if ($Stopping) { return 'none' }
+    return 'update'
+}
+
+# Fast-forward $Repo to exactly $Sha - never past it: the board may be behind its own origin, and
+# the tip would only be another mismatch. Fetches first when the commit is not here yet.
+# Returns @{ ok; state; reason }, state one of:
+#   moved      HEAD is now $Sha
+#   missing    $Sha is not reachable even after a fetch (the board's commit is not where this
+#              checkout fetches from yet) - worth trying again later
+#   dirty      tracked files here are modified - a person's work, never overwritten
+#   not-ff     $Sha is not ahead of HEAD - the board went backwards or sideways; a person decides
+#   failed     git refused for another reason
+function Update-OwnCheckout {
+    param([string]$Repo, [string]$Sha)
+    $ErrorActionPreference = 'Continue'
+    git -C $Repo cat-file -e "$Sha^{commit}" 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        git -C $Repo fetch --quiet origin 2>$null
+        git -C $Repo cat-file -e "$Sha^{commit}" 2>$null
+        if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = 'missing'; reason = "commit $Sha is not in this checkout, even after fetching from origin" } }
+    }
+    $dirty = @(git -C $Repo status --porcelain --untracked-files=no 2>$null | Where-Object { $_ })
+    if ($dirty.Count -gt 0) { return @{ ok = $false; state = 'dirty'; reason = "$($dirty.Count) tracked file(s) here are modified" } }
+    git -C $Repo merge-base --is-ancestor HEAD $Sha 2>$null
+    if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = 'not-ff'; reason = "the board's commit $Sha is not ahead of this checkout's - it is not a fast-forward" } }
+    git -C $Repo merge --quiet --ff-only $Sha *> $null
+    $head = "$(git -C $Repo rev-parse HEAD 2>$null)".Trim()
+    if ($LASTEXITCODE -ne 0 -or $head -ine $Sha) { return @{ ok = $false; state = 'failed'; reason = "git could not fast-forward to $Sha" } }
+    return @{ ok = $true; state = 'moved' }
+}
+
+# Run the runner as a child for as long as it keeps exiting with $RunnerUpdatedExit, starting it
+# again each time; return the first other exit code. A function so the tests can drive it with a
+# stand-in child script rather than the runner itself.
+function Invoke-RunnerSupervisor {
+    param([string[]]$ChildArgs, [int]$PauseSeconds = 2)
+    while ($true) {
+        $child = Start-Process -FilePath 'powershell' -ArgumentList $ChildArgs -PassThru -WindowStyle Hidden
+        try { $null = $child.Handle } catch { }
+        $child.WaitForExit()
+        $code = $child.ExitCode
+        if ($code -ne $RunnerUpdatedExit) { return $code }
+        Write-Log "Runner updated to the board host's commit - starting it again on the new code."
+        Start-Sleep -Seconds $PauseSeconds
+    }
+}
+
 # Everything below runs only when this file is executed, not when the tests lift its functions.
 if ($MyInvocation.InvocationName -eq '.') { return }
+
+# ---- The supervisor ----
+#
+# Started the usual way (Task Scheduler, by hand), this file runs the runner as a child and starts it
+# again whenever it exits with $RunnerUpdatedExit - which it does only after moving this checkout to
+# the board host's commit, so the new runner is on the new code. Any other exit ends the supervisor
+# with the same code. It stays this small on purpose: it is the one part of the runner that is NOT
+# reloaded by an update, so a change to it takes effect at the next logon or manual start.
+if (-not $Inner -and -not $Once) {
+    $childArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path, '-Inner')
+    if ($HostFile) { $childArgs += @('-HostFile', $HostFile) }
+    exit (Invoke-RunnerSupervisor -ChildArgs $childArgs)
+}
 
 if (-not $HostFile) { $HostFile = Join-Path $DataRoot 'host.json' }
 $HostCfg = Read-HostConfig -Path $HostFile
@@ -256,7 +344,12 @@ if (-not $single.WaitOne(0)) { Write-Log "Another runner is already running on t
 
 $script:AgentSlot = 0
 $commit = Get-OwnCommit
-Write-Log "Runner '$($HostCfg.name)' on commit $commit, board host $DashboardUrl, projects: $(@($HostCfg.projects.Keys) -join ', ')"
+Write-Log "Runner '$($HostCfg.name)' on commit $commit, board host $DashboardUrl, projects: $(@($HostCfg.projects.Keys) -join ', '), auto-update $(if ($HostCfg.autoUpdate) { 'on' } else { 'off' })"
+$ownRepo = Split-Path -Parent $DataRoot
+# What has already been said, so a waiting or refused update is logged once per board commit and
+# not on every check-in; and when a commit not fetchable yet may be tried for again.
+$updateSaid = @{}
+$updateRetryAt = @{}
 
 $Runs = Find-SurvivingRuns
 foreach ($slot in $Runs.Keys) { Write-Log "  Adopted run $($Runs[$slot].RunId) in slot $slot (ticket #$($Runs[$slot].TicketId), pid $($Runs[$slot].Pid))" }
@@ -332,6 +425,37 @@ while ($true) {
     }
 
     if ($Once) { break }
+
+    # Stay on the board host's commit. After the orders, so a kill or a start this check-in carried is
+    # acted on first; and only ever while idle - see Get-UpdateAction.
+    $boardSha = "$($resp.boardCommit)".Trim()
+    $liveNow = @($Runs.Values | Where-Object { -not $_.ExitedAt }).Count
+    $action = Get-UpdateAction -Own $commit -Board $boardSha -LiveRuns $liveNow -Stopping (Test-Path $RunnerStopFile) -Enabled $HostCfg.autoUpdate
+    if ($action -eq 'wait' -and $updateSaid[$boardSha] -ne 'wait') {
+        Write-Log "Board host is on commit $boardSha; this runner is on $commit. Updating once its $liveNow run(s) finish."
+        $updateSaid[$boardSha] = 'wait'
+    }
+    elseif ($action -eq 'update' -and -not ($updateRetryAt[$boardSha] -and (Get-Date) -lt $updateRetryAt[$boardSha])) {
+        $result = Update-OwnCheckout -Repo $ownRepo -Sha $boardSha
+        if ($result.ok) {
+            Write-Log "Updated this checkout from $commit to the board host's commit $boardSha."
+            $single.ReleaseMutex()
+            exit $RunnerUpdatedExit
+        }
+        if ($result.state -eq 'missing') {
+            # Not fetchable yet: try again on a back-off, never on every check-in.
+            $updateRetryAt[$boardSha] = (Get-Date).AddMinutes($RunnerFetchBackoffMinutes)
+            if ($updateSaid[$boardSha] -ne 'missing') {
+                Write-Log "Cannot update to the board host's commit yet: $($result.reason). Trying again every $RunnerFetchBackoffMinutes min."
+                $updateSaid[$boardSha] = 'missing'
+            }
+        }
+        else {
+            # Dirty or not a fast-forward: a person's call. Not tried again for this board commit.
+            $updateRetryAt[$boardSha] = [datetime]::MaxValue
+            Write-Log "Not updating to the board host's commit ${boardSha}: $($result.reason). This host gets no work until its checkout is on that commit."
+        }
+    }
 }
 
 $single.ReleaseMutex()
