@@ -45,7 +45,13 @@ public record UpdateWorkItemRequest(string? Text, bool? Done, int? Order);
 public record AddQaItemRequest(string Text);
 public record UpdateQaItemRequest(string? Text, string? Status, string? Note, int? Order);
 public record AddCommentRequest(string Body, string? Author);
-public record ClaimNextRequest(string[]? Projects, string[]? Priorities = null);
+/// <summary>
+/// <c>Skills</c> narrows the claim to tickets whose next skill is on the list; <c>Host</c> names the
+/// worker host the run is for, which must be one <c>workerHosts</c> configures and narrows the
+/// projects to the ones that host has a clone of. Both absent for a board host claim, which then
+/// behaves exactly as it always has. See docs/worker-hosts-plan.md.
+/// </summary>
+public record ClaimNextRequest(string[]? Projects, string[]? Priorities = null, string[]? Skills = null, string? Host = null);
 public record ReleaseLeasesRequest(int TicketId, string? Reason);
 public record ResetLeasesRequest(int[]? KeepTicketIds);
 public record AddDependencyRequest(string? BlockerIssueKey, int? BlockerTicketId, string? Note);
@@ -196,7 +202,24 @@ public static class TicketEndpoints
             string[] ResourcesFor(string projectKey, string skill) =>
                 registry.GetProjectConfig(projectKey).ResourcesFor(skill);
 
-            var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter);
+            // A worker host claims only what it is configured for: its skills, and the projects it
+            // has a clone of, within whatever the board's own project filter already allows.
+            string[]? skillFilter = req?.Skills is { Length: > 0 } s ? s : null;
+            if (!string.IsNullOrWhiteSpace(req?.Host))
+            {
+                var host = WorkerHostConfig.Read(global).FirstOrDefault(h => h.Name.Equals(req.Host, StringComparison.OrdinalIgnoreCase));
+                if (host is null || !host.Enabled)
+                    return Results.BadRequest(new { error = $"'{req.Host}' is not an enabled worker host." });
+                skillFilter = skillFilter is null ? host.Skills : skillFilter.Intersect(host.Skills).ToArray();
+                var allowed = filter is { Length: > 0 } ? filter : registry.Projects.ToArray();
+                filter = allowed.Where(p => host.Projects.Contains(p, StringComparer.OrdinalIgnoreCase)).ToArray();
+                // Nothing in common is "nothing to claim", not "everything": an empty filter means
+                // every project to ClaimNextAsync, and an empty skill list every skill.
+                if (filter.Length == 0 || skillFilter.Length == 0)
+                    return Results.Ok(new { claimed = (object?)null });
+            }
+
+            var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter, skillFilter);
             if (result is null)
                 return Results.Ok(new { claimed = (object?)null });
 
@@ -237,6 +260,7 @@ public static class TicketEndpoints
                         files: ticketFiles, tracker: tracker),
                     skill = result.Skill,
                     resumed = result.Resumed,
+                    runId = result.RunId,
                     leases = result.Leases,
                     issueChanges,
                     // How this project's tracker wants its issue named in a branch and in a commit

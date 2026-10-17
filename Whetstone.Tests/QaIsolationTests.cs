@@ -58,6 +58,10 @@ public class QaIsolationTests : IDisposable
     [InlineData("POST", "/api/usage/signin")]
     [InlineData("POST", "/api/usage/account")]
     [InlineData("POST", "/api/system/pick-folder")]
+    [InlineData("POST", "/api/hosts/bravo-host/checkin")]
+    [InlineData("POST", "/api/hosts/bravo-host/orders")]
+    [InlineData("POST", "/api/tickets/7/branch/accept")]
+    [InlineData("GET", "/api/hosts/project-kit/alpha")]
     // Case and a trailing slash are the same route to the router, so they are to the table.
     [InlineData("post", "/API/Heartbeat/Start/")]
     public void A_copy_refuses_every_route_that_reaches_beyond_it(string method, string path)
@@ -84,6 +88,7 @@ public class QaIsolationTests : IDisposable
     [InlineData("GET", "/api/config")]
     [InlineData("PUT", "/api/config")]
     [InlineData("POST", "/mcp")]
+    [InlineData("GET", "/api/hosts")]
     [InlineData("GET", "/")]
     public void A_copy_still_serves_what_a_QA_run_is_there_to_exercise(string method, string path)
     {

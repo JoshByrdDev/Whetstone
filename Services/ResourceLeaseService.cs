@@ -233,6 +233,31 @@ public class ResourceLeaseService
         return held.Count > 0;
     }
 
+    /// <summary>
+    /// Whether <paramref name="runId"/> is still the live lease on <paramref name="ticketId"/> itself -
+    /// i.e. the run that took it has not been given up on. A worker host's run is named by this id
+    /// (see <c>TicketService.ClaimResult.RunId</c>), so a run the orchestrator released while its
+    /// host was unreachable can neither hand its branch back nor keep running.
+    /// </summary>
+    public async Task<bool> IsLiveRunAsync(int runId, int ticketId)
+    {
+        await SweepExpiredAsync();
+        var key = TicketKey(ticketId);
+        return await _db.ResourceLeases.AnyAsync(l => l.Id == runId && l.ResourceKey == key && l.ReleasedAt == null);
+    }
+
+    /// <summary>Which of <paramref name="runIds"/> are still live ticket leases.</summary>
+    public async Task<HashSet<int>> LiveRunsAsync(IReadOnlyCollection<int> runIds)
+    {
+        if (runIds.Count == 0) return new HashSet<int>();
+        await SweepExpiredAsync();
+        var ids = runIds.Distinct().ToList();
+        var live = await _db.ResourceLeases
+            .Where(l => ids.Contains(l.Id) && l.ReleasedAt == null && l.ResourceKey.StartsWith("ticket:"))
+            .Select(l => l.Id).ToListAsync();
+        return live.ToHashSet();
+    }
+
     /// <summary>Everything currently held, newest first - "who has the QA stack right now".</summary>
     public async Task<List<ResourceLease>> ActiveAsync()
     {

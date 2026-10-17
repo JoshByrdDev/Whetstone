@@ -134,7 +134,12 @@ public class TicketService
     /// Outcome of a successful claim: the now-locked ticket, its skill, whether it was a resume, and
     /// any shared resources the run holds (which the worker must give back when it finishes).
     /// </summary>
-    public record ClaimResult(Ticket Ticket, string Skill, bool Resumed, string[] Leases);
+    /// <para>
+    /// <c>RunId</c> is the id of the ticket's own lease - "this run", for as long as the lease lives.
+    /// A worker host names it when it hands a branch back, so a run the orchestrator has since given
+    /// up on cannot overwrite what the next run did. 0 when the claim took no lease (no lease service).
+    /// </para>
+    public record ClaimResult(Ticket Ticket, string Skill, bool Resumed, string[] Leases, int RunId = 0);
 
     /// <summary>
     /// Claim the single most urgent workable ticket across all projects (or a filtered
@@ -162,7 +167,8 @@ public class TicketService
         int maxAttempts = 3,
         Func<string, string, string[]>? resourcesFor = null,
         TimeSpan? leaseTtl = null,
-        IReadOnlyCollection<TicketPriority>? priorityFilter = null)
+        IReadOnlyCollection<TicketPriority>? priorityFilter = null,
+        IReadOnlyCollection<string>? skillFilter = null)
     {
         if (maxAttempts < 1) maxAttempts = 1;
 
@@ -213,6 +219,11 @@ public class TicketService
 
             var target = PhaseMachine.ClaimTarget(t.Phase);
             var skill = PhaseMachine.SkillFor(target);
+
+            // A worker host only runs some phases (docs/worker-hosts-plan.md). Above the skill check
+            // on purpose: a claim that is not going to run this ticket must not block it either -
+            // that is for a claim that would, and the board host's next one will.
+            if (skillFilter is { Count: > 0 } && !skillFilter.Contains(skill)) continue;
 
             if (!skillExists(t.ProjectKey, skill))
             {
@@ -331,7 +342,8 @@ public class TicketService
             }
 
             return new ClaimResult((await GetAsync(t.Id))!, skill, resumed,
-                leases?.Select(l => l.ResourceKey).ToArray() ?? Array.Empty<string>());
+                leases?.Select(l => l.ResourceKey).ToArray() ?? Array.Empty<string>(),
+                leases?.FirstOrDefault(l => l.ResourceKey == ResourceLeaseService.TicketKey(t.Id))?.Id ?? 0);
         }
 
         return null;

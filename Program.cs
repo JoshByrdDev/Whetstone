@@ -49,6 +49,9 @@ builder.Services.AddSingleton(isolation);
 // projectPath is referenced, as a working directory at run time).
 builder.Services.AddSingleton<DashboardPaths>();
 builder.Services.AddSingleton<ProjectRegistry>();
+// Machines that run workers for this board (docs/worker-hosts-plan.md). In memory; see the class.
+builder.Services.AddSingleton<BoardCommit>();
+builder.Services.AddSingleton<WorkerHostService>();
 builder.Services.AddSingleton<EventStore>();
 // Per-project tracker access (Jira or Azure Boards, one per project) + live title/description
 // resolution for linked tickets. There is no container-wide tracker: which system a project's
@@ -420,9 +423,13 @@ app.MapPost("/api/heartbeat/start", async (HeartbeatManager hb, EventStore store
 });
 
 // POST /api/heartbeat/stop — kill the heartbeat process
-app.MapPost("/api/heartbeat/stop", async (HeartbeatManager hb, EventStore store, IHubContext<HeartbeatHub> hub) =>
+app.MapPost("/api/heartbeat/stop", async (HeartbeatManager hb, EventStore store, WorkerHostService hosts, IHubContext<HeartbeatHub> hub) =>
 {
     var (success, message) = hb.Stop();
+    // "Now" means every machine: a worker host's runs are not in the tree the kill just took, so
+    // each is ordered killed by its runner. Whether or not the heartbeat was running - a remote run
+    // can outlive the orchestrator that started it.
+    hosts.KillAll();
     // The kill took every worker with it, and none of them got to report its slot free — clear the
     // slots now or they come back as ghosts the moment the heartbeat next starts.
     if (success) store.ResetAgents();
@@ -499,6 +506,9 @@ app.MapConfigEndpoints();
 
 // Per-project stack control (status, start, stop).
 app.MapStackEndpoints();
+
+// Worker hosts: check-in and orders for their runners, branch hand-back, the project kit.
+app.MapWorkerHostEndpoints();
 
 // Per-ticket git actions for the human: checkout, and PR preflight + create.
 app.MapGitEndpoints();

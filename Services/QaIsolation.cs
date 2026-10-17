@@ -76,6 +76,11 @@ public sealed class QaIsolation
         R("POST", @"^/api/projects/[^/]+/dependencies/refresh/?$", "reading the issue tracker"),
         R("POST", @"^/api/usage/(check|nudge|signin|account)/?$", "reading, renewing or switching the Claude login"),
         R("POST", @"^/api/system/pick-folder/?$", "opening a dialog on the desktop"),
+        // Worker hosts are other machines. Reading /api/hosts stays open - the copy has none, and the
+        // fleet view asks for it - but nothing that dispatches to one, or that one would call, does.
+        R("POST", @"^/api/hosts/[^/]+/(checkin|orders)/?$", "dispatching runs to a worker host"),
+        R("POST", @"^/api/tickets/\d+/branch/accept/?$", "taking a branch from a worker host"),
+        R("GET", @"^/api/hosts/project-kit/[^/]+/?$", "serving a project to a worker host"),
     };
 
     /// <summary>What a request would do that a QA copy refuses, or null when the copy may serve it.</summary>
