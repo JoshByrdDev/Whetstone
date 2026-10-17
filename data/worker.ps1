@@ -29,6 +29,9 @@ param(
 
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $DataRoot "heartbeat-common.ps1")
+# The branch round trip for a run on a worker host. Functions only; nothing in it runs unless the
+# claim says this run is on one - see $onHost below.
+. (Join-Path $DataRoot "worker-board.ps1")
 
 # A worker is its own top-level session, never a child of one. When the app was started from inside
 # Claude Code (`dotnet run` in a session's shell), every process under it inherits that session's
@@ -1255,6 +1258,13 @@ You are reading ``$reviewBranch`` to give its author feedback. You are not build
 # Dashboard-owned per-project data dir (holds reflect-prompt and the review queue).
 $projectDataDir = "$($Claim.project.dataDir)"
 if (-not $projectDataDir) { $projectDataDir = $null }
+# Set only when this run is on a worker host - another machine than the board's, started by its
+# runner (data/runner.ps1), which stamps the host's name and rewrites the claim's paths to its own
+# clone before this script sees it. Everything that differs on a worker host keys off $onHost, so a
+# claim without it - every board host run - takes none of those paths. See docs/worker-hosts-plan.md.
+$runHost = "$($Claim.host)".Trim()
+$onHost  = [bool]$runHost
+$runId   = "$($Claim.runId)".Trim()
 
 Write-Log "--- Working ticket #$ticketId [$projectKey] phase=$phase skill=$skill model=$phaseModel resumed=$resumed ---"
 Send-DashboardEvent -Type "cycle_start" -TicketId $ticketId -Phase $phase -Project $projectKey
@@ -1293,6 +1303,54 @@ if ($null -eq $Claim.project.mergeInsteadOfPr -and $Claim.project.dataDir) {
             if ($null -ne $value) { $mergeLocally = ($value -eq $true) }
         }
         catch { }
+    }
+}
+
+# A run that cannot start, said once: a comment, a cycle row, the claim given back. -Block when it
+# needs a person; otherwise the ticket is simply left for the next claim, on whichever machine.
+function Stop-CycleEarly {
+    param([string]$Reason, [string]$Comment, [switch]$Block)
+    Write-Log "  $Reason - $(if ($Block) { 'blocking' } else { 'giving back' }) ticket #$ticketId."
+    if ($Block) { Block-Ticket -TicketId $ticketId -Reason $Reason }
+    Send-TicketComment -TicketId $ticketId -Body $Comment
+    Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error $Reason
+    # Still a cycle: it consumed wall clock and produced nothing. A failure that leaves no row
+    # behind is a failure the metrics will report as a pipeline that never stumbles.
+    $cycleTimer.Stop()
+    Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
+        -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
+        -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error"
+    Send-LeaseRelease -TicketId $ticketId -Reason $Reason
+    Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
+    exit 0
+}
+
+# On a worker host the clone is brought up to the board host's refs before the worktree is
+# resolved: its base, its view of origin, and this ticket's branch as the board host last had it.
+# That commit is also what the hand-back at the end says it expects to replace. A board host it
+# cannot reach is not the ticket's fault, so the claim is given back rather than the ticket
+# blocked; a branch that cannot be brought level without losing work is, and needs a person.
+$boardStartSha = ''
+if ($onHost -and $repoDir -and -not $isReview) {
+    $sync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+    if (-not $sync.ok) {
+        Stop-CycleEarly -Reason "Could not sync with the board host ($runHost): $($sync.reason)" `
+            -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $($sync.reason). No work was attempted; the ticket goes back to the queue."
+    }
+    $recordedBranch = "$($Claim.ticket.branch)".Trim()
+    if ($recordedBranch) {
+        $got = Get-BoardBranch -RepoDir $repoDir -Branch $recordedBranch
+        if (-not $got.ok) {
+            Stop-CycleEarly -Reason "Could not fetch '$recordedBranch' from the board host ($runHost): $($got.reason)" `
+                -Comment "This run was on worker host ``$runHost`` and could not fetch this ticket's branch from the board host: $($got.reason). No work was attempted; the ticket goes back to the queue."
+        }
+        $boardStartSha = $got.sha
+        $level = Update-BranchFromBoard -RepoDir $repoDir -Branch $recordedBranch -BoardSha $got.sha
+        if (-not $level.ok) {
+            Stop-CycleEarly -Block -Reason "Branch '$recordedBranch' on worker host $runHost cannot be brought level with the board host: $($level.reason)" `
+                -Comment "This run was on worker host ``$runHost``, whose copy of ``$recordedBranch`` cannot be brought level with the board host's without losing work: $($level.reason). Ticket blocked; no work was attempted. Compare the two machines' branches and keep the one that is right, then unblock."
+        }
+        Write-Log "  Worker host $runHost - '$recordedBranch' against the board host: $($level.state)"
     }
 }
 
@@ -1336,8 +1394,11 @@ if ($repoDir) {
         else {
             Write-Log "  Worktree: $workDir (branch '$($wt.branch)')"
             # Record both together: a branch whose worktree the dashboard cannot name is a branch
-            # nobody can find later.
-            Set-TicketBranch -TicketId $ticketId -Branch $wt.branch -WorktreePath $wt.path
+            # nobody can find later. Except on a worker host, whose worktree is on another machine:
+            # the board host reads a ticket's worktree path as one of its own (analysis, the
+            # steward's checks, the reaper), so it is told the branch and nothing else.
+            if ($onHost) { Set-TicketBranch -TicketId $ticketId -Branch $wt.branch }
+            else         { Set-TicketBranch -TicketId $ticketId -Branch $wt.branch -WorktreePath $wt.path }
         }
     }
     else {
@@ -1791,7 +1852,12 @@ if ($repoDir -and -not $isReview) {
         # Last thing before the ticket goes to a human: make sure what they are about to merge
         # actually merges. Deliberately AFTER the squash - rebasing one commit is one patch, and
         # the conflicts it reports are the real ones rather than per-commit noise from the
-        # intermediate states squashing has already thrown away.
+        # intermediate states squashing has already thrown away. On a worker host the mirrored
+        # base is refreshed first, so the rebase sees what was merged on the board host meanwhile.
+        if ($onHost) {
+            $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+            if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the rebase: $($resync.reason) - rebasing onto the base as of the start of the run." }
+        }
         $rebase = Update-BranchFromBase -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir `
             -MergeLocally $mergeLocally
         if ($rebase) {
@@ -1832,6 +1898,46 @@ if ($repoDir -and -not $isReview) {
                 Write-Log "  Staleness check skipped: $($rebase.reason)."
                 Send-TicketComment -TicketId $ticketId -Body "The heartbeat could not check this branch against ${baseName}: $($rebase.reason). Rebase it by hand before merging, or expect to resolve whatever has landed on the base since."
             }
+        }
+    }
+}
+
+# On a worker host, hand the branch back to the board host - after every safety net above has
+# finished with it, and before the lease goes: the board host checks that this run still holds the
+# ticket before it moves anything (see the branch accept route). A hand-back that fails blocks the
+# ticket, because the work now exists on one machine only and the next run, on either, would not
+# start from it.
+if ($onHost -and $repoDir -and -not $isReview -and $wt -and $wt.branch) {
+    $tip = "$(git -C $workDir rev-parse --verify --quiet HEAD 2>$null)".Trim()
+    if ($tip -and $tip -eq $boardStartSha) {
+        Write-Log "  Nothing new on '$($wt.branch)' - nothing to hand back."
+    }
+    else {
+        $why = $null
+        $sent = Send-BranchToBoard -WorkDir $workDir -RunId $runId
+        if (-not $sent.ok) { $why = $sent.reason }
+        else {
+            $body = @{ runId = [int]$runId; branch = $wt.branch; sha = $sent.sha; incomingRef = $sent.ref; expectedOld = $boardStartSha } |
+                ConvertTo-Json -Compress
+            try {
+                $null = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$ticketId/branch/accept" -Method Post `
+                    -ContentType 'application/json' -Body $body -TimeoutSec 120
+            }
+            catch {
+                $why = $_.Exception.Message
+                try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).error; if ($detail) { $why = $detail } } catch { }
+            }
+        }
+        if ($why) {
+            $reason = "Hand-back from worker host $runHost failed: $why"
+            Write-Log "  $reason"
+            Block-Ticket -TicketId $ticketId -Reason $reason
+            Send-TicketComment -TicketId $ticketId -Body "This run was on worker host ``$runHost`` and could not hand its branch back to the board host: $why`n`nThe work is committed there, as ``$tip`` on ``$($wt.branch)``, and nowhere else. Ticket blocked so no run starts without it. Once the cause is fixed, unblock: the next run on that machine hands it back."
+            Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error $reason
+        }
+        else {
+            $null = Set-BranchHandedBack -RepoDir $repoDir -Branch $wt.branch -Sha $sent.sha
+            Write-Log "  Handed '$($wt.branch)' back to the board host at $($sent.sha)."
         }
     }
 }
@@ -1887,7 +1993,10 @@ Send-LeaseRelease -TicketId $ticketId -Reason "cycle finished ($outcome)"
 
 Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
 # Reflection runs the same CLI against the same account, so after a limit it would only be refused too.
-if (-not $limitReset) {
+# Not on a worker host: what it writes belongs to the board host's project folder and notes store,
+# and the copies a worker host is served are read-only (see ProjectKit). Its kit carries no
+# reflect-prompt.md either, which would stop it on its own; this says so where it is decided.
+if (-not $limitReset -and -not $onHost) {
     Invoke-Reflection -ProjectDataDir $projectDataDir -RepoDir $workDir -RunLog $runLogLines `
         -MemoryDir $memoryDir -TicketId $ticketId
 }
