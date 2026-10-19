@@ -72,6 +72,15 @@ $cases = @(
     @{ Expect='allow'; Tool='Bash'; Cmd="powershell -NoProfile -Command 'Get-NetTCPConnection -LocalPort 53547 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Stop-Process -Id `$_ -Force }'" },
     # Changing the infrastructure code is ordinary work.
     @{ Expect='allow'; Tool='Bash'; Cmd='git add sst.config.ts infra/alarms.ts && git commit -m "Alarms: a throttle alarm on the web function"' },
+    # A phone app, built here and run on an emulator on this machine.
+    @{ Expect='allow'; Tool='Bash'; Cmd='cd apps/app && npx expo prebuild --platform android --no-install && cd android && ./gradlew assembleDebug --no-daemon' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='pnpm --filter @app/app exec expo start --port 53548' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='adb -s emulator-5554 reverse tcp:53547 tcp:53547 && adb -s emulator-5554 install -r app-debug.apk' },
+    @{ Expect='allow'; Tool='PowerShell'; Cmd='& "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" -s emulator-5554 exec-out screencap -p > shot.png' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='adb devices -l && adb -s emulator-5554 shell getprop sys.boot_completed' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='android --no-metrics emulator start --headless pixel_7_api36' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='npx eas-cli --version' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='grep -rn "eas build" docs/ && cat eas.json' },
 
     # --- must DENY: reaching off this machine ---
     @{ Expect='deny'; Tool='Bash'; Cmd='terraform apply -auto-approve' },
@@ -96,6 +105,18 @@ $cases = @(
     @{ Expect='deny'; Tool='Bash'; Cmd='pnpm deploy:prod' },
     @{ Expect='deny'; Tool='Bash'; Cmd='DATABASE_URL=postgres://app:hunter2@10.0.12.7:5432/app pnpm db:migrate' },
     @{ Expect='deny'; Tool='Bash'; Cmd='DATABASE_URL=postgresql://app@app-prod.internal/app pnpm db:migrate' },
+    # A phone app leaves the machine through Expo's cloud, a public tunnel, or a real phone.
+    @{ Expect='deny'; Tool='Bash'; Cmd='npx eas build --platform android --profile preview' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='cd apps/app && eas update --branch main' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='pnpm dlx eas-cli submit -p android' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='eas whoami' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='npx expo start --tunnel' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='npx expo login -u someone' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='adb connect 192.168.1.44:5555' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='adb pair 192.168.1.44:37099 123456' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='adb -d install -r app-debug.apk' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='adb -s R5CT10ABCDE install -r app-debug.apk' },
+    @{ Expect='deny'; Tool='PowerShell'; Cmd='& "C:\Sdk\platform-tools\adb.exe" connect 10.0.0.12' },
     # Pulling a database backup off a server is a human's job. WinSCP is often vendored
     # inside a repo, so it is invoked by path rather than at a command position.
     @{ Expect='deny'; Tool='Bash'; Cmd='src\tools\WinSCP.exe /command "open sftp://user@backups.example.com" "get nightly.bak"' },

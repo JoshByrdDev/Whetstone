@@ -254,6 +254,45 @@ if ($c -match ($sep + '(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?deploy:[\w-]+')) {
     Deny "a package script named deploy:<stage> - a deploy is a human's to run"
 }
 
+# ---- A phone app: Expo's cloud, and devices that are not an emulator --------
+
+# EAS is Expo's hosted service and has no offline verb: build and submit upload the source to
+# Expo's servers (and on to a store), update publishes to every installed copy, and even login,
+# whoami and env read an account. The local equivalents are 'expo prebuild' and Gradle.
+if ($c -match ($sep + $runner + 'eas(?:-cli)?(?=\s|$)')) {
+    if ($c -notmatch ($sep + $runner + 'eas(?:-cli)?\s+(?:--version|-v|--help|-h)(?=\s|$)')) {
+        Deny "eas - Expo's hosted build, submit and update service. Build the app locally with 'expo prebuild' and Gradle"
+    }
+}
+# The expo CLI itself is local, apart from a tunnel (which puts the dev server on the public
+# internet) and the verbs that sign in to or publish through an Expo account.
+if ($c -match ($sep + $runner + 'expo\b[^\r\n;&|]*\s--tunnel\b')) {
+    Deny "'expo start --tunnel' - it serves this machine's dev server through a public relay. An emulator reaches it over adb reverse"
+}
+if ($c -match ($sep + $runner + 'expo\s+(?:login|logout|register|whoami|publish|upload)\b')) {
+    Deny "an expo command that signs in to or publishes through an Expo account"
+}
+
+# adb drives whatever device it is given, and only an emulator is this machine. 'connect' and
+# 'pair' reach a phone over the network; -d, or a serial that is not emulator-<port>, picks a
+# phone on a USB cable. Matched anywhere it runs as an executable, because it is usually
+# invoked by its full path under the SDK.
+foreach ($m in [regex]::Matches($c, '(?i)(?:^|[\s\\/"' + [char]39 + '&;|(])adb(?:\.exe)?["' + [char]39 + ']?\s+([^\r\n;&|]*)')) {
+    $adbArgs = $m.Groups[1].Value
+    $target = [regex]::Match($adbArgs, '(?i)(?:^|\s)(?:connect|pair)\s+([^\s"' + [char]39 + ']+)')
+    if ($target.Success -and -not (Test-LocalHost $target.Groups[1].Value)) {
+        Deny "adb reaching '$($target.Groups[1].Value)' over the network - only an emulator on this machine is in scope"
+    }
+    if ($adbArgs -match '(?:^|\s)-d(?=\s|$)') {
+        Deny "'adb -d' - a phone on a USB cable. Name the emulator with -s emulator-<port>"
+    }
+    $serial = [regex]::Match($adbArgs, '(?:^|\s)-s\s+([^\s"' + [char]39 + ']+)')
+    # Not Test-LocalHost: a USB phone's serial is a single label, which that reads as local.
+    if ($serial.Success -and $serial.Groups[1].Value -notmatch '^(?:emulator-\d+|(?:localhost|127\.0\.0\.1):\d+)$') {
+        Deny "adb on device '$($serial.Groups[1].Value)', which is not an emulator - only an emulator on this machine is in scope"
+    }
+}
+
 # ---- File transfer to somebody else's server -------------------------------
 
 # sftp/scp/ssh are covered by the CLI rules above. These three are the gaps they leave:
