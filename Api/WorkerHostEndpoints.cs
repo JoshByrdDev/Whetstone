@@ -43,6 +43,24 @@ public static class WorkerHostEndpoints
     {
         app.MapGet("/api/hosts", (WorkerHostService hosts) => Results.Ok(hosts.Snapshot()));
 
+        // Where work goes first, read by the orchestrator on every pass - not from config at its own
+        // start, because restarting it to apply a change would kill every worker it has out.
+        app.MapGet("/api/hosts/dispatch", (ProjectRegistry registry) =>
+        {
+            var global = registry.GetGlobalConfig();
+            return Results.Ok(WorkerHostSettings.ReadDispatch(global, WorkerHostConfig.Read(global)));
+        });
+
+        app.MapPut("/api/hosts/settings/dispatch", (WorkerHostSettings.DispatchEdit req, DashboardPaths paths, ProjectRegistry registry) =>
+        {
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            if (WorkerHostSettings.SetDispatch(config, req, WorkerHostConfig.Read(registry.GetGlobalConfig())) is { } why)
+                return Results.BadRequest(new { error = why });
+            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            return Results.Ok(new { saved = true });
+        });
+
         // ---- The Heartbeat page's worker hosts section ----
         //
         // Everything it draws in one read: the switch, every configured host with its live state,
@@ -53,6 +71,7 @@ public static class WorkerHostEndpoints
                 enabled = hosts.RemoteOn,
                 boardCommit = commit.Get(),
                 hosts = hosts.Snapshot(),
+                dispatch = WorkerHostSettings.ReadDispatch(registry.GetGlobalConfig(), WorkerHostConfig.Read(registry.GetGlobalConfig())),
                 seen = hosts.Seen(),
                 projects = registry.Projects.Select(k => new { key = k, displayName = registry.GetProjectConfig(k).DisplayName }),
                 skills = WorkerHostSettings.HostableSkills,

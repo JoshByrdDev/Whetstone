@@ -747,7 +747,7 @@ while ($true) {
     if ($limitUntil) {
         # The limit is the board host's account's. A worker host spends its own, and reports its
         # own limit, which the API reads into whether it is dispatchable - so its berths still fill.
-        $null = Start-RemoteFill
+        $null = Start-Fill -LocalOpen $false
         if ((Get-BusyCount) -gt 0) {
             $null = Start-InterruptibleSleep -Seconds $AgentPollSeconds   # a stop is handled at the top
             continue
@@ -766,39 +766,9 @@ while ($true) {
         continue
     }
 
-    # Worker hosts first: a ticket that can run on the bigger machine does, and the board host keeps
-    # its headroom for the person using it.
-    $launched += Start-RemoteFill
-
-    while ((Get-WorkerCount) -lt $HeartbeatWorkers) {
-        # Re-read the flag before every berth, not once a pass. Filling three slots is up to three
-        # claim-next calls with a tracker round-trip behind each, so a pass that began before the
-        # button was pressed can still be handing out tickets a minute later - and a ticket handed
-        # out after a stop is precisely the new work the button promises not to start.
-        if (Test-Path $StopFile) {
-            Write-Log "  Stop signal detected while filling the fleet - claiming nothing further."
-            break
-        }
-
-        $claim = Invoke-ClaimNext
-        if (-not $claim) { break }
-
-        $slot = Get-FreeSlot
-        if ($slot -eq 0) { break }   # cannot happen while the count says there is room, but never guess
-
-        try {
-            if (Start-Agent -Claim $claim -Slot $slot) {
-                $launched++
-                # Work has happened, so the next time the board empties out is worth a notification.
-                Add-WorkedTicket -TicketId "$($claim.ticket.id)" -Project "$($claim.project.key)"
-            }
-        }
-        catch {
-            Write-Log "ERROR launching agent ${slot}: $($_.Exception.Message)"
-            Send-DashboardEvent -Type "error" -Error $_.Exception.Message
-            Send-LeaseRelease -TicketId "$($claim.ticket.id)" -Reason "agent could not be started"
-        }
-    }
+    # This machine and every worker host, in the order and the way the Heartbeat page says - see
+    # Start-Fill in heartbeat-hosts.ps1.
+    $launched += Start-Fill
 
     # A stop that landed mid-fill goes round to the top rather than being handled here: that is the
     # one place the drain lives, and it keeps this pass from announcing a sleep it will not take.

@@ -33,14 +33,43 @@ $script:Orders = @()
 $script:Released = @()
 $script:Idle = @()
 
+$script:Placed = @()
+$script:Refuse = @()
+$script:DispatchView = $null
+$script:DispatchDown = $false
+$HeartbeatWorkers = 2
+
 function Write-Log { param([string]$Message) }
-function Send-DashboardEvent { param($Type, $Text, $Agent) if ($Text -eq 'idle') { $script:Idle += $Agent } }
+function Send-DashboardEvent { param($Type, $Text, $Agent, [Alias('Error')]$Err) if ($Text -eq 'idle') { $script:Idle += $Agent } }
 function Send-LeaseRelease { param([string]$TicketId, [string]$Reason) $script:Released += $TicketId }
 function Add-WorkedTicket { param($TicketId, $Project) }
+
+# This machine's half, as heartbeat.ps1 defines it, over the same queue the hosts claim from.
+function Get-WorkerCount { return @($script:Agents.Keys | Where-Object { $_ -lt $StewardSlot }).Count }
+function Get-FreeSlot {
+    for ($i = 1; $i -le $HeartbeatWorkers; $i++) { if (-not $script:Agents.ContainsKey($i)) { return $i } }
+    return 0
+}
+function Invoke-ClaimNext {
+    $script:ClaimHosts += '@board'
+    if ($script:Refuse -contains '@board') { return $null }
+    if ($script:Claims.Count -gt 0) { return $script:Claims.Dequeue() }
+    return $null
+}
+function Start-Agent {
+    param($Claim, [int]$Slot)
+    $script:Agents[$Slot] = @{ Process = 'local'; TicketId = "$($Claim.ticket.id)" }
+    $script:Placed += "@board:$($Claim.ticket.id)"
+    return $true
+}
 
 function Invoke-RestMethod {
     param([string]$Uri, [string]$Method, [string]$ContentType, [string]$Body, [int]$TimeoutSec)
     $path = $Uri.Substring($DashboardUrl.Length)
+    if ($path -eq '/api/hosts/dispatch') {
+        if ($script:DispatchDown) { throw "connection refused" }
+        return $script:DispatchView
+    }
     if ($path -eq '/api/hosts') {
         if ($script:HostsDown) { throw "connection refused" }
         if ($script:HostsNotFound) {
@@ -52,13 +81,17 @@ function Invoke-RestMethod {
         return $script:Hosts
     }
     if ($path -eq '/api/heartbeat/claim-next') {
-        $script:ClaimHosts += ($Body | ConvertFrom-Json).host
-        $next = if ($script:Claims.Count -gt 0) { $script:Claims.Dequeue() } else { $null }
+        $claimHost = ($Body | ConvertFrom-Json).host
+        $script:ClaimHosts += $claimHost
+        $next = if ($script:Refuse -contains $claimHost) { $null }
+                elseif ($script:Claims.Count -gt 0) { $script:Claims.Dequeue() } else { $null }
         return [pscustomobject]@{ claimed = $next }
     }
     if ($path -like '/api/hosts/*/orders') {
         if ($script:OrdersDown) { throw "500" }
-        $script:Orders += [pscustomobject]@{ path = $path; body = ($Body | ConvertFrom-Json) }
+        $order = [pscustomobject]@{ path = $path; body = ($Body | ConvertFrom-Json) }
+        $script:Orders += $order
+        $script:Placed += "$($path.Split('/')[3]):$($order.body.claim.ticket.id)"
         return $null
     }
     throw "unexpected call to $Uri"
@@ -93,6 +126,15 @@ function Reset-Board {
     $script:Released = @()
     $script:Idle = @()
     $script:LastHosts = $null
+    $script:Placed = @()
+    $script:Refuse = @()
+    $script:DispatchView = [pscustomobject]@{ mode = 'fill'; order = @() }
+    $script:DispatchDown = $false
+    $script:Dispatch = $null
+}
+
+function Set-Dispatch { param([string]$Mode, [string[]]$Order = @())
+    $script:DispatchView = [pscustomobject]@{ mode = $Mode; order = @($Order) }
 }
 
 # A remote agent as Start-RemoteAgent books one, ordered $Ago seconds ago.
@@ -102,12 +144,14 @@ function Set-RemoteAgent { param([int]$Slot, [int]$Ticket, [int]$RunId, [bool]$S
 }
 
 # ---- Filling --------------------------------------------------------------------------------
-Write-Host "== Start-RemoteFill"
+# The worker hosts alone first (-LocalOpen $false, as when this machine is at its usage limit), then
+# both together in each order and mode.
+Write-Host "== Start-Fill, worker hosts"
 Reset-Board
 $script:Hosts = @(New-HostView -Slots 2)
 foreach ($t in 11, 12, 13) { $script:Claims.Enqueue((New-Claim $t)) }
 $null = Get-WorkerHosts
-$n = Start-RemoteFill
+$n = Start-Fill -LocalOpen $false
 Check 'fills every free berth and no more' $n 2
 Check 'berths numbered from the host block' ((@($script:Agents.Keys) | Sort-Object) -join ',') '5,6'
 Check 'claims name the host' (($script:ClaimHosts | Select-Object -Unique) -join ',') 'bravo-host'
@@ -121,18 +165,18 @@ Reset-Board
 $script:Hosts = @(New-HostView -Dispatchable $false)
 $script:Claims.Enqueue((New-Claim 11))
 $null = Get-WorkerHosts
-Check 'a host that is not dispatchable is not claimed for' (Start-RemoteFill) 0
+Check 'a host that is not dispatchable is not claimed for' (Start-Fill -LocalOpen $false) 0
 Check '... and not asked' $script:ClaimHosts.Count 0
 
 Reset-Board
 $script:Claims.Enqueue((New-Claim 11))
-Check 'hosts unknown: nothing is claimed' (Start-RemoteFill) 0
+Check 'hosts unknown: nothing is claimed' (Start-Fill -LocalOpen $false) 0
 
 Reset-Board
 $script:Hosts = @(New-HostView -Slots 1)
 $script:Claims.Enqueue((New-Claim -Ticket 11 -RunId 0))
 $null = Get-WorkerHosts
-Check 'a claim with no run id is not sent' (Start-RemoteFill) 0
+Check 'a claim with no run id is not sent' (Start-Fill -LocalOpen $false) 0
 Check '... and is given back' ($script:Released -join ',') '11'
 
 Reset-Board
@@ -140,9 +184,115 @@ $script:Hosts = @(New-HostView -Slots 1)
 $script:Claims.Enqueue((New-Claim 11))
 $script:OrdersDown = $true
 $null = Get-WorkerHosts
-Check 'an order that cannot be placed starts nothing' (Start-RemoteFill) 0
+Check 'an order that cannot be placed starts nothing' (Start-Fill -LocalOpen $false) 0
 Check '... gives the claim back' ($script:Released -join ',') '11'
 Check '... and books no agent' $script:Agents.Count 0
+
+Write-Host "== Start-Fill, order and mode"
+function New-Tickets { param([int]$Count) for ($i = 0; $i -lt $Count; $i++) { $script:Claims.Enqueue((New-Claim (11 + $i))) } }
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+New-Tickets 5
+$null = Get-WorkerHosts
+Check 'nothing written: fill, worker hosts first' (Start-Fill) 4
+Check '... host full before this machine is given anything' ($script:Placed -join ' ') 'bravo-host:11 bravo-host:12 @board:13 @board:14'
+Check '... and nothing past every berth' $script:Claims.Count 1
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+Set-Dispatch -Mode 'fill' -Order @('@board', 'bravo-host')
+New-Tickets 4
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'fill, this machine first' ($script:Placed -join ' ') '@board:11 @board:12 bravo-host:13 bravo-host:14'
+
+Reset-Board
+$script:Hosts = @((New-HostView -Name 'r1' -FirstSlot 5 -Slots 2), (New-HostView -Name 'r2' -FirstSlot 7 -Slots 2))
+Set-Dispatch -Mode 'spread' -Order @('r1', '@board', 'r2')
+New-Tickets 3
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'spread: one each, in the order' ($script:Placed -join ' ') 'r1:11 @board:12 r2:13'
+
+Reset-Board
+$script:Hosts = @((New-HostView -Name 'r1' -FirstSlot 5 -Slots 2), (New-HostView -Name 'r2' -FirstSlot 7 -Slots 2))
+Set-Dispatch -Mode 'spread' -Order @('r1', '@board', 'r2')
+New-Tickets 7
+$null = Get-WorkerHosts
+Check 'spread: round again once each has one, until every berth is full' (Start-Fill) 6
+Check '... in the order each time' ($script:Placed -join ' ') 'r1:11 @board:12 r2:13 r1:14 @board:15 r2:16'
+
+Reset-Board
+$script:Hosts = @(New-HostView -Name 'r1' -Slots 2)
+Set-RemoteAgent -Slot 5 -Ticket 99 -RunId 899 -HostName 'r1'
+Set-Dispatch -Mode 'spread' -Order @('r1', '@board')
+New-Tickets 1
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'spread counts what is already running, not just this pass' ($script:Placed -join ' ') '@board:11'
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+$script:Refuse = @('bravo-host')
+New-Tickets 3
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'a host with nothing it can take is done for the pass, and only it' ($script:Placed -join ' ') '@board:11 @board:12'
+Check '... asked once' (@($script:ClaimHosts | Where-Object { $_ -eq 'bravo-host' }).Count) 1
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+Set-Dispatch -Mode 'spread' -Order @('bravo-host', '@board')
+$script:Refuse = @('@board')
+New-Tickets 3
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'spread: this machine with nothing to take leaves the host to fill' ($script:Placed -join ' ') 'bravo-host:11 bravo-host:12'
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+Set-Dispatch -Mode 'fill' -Order @('@board', 'bravo-host')
+New-Tickets 3
+$null = Get-WorkerHosts
+$null = Start-Fill -LocalOpen $false
+Check 'this machine at its usage limit is left out, whatever its place' ($script:Placed -join ' ') 'bravo-host:11 bravo-host:12'
+Check '... and never asked' (@($script:ClaimHosts | Where-Object { $_ -eq '@board' }).Count) 0
+
+Reset-Board
+$script:Hosts = @((New-HostView -Name 'r1' -FirstSlot 5 -Dispatchable $false), (New-HostView -Name 'r2' -FirstSlot 7 -Slots 1))
+Set-Dispatch -Mode 'spread' -Order @('r1', 'r2', '@board')
+New-Tickets 2
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'a host that is not dispatchable keeps its place but is given nothing' ($script:Placed -join ' ') 'r2:11 @board:12'
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+New-Tickets 2
+$null = Get-WorkerHosts
+New-Item -ItemType File -Path $StopFile -Force | Out-Null
+Check 'a stop claims nothing' (Start-Fill) 0
+Remove-Item $StopFile -Force
+Check '... and asks nobody' $script:ClaimHosts.Count 0
+
+Write-Host "== Get-Dispatch"
+Reset-Board
+$script:DispatchDown = $true
+$d = Get-Dispatch
+Check 'never read: fill, in no written order' "$($d.mode) $(@($d.order).Count)" 'fill 0'
+$script:DispatchDown = $false
+Set-Dispatch -Mode 'spread' -Order @('@board', 'bravo-host')
+$null = Get-Dispatch
+$script:DispatchDown = $true
+$d = Get-Dispatch
+Check 'unreadable after a good read: the last answer stands' "$($d.mode) $($d.order -join ',')" 'spread @board,bravo-host'
+
+Write-Host "== Resolve-DispatchOrder"
+Check 'unwritten: hosts in config order, then this machine' ((Resolve-DispatchOrder -Order @() -HostNames @('a', 'b')) -join ',') 'a,b,@board'
+Check 'no hosts: this machine alone' ((Resolve-DispatchOrder -Order @() -HostNames @()) -join ',') '@board'
+Check 'strangers and repeats dropped; the unlisted go after the board' ((Resolve-DispatchOrder -Order @('B', 'gone', '@board', 'b') -HostNames @('a', 'b', 'c')) -join ',') 'b,@board,a,c'
+Check 'the board unlisted goes last' ((Resolve-DispatchOrder -Order @('c') -HostNames @('a', 'b', 'c')) -join ',') 'c,a,b,@board'
 
 # ---- Reading runs back ----------------------------------------------------------------------
 Write-Host "== Update-RemoteFleet"

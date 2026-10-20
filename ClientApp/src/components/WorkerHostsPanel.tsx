@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Chip, GhostButton, Panel, SectionRule, DIM, MUTED, BRIGHT } from './ui';
-import { DISPLAY, MONO, BODY, CAPS } from './orbit';
+import { DISPLAY, MONO, BODY, CAPS, chamfer } from './orbit';
 import { label, ago } from './stewardParts';
 import { track } from '../theme';
 import type { WorkerHost } from '../hooks/useWorkerHosts';
@@ -9,7 +9,8 @@ import type { WorkerHost } from '../hooks/useWorkerHosts';
  * The board's worker hosts: other computers that run workers for it and hand their branches back
  * (docs/worker-hosts-plan.md). One switch for all remote work, then a panel per computer - is it
  * answering, is it on this board's commit, what is it running - with what it may be given: its
- * berths, how many QA stacks at once, which phases, which projects.
+ * berths, how many QA stacks at once, which phases, which projects. Above them, the order work goes
+ * to the computers in, this one included, and whether it fills them in turn or spreads across them.
  *
  * Every change saves as it is made and applies on the orchestrator's next pass; nothing restarts.
  * A computer starts switched off with no projects, so nothing reaches it until its owner says so.
@@ -19,12 +20,29 @@ interface Settings {
   enabled: boolean;
   boardCommit?: string | null;
   hosts: (WorkerHost & { skills: string[]; projects: string[]; qaLeases: number; remoteOn: boolean; commit?: string | null })[];
+  dispatch: Dispatch;
   seen: { name: string; lastSeen: string; commit?: string | null }[];
   projects: { key: string; displayName: string }[];
   skills: string[];
 }
 
 type HostEdit = Partial<{ enabled: boolean; slots: number; qaLeases: number; skills: string[]; projects: string[] }>;
+
+/** Where work goes first. `@board` is this computer; the API always lists it and every host once. */
+type DispatchMode = 'fill' | 'spread';
+interface Dispatch { mode: DispatchMode; order: string[] }
+const BOARD = '@board';
+
+const MODE: Record<DispatchMode, { name: string; says: string }> = {
+  fill: {
+    name: 'Fill in order',
+    says: 'Each computer is filled before the next one in the order is given anything.',
+  },
+  spread: {
+    name: 'Spread',
+    says: 'Each ticket goes to whichever computer is running the fewest; the order breaks ties.',
+  },
+};
 
 const SKILL_LABEL: Record<string, string> = {
   speculate: 'Speculate', implement: 'Implement', refine: 'Refine', 'qa-test': 'QA', 'review-pr': 'Review',
@@ -122,6 +140,10 @@ export function WorkerHostsPanel() {
         </p>
       )}
 
+      {s.hosts.length > 0 && s.dispatch && (
+        <DispatchPanel s={s} busy={busy} onSave={e => act('/api/hosts/settings/dispatch', 'PUT', e)} />
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         {s.hosts.map(h => (
           <HostCard key={h.name} h={h} s={s} busy={busy} onEdit={e => edit(h.name, e)}
@@ -161,6 +183,61 @@ export function WorkerHostsPanel() {
         />
         <GhostButton disabled={busy || !newName.trim()} onClick={() => { add(newName.trim()); setNewName(''); }}>Add</GhostButton>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Where the orchestrator sends work first, and how it shares it out along that order. Read on its
+ * next pass, like everything else here. Up and down rather than dragging, so it works under a thumb.
+ */
+function DispatchPanel({ s, busy, onSave }: {
+  s: Settings;
+  busy: boolean;
+  onSave: (e: Partial<Dispatch>) => void;
+}) {
+  const { mode, order } = s.dispatch;
+  const move = (i: number, by: number) => {
+    const next = [...order];
+    [next[i], next[i + by]] = [next[i + by], next[i]];
+    onSave({ order: next });
+  };
+
+  return (
+    <div className="mb-3">
+      <Panel tone="var(--w-queue)">
+        <div className="flex items-center gap-3 flex-wrap">
+          <span style={label()}>Dispatch</span>
+          <span className="flex-1" />
+          {(Object.keys(MODE) as DispatchMode[]).map(m => (
+            <Chip key={m} on={mode === m} disabled={busy || mode === m} onClick={() => onSave({ mode: m })} title={MODE[m].says}>
+              {MODE[m].name}
+            </Chip>
+          ))}
+        </div>
+        <p className="mt-1" style={{ font: `400 10.5px ${BODY}`, color: MUTED }}>{MODE[mode].says}</p>
+
+        <ol className="mt-2 space-y-1">
+          {order.map((name, i) => {
+            const h = s.hosts.find(x => x.name === name);
+            const st = h ? stateOf(h) : { text: 'this board\'s own workers', colour: MUTED };
+            return (
+              <li key={name} className="flex items-center gap-3 min-w-0 border border-hair px-2 py-1" style={{ clipPath: chamfer(7) }}>
+                <span style={{ font: `700 13px ${MONO}`, color: DIM, minWidth: 18, textAlign: 'right' }}>{i + 1}</span>
+                <span className="min-w-0 truncate" style={{ font: `700 12px ${DISPLAY}`, letterSpacing: track(0.12), color: BRIGHT, textTransform: CAPS }}>
+                  {name === BOARD ? 'This computer' : name}
+                </span>
+                <span className="min-w-0 truncate max-sm:hidden" style={{ font: `600 10px ${DISPLAY}`, letterSpacing: track(0.2), color: st.colour, textTransform: CAPS }}>
+                  {st.text}
+                </span>
+                <span className="flex-1" />
+                <GhostButton disabled={busy || i === 0} onClick={() => move(i, -1)} title="Give work here sooner">↑</GhostButton>
+                <GhostButton disabled={busy || i === order.length - 1} onClick={() => move(i, 1)} title="Give work here later">↓</GhostButton>
+              </li>
+            );
+          })}
+        </ol>
+      </Panel>
     </div>
   );
 }

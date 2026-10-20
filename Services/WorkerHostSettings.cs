@@ -1,10 +1,12 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Whetstone.Services;
 
 /// <summary>
-/// Edits to the worker hosts' part of the board host's global config - <c>workerHostsEnabled</c> and
-/// <c>workerHosts</c> - as the Heartbeat page makes them (docs/worker-hosts-plan.md). Pure functions
+/// Edits to the worker hosts' part of the board host's global config - <c>workerHostsEnabled</c>,
+/// <c>workerHosts</c>, and where work goes first (<c>dispatchOrder</c>, <c>dispatchMode</c>) - as the
+/// Heartbeat page makes them (docs/worker-hosts-plan.md). Pure functions
 /// over the loaded config object, so every rule here is tested without a file or a request.
 /// </summary>
 public static class WorkerHostSettings
@@ -12,6 +14,29 @@ public static class WorkerHostSettings
     /// <summary>The switch for all remote work. Absent means on, which is what config written before it meant.</summary>
     public const string EnabledKey = "workerHostsEnabled";
     public const string HostsKey = "workerHosts";
+
+    /// <summary>Where work goes first: host names and <see cref="Board"/>, highest priority first.</summary>
+    public const string OrderKey = "dispatchOrder";
+
+    /// <summary>How work is shared out along that order: <see cref="Fill"/> or <see cref="Spread"/>.</summary>
+    public const string ModeKey = "dispatchMode";
+
+    /// <summary>The board host's own workers in the order. A host name cannot contain '@', so no host is ever it.</summary>
+    public const string Board = "@board";
+
+    /// <summary>Fill the first place in the order before the next is given anything. The default, and the only behaviour before there was a choice.</summary>
+    public const string Fill = "fill";
+
+    /// <summary>Give each ticket to whichever place has the fewest running, the order breaking ties.</summary>
+    public const string Spread = "spread";
+
+    public static readonly string[] Modes = { Fill, Spread };
+
+    /// <summary>How the orchestrator shares out work, as it reads it every pass.</summary>
+    public record Dispatch(string Mode, IReadOnlyList<string> Order);
+
+    /// <summary>A change to it, as the page sends one. A null field is left as it is.</summary>
+    public record DispatchEdit(string? Mode, string[]? Order);
 
     /// <summary>The phases a worker host may be given. The steward never runs on one.</summary>
     public static readonly string[] HostableSkills = { "speculate", "implement", "refine", "qa-test", "review-pr" };
@@ -75,7 +100,64 @@ public static class WorkerHostSettings
             .FirstOrDefault(h => string.Equals(h["name"]?.GetValue<string>(), name.Trim(), StringComparison.OrdinalIgnoreCase));
         if (entry is null) return false;
         hosts.Remove(entry);
+        // Out of the order too, so a host added again later by the same name starts at the end
+        // rather than wherever the one before it stood.
+        if (config[OrderKey] is JsonArray order)
+            foreach (var n in order.Where(n => n is JsonValue v && v.TryGetValue<string>(out var s)
+                         && string.Equals(s, name.Trim(), StringComparison.OrdinalIgnoreCase)).ToList())
+                order.Remove(n);
         return true;
+    }
+
+    /// <summary>
+    /// The mode and the order as they stand. The order always names every configured host and the
+    /// board exactly once: a name it does not know is dropped, and a host it does not list is added
+    /// after those it does - before the board when the board is not listed either, which is what an
+    /// order nobody has written means. Unwritten, that is every host in config order, then the board,
+    /// in fill mode: worker hosts first, as it was before there was a setting.
+    /// </summary>
+    public static Dispatch ReadDispatch(IReadOnlyDictionary<string, JsonElement> global, IReadOnlyList<WorkerHostConfig> hosts)
+    {
+        var mode = global.TryGetValue(ModeKey, out var m) && m.ValueKind == JsonValueKind.String
+            && Modes.Contains(m.GetString()) ? m.GetString()! : Fill;
+        var listed = global.TryGetValue(OrderKey, out var o) && o.ValueKind == JsonValueKind.Array
+            ? o.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!)
+            : Enumerable.Empty<string>();
+        return new Dispatch(mode, NormalizeOrder(listed, hosts.Select(h => h.Name).ToList()));
+    }
+
+    public static IReadOnlyList<string> NormalizeOrder(IEnumerable<string> listed, IReadOnlyList<string> hostNames)
+    {
+        var result = new List<string>();
+        foreach (var raw in listed)
+        {
+            var n = raw.Trim();
+            var name = n.Equals(Board, StringComparison.OrdinalIgnoreCase) ? Board
+                : hostNames.FirstOrDefault(h => h.Equals(n, StringComparison.OrdinalIgnoreCase));
+            if (name is not null && !result.Contains(name, StringComparer.OrdinalIgnoreCase)) result.Add(name);
+        }
+        var hadBoard = result.Contains(Board);
+        result.AddRange(hostNames.Where(h => !result.Contains(h, StringComparer.OrdinalIgnoreCase)));
+        if (!hadBoard) result.Add(Board);
+        return result;
+    }
+
+    /// <summary>Change the mode, the order, or both. Returns why the edit was refused, or null.</summary>
+    public static string? SetDispatch(JsonObject config, DispatchEdit edit, IReadOnlyList<WorkerHostConfig> hosts)
+    {
+        if (edit.Mode is { } mode && !Modes.Contains(mode))
+            return $"Not a way of sharing out work: {mode}. It is one of {string.Join(", ", Modes)}.";
+        if (edit.Order is { } order)
+        {
+            var unknown = order.Where(n => !n.Trim().Equals(Board, StringComparison.OrdinalIgnoreCase)
+                && !hosts.Any(h => h.Name.Equals(n.Trim(), StringComparison.OrdinalIgnoreCase))).ToList();
+            if (unknown.Count > 0) return $"Not a worker host: {string.Join(", ", unknown)}.";
+        }
+
+        if (edit.Mode is { } m) config[ModeKey] = m;
+        if (edit.Order is { } o)
+            config[OrderKey] = new JsonArray(NormalizeOrder(o, hosts.Select(h => h.Name).ToList()).Select(n => (JsonNode)n).ToArray());
+        return null;
     }
 
     /// <summary>

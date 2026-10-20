@@ -249,7 +249,7 @@ remote slot.
 
 | Function | Change |
 |---|---|
-| fill loop | Per host, fill while it has a free slot, is online, matches the board host's commit, and is not paused. A worker host claims with its `Skills`, `Projects` and `Host`. Worker hosts fill **before** the board host, so a single ticket runs on the bigger machine. A config flag can reverse that (open question 2). |
+| fill loop | Per host, fill while it has a free slot, is online, matches the board host's commit, and is not paused. A worker host claims with its `Skills`, `Projects` and `Host`. Which place fills first, and whether it is filled before the next or work is spread across them, is the owner's setting (open question 2); unwritten, worker hosts fill **before** the board host. A place with nothing it can take is done for the pass, and only it. |
 | `Start-Agent` | A remote slot posts a `start` order instead of calling `Start-Process`. If the order is not seen as running within 2 minutes, the lease is released, as for a local start that failed. |
 | `Update-Fleet` | A remote slot reads its exit from `GET /api/hosts`, not from `HasExited`. |
 | startup | Remote live runs from `GET /api/hosts` are adopted and added to `KeepTicketIds` **before** `Reset-Leases`. Without this, restarting the orchestrator releases every worker host ticket that is mid-run. That is the one bug in this design that would double-work tickets. |
@@ -344,8 +344,12 @@ changed.
    kit) rather than cloning the project folder's own repo. That way nothing drifts, and nothing is
    committed on the worker host, but the files are still on that disk. Is a worker host an
    exception to that decision, and for which projects?
-2. **Which host fills first.** Planned: worker hosts first, to keep load off the board host. The
-   other order keeps more of the work on the machine you are sitting at.
+2. **Which host fills first.** Answered: the owner's, on the Heartbeat page. `dispatchOrder` ranks
+   every worker host and this machine (`@board`), and `dispatchMode` is **Fill in order** (`fill`,
+   the default: each place filled before the next is given anything) or **Spread** (each ticket to
+   the place running the fewest, the order breaking ties). Unwritten, it is fill with worker hosts
+   first - the planned answer, unchanged. The orchestrator reads both from `GET /api/hosts/dispatch`
+   every pass; see `Start-Fill` in `data/heartbeat-hosts.ps1`.
 3. **Hard Stop.** Planned: it kills worker host runs too.
 4. **Reflection.** Skipped on worker host runs in phase 1, so their lessons are lost. The follow-up
    is shipping the run log back and reflecting on the board host.

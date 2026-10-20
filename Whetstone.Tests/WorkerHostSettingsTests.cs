@@ -102,6 +102,84 @@ public class WorkerHostSettingsTests
         Assert.Equal(new[] { "b" }, WorkerHostConfig.Read(AsGlobal(config)).Select(h => h.Name));
     }
 
+    private static IReadOnlyList<WorkerHostConfig> Hosts(params string[] names) =>
+        names.Select((n, i) => new WorkerHostConfig(n, true, 1, WorkerHostConfig.DefaultSkills, Projects, 5 + i)).ToList();
+
+    [Fact]
+    public void Unwritten_dispatch_is_fill_with_worker_hosts_before_the_board()
+    {
+        var d = WorkerHostSettings.ReadDispatch(AsGlobal(new JsonObject()), Hosts("a", "b"));
+        Assert.Equal(WorkerHostSettings.Fill, d.Mode);
+        Assert.Equal(new[] { "a", "b", WorkerHostSettings.Board }, d.Order);
+    }
+
+    [Fact]
+    public void No_worker_hosts_is_the_board_alone()
+    {
+        var d = WorkerHostSettings.ReadDispatch(AsGlobal(new JsonObject()), Hosts());
+        Assert.Equal(new[] { WorkerHostSettings.Board }, d.Order);
+    }
+
+    [Fact]
+    public void A_written_order_names_every_host_and_the_board_once()
+    {
+        var hostNames = new[] { "a", "b", "c" };
+        // A stranger is dropped, a repeat is dropped, names match whatever their case, and a host it
+        // leaves out goes at the end - behind the board, once the board has a place of its own.
+        Assert.Equal(new[] { "b", WorkerHostSettings.Board, "a", "c" },
+            WorkerHostSettings.NormalizeOrder(new[] { "B", "gone", "@BOARD", "b" }, hostNames));
+        // With the board left out too, it goes last, as in an order nobody wrote.
+        Assert.Equal(new[] { "c", "a", "b", WorkerHostSettings.Board },
+            WorkerHostSettings.NormalizeOrder(new[] { "c" }, hostNames));
+    }
+
+    [Fact]
+    public void Dispatch_is_saved_normalized_and_read_back()
+    {
+        var config = new JsonObject();
+        var hosts = Hosts("a", "b");
+        Assert.Null(WorkerHostSettings.SetDispatch(config, new("spread", new[] { "b", "@board" }), hosts));
+        var d = WorkerHostSettings.ReadDispatch(AsGlobal(config), hosts);
+        Assert.Equal(WorkerHostSettings.Spread, d.Mode);
+        Assert.Equal(new[] { "b", WorkerHostSettings.Board, "a" }, d.Order);
+
+        // Changing only the mode leaves the order alone.
+        Assert.Null(WorkerHostSettings.SetDispatch(config, new("fill", null), hosts));
+        d = WorkerHostSettings.ReadDispatch(AsGlobal(config), hosts);
+        Assert.Equal((WorkerHostSettings.Fill, "b"), (d.Mode, d.Order[0]));
+    }
+
+    [Theory]
+    [InlineData("pack", null)]
+    [InlineData(null, "nobody")]
+    public void Dispatch_the_page_cannot_ask_for_is_refused_and_nothing_is_written(string? mode, string? host)
+    {
+        var config = new JsonObject();
+        Assert.NotNull(WorkerHostSettings.SetDispatch(config,
+            new(mode, host is null ? null : new[] { host, "@board" }), Hosts("a")));
+        Assert.Empty(config);
+    }
+
+    [Fact]
+    public void A_mode_written_by_hand_that_is_not_one_reads_as_fill()
+    {
+        var config = new JsonObject { [WorkerHostSettings.ModeKey] = "evenly" };
+        Assert.Equal(WorkerHostSettings.Fill, WorkerHostSettings.ReadDispatch(AsGlobal(config), Hosts("a")).Mode);
+    }
+
+    [Fact]
+    public void A_removed_host_leaves_the_order_and_comes_back_at_the_end()
+    {
+        var config = new JsonObject();
+        WorkerHostSettings.Upsert(config, "a", new(null, null, null, null, null), Projects);
+        WorkerHostSettings.Upsert(config, "b", new(null, null, null, null, null), Projects);
+        WorkerHostSettings.SetDispatch(config, new(null, new[] { "a", "@board", "b" }), WorkerHostConfig.Read(AsGlobal(config)));
+        WorkerHostSettings.Remove(config, "a");
+        WorkerHostSettings.Upsert(config, "a", new(null, null, null, null, null), Projects);
+        Assert.Equal(new[] { WorkerHostSettings.Board, "b", "a" },
+            WorkerHostSettings.ReadDispatch(AsGlobal(config), WorkerHostConfig.Read(AsGlobal(config))).Order);
+    }
+
     private static WorkerHostView View(string name, int first, int slots, bool busy) =>
         new(name, true, slots, first, WorkerHostConfig.DefaultSkills, Projects, true, null, "c", true,
             busy ? new[] { new HostRun(first, 1, 10, "alpha", 1, false, null, null) } : Array.Empty<HostRun>(), 0, null);

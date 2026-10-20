@@ -334,6 +334,11 @@ discoverable from the code:
 - **Slots past the steward's are remote.** The board host's workers are 1..3 and the steward is 4,
   so worker hosts are numbered from 5. This is written twice and the two must agree:
   `WorkerHostConfig.FirstRemoteSlot` in C# and `$StewardSlot` in `heartbeat-common.ps1`.
+- **Where work goes first is read every pass, never at start.** `dispatchOrder` (worker host names
+  and `@board` for this machine) and `dispatchMode` (`fill` by default, or `spread`) reach the
+  orchestrator through `GET /api/hosts/dispatch`, because applying a setting by restarting it would
+  kill every worker it has out. The order is its own list, not the order of `workerHosts`: that
+  order numbers the berths, and reordering it renumbers them under runs that are out.
 - **A run is named by its ticket lease.** `ClaimResult.RunId` is the ticket lease's own id. The
   branch accept route refuses a run whose lease has gone, and a runner kills such a run, so a run
   the orchestrator gave up on can never overwrite the next one's work.
