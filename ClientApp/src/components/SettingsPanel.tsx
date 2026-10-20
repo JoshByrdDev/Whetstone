@@ -197,12 +197,17 @@ interface GlobalConfig {
   notificationChannel: string;
   /** Which notifications are sent, by key from notificationEventCatalog. Empty = none. */
   notificationEvents: string[];
-  slackWebhookUrl: string;
+  /** Whether a webhook is already saved. The webhook itself is never sent back to the browser. */
+  slackWebhookUrlSet: boolean;
+  /** Write-only, like claudeOauthToken: absent keeps the saved one, an empty string clears it. */
+  slackWebhookUrl?: string;
   /** Blank means the public server, https://ntfy.sh. */
   ntfyServerUrl: string;
   ntfyTopic: string;
-  /** Only for a protected topic; blank sends anonymously. */
-  ntfyToken: string;
+  /** Whether an ntfy token is already saved; the token itself is never sent back. */
+  ntfyTokenSet: boolean;
+  /** Only for a protected topic; blank sends anonymously. Write-only, as slackWebhookUrl. */
+  ntfyToken?: string;
   baseHeartbeatMinutes: number;
   heartbeatIdleMultiplier: number;
   heartbeatMaxMinutes: number;
@@ -447,7 +452,8 @@ function GlobalSettings() {
 
   /**
    * Send one test notification through whatever the form currently says — saved or not, so a topic
-   * can be tried before it is committed. The server runs the heartbeat's own sender to do it.
+   * can be tried before it is committed. The server runs the heartbeat's own sender to do it. A
+   * webhook or token left untyped is not in the body, and the server uses the saved one.
    */
   const testNotification = async () => {
     if (!cfg) return;
@@ -522,7 +528,10 @@ function GlobalSettings() {
   const channels = cfg.notificationChannels ?? [];
   const channel = channels.find(c => c.key === cfg.notificationChannel);
   // Whether the chosen channel has what it needs to send anything at all.
-  const channelReady = cfg.notificationChannel === 'ntfy' ? !!cfg.ntfyTopic : !!cfg.slackWebhookUrl;
+  // A saved webhook counts unless the form is clearing it; the test sends the saved one.
+  const channelReady = cfg.notificationChannel === 'ntfy'
+    ? !!cfg.ntfyTopic
+    : cfg.slackWebhookUrl !== undefined ? !!cfg.slackWebhookUrl : cfg.slackWebhookUrlSet;
   // And again for the phases: the pipeline decides which exist, not this bundle.
   const phases = cfg.workerPhases ?? [];
   const phaseModels = cfg.phaseModels ?? {};
@@ -604,9 +613,9 @@ function GlobalSettings() {
               <Field
                 label="Access Token"
                 description="Only for a topic that is protected on its server. Blank sends without one."
-                value={cfg.ntfyToken}
+                value={cfg.ntfyToken ?? ''}
                 onChange={v => update({ ntfyToken: v.trim() })}
-                placeholder="tk_…"
+                placeholder={cfg.ntfyTokenSet ? '••••••••  (saved)' : 'tk_…'}
                 isSecret
               />
             </>
@@ -614,9 +623,10 @@ function GlobalSettings() {
             <Field
               label="Webhook URL"
               description="Slack incoming webhook for heartbeat notifications."
-              value={cfg.slackWebhookUrl}
+              value={cfg.slackWebhookUrl ?? ''}
               onChange={v => update({ slackWebhookUrl: v })}
               isSecret
+              placeholder={cfg.slackWebhookUrlSet ? '••••••••  (saved)' : ''}
               error={errors.slackWebhookUrl}
             />
           )}

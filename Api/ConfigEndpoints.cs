@@ -279,11 +279,13 @@ public static class ConfigEndpoints
                 dashboardUrl = Str(g, "dashboardUrl", "http://localhost:5338"),
                 // Where notifications go, and each channel's own settings.
                 notificationChannel = NormalizeChannel(Str(g, "notificationChannel", "slack")),
-                slackWebhookUrl = Str(g, "slackWebhookUrl", ""),
+                // Whether a webhook is saved, NOT the webhook: it is the whole credential for posting
+                // to the channel, and this API has no authentication. Same rule as claudeOauthTokenSet.
+                slackWebhookUrlSet = !string.IsNullOrWhiteSpace(Str(g, "slackWebhookUrl", "")),
                 // Blank means the public server, which is what the heartbeat sends to.
                 ntfyServerUrl = Str(g, "ntfyServerUrl", ""),
                 ntfyTopic = Str(g, "ntfyTopic", ""),
-                ntfyToken = Str(g, "ntfyToken", ""),
+                ntfyTokenSet = !string.IsNullOrWhiteSpace(Str(g, "ntfyToken", "")),
                 // Which notifications are ticked, by key from the catalogue below. Empty is a real
                 // state and not a missing one: a channel that is configured but silent, which is why
                 // this is stored rather than inferred from whether a channel is set up.
@@ -449,7 +451,7 @@ public static class ConfigEndpoints
         // current values, saved or not, so a topic can be tried before it is committed. The send
         // itself is done by data/notify-test.ps1 through notifiers.ps1, the same code the heartbeat
         // runs, rather than by a C# copy of it that could pass while the real one fails.
-        app.MapPost("/api/notifications/test", async (HttpRequest request, DashboardPaths paths) =>
+        app.MapPost("/api/notifications/test", async (HttpRequest request, DashboardPaths paths, ProjectRegistry registry) =>
         {
             var incoming = await ReadObject(request);
             if (incoming is null) return Results.BadRequest(new { error = "Invalid JSON body" });
@@ -463,6 +465,11 @@ public static class ConfigEndpoints
             var settings = new JsonObject();
             foreach (var key in new[] { "notificationChannel", "slackWebhookUrl", "ntfyServerUrl", "ntfyTopic", "ntfyToken" })
                 if (incoming[key] is JsonNode v) settings[key] = v.DeepClone();
+            // The webhook and the token are never served to the form, so it sends one only when one
+            // was typed. Absent means "the one already saved" - the same reading the PUT gives it.
+            var stored = registry.GetGlobalConfig();
+            foreach (var key in new[] { "slackWebhookUrl", "ntfyToken" })
+                if (!settings.ContainsKey(key) && Str(stored, key, "") is { Length: > 0 } saved) settings[key] = saved;
 
             var temp = Path.Combine(Path.GetTempPath(), $"whetstone-notify-{Guid.NewGuid():N}.json");
             try
