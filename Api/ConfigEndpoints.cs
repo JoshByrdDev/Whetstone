@@ -664,7 +664,10 @@ public static class ConfigEndpoints
                 kind = Services.Tracker.TrackerConfig.KindToString(tracker.Kind),
                 baseUrl = tracker.BaseUrl,
                 email = tracker.Email,
-                token = tracker.Token,
+                // Whether a token is saved, NOT the token, for the same reason as claudeOauthTokenSet:
+                // this API has no authentication, and anything that can reach it - a worker's curl
+                // to localhost included - would otherwise be handed the tracker login in plain text.
+                tokenSet = !string.IsNullOrWhiteSpace(tracker.Token),
                 project = tracker.Project,
                 // The EFFECTIVE lists, with the provider defaults filled in. The settings form round-
                 // trips whatever it is given, so handing it a null would either crash the field or
@@ -689,10 +692,11 @@ public static class ConfigEndpoints
                     }),
             qaApiPort = Num(cfg, "qaApiPort", 53536),
             qaWebPort = Num(cfg, "qaWebPort", 53537),
+            // The username is served; the password is reported as set or not, like the tracker token.
             qaLogin = new
             {
                 username = StrEl(qa, "username"),
-                password = StrEl(qa, "password"),
+                passwordSet = !string.IsNullOrWhiteSpace(StrEl(qa, "password")),
             },
         };
     }
@@ -761,7 +765,9 @@ public static class ConfigEndpoints
             tracker["kind"] = req.Tracker.Kind ?? "none";
             tracker["baseUrl"] = req.Tracker.BaseUrl ?? "";
             tracker["email"] = req.Tracker.Email ?? "";
-            tracker["token"] = req.Tracker.Token ?? "";
+            // Write-only: the GET never serves it, so a save that did not type one sends none, and
+            // that keeps the stored token. An explicit empty string clears it.
+            if (req.Tracker.Token is not null) tracker["token"] = req.Tracker.Token;
             tracker["project"] = req.Tracker.Project ?? "";
             if (req.Tracker.BlockingLinkTypes is not null)
                 tracker["blockingLinkTypes"] = ToJsonArray(req.Tracker.BlockingLinkTypes);
@@ -779,7 +785,8 @@ public static class ConfigEndpoints
         {
             var qa = local["qaLogin"]?.AsObject() ?? new JsonObject();
             qa["username"] = req.QaLogin.Username ?? "";
-            qa["password"] = req.QaLogin.Password ?? "";
+            // Write-only, as the tracker token above: absent keeps it, empty clears it.
+            if (req.QaLogin.Password is not null) qa["password"] = req.QaLogin.Password;
             local["qaLogin"] = qa;
         }
         SaveObject(paths.ProjectConfig(key), local, localBefore);
@@ -936,7 +943,8 @@ public record ProjectUpsertRequest(
 /// <param name="Kind">"jira", "azureDevOps", or "none".</param>
 /// <param name="BaseUrl">The Jira site, or the Azure DevOps organisation URL.</param>
 /// <param name="Email">Jira only — the account the API token belongs to.</param>
-/// <param name="Token">Jira API token, or Azure DevOps personal access token.</param>
+/// <param name="Token">Jira API token, or Azure DevOps personal access token. Write-only: null
+/// keeps the stored one, an empty string clears it.</param>
 /// <param name="Project">Azure DevOps only — the team project.</param>
 public record TrackerDto(
     string? Kind, string? BaseUrl, string? Email, string? Token, string? Project,

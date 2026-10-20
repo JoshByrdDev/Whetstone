@@ -312,7 +312,9 @@ interface ProjectDetail {
   trackerDefaults: Partial<Record<TrackerKindName, { blockingLinkTypes: string[]; doneStates: string[] }>>;
   qaApiPort: number;
   qaWebPort: number;
-  qaLogin: { username: string; password: string };
+  /** `passwordSet` says whether one is saved; the password itself is never sent back. `password`
+   *  is write-only, as `TrackerSettings.token` is. */
+  qaLogin: { username: string; passwordSet: boolean; password?: string };
 }
 
 /**
@@ -326,7 +328,11 @@ interface TrackerSettings {
   kind: TrackerKindName;
   baseUrl: string;
   email: string;
-  token: string;
+  /** Whether a token is already saved. The token itself is never sent back to the browser. */
+  tokenSet: boolean;
+  /** Write-only: absent unless the user typed one, so saving without touching it keeps the stored
+   *  token, and an explicit empty string clears it. */
+  token?: string;
   project: string;
   // Which link types gate a ticket, and which states mean finished. Left to the config file on
   // Jira, where both answers are built in; surfaced here for Azure DevOps, where they are not.
@@ -1381,8 +1387,9 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
                         onChange={v => update({ tracker: { ...tracker, project: v } })}
                         placeholder="YourTeamProject" error={errors.trackerProject} />
                     )}
-                    <Field label={spec.tokenLabel} value={tracker.token}
-                      onChange={v => update({ tracker: { ...tracker, token: v } })} isSecret />
+                    <Field label={spec.tokenLabel} value={tracker.token ?? ''}
+                      onChange={v => update({ tracker: { ...tracker, token: v } })} isSecret
+                      placeholder={tracker.tokenSet ? '••••••••  (saved)' : ''} />
                   </div>
                 </>
               )}
@@ -1419,7 +1426,8 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
             </div>
             <div className="grid grid-cols-2 gap-4 mt-4">
               <Field label="Username" value={p.qaLogin.username} onChange={v => update({ qaLogin: { ...p.qaLogin, username: v } })} placeholder="qa-user" />
-              <Field label="Password" value={p.qaLogin.password} onChange={v => update({ qaLogin: { ...p.qaLogin, password: v } })} isSecret />
+              <Field label="Password" value={p.qaLogin.password ?? ''} onChange={v => update({ qaLogin: { ...p.qaLogin, password: v } })} isSecret
+                placeholder={p.qaLogin.passwordSet ? '••••••••  (saved)' : ''} />
             </div>
           </div>
 
