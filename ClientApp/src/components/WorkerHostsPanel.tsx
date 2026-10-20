@@ -210,7 +210,7 @@ function DispatchPanel({ s, busy, onSave }: {
           <span style={label()}>Dispatch</span>
           <span className="flex-1" />
           {(Object.keys(MODE) as DispatchMode[]).map(m => (
-            <Chip key={m} on={mode === m} disabled={busy || mode === m} onClick={() => onSave({ mode: m })} title={MODE[m].says}>
+            <Chip key={m} on={mode === m} disabled={busy} onClick={() => { if (mode !== m) onSave({ mode: m }); }} title={MODE[m].says}>
               {MODE[m].name}
             </Chip>
           ))}
