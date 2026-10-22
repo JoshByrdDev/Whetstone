@@ -682,6 +682,7 @@ function GlobalSettings() {
           <Field label="Max Interval (min)" description="Cap between cycles" type="number"
             value={cfg.heartbeatMaxMinutes} onChange={v => update({ heartbeatMaxMinutes: Number(v) || 0 })} error={errors.heartbeatMaxMinutes} />
         </div>
+        <TimingExample cfg={cfg} valid={!errors.baseHeartbeatMinutes && !errors.heartbeatIdleMultiplier && !errors.heartbeatMaxMinutes} />
       </FieldGroup>
 
       <FieldGroup title="Heartbeat Off-Hours">
@@ -828,6 +829,48 @@ function GlobalSettings() {
           )}
         </div>
       </FieldGroup>
+    </div>
+  );
+}
+
+// ---------- Heartbeat timing ---------------------------------------------------
+
+/**
+ * The waits the heartbeat would actually take with the numbers on screen, worked out the way
+ * heartbeat.ps1 does it: every empty pass multiplies the current wait (rounded up) before sleeping,
+ * capped at the max, and finding work or being woken by new work puts it back to the base. So the
+ * base itself is the floor it returns to, not the first quiet wait.
+ */
+function idleWaits(base: number, multiplier: number, max: number): number[] {
+  const waits: number[] = [];
+  let current = base;
+  while (waits.length < 8) {
+    current = Math.min(Math.ceil(current * multiplier), max);
+    waits.push(current);
+    if (current >= max) break;
+  }
+  return waits;
+}
+
+function TimingExample({ cfg, valid }: { cfg: GlobalConfig; valid: boolean }) {
+  if (!valid) return null;
+  const { baseHeartbeatMinutes: base, heartbeatIdleMultiplier: mult, heartbeatMaxMinutes: max } = cfg;
+  const waits = idleWaits(base, mult, max);
+  const reachesMax = waits[waits.length - 1] >= max;
+  const steps = reachesMax ? waits.slice(0, -1) : waits;
+  return (
+    <div className="border-t border-hair pt-3 space-y-1.5 text-xs text-gray-500">
+      <p>
+        <span className="text-gray-400">With these numbers:</span> while agents are working, the heartbeat checks
+        every few seconds for a free slot. Once the board has nothing to work on, it waits{' '}
+        {steps.length > 0 && <>{steps.map(w => `${w}`).join(', ')}, then </>}
+        {reachesMax ? <>{max} minutes between checks from then on</> : <>longer each time</>}.
+      </p>
+      <p>
+        During off-hours ({cfg.offHoursStart}–{cfg.offHoursEnd}), once the wait has reached {max} minutes it
+        sleeps until {cfg.offHoursEnd} instead. Any wait is cut short when a ticket becomes ready to work, and the
+        count starts again from {base} minute{base === 1 ? '' : 's'}.
+      </p>
     </div>
   );
 }
