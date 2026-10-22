@@ -231,6 +231,8 @@ interface GlobalConfig {
   maxQaLeases: number;
   /** Whether the Heartbeat tab shows its Worker Hosts section. Display only. */
   showWorkerHosts: boolean;
+  /** Remote work is switched on and a worker host is set up. The section cannot be hidden then. */
+  workerHostsInUse: boolean;
   /** What each kind of run takes, keyed by role. Served with every gap filled, so what is on
    *  screen is what runs. There is no fleet-wide provider. */
   agentRoles: Record<string, AgentRoleSetting>;
@@ -409,6 +411,7 @@ function withDefaults(d: GlobalConfig): GlobalConfig {
     qaLeases: d.qaLeases ?? 1,
     maxQaLeases: d.maxQaLeases ?? 10,
     showWorkerHosts: d.showWorkerHosts ?? false,
+    workerHostsInUse: d.workerHostsInUse ?? false,
   };
 }
 
@@ -790,9 +793,18 @@ function GlobalSettings() {
             'network. Display only: hiding it changes nothing about hosts already set up, and any that are ' +
             'switched on keep getting work.'
           }
-          checked={cfg.showWorkerHosts}
+          checked={cfg.showWorkerHosts || cfg.workerHostsInUse}
           onChange={v => update({ showWorkerHosts: v })}
+          // Locked on while remote work is in use: hiding the section would hide the switch that
+          // stops that work. The server holds the same line.
+          disabled={cfg.workerHostsInUse}
+          title={cfg.workerHostsInUse ? 'Turn off Remote work on the Heartbeat tab first' : undefined}
         />
+        {cfg.workerHostsInUse && (
+          <p className="text-xs text-gray-500">
+            ⓘ Remote work is on, so this stays shown. Turn Remote work off on the Heartbeat tab to hide it.
+          </p>
+        )}
       </FieldGroup>
 
       <FieldGroup title="Heartbeat Reliability">

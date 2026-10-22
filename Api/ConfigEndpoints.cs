@@ -339,6 +339,8 @@ public static class ConfigEndpoints
                 notificationEventCatalog = NotificationEvents,
                 notificationChannels = NotificationChannels,
                 showWorkerHosts = ShowWorkerHosts(g),
+                // While remote work is in use the section cannot be hidden; Settings locks the box.
+                workerHostsInUse = WorkerHostsInUse(g),
             });
         });
 
@@ -373,6 +375,13 @@ public static class ConfigEndpoints
                 }
                 catch { target.Remove("heartbeatWorkers"); }   // not a number — fall back to the default
             }
+            // The Worker Hosts section cannot be hidden while remote work is in use: hiding it would
+            // put the switch that stops that work out of sight. Settings locks the box; this is the
+            // same rule for a body that ignores the lock.
+            if (target["showWorkerHosts"] is JsonValue show && show.TryGetValue<bool>(out var on) && !on
+                && WorkerHostsInUse(registry.GetGlobalConfig()))
+                target["showWorkerHosts"] = true;
+
             if (target["qaLeases"] is JsonNode qa)
             {
                 try
@@ -852,9 +861,17 @@ public static class ConfigEndpoints
     /// <summary>
     /// Whether the Heartbeat tab shows its Worker Hosts section. Off unless set: most boards run on
     /// one machine and never lend work out, and the section is a lot of page for a feature not in use.
+    /// Always on while remote work is in use, so the switch that stops it can never be out of sight.
     /// </summary>
     internal static bool ShowWorkerHosts(IReadOnlyDictionary<string, JsonElement> cfg) =>
-        cfg.TryGetValue("showWorkerHosts", out var v) && v.ValueKind == JsonValueKind.True;
+        WorkerHostsInUse(cfg) || (cfg.TryGetValue("showWorkerHosts", out var v) && v.ValueKind == JsonValueKind.True);
+
+    /// <summary>
+    /// Remote work is switched on and there is a worker host for it to reach. The switch alone is
+    /// not enough: it reads as on until someone turns it off, on every board, hosts or none.
+    /// </summary>
+    internal static bool WorkerHostsInUse(IReadOnlyDictionary<string, JsonElement> cfg) =>
+        WorkerHostConfig.RemoteEnabled(cfg) && WorkerHostConfig.Read(cfg).Count > 0;
 
     private static string Str(Dictionary<string, JsonElement> cfg, string key, string fallback) =>
         cfg.TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;
