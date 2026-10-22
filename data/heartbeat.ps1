@@ -140,7 +140,7 @@ $ClaimCallFailed = $false
 function Invoke-ClaimNext {
     try {
         $resp = Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/claim-next" -Method Post `
-            -ContentType 'application/json' -Body '{}' -TimeoutSec 15
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody '{}') -TimeoutSec 15
         return $resp.claimed
     }
     catch {
@@ -169,7 +169,7 @@ function Reset-Leases {
         # number, which the endpoint would refuse to bind.
         $body = @{ keepTicketIds = @($KeepTicketIds) } | ConvertTo-Json -Compress
         $r = Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/leases/reset" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 10
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 10
         if ($r.released -gt 0) { Write-Log "Reclaimed $($r.released) lease(s) left behind by a previous run." }
     }
     catch { Write-Log "Could not reclaim old leases: $($_.Exception.Message)" }

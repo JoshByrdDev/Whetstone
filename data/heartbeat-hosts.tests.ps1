@@ -9,6 +9,12 @@
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'heartbeat-hosts.ps1')
 
+# How a body is encoded is heartbeat-common.ps1's, which cannot be dot-sourced here (it reads the
+# config and starts a provider), so its one function is lifted out of it as it stands.
+$common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
+. ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'ConvertTo-JsonBody' }, $false) | Select-Object -First 1).Extent.Text))
+$JsonContentType = 'application/json; charset=utf-8'
+
 $DashboardUrl = 'http://board.test:5338'
 $StewardSlot = 4
 $StopFile = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-hosts-nostop-" + [guid]::NewGuid().ToString("N"))
@@ -31,6 +37,7 @@ $script:Claims = New-Object System.Collections.Queue
 $script:ClaimHosts = @()
 $script:Orders = @()
 $script:Released = @()
+$script:Refunded = @()
 $script:Idle = @()
 
 $script:Placed = @()
@@ -42,6 +49,7 @@ $HeartbeatWorkers = 2
 function Write-Log { param([string]$Message) }
 function Send-DashboardEvent { param($Type, $Text, $Agent, [Alias('Error')]$Err) if ($Text -eq 'idle') { $script:Idle += $Agent } }
 function Send-LeaseRelease { param([string]$TicketId, [string]$Reason) $script:Released += $TicketId }
+function Send-AttemptRefund { param([string]$TicketId, [string]$Reason) $script:Refunded += $TicketId }
 function Add-WorkedTicket { param($TicketId, $Project) }
 
 # This machine's half, as heartbeat.ps1 defines it, over the same queue the hosts claim from.
@@ -64,8 +72,11 @@ function Start-Agent {
 }
 
 function Invoke-RestMethod {
-    param([string]$Uri, [string]$Method, [string]$ContentType, [string]$Body, [int]$TimeoutSec)
+    param([string]$Uri, [string]$Method, [string]$ContentType, $Body, [int]$TimeoutSec)
     $path = $Uri.Substring($DashboardUrl.Length)
+    # What the board would read: bytes as UTF-8, which is what its JSON reader insists on.
+    $raw = $Body
+    if ($Body -is [byte[]]) { $Body = [System.Text.Encoding]::UTF8.GetString($Body) }
     if ($path -eq '/api/hosts/dispatch') {
         if ($script:DispatchDown) { throw "connection refused" }
         return $script:DispatchView
@@ -89,7 +100,7 @@ function Invoke-RestMethod {
     }
     if ($path -like '/api/hosts/*/orders') {
         if ($script:OrdersDown) { throw "500" }
-        $order = [pscustomobject]@{ path = $path; body = ($Body | ConvertFrom-Json) }
+        $order = [pscustomobject]@{ path = $path; body = ($Body | ConvertFrom-Json); contentType = $ContentType; bytes = ($raw -is [byte[]]) }
         $script:Orders += $order
         $script:Placed += "$($path.Split('/')[3]):$($order.body.claim.ticket.id)"
         return $null
@@ -124,6 +135,7 @@ function Reset-Board {
     $script:ClaimHosts = @()
     $script:Orders = @()
     $script:Released = @()
+    $script:Refunded = @()
     $script:Idle = @()
     $script:LastHosts = $null
     $script:Placed = @()
@@ -186,7 +198,22 @@ $script:OrdersDown = $true
 $null = Get-WorkerHosts
 Check 'an order that cannot be placed starts nothing' (Start-Fill -LocalOpen $false) 0
 Check '... gives the claim back' ($script:Released -join ',') '11'
+Check '... refunds the attempt the claim charged' ($script:Refunded -join ',') '11'
 Check '... and books no agent' $script:Agents.Count 0
+
+# A ticket's own text, past ASCII. Sent as a 5.1 string body, the section sign went out as one
+# byte that is not UTF-8 and the board refused the whole order with a 400.
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 1)
+$title = "Rule $([char]0xA7)4 $([char]0x00B7) 2$([char]0x00D7) $([char]0x2014) $([char]0x201C)quoted$([char]0x201D)"
+$c = New-Claim 11
+$c.ticket | Add-Member -NotePropertyName title -NotePropertyValue $title
+$script:Claims.Enqueue($c)
+$null = Get-WorkerHosts
+Check 'a ticket past ASCII is ordered' (Start-Fill -LocalOpen $false) 1
+Check '... as UTF-8 bytes' "$($script:Orders[0].bytes) $($script:Orders[0].contentType)" 'True application/json; charset=utf-8'
+Check '... and its text arrives as it was written' ($script:Orders[0].body.claim.ticket.title -eq $title) $true
+Check '... and nothing is refunded' $script:Refunded.Count 0
 
 Write-Host "== Start-Fill, order and mode"
 function New-Tickets { param([int]$Count) for ($i = 0; $i -lt $Count; $i++) { $script:Claims.Enqueue((New-Claim (11 + $i))) } }

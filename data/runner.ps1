@@ -402,7 +402,7 @@ while ($true) {
     $resp = $null
     try {
         $resp = Invoke-RestMethod -Uri "$DashboardUrl/api/hosts/$($HostCfg.name)/checkin" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 60
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 60
         if ($failures -gt 0) { Write-Log "Board host reachable again after $failures failed check-in(s)." }
         $failures = 0
     }

@@ -240,6 +240,21 @@ function Write-Log {
     Add-Utf8Text -Path $logFile -Text ($logMessage + [Environment]::NewLine)
 }
 
+# Every JSON body sent to the board goes out as UTF-8 bytes, under this content type. Windows
+# PowerShell 5.1 sends a string body as ISO-8859-1: a character past it (an em dash, a curly quote)
+# arrives as a plain '-' or '?', and one inside it past ASCII (a section sign, a middle dot, a
+# times sign) as a lone byte that is not UTF-8 at all, which the API's JSON reader refuses with a
+# 400. Ticket text carries all of these, so a start order for a worker host - the whole claim, the
+# ticket included - was refused for what its ticket said, and comments and events carrying one
+# were silently dropped. Bytes are sent as they are.
+$JsonContentType = 'application/json; charset=utf-8'
+function ConvertTo-JsonBody {
+    param([string]$Json)
+    # The comma keeps the bytes one array: returned bare, PowerShell unrolls it into an object[]
+    # of single bytes, which Invoke-RestMethod would send as text.
+    return ,[System.Text.Encoding]::UTF8.GetBytes($Json)
+}
+
 # Post one event to the dashboard's feed. Stamped with this process's agent slot unless the caller
 # names a different one, which the orchestrator does when it reports a slot it has just reaped.
 function Send-DashboardEvent {
@@ -261,7 +276,7 @@ function Send-DashboardEvent {
         if ($DurationSeconds) { $evt.durationSeconds = $DurationSeconds }
         if ($Error)           { $evt.error          = $Error }
         $body = $evt | ConvertTo-Json -Compress
-        Invoke-RestMethod -Uri "$DashboardUrl/api/events" -Method Post -ContentType 'application/json' -Body $body -TimeoutSec 2 | Out-Null
+        Invoke-RestMethod -Uri "$DashboardUrl/api/events" -Method Post -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 2 | Out-Null
     }
     catch { }  # fire-and-forget - the dashboard being down must never break the heartbeat
 }
@@ -273,7 +288,7 @@ function Send-TicketComment {
     try {
         $payload = @{ body = $Body; author = "System" } | ConvertTo-Json -Compress
         Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/comments" -Method Post `
-            -ContentType 'application/json' -Body $payload -TimeoutSec 3 | Out-Null
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $payload) -TimeoutSec 3 | Out-Null
     }
     catch { }
 }
@@ -289,10 +304,23 @@ function Send-LeaseRelease {
     try {
         $body = @{ ticketId = [int]$TicketId; reason = $Reason } | ConvertTo-Json -Compress
         $r = Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/leases/release" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 5
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5
         if ($r.released -gt 0) { Write-Log "  Released $($r.released) resource lease(s)." }
     }
     catch { Write-Log "  (leases) release failed: $($_.Exception.Message)" }
+}
+
+# Hand back the attempt the last claim charged, for a run that was never given a chance to work: a
+# provider that refused it, an order a worker host never received. See RefundAttemptAsync.
+function Send-AttemptRefund {
+    param([string]$TicketId, [string]$Reason)
+    if (-not $DashboardUrl -or -not $TicketId) { return }
+    try {
+        $body = @{ ticketId = [int]$TicketId; reason = $Reason } | ConvertTo-Json -Compress
+        Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/refund-attempt" -Method Post `
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
+    }
+    catch { Write-Log "  Could not refund the attempt: $($_.Exception.Message)" }
 }
 
 # Record the branch and/or worktree on the ticket (narrow update; never touches title/desc/issue link).
@@ -306,7 +334,7 @@ function Set-TicketBranch {
         if ($payload.Count -eq 0) { return }
         $body = $payload | ConvertTo-Json -Compress
         Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/branch" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
     }
     catch { Write-Log "  Could not record branch '$Branch' on ticket #${TicketId}: $($_.Exception.Message)" }
 }
@@ -318,7 +346,7 @@ function Block-Ticket {
     try {
         $body = @{ toPhase = "Blocked"; reason = $Reason } | ConvertTo-Json -Compress
         Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/transition" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
     }
     catch { Write-Log "  Could not block ticket #${TicketId}: $($_.Exception.Message)" }
 }
@@ -342,7 +370,7 @@ function Set-TicketPhase {
     try {
         $body = @{ toPhase = $Phase; reason = $Reason } | ConvertTo-Json -Compress
         Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/transition" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
         return $true
     }
     catch {

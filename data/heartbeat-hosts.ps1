@@ -68,7 +68,7 @@ function Invoke-HostClaim {
     try {
         $body = @{ host = "$($HostView.name)" } | ConvertTo-Json -Compress
         $resp = Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/claim-next" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 15
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 15
         return $resp.claimed
     }
     catch {
@@ -96,10 +96,19 @@ function Start-RemoteAgent {
     $body = @{ kind = 'start'; slot = $Slot; runId = $runId; claim = $Claim } | ConvertTo-Json -Depth 20 -Compress
     try {
         $null = Invoke-RestMethod -Uri "$DashboardUrl/api/hosts/$HostName/orders" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 15
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 15
     }
     catch {
-        Write-Log "  Could not order ticket #$ticketId onto $HostName slot ${Slot}: $($_.Exception.Message)"
+        # The API's own reason, when it gave one: "400 Bad Request" alone is what left a refused
+        # order undiagnosed for a day.
+        $why = $_.Exception.Message
+        if ($_.ErrorDetails.Message) {
+            try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).error; if ($detail) { $why = "$why - $detail" } } catch { }
+        }
+        Write-Log "  Could not order ticket #$ticketId onto $HostName slot ${Slot}: $why"
+        # The claim charged an attempt for a run that never started. Left charged, three refused
+        # orders block a ticket for "no progress" without it ever having been worked.
+        Send-AttemptRefund -TicketId $ticketId -Reason "it could not be ordered onto worker host $HostName ($why)"
         Send-LeaseRelease -TicketId $ticketId -Reason "could not order it onto worker host $HostName"
         return $false
     }

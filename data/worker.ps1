@@ -129,7 +129,7 @@ function Send-CycleReport {
 
         $body = $payload | ConvertTo-Json -Compress -Depth 4
         Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/cycles" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
     }
     catch { Write-Log "  (metrics) cycle report failed: $($_.Exception.Message)" }
 }
@@ -1890,12 +1890,7 @@ if ($limitReset) {
             ConvertTo-Json -Compress | Set-Content -Path $UsageLimitFile -Encoding UTF8
     }
     catch { Write-Log "  Could not record the usage limit: $($_.Exception.Message)" }
-    try {
-        $body = @{ ticketId = [int]$ticketId; reason = "the account's usage limit refused it ($limitText). The heartbeat resumes after $($limitReset.ToString('yyyy-MM-dd HH:mm'))." } | ConvertTo-Json -Compress
-        Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/refund-attempt" -Method Post `
-            -ContentType 'application/json' -Body $body -TimeoutSec 5 | Out-Null
-    }
-    catch { Write-Log "  Could not refund the attempt: $($_.Exception.Message)" }
+    Send-AttemptRefund -TicketId $ticketId -Reason "the account's usage limit refused it ($limitText). The heartbeat resumes after $($limitReset.ToString('yyyy-MM-dd HH:mm'))."
     Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Usage limit - paused until $($limitReset.ToString('HH:mm'))"
 }
 
@@ -2052,7 +2047,7 @@ if ($onHost -and $repoDir -and -not $isReview -and $wt -and $wt.branch) {
                 ConvertTo-Json -Compress
             try {
                 $null = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$ticketId/branch/accept" -Method Post `
-                    -ContentType 'application/json' -Body $body -TimeoutSec 120
+                    -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 120
             }
             catch {
                 $why = $_.Exception.Message
