@@ -26,6 +26,7 @@ import { chamfer, CAPS, DISPLAY } from './components/orbit';
 import { useTheme, track } from './theme';
 import { useTabStatus } from './hooks/useTabStatus';
 import { useNarrow } from './hooks/useNarrow';
+import { confirmLeave } from './hooks/useUnsavedGuard';
 
 type Tab = 'board' | 'steward' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
 
@@ -112,6 +113,8 @@ export default function App() {
 
   const go = useCallback((next: Tab) => {
     if (next === tab || leaving) return;
+    // A page holding unsaved edits is unmounted by the switch, so it gets to ask first.
+    if (!confirmLeave()) return;
     // Reduced motion still switches tabs — it just arrives already there.
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) { setTab(next); return; }
     const dir: 1 | -1 = TABS.findIndex(t => t.id === next) > TABS.findIndex(t => t.id === tab) ? 1 : -1;

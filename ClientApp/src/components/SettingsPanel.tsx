@@ -5,6 +5,8 @@ import { skyEnabled, setSkyEnabled } from './Backdrop';
 import { THEMES, WEEKDAYS, WEEKDAY_LABEL, currentTheme, nextTheme, resolveTheme, setTheme, setThemePref, useThemePref, weekOf } from '../theme';
 import type { ThemePref, Weekday } from '../theme';
 import type { Track } from '../types/tickets';
+import { usePop } from '../hooks/usePop';
+import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 
 // ---------- Shared field primitives -----------------------------------------
 
@@ -393,7 +395,9 @@ const splitList = (v: string) => v.split(',').map(s => s.trim()).filter(Boolean)
 
 function GlobalSettings() {
   const [cfg, setCfg] = useState<GlobalConfig | null>(null);
-  const [dirty, setDirty] = useState(false);
+  // What the server last held, as JSON. Unsaved means "different from this", not "touched": a
+  // field changed and changed back leaves nothing to save.
+  const [saved, setSaved] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<Msg>(null);
   const [tokenCheck, setTokenCheck] = useState<TokenCheck>(null);
@@ -411,12 +415,26 @@ function GlobalSettings() {
   const pref = useThemePref();
 
   useEffect(() => {
-    fetch('/api/config').then(r => r.json()).then(setCfg).catch(() => setMsg({ type: 'error', text: 'Failed to load' }));
+    fetch('/api/config').then(r => r.json())
+      .then((d: GlobalConfig) => { setCfg(d); setSaved(JSON.stringify(d)); })
+      .catch(() => setMsg({ type: 'error', text: 'Failed to load' }));
   }, []);
+
+  const dirty = cfg !== null && saved !== null && JSON.stringify(cfg) !== saved;
+  useUnsavedGuard(dirty ? 'You have unsaved global settings. Leave without saving them?' : null);
+
+  // Back to what the server holds. Parsed from the snapshot rather than refetched, so it is
+  // exactly what "unsaved" was measured against.
+  const discard = () => {
+    if (saved === null) return;
+    setCfg(JSON.parse(saved));
+    setMsg(null);
+    setNotifyTest(null);
+    setTokenCheck(null);
+  };
 
   const update = (patch: Partial<GlobalConfig>) => {
     setCfg(prev => (prev ? { ...prev, ...patch } : prev));
-    setDirty(true);
     setMsg(null);
     // Any edit makes the last test result a claim about settings that are no longer on screen.
     setNotifyTest(null);
@@ -517,12 +535,12 @@ function GlobalSettings() {
       });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Save failed');
       setMsg({ type: 'success', text: 'Saved. Restart the server to apply.' });
-      setDirty(false);
-      // The server tidies the account list as it stores it - a folder for each new account, blanks
-      // and duplicates dropped - so what is on screen is re-read rather than assumed.
-      const stored = await fetch('/api/config').then(r => (r.ok ? r.json() : null)).catch(() => null);
-      if (stored?.claudeAccounts)
-        setCfg(prev => (prev ? { ...prev, claudeAccounts: stored.claudeAccounts } : prev));
+      // The server tidies what it stores - a folder for each new account, a model that does not
+      // fit its provider, a write-only secret it never sends back - so the screen and the
+      // "unsaved" baseline are both re-read from it rather than assumed from what was sent.
+      const stored: GlobalConfig | null = await fetch('/api/config').then(r => (r.ok ? r.json() : null)).catch(() => null);
+      if (stored) { setCfg(stored); setSaved(JSON.stringify(stored)); }
+      else setSaved(JSON.stringify(cfg));
       // The usage token is the one setting whose value can be wrong in a way the server can check,
       // and the only feedback otherwise is a header chip that goes on saying nothing. So try it.
       if (cfg.claudeOauthToken) await checkToken();
@@ -852,7 +870,62 @@ function GlobalSettings() {
           )}
         </div>
       </FieldGroup>
+      {/* Sticks to the bottom of the screen while anything is unsaved, so Save is never a scroll
+          away from the field just changed. The one at the top stays for a page read from the top. */}
+      <UnsavedBar dirty={dirty} saving={saving} hasErrors={hasErrors} onSave={save} onDiscard={discard} />
     </div>
+  );
+}
+
+// ---------- Unsaved changes -----------------------------------------------------
+
+/**
+ * A bar held at the bottom of the screen while the global settings differ from what is saved.
+ *
+ * Fixed rather than sticky: the global settings sit below the projects, and a sticky bar would
+ * scroll away with them the moment the page is read further up. It arrives from the edge it sits
+ * on (orbit-pop, side "above") and keeps a spacer under the page while shown, so it never covers
+ * the last field.
+ */
+function UnsavedBar({ dirty, saving, hasErrors, onSave, onDiscard }: {
+  dirty: boolean; saving: boolean; hasErrors: boolean; onSave: () => void; onDiscard: () => void;
+}) {
+  const { show, fx } = usePop(dirty);
+  if (!show) return null;
+  return (
+    <>
+      <div aria-hidden className="h-16" />
+      <div className="fixed inset-x-0 bottom-4 z-30 pointer-events-none px-3 sm:px-6">
+        <div
+          role="status"
+          data-fx={fx}
+          data-side="above"
+          className="orbit-pop pointer-events-auto max-w-3xl mx-auto flex items-center gap-3 bg-gray-800 border border-hair px-4 py-2.5 shadow-lg"
+          style={{ clipPath: chamfer(10) }}
+        >
+          <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+          <span className="flex-1 min-w-0 text-sm text-gray-200">
+            {hasErrors ? 'Unsaved changes. Fix the fields marked in red to save.' : 'Unsaved changes to global settings.'}
+          </span>
+          <button
+            type="button"
+            onClick={onDiscard}
+            disabled={saving}
+            className="orbit-tap text-xs px-3 py-1.5 rounded border border-hair text-gray-300 hover:bg-gray-900 disabled:opacity-50"
+          >
+            Discard
+          </button>
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={saving || hasErrors}
+            className="btn-act px-4 py-1.5 bg-blue-500 text-void disabled:bg-gray-700 disabled:text-gray-500"
+          >
+            {saving ? 'Saving…' : 'Save global'}
+          </button>
+        </div>
+      </div>
+    </>
   );
 }
 
