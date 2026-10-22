@@ -900,7 +900,7 @@ function UnsavedBar({ dirty, saving, hasErrors, onSave, onDiscard }: {
           role="status"
           data-fx={fx}
           data-side="above"
-          className="orbit-pop pointer-events-auto max-w-3xl mx-auto flex items-center gap-3 bg-gray-800 border border-hair px-4 py-2.5 shadow-lg"
+          className="orbit-pop pointer-events-auto max-w-3xl mx-auto flex items-center gap-3 bg-gray-800 backdrop-blur-md border border-hair px-4 py-2.5 shadow-lg"
           style={{ clipPath: chamfer(10) }}
         >
           <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
