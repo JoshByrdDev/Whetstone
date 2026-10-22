@@ -293,7 +293,7 @@ public class EventStore
                 return Math.Clamp((int)w.GetDouble(), 1, HeartbeatManager.MaxWorkers);
         }
         catch { /* a malformed config must not blank the whole status */ }
-        return HeartbeatManager.MaxWorkers;
+        return HeartbeatManager.DefaultWorkers;
     }
 
     public object GetState()

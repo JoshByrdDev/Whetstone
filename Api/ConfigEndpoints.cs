@@ -297,7 +297,7 @@ public static class ConfigEndpoints
                 heartbeatWorkerStallMinutes = Num(g, "heartbeatWorkerStallMinutes", 30),
                 // How many agents work at once. Clamped on the way out as well as on the way in, so
                 // a hand-edited config file can never put the UI and the orchestrator at odds.
-                heartbeatWorkers = Math.Clamp((int)Num(g, "heartbeatWorkers", HeartbeatManager.MaxWorkers), 1, HeartbeatManager.MaxWorkers),
+                heartbeatWorkers = Math.Clamp((int)Num(g, "heartbeatWorkers", HeartbeatManager.DefaultWorkers), 1, HeartbeatManager.MaxWorkers),
                 maxHeartbeatWorkers = HeartbeatManager.MaxWorkers,
                 // Eligible projects for the heartbeat; empty = all (including any added later).
                 heartbeatProjects = StrArray(g, "heartbeatProjects"),

@@ -85,14 +85,15 @@ $BranchPrefix            = ""
 $HeartbeatWorkers        = 3
 
 # The ceiling, mirrored from HeartbeatManager.MaxWorkers on the dashboard side. Both halves of the
-# system clamp to it independently so a hand-edited config file cannot start a fourth agent by
+# system clamp to it independently so a hand-edited config file cannot start an eleventh agent by
 # going round whichever half happens to read the value first.
-$MaxHeartbeatWorkers     = 3
+$MaxHeartbeatWorkers     = 10
 
 # The berth a project's steward runs in: one past the last worker slot, and never counted against
 # the worker limit. A steward is the thing that answers questions and signs work off, so making it
 # wait for a free worker slot would have the fleet's own output queueing behind the fleet. One at a
-# time across every project - it is a full session on the same account as the three beside it.
+# time across every project - it is a full session like the workers beside it. It moves with the
+# ceiling, and so does every worker host's berth (WorkerHostConfig.FirstRemoteSlot).
 $StewardSlot             = $MaxHeartbeatWorkers + 1
 
 $globalDefaults = $null

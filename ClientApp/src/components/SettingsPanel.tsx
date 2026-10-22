@@ -434,6 +434,9 @@ function GlobalSettings() {
     if (cfg.heartbeatMaxAttempts < 1) errors.heartbeatMaxAttempts = 'Must be ≥ 1';
     if (cfg.heartbeatWorkerTimeoutMinutes < 1) errors.heartbeatWorkerTimeoutMinutes = 'Must be ≥ 1';
     if (cfg.heartbeatWorkerStallMinutes < 0) errors.heartbeatWorkerStallMinutes = 'Must be ≥ 0';
+    const maxAgents = cfg.maxHeartbeatWorkers || 10;
+    if (!Number.isInteger(cfg.heartbeatWorkers) || cfg.heartbeatWorkers < 1 || cfg.heartbeatWorkers > maxAgents)
+      errors.heartbeatWorkers = `A whole number from 1 to ${maxAgents}`;
   }
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -697,16 +700,18 @@ function GlobalSettings() {
           only when there is a workable ticket for it, so a quiet board still runs one agent. Takes effect
           the next time the heartbeat is started.
         </p>
-        <SelectField
-          label="Concurrent Agents"
-          description="Every agent is a full CLI session on this machine. Those on the same provider share its rate limits."
-          value={String(cfg.heartbeatWorkers)}
-          onChange={v => update({ heartbeatWorkers: Number(v) || 1 })}
-          options={Array.from({ length: cfg.maxHeartbeatWorkers || 3 }, (_, i) => ({
-            value: String(i + 1),
-            label: i === 0 ? '1 (one at a time)' : `${i + 1} agents`,
-          }))}
-        />
+        <div className="max-w-xs">
+          <Field
+            label="Concurrent Agents"
+            description={`1 to ${cfg.maxHeartbeatWorkers || 10}. Every agent is a full CLI session on this machine, and those on the same provider share its rate limits.`}
+            type="number"
+            value={Number.isNaN(cfg.heartbeatWorkers) ? '' : cfg.heartbeatWorkers}
+            // Kept as typed, blank included, so the field can be cleared and retyped; the check
+            // below holds the save until it is a whole number in range.
+            onChange={v => update({ heartbeatWorkers: v === '' ? NaN : Number(v) })}
+            error={errors.heartbeatWorkers}
+          />
+        </div>
       </FieldGroup>
 
       <FieldGroup title="Heartbeat Reliability">

@@ -5,15 +5,18 @@ namespace Whetstone.Services;
 public class HeartbeatManager
 {
     /// <summary>
-    /// Hard ceiling on how many agents the orchestrator may run at once.
+    /// Hard ceiling on how many agents the orchestrator may run at once, whatever Settings says.
     /// <para>
-    /// A ceiling rather than a setting because the cost of getting it wrong is not a slow pipeline
-    /// but a wrecked one: every agent is a full Claude session drawing on the same rate-limit
-    /// window, and they share one machine's CPU, disk and docker daemon. Three is what this system
-    /// was sized for; raising it is a decision to re-measure, not a number to edit in a text box.
+    /// Every agent is a full CLI session, and they share one machine's CPU, disk and docker daemon,
+    /// and each provider's rate limits. Settings lets the number be typed up to this; past it is a
+    /// typo, not a plan. The steward's berth and every worker host's are numbered past this, so
+    /// changing it renumbers them: do it with the fleet stopped.
     /// </para>
     /// </summary>
-    public const int MaxWorkers = 3;
+    public const int MaxWorkers = 10;
+
+    /// <summary>How many agents run at once when Settings has never been told.</summary>
+    public const int DefaultWorkers = 3;
 
     private readonly string _scriptPath;
     private readonly string _workerScriptPath;

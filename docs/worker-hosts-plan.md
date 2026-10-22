@@ -242,9 +242,9 @@ A claim with no host takes none of these paths, so a board host run is byte-for-
 ]
 ```
 
-**Slots.** Board host slots stay 1..3 (`MaxHeartbeatWorkers`, still clamped at 3 on both sides) and
-the steward stays 4. Worker host slots are numbered from 5, in blocks per host, and each block is
-clamped on its own (1..8). `$Agents[slot]` gains `Host` and `RunId`. Its `Process` is `$null` for a
+**Slots.** Board host slots are 1..`MaxHeartbeatWorkers` (3 when this was written, 10 since) and
+the steward is the next one. Worker host slots are numbered past it (from 12 now), in blocks per
+host, and each block is clamped on its own (1..8). `$Agents[slot]` gains `Host` and `RunId`. Its `Process` is `$null` for a
 remote slot.
 
 | Function | Change |

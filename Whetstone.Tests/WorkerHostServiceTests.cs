@@ -30,11 +30,12 @@ public class WorkerHostServiceTests
     public void Hosts_are_numbered_after_the_board_hosts_workers_and_the_steward()
     {
         var hosts = WorkerHostConfig.Read(Global("""[{ "name": "a", "slots": 3 }, { "name": "b", "slots": 2 }]"""));
-        Assert.Equal(5, WorkerHostConfig.FirstRemoteSlot);
-        Assert.Equal(new[] { 5, 8 }, hosts.Select(h => h.FirstSlot));
-        Assert.True(hosts[0].OwnsSlot(7));
-        Assert.False(hosts[0].OwnsSlot(8));
-        Assert.True(hosts[1].OwnsSlot(9));
+        Assert.Equal(HeartbeatManager.MaxWorkers + 2, WorkerHostConfig.FirstRemoteSlot);
+        var first = WorkerHostConfig.FirstRemoteSlot;
+        Assert.Equal(new[] { first, first + 3 }, hosts.Select(h => h.FirstSlot));
+        Assert.True(hosts[0].OwnsSlot(first + 2));
+        Assert.False(hosts[0].OwnsSlot(first + 3));
+        Assert.True(hosts[1].OwnsSlot(first + 4));
     }
 
     [Fact]

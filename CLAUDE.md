@@ -331,8 +331,9 @@ discoverable from the code:
   idle, fast-forwards to it and restarts on the new code. Started normally, `runner.ps1` is a small
   supervisor around the runner (`-Inner`); a change to the supervisor's own lines needs the task
   started again on that machine.
-- **Slots past the steward's are remote.** The board host's workers are 1..3 and the steward is 4,
-  so worker hosts are numbered from 5. This is written twice and the two must agree:
+- **Slots past the steward's are remote.** The board host's workers are 1..`MaxWorkers` (10) and
+  the steward is the next slot, so worker hosts are numbered from 12. Raising the ceiling renumbers
+  both, so it is done with the fleet stopped. This is written twice and the two must agree:
   `WorkerHostConfig.FirstRemoteSlot` in C# and `$StewardSlot` in `heartbeat-common.ps1`.
 - **Where work goes first is read every pass, never at start.** `dispatchOrder` (worker host names
   and `@board` for this machine) and `dispatchMode` (`fill` by default, or `spread`) reach the
