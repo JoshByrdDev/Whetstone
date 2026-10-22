@@ -393,6 +393,20 @@ const splitList = (v: string) => v.split(',').map(s => s.trim()).filter(Boolean)
 
 // ---------- Global settings -------------------------------------------------
 
+/**
+ * The config with every number this page validates filled in. The bundle is served from the
+ * checkout and the API from whatever was last started, so for a while after an update the page can
+ * be newer than its server: a field the server does not send yet reads as its default, not as a
+ * blank the page then refuses to save.
+ */
+function withDefaults(d: GlobalConfig): GlobalConfig {
+  return {
+    ...d,
+    qaLeases: d.qaLeases ?? 1,
+    maxQaLeases: d.maxQaLeases ?? 10,
+  };
+}
+
 function GlobalSettings() {
   const [cfg, setCfg] = useState<GlobalConfig | null>(null);
   // What the server last held, as JSON. Unsaved means "different from this", not "touched": a
@@ -416,7 +430,7 @@ function GlobalSettings() {
 
   useEffect(() => {
     fetch('/api/config').then(r => r.json())
-      .then((d: GlobalConfig) => { setCfg(d); setSaved(JSON.stringify(d)); })
+      .then((d: GlobalConfig) => { const c = withDefaults(d); setCfg(c); setSaved(JSON.stringify(c)); })
       .catch(() => setMsg({ type: 'error', text: 'Failed to load' }));
   }, []);
 
@@ -539,7 +553,7 @@ function GlobalSettings() {
       // fit its provider, a write-only secret it never sends back - so the screen and the
       // "unsaved" baseline are both re-read from it rather than assumed from what was sent.
       const stored: GlobalConfig | null = await fetch('/api/config').then(r => (r.ok ? r.json() : null)).catch(() => null);
-      if (stored) { setCfg(stored); setSaved(JSON.stringify(stored)); }
+      if (stored) { const c = withDefaults(stored); setCfg(c); setSaved(JSON.stringify(c)); }
       else setSaved(JSON.stringify(cfg));
       // The usage token is the one setting whose value can be wrong in a way the server can check,
       // and the only feedback otherwise is a header chip that goes on saying nothing. So try it.
