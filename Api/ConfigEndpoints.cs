@@ -31,6 +31,9 @@ public static class ConfigEndpoints
         // How many agents the one orchestrator runs at once (1..HeartbeatManager.MaxWorkers), and how
         // many copies of a parallelStacks project's stack this machine runs at once (qaLeases).
         "heartbeatWorkers", "qaLeases",
+        // Whether the Heartbeat tab shows its Worker Hosts section. Display only: off hides it and
+        // changes nothing about hosts already set up.
+        "showWorkerHosts",
         // Branch enforcement: base branch new feature branches fork from, and their name prefix.
         "baseBranch", "branchPrefix",
         // Which CLI, model and effort each kind of run takes, one entry per role. See AgentRoles.
@@ -335,6 +338,7 @@ public static class ConfigEndpoints
                 agentProviders = AgentProviders,
                 notificationEventCatalog = NotificationEvents,
                 notificationChannels = NotificationChannels,
+                showWorkerHosts = ShowWorkerHosts(g),
             });
         });
 
@@ -844,6 +848,13 @@ public static class ConfigEndpoints
     /// <summary>A loaded object's serialised form, to hand back to <see cref="SaveObject"/> so it
     /// can tell a real edit from a no-op.</summary>
     internal static string Snapshot(JsonObject obj) => obj.ToJsonString(WriteOptions);
+
+    /// <summary>
+    /// Whether the Heartbeat tab shows its Worker Hosts section. Off unless set: most boards run on
+    /// one machine and never lend work out, and the section is a lot of page for a feature not in use.
+    /// </summary>
+    internal static bool ShowWorkerHosts(IReadOnlyDictionary<string, JsonElement> cfg) =>
+        cfg.TryGetValue("showWorkerHosts", out var v) && v.ValueKind == JsonValueKind.True;
 
     private static string Str(Dictionary<string, JsonElement> cfg, string key, string fallback) =>
         cfg.TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;

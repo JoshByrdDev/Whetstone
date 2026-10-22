@@ -227,6 +227,8 @@ interface GlobalConfig {
    *  parallelStacks. Worker hosts have their own, in the Worker Hosts panel. */
   qaLeases: number;
   maxQaLeases: number;
+  /** Whether the Heartbeat tab shows its Worker Hosts section. Display only. */
+  showWorkerHosts: boolean;
   /** What each kind of run takes, keyed by role. Served with every gap filled, so what is on
    *  screen is what runs. There is no fleet-wide provider. */
   agentRoles: Record<string, AgentRoleSetting>;
@@ -404,6 +406,7 @@ function withDefaults(d: GlobalConfig): GlobalConfig {
     ...d,
     qaLeases: d.qaLeases ?? 1,
     maxQaLeases: d.maxQaLeases ?? 10,
+    showWorkerHosts: d.showWorkerHosts ?? false,
   };
 }
 
@@ -768,6 +771,16 @@ function GlobalSettings() {
             together.
           </p>
         )}
+        <CheckField
+          label="Show worker hosts"
+          description={
+            'Shows the Worker Hosts section on the Heartbeat tab, for lending work to other computers on your ' +
+            'network. Display only: hiding it changes nothing about hosts already set up, and any that are ' +
+            'switched on keep getting work.'
+          }
+          checked={cfg.showWorkerHosts}
+          onChange={v => update({ showWorkerHosts: v })}
+        />
       </FieldGroup>
 
       <FieldGroup title="Heartbeat Reliability">

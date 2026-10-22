@@ -69,6 +69,8 @@ public static class WorkerHostEndpoints
             Results.Ok(new
             {
                 enabled = hosts.RemoteOn,
+                // Whether to draw the section at all - a Settings choice, display only.
+                shown = ConfigEndpoints.ShowWorkerHosts(registry.GetGlobalConfig()),
                 boardCommit = commit.Get(),
                 hosts = hosts.Snapshot(),
                 dispatch = WorkerHostSettings.ReadDispatch(registry.GetGlobalConfig(), WorkerHostConfig.Read(registry.GetGlobalConfig())),

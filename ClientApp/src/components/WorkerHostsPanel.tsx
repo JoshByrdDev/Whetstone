@@ -18,6 +18,8 @@ import type { WorkerHost } from '../hooks/useWorkerHosts';
 
 interface Settings {
   enabled: boolean;
+  /** Whether Settings asks for this section at all. Absent from an older server, which always drew it. */
+  shown?: boolean;
   boardCommit?: string | null;
   hosts: (WorkerHost & { skills: string[]; projects: string[]; qaLeases: number; remoteOn: boolean; commit?: string | null })[];
   dispatch: Dispatch;
@@ -106,7 +108,8 @@ export function WorkerHostsPanel() {
   const edit = (name: string, e: HostEdit) => act(`/api/hosts/settings/hosts/${encodeURIComponent(name)}`, 'PUT', e);
   const add = (name: string) => edit(name, {});
 
-  if (!s) return null;
+  // Hidden by Settings: nothing drawn, and nothing about the hosts themselves changes.
+  if (!s || s.shown === false) return null;
 
   const empty = s.hosts.length === 0 && s.seen.length === 0;
 
