@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback } from 'react';
 interface HeartbeatStatus {
   running: boolean;
   scriptExists: boolean;
+  /** Why heartbeat.ps1 refused the last start (a missing agent CLI, usually); null while running. */
+  startupError: string | null;
   stopRequested: boolean;
   /** Agents still finishing their phase under a pending stop — 0 when nothing is being waited on. */
   draining: number;
@@ -83,7 +85,7 @@ export function HeartbeatControl() {
   const isRunning = status.running;
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex flex-wrap items-center gap-3">
       {!status.scriptExists ? (
         <span className="text-xs text-red-400">heartbeat.ps1 not found</span>
       ) : (
@@ -145,6 +147,13 @@ export function HeartbeatControl() {
         </>
       )}
       {error && <span className="text-xs text-red-400">{error}</span>}
+      {/* The script's own refusal. It exits before it can tell anyone else, so without this a start
+          that was refused looks exactly like a start that worked and then stopped. */}
+      {!error && !isRunning && status.startupError && (
+        <span className="min-w-0 break-words text-xs text-red-400">
+          Refused to start: {status.startupError} (System → Setup check)
+        </span>
+      )}
     </div>
   );
 }

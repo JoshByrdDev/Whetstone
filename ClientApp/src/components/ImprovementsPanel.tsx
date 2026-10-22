@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { PageHead, PrimaryButton } from './ui';
+import { SetupCheck } from './SetupCheck';
 
 // The three the reflection writes today, then the older pair still attached to anything filed
 // before that changed. Order matters: it is the dropdown order, knowledge kinds first.
@@ -81,7 +82,9 @@ export function ImprovementsPanel() {
   }, [project]);
 
   const fetchItems = useCallback(async () => {
-    if (!project) return;
+    // No project yet (a new machine): nothing to load, and staying on the loading line would hide
+    // the setup check on exactly the machine that needs it.
+    if (!project) { setLoading(false); return; }
     try {
       const res = await fetch(`/api/improvements?project=${encodeURIComponent(project)}`);
       const data = await res.json();
@@ -256,6 +259,8 @@ export function ImprovementsPanel() {
           </PrimaryButton>
         }
       />
+
+      <SetupCheck />
 
       {/* Apply status banner */}
       {applyStatus && (

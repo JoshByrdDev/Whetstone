@@ -168,6 +168,11 @@ public class DashboardPaths
     public string GlobalStopFile => Path.Combine(DataRoot, "heartbeat.stop");
     public string GlobalWakeFile => Path.Combine(DataRoot, "heartbeat.wake");
     public string GlobalLogsDir => Path.Combine(DataRoot, "logs");
+    /// <summary>
+    /// Why the last heartbeat refused to start, written by heartbeat.ps1's prerequisite check. Started
+    /// from the dashboard it has no console, so this file is the only place that reason lands.
+    /// </summary>
+    public string HeartbeatStartupErrorFile => Path.Combine(GlobalLogsDir, "heartbeat-startup-error.txt");
 
     /// <summary>Committed, project-agnostic skill + operational-file templates used to scaffold a new project.</summary>
     public string SkillTemplatesDir => Path.Combine(DataRoot, "skill-templates");

@@ -6,6 +6,11 @@ install: every step says how to check it worked, because several of the things b
 
 Whetstone runs on Windows only.
 
+Once it is running, **System → Setup check** checks most of this list for you: the agent CLIs your
+roles use, git and its identity in each project's repo, Node and npx, the narrator, and why the
+heartbeat last refused to start. Press **Check again** after installing something, and restart Whetstone
+first, because neither it nor the heartbeat sees a program installed after it started.
+
 ## 1. Required
 
 | What | Why | Check |
@@ -76,9 +81,9 @@ whole. Worker hosts have their own guide: [`worker-host-setup.md`](worker-host-s
 | Check | Where |
 |---|---|
 | The app bar's usage meter shows numbers, not "no credentials" or "expired" | The Claude login is good |
-| The heartbeat stays **Running** after you start it | If it flips straight back to Stopped, an agent CLI it is configured to use is missing from `PATH`, and the error goes to a console nobody sees. Check with `powershell -NoProfile -Command "Get-Command claude"` (or `codex`, `gemini`) |
+| System → **Setup check** shows nothing missing | Agent CLIs, git identity, Node, the narrator |
+| The heartbeat stays **Running** after you start it | If it flips back to Stopped, the reason is shown beside the Start button on the Heartbeat page and at the top of the Setup check. Usually it is an agent CLI missing from `PATH` |
 | Settings → Notifications → **Send test** | Notifications |
-| The Classroom has no "Voice-over is not set up" notice | The narrator |
 | A first small ticket gets through QA, not Blocked | Node and Playwright |
 
 ## 6. What never leaves this machine

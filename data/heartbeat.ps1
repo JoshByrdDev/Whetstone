@@ -48,23 +48,30 @@ $script:WorkedSinceSleepNotice   = $false
 $script:TicketsWorkedSinceNotice = @()
 
 # --- Prerequisites ---
+# Started from the dashboard there is no console, so a refusal printed here is read by nobody and
+# the board just flips back to Stopped. It is also written to a file the dashboard reports
+# (DashboardPaths.HeartbeatStartupErrorFile); a start that gets past this point removes it.
+$StartupErrorFile = Join-Path $LogDir "heartbeat-startup-error.txt"
+function Stop-AtStartup([string]$Why) {
+    Write-Host "ERROR: $Why" -ForegroundColor Red
+    try {
+        New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+        Set-Content -Path $StartupErrorFile -Value $Why -Encoding UTF8
+    } catch { }
+    exit 1
+}
+
 # Every CLI some role runs on. One that is missing would fail every run of its roles, each with
 # the same error, so it stops the fleet here instead - naming the roles that need it.
 foreach ($p in $AgentProvidersInUse) {
     if (-not (Get-Command $p.Exe -ErrorAction SilentlyContinue)) {
         $needs = ($AgentRoleKeys | Where-Object { (Get-AgentRole -Role $_).Provider.Key -eq $p.Key }) -join ', '
-        Write-Host "ERROR: '$($p.Exe)' command not found in PATH, and these roles run on it: $needs. Install the $($p.DisplayName) CLI first, or move those roles to another provider in Settings." -ForegroundColor Red
-        exit 1
+        Stop-AtStartup "'$($p.Exe)' command not found in PATH, and these roles run on it: $needs. Install the $($p.DisplayName) CLI first, or move those roles to another provider in Settings."
     }
 }
-if (-not (Test-Path $PromptFile)) {
-    Write-Host "ERROR: Prompt file not found at $PromptFile" -ForegroundColor Red
-    exit 1
-}
-if (-not (Test-Path $WorkerScript)) {
-    Write-Host "ERROR: Worker script not found at $WorkerScript" -ForegroundColor Red
-    exit 1
-}
+if (-not (Test-Path $PromptFile)) { Stop-AtStartup "Prompt file not found at $PromptFile" }
+if (-not (Test-Path $WorkerScript)) { Stop-AtStartup "Worker script not found at $WorkerScript" }
+Remove-Item -Path $StartupErrorFile -ErrorAction SilentlyContinue
 
 # An agent launched with -NoNewWindow writes into this console, which is what you want when a person
 # is watching the fleet work; every line is tagged with its slot, so three at once still reads. When

@@ -23,6 +23,7 @@ public class HeartbeatManager
     private readonly string _lockFilePath;
     private readonly string _stopFilePath;
     private readonly string _wakeFilePath;
+    private readonly string _startupErrorPath;
     private readonly string _workingDir;
     private Process? _process;
     private readonly QaIsolation _isolation;
@@ -38,6 +39,7 @@ public class HeartbeatManager
         _lockFilePath = paths.GlobalLockFile;
         _stopFilePath = paths.GlobalStopFile;
         _wakeFilePath = paths.GlobalWakeFile;
+        _startupErrorPath = paths.HeartbeatStartupErrorFile;
         _workingDir = paths.DataRoot;
     }
 
@@ -125,6 +127,26 @@ public class HeartbeatManager
 
     // Both halves, because the orchestrator without its worker script exits within a second of
     // starting - which the UI would otherwise report as "started", then "stopped", with no reason.
+    /// <summary>
+    /// Why the last start was refused by heartbeat.ps1's own prerequisite check (a missing agent
+    /// CLI, most often), or null. Only while nothing is running: a later start that got past the
+    /// check removes the file, and so does the next press of Start.
+    /// </summary>
+    public string? StartupError
+    {
+        get
+        {
+            if (IsRunning) return null;
+            try
+            {
+                if (!File.Exists(_startupErrorPath)) return null;
+                var text = File.ReadAllText(_startupErrorPath).Trim();
+                return text.Length > 0 ? text : null;
+            }
+            catch { return null; }
+        }
+    }
+
     public bool ScriptExists => File.Exists(_scriptPath) && File.Exists(_workerScriptPath);
 
     public bool StopRequested => File.Exists(_stopFilePath);
@@ -195,6 +217,7 @@ public class HeartbeatManager
             // confirmed nothing is alive, so a lock still on disk is a leftover — and leaving it
             // would make the fresh heartbeat look like it was already running.
             ClearSignalFiles();
+            try { File.Delete(_startupErrorPath); } catch { /* the script overwrites it if it refuses again */ }
 
             _process.Start();
 

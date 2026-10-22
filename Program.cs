@@ -88,6 +88,9 @@ builder.Services.AddSingleton<ImprovementApplier>();
 // lease and creates no worktree, so it never contends with the heartbeat's workers for a ticket.
 // Executes one analysis and nothing else — when it runs is not its decision.
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.Narrator>();
+builder.Services.AddSingleton<SetupCheckService>(sp => new SetupCheckService(
+    sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<Whetstone.Services.Walkthrough.Narrator>(),
+    sp.GetRequiredService<HeartbeatManager>()));
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.WalkthroughService>();
 builder.Services.AddSingleton<AnalysisRunner>();
 builder.Services.AddSingleton<Whetstone.Services.UnitReports.UnitReportRunner>();
@@ -419,10 +422,17 @@ app.MapGet("/api/heartbeat/status", (HeartbeatManager hb, EventStore store) =>
     {
         running = hb.IsRunning,
         scriptExists = hb.ScriptExists,
+        // Why the last start was refused by the script itself; null while running or when it wasn't.
+        startupError = hb.StartupError,
         stopRequested = hb.StopRequested,
         draining = hb.StopRequested && hb.IsRunning ? store.BusyAgentCount : 0,
     });
 });
+
+// GET /api/setup-check - what a fresh install needs and this machine lacks: agent CLIs, git and
+// its identity, Node, the narrator, and why the heartbeat last refused to start. Reads PATH and git
+// config; starts nothing. See SetupCheckService and docs/setup.md.
+app.MapGet("/api/setup-check", (SetupCheckService check) => Results.Ok(check.Run()));
 
 // POST /api/heartbeat/start — launch heartbeat.ps1
 app.MapPost("/api/heartbeat/start", async (HeartbeatManager hb, EventStore store, IHubContext<HeartbeatHub> hub) =>

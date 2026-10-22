@@ -3,6 +3,8 @@ import { useState, useEffect, useCallback } from 'react';
 interface HeartbeatStatus {
   running: boolean;
   scriptExists: boolean;
+  /** Why heartbeat.ps1 refused the last start (a missing agent CLI, usually); null while running. */
+  startupError: string | null;
   stopRequested: boolean;
   /** Agents still finishing their phase under a pending stop — 0 when nothing is being waited on. */
   draining: number;
@@ -37,6 +39,8 @@ export function HeaderHeartbeatToggle() {
   if (!status || !status.scriptExists) return null;
 
   const isRunning = status.running;
+  // A refusal from the script itself counts as an error here too: it is why the button is back.
+  const problem = error ?? (!isRunning && status.startupError ? `Refused to start: ${status.startupError}` : null);
 
   const call = async (endpoint: string, failMsg: string) => {
     setLoading(true);
@@ -69,9 +73,9 @@ export function HeaderHeartbeatToggle() {
       <button
         onClick={() => call('/api/heartbeat/start', 'Failed to start heartbeat')}
         disabled={loading}
-        title={error ?? 'Start heartbeat'}
+        title={problem ?? 'Start heartbeat'}
         className={`${btnBase} ${
-          error
+          problem
             ? 'border-red-500/60 text-red-400 hover:bg-red-500/10'
             : 'border-hair text-emerald-400 hover:bg-emerald-500/10 hover:border-emerald-500/60'
         }`}
