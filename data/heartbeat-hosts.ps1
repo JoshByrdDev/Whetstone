@@ -1,8 +1,8 @@
 # ============================================================
 # The orchestrator's worker hosts: berths on other machines (docs/worker-hosts-plan.md, piece 5).
 #
-# A worker host's berths are slots numbered past the steward's ($StewardSlot), in blocks the board
-# host's API hands out from `workerHosts` in its config. The orchestrator fills them the way it fills
+# A worker host's berths are slots numbered past this machine's ceiling, a block of ten per host
+# (11.., 21..), never the steward's ($StewardSlot), as the board host's API hands them out from `workerHosts` in its config. The orchestrator fills them the way it fills
 # its own - one claim per free berth - but a start is an ORDER placed with the API, which that host's
 # runner (data/runner.ps1) picks up on its next check-in, and "has it finished" is read from what the
 # runner last reported rather than from a process handle.
@@ -26,7 +26,7 @@ $HostOfflineReleaseMinutes = 10
 # What the API last said about every worker host, or $null when it could not be asked.
 $script:LastHosts = $null
 
-function Test-RemoteSlot { param([int]$Slot) return $Slot -gt $StewardSlot }
+function Test-RemoteSlot { param([int]$Slot) return $Slot -gt $MaxHeartbeatWorkers -and $Slot -ne $StewardSlot }
 
 # Every worker host as GET /api/hosts describes it, or $null when it could not be asked. $null is
 # "do not know", which every caller reads as "change nothing" - never as "there are none".

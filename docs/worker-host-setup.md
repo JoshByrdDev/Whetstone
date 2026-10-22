@@ -77,7 +77,8 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
 
    A new host starts switched off, with one berth, the phases that take no stack, and **no
    projects**: nothing is sent to it until you choose which projects may go there. Its berths are
-   numbered from 12, past the board host's ten and the steward's. The section's *Remote work* switch
+   numbered in a block of ten past the board host's ten: the first host's from 11, the second's
+   from 21. The section's *Remote work* switch
    turns all of it off at once.
 
 ## On the worker host

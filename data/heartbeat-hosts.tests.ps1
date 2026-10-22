@@ -16,7 +16,9 @@ $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $
 $JsonContentType = 'application/json; charset=utf-8'
 
 $DashboardUrl = 'http://board.test:5338'
-$StewardSlot = 4
+# A small board: three workers here, so a worker host's berths start at 5 in these tests.
+$MaxHeartbeatWorkers = 3
+$StewardSlot = 99
 $StopFile = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-hosts-nostop-" + [guid]::NewGuid().ToString("N"))
 $script:fail = 0
 $script:total = 0
@@ -53,7 +55,7 @@ function Send-AttemptRefund { param([string]$TicketId, [string]$Reason) $script:
 function Add-WorkedTicket { param($TicketId, $Project) }
 
 # This machine's half, as heartbeat.ps1 defines it, over the same queue the hosts claim from.
-function Get-WorkerCount { return @($script:Agents.Keys | Where-Object { $_ -lt $StewardSlot }).Count }
+function Get-WorkerCount { return @($script:Agents.Keys | Where-Object { $_ -le $MaxHeartbeatWorkers }).Count }
 function Get-FreeSlot {
     for ($i = 1; $i -le $HeartbeatWorkers; $i++) { if (-not $script:Agents.ContainsKey($i)) { return $i } }
     return 0
@@ -390,7 +392,7 @@ Reset-Board
 $script:HostsDown = $true
 Check 'hosts unreadable: unknown, so the caller resets nothing' ($null -eq (Add-RemoteAgents)) $true
 
-Check 'slots past the steward are remote' "$(Test-RemoteSlot 4) $(Test-RemoteSlot 5)" 'False True'
+Check 'slots past this machine are remote, and the steward is not' "$(Test-RemoteSlot 3) $(Test-RemoteSlot 4) $(Test-RemoteSlot 5) $(Test-RemoteSlot 99)" 'False True True False'
 
 # ---- Two checkouts on one machine ---------------------------------------------------------------
 # A board of its own beside a worker host's checkout: every scan by script name must see only its

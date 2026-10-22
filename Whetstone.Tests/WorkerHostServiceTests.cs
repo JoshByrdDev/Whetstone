@@ -27,15 +27,28 @@ public class WorkerHostServiceTests
     // ---- Config -----------------------------------------------------------------
 
     [Fact]
-    public void Hosts_are_numbered_after_the_board_hosts_workers_and_the_steward()
+    public void Hosts_are_numbered_in_blocks_of_ten_after_the_board_hosts_workers()
     {
         var hosts = WorkerHostConfig.Read(Global("""[{ "name": "a", "slots": 3 }, { "name": "b", "slots": 2 }]"""));
-        Assert.Equal(HeartbeatManager.MaxWorkers + 2, WorkerHostConfig.FirstRemoteSlot);
-        var first = WorkerHostConfig.FirstRemoteSlot;
-        Assert.Equal(new[] { first, first + 3 }, hosts.Select(h => h.FirstSlot));
-        Assert.True(hosts[0].OwnsSlot(first + 2));
-        Assert.False(hosts[0].OwnsSlot(first + 3));
-        Assert.True(hosts[1].OwnsSlot(first + 4));
+        Assert.Equal(11, WorkerHostConfig.FirstRemoteSlot);
+        Assert.Equal(new[] { 11, 21 }, hosts.Select(h => h.FirstSlot));
+        Assert.True(hosts[0].OwnsSlot(13));
+        Assert.False(hosts[0].OwnsSlot(14));
+        Assert.True(hosts[1].OwnsSlot(22));
+        Assert.False(hosts[1].OwnsSlot(23));
+    }
+
+    [Fact]
+    public void The_steward_sits_outside_every_berth()
+    {
+        // Ten full hosts: the steward must be none of theirs and none of this machine's.
+        var many = string.Join(",", Enumerable.Range(1, 10).Select(i => $$"""{ "name": "h{{i}}", "slots": {{WorkerHostConfig.MaxSlots}} }"""));
+        var hosts = WorkerHostConfig.Read(Global($"[{many}]"));
+        Assert.True(WorkerHostConfig.StewardSlot > HeartbeatManager.MaxWorkers);
+        Assert.DoesNotContain(hosts, h => h.OwnsSlot(WorkerHostConfig.StewardSlot));
+        // The board's own block, and every host's, fit in ten so the tens digit names the machine.
+        Assert.True(HeartbeatManager.MaxWorkers <= WorkerHostConfig.HostBlock);
+        Assert.True(WorkerHostConfig.MaxSlots < WorkerHostConfig.HostBlock - 1);
     }
 
     [Fact]

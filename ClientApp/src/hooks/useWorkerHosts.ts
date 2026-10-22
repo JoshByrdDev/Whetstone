@@ -12,7 +12,7 @@ export interface WorkerHostRun {
 /**
  * A worker host as `GET /api/hosts` describes it: another machine that runs workers for this board
  * and hands their branches back (docs/worker-hosts-plan.md). Its berths are slots
- * `firstSlot .. firstSlot + slots - 1`, numbered past the steward's.
+ * `firstSlot .. firstSlot + slots - 1`, a block of ten per host after the board host's (11.., 21..).
  */
 export interface WorkerHost {
   name: string;

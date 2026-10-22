@@ -216,9 +216,9 @@ function Get-BusyCount { return $Agents.Count }
 
 # Tickets being worked HERE, which is what the worker limit limits. The steward's berth is beside the
 # worker slots, not one of them (see $StewardSlot), so it counts as busy and never as a worker; and
-# a worker host's berths are past the steward's and limited by that host's own slot count.
+# a worker host's berths are past this machine's ceiling and limited by that host's own slot count.
 function Get-WorkerCount {
-    return @($Agents.Keys | Where-Object { $_ -lt $StewardSlot }).Count
+    return @($Agents.Keys | Where-Object { $_ -le $MaxHeartbeatWorkers }).Count
 }
 
 function Get-FreeSlot {

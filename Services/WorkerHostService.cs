@@ -8,8 +8,10 @@ namespace Whetstone.Services;
 /// orchestrator stays here. See docs/worker-hosts-plan.md.
 /// </summary>
 /// <param name="FirstSlot">
-/// The agent slot its first berth is numbered. Board host workers are 1..3 and the steward is 4, so
-/// worker hosts are numbered from 5 in blocks, in the order the config lists them.
+/// The agent slot its first berth is numbered. Board host workers are 1..10, and each worker host
+/// gets a block of ten after them, in the order the config lists them: the first from 11, the next
+/// from 21. The tens digit says which machine, the units which berth on it. The steward is 99,
+/// outside every block.
 /// </param>
 /// <param name="QaLeases">
 /// How many copies of one project's stack this host may run at once - its own capacity for a
@@ -18,8 +20,18 @@ namespace Whetstone.Services;
 /// </param>
 public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Skills, string[] Projects, int FirstSlot, int QaLeases = 1)
 {
-    /// <summary>The first slot past the board host's workers and the steward.</summary>
-    public const int FirstRemoteSlot = HeartbeatManager.MaxWorkers + 2;
+    /// <summary>How far apart two worker hosts' first berths are: one per ten, so slot 23 reads as host 2, berth 3.</summary>
+    public const int HostBlock = 10;
+
+    /// <summary>The first slot past the board host's workers: the first worker host's first berth.</summary>
+    public const int FirstRemoteSlot = HeartbeatManager.MaxWorkers + 1;
+
+    /// <summary>
+    /// The steward's berth. It is beside the fleet rather than in it, so it sits where no block can
+    /// reach: a block's berths end at x8 (<see cref="MaxSlots"/>), so x9 is never anybody's.
+    /// Mirrored as <c>$StewardSlot</c> in heartbeat-common.ps1.
+    /// </summary>
+    public const int StewardSlot = 99;
 
     /// <summary>Most berths one worker host may have. Its RAM is the real limit; this stops a typo.</summary>
     public const int MaxSlots = 8;
@@ -57,7 +69,7 @@ public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Sk
 
             result.Add(new WorkerHostConfig(name, enabled, slots, skills.Length > 0 ? skills : DefaultSkills, projects, next,
                 Math.Clamp(qa, 1, MaxSlots)));
-            next += slots;
+            next += HostBlock;
         }
         return result;
     }

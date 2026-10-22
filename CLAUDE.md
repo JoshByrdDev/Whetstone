@@ -299,7 +299,7 @@ is separation by absence, the same kind "there is no tool that signs a ticket of
 is not authentication - nothing on this machine is - so do not describe it as a security boundary.
 
 **It runs in a berth of its own.** The orchestrator asks `GET /api/steward/due` each pass and
-starts `data/steward.ps1` in slot 4, beside the three worker slots and never counted against them.
+starts `data/steward.ps1` in slot 99, beside the worker slots and never counted against them.
 A run is started by something happening (a ticket reached review or blocked, the owner answered,
 the base moved), not by a clock, and at most once per project in five minutes.
 
@@ -345,10 +345,12 @@ discoverable from the code:
   idle, fast-forwards to it and restarts on the new code. Started normally, `runner.ps1` is a small
   supervisor around the runner (`-Inner`); a change to the supervisor's own lines needs the task
   started again on that machine.
-- **Slots past the steward's are remote.** The board host's workers are 1..`MaxWorkers` (10) and
-  the steward is the next slot, so worker hosts are numbered from 12. Raising the ceiling renumbers
-  both, so it is done with the fleet stopped. This is written twice and the two must agree:
-  `WorkerHostConfig.FirstRemoteSlot` in C# and `$StewardSlot` in `heartbeat-common.ps1`.
+- **A slot's tens digit names the machine.** The board host's workers are 1..`MaxWorkers` (10),
+  and each worker host gets a block of ten after them in config order: the first from 11, the next
+  from 21. The steward is 99, outside every block, so it never interrupts that numbering. Changing
+  any of it renumbers berths under runs that are out, so it is done with the fleet stopped. This is
+  written twice and the two must agree: `WorkerHostConfig.FirstRemoteSlot` / `HostBlock` /
+  `StewardSlot` in C# and `$StewardSlot` in `heartbeat-common.ps1`.
 - **Where work goes first is read every pass, never at start.** `dispatchOrder` (worker host names
   and `@board` for this machine) and `dispatchMode` (`fill` by default, or `spread`) reach the
   orchestrator through `GET /api/hosts/dispatch`, because applying a setting by restarting it would

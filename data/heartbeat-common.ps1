@@ -89,12 +89,16 @@ $HeartbeatWorkers        = 3
 # going round whichever half happens to read the value first.
 $MaxHeartbeatWorkers     = 10
 
-# The berth a project's steward runs in: one past the last worker slot, and never counted against
-# the worker limit. A steward is the thing that answers questions and signs work off, so making it
-# wait for a free worker slot would have the fleet's own output queueing behind the fleet. One at a
-# time across every project - it is a full session like the workers beside it. It moves with the
-# ceiling, and so does every worker host's berth (WorkerHostConfig.FirstRemoteSlot).
-$StewardSlot             = $MaxHeartbeatWorkers + 1
+# The berth a project's steward runs in, never counted against the worker limit. A steward is the
+# thing that answers questions and signs work off, so making it wait for a free worker slot would
+# have the fleet's own output queueing behind the fleet. One at a time across every project - it is
+# a full session like the workers beside it.
+#
+# Slots read as places: 1..10 are this machine, and each worker host has a block of ten after that
+# (11.., 21.., in the order the config lists them; WorkerHostConfig.FirstRemoteSlot and HostBlock).
+# The steward is 99, outside every block - a block's berths stop at x8 - so it never sits in the
+# middle of that numbering. Mirrored as WorkerHostConfig.StewardSlot in C#.
+$StewardSlot             = 99
 
 $globalDefaults = $null
 $global         = $null
