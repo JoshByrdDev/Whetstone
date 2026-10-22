@@ -82,14 +82,22 @@ public static class ConfigEndpoints
             // medium), so an unset field would mean a different thing after every model change.
             supportsReasoningEffort: true,
             reportsUsage: true,
+            // The family aliases first: Claude Code resolves each to the newest model in it, so these
+            // never go stale. The pinned ids below them stay for a run that has to be reproducible.
             workerModels: new[]
             {
+                new ModelChoice("opus", "Latest Opus"),
+                new ModelChoice("sonnet", "Latest Sonnet (cheaper)"),
                 new ModelChoice("claude-opus-5-5", "Opus 5.5"),
                 new ModelChoice("claude-opus-5", "Opus 5"),
                 new ModelChoice("claude-sonnet-5-5", "Sonnet 5.5 (cheaper)"),
                 new ModelChoice("claude-fable-5-1", "Fable 5.1 (most capable)"),
             },
-            reflectionModels: new[] { new ModelChoice("haiku", "Haiku") }),
+            reflectionModels: new[]
+            {
+                new ModelChoice("haiku", "Latest Haiku"),
+                new ModelChoice("sonnet", "Latest Sonnet"),
+            }),
         new(
             key: "codex",
             label: "OpenAI Codex",
