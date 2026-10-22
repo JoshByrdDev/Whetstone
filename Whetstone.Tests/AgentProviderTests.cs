@@ -113,8 +113,8 @@ public class AgentProviderTests
             ("workerModel", "claude-opus-5-5"),
             ("workerReasoningEffort", "xhigh"));
 
-        Assert.Equal("xhigh", ArgAfter(factory.Resolve().BuildFreeformRun("C:/repo", Scratch()), "--effort"));
-        Assert.Equal("xhigh", ArgAfter(factory.ResolveForAnalysis().BuildAnalysisRun("C:/repo", "{}", Scratch()), "--effort"));
+        Assert.Equal("xhigh", ArgAfter(factory.For(AgentRoles.Applier).BuildFreeformRun("C:/repo", Scratch()), "--effort"));
+        Assert.Equal("xhigh", ArgAfter(factory.For(AgentRoles.Analysis).BuildAnalysisRun("C:/repo", "{}", Scratch()), "--effort"));
     }
 
     /// <summary>
@@ -131,8 +131,8 @@ public class AgentProviderTests
         if (stored != null) settings.Add(("workerReasoningEffort", stored));
         var factory = FactoryWith(settings.ToArray());
 
-        Assert.Equal(AgentProviderFactory.DefaultEffort, factory.Effort);
-        Assert.Equal("medium", ArgAfter(factory.ResolveForAnalysis().BuildAnalysisRun("C:/repo", "{}", Scratch()), "--effort"));
+        Assert.Equal(AgentProviderFactory.DefaultEffort, factory.Role(AgentRoles.Analysis).Effort);
+        Assert.Equal("medium", ArgAfter(factory.For(AgentRoles.Analysis).BuildAnalysisRun("C:/repo", "{}", Scratch()), "--effort"));
     }
 
     /// <summary>Codex takes the same setting, in its own spelling, on both of the dashboard's runs.</summary>
@@ -141,8 +141,8 @@ public class AgentProviderTests
     {
         var factory = FactoryWith(("agentProvider", "codex"), ("workerReasoningEffort", "xhigh"));
 
-        Assert.Equal("model_reasoning_effort=xhigh", ArgAfter(factory.ResolveForAnalysis().BuildAnalysisRun("C:/repo", "{}", Scratch()), "-c"));
-        Assert.Equal("model_reasoning_effort=xhigh", ArgAfter(factory.Resolve().BuildFreeformRun("C:/repo", Scratch()), "-c"));
+        Assert.Equal("model_reasoning_effort=xhigh", ArgAfter(factory.For(AgentRoles.Analysis).BuildAnalysisRun("C:/repo", "{}", Scratch()), "-c"));
+        Assert.Equal("model_reasoning_effort=xhigh", ArgAfter(factory.For(AgentRoles.Applier).BuildFreeformRun("C:/repo", Scratch()), "-c"));
     }
 
     /// <summary>
@@ -217,8 +217,8 @@ public class AgentProviderTests
             ("workerModel", "claude-opus-5"),
             ("analysisModel", "claude-fable-5-1"));
 
-        Assert.Equal("claude-opus-5", ModelOf(factory.Resolve()));
-        Assert.Equal("claude-fable-5-1", ModelOf(factory.ResolveForAnalysis()));
+        Assert.Equal("claude-opus-5", ModelOf(factory.For(AgentRoles.Applier)));
+        Assert.Equal("claude-fable-5-1", ModelOf(factory.For(AgentRoles.Analysis)));
     }
 
     /// <summary>
@@ -235,13 +235,14 @@ public class AgentProviderTests
         var settings = new List<(string, string)> { ("agentProvider", "claude"), ("workerModel", "claude-fable-5-1") };
         if (stored != null) settings.Add(("analysisModel", stored));
 
-        Assert.Equal("claude-fable-5-1", ModelOf(FactoryWith(settings.ToArray()).ResolveForAnalysis()));
+        Assert.Equal("claude-fable-5-1", ModelOf(FactoryWith(settings.ToArray()).For(AgentRoles.Analysis)));
     }
 
     /// <summary>
     /// The provider guard applies to the override too. A config left naming Claude's model after a
     /// switch to codex would otherwise fail every analysis with an error about a model name, which
-    /// says nothing about the setting that caused it.
+    /// says nothing about the setting that caused it. It falls through to the worker model, the
+    /// next thing the legacy settings named.
     /// </summary>
     [Fact]
     public void AnAnalysisModelBelongingToAnotherProviderIsIgnored()
@@ -251,7 +252,101 @@ public class AgentProviderTests
             ("workerModel", "gpt-5.6-terra"),
             ("analysisModel", "claude-fable-5-1"));
 
-        Assert.Equal(CodexAgentProvider.DefaultModel, ModelOf(factory.ResolveForAnalysis()));
+        Assert.Equal("gpt-5.6-terra", ModelOf(factory.For(AgentRoles.Analysis)));
+    }
+
+    // ---- Roles ----------------------------------------------------------------
+
+    /// <summary>
+    /// The point of roles: two runs on two CLIs at once. Each takes its own provider, model and
+    /// effort, and neither borrows from the other.
+    /// </summary>
+    [Fact]
+    public void EachRoleRunsOnItsOwnProvider()
+    {
+        var factory = FactoryWithJson("""
+            { "agentRoles": {
+                "analysis": { "provider": "codex",  "model": "gpt-5.6-sol", "effort": "high" },
+                "applier":  { "provider": "claude", "model": "opus",        "effort": "low" } } }
+            """);
+
+        var analysis = factory.For(AgentRoles.Analysis);
+        var applier = factory.For(AgentRoles.Applier);
+        Assert.IsType<CodexAgentProvider>(analysis);
+        Assert.IsType<ClaudeAgentProvider>(applier);
+        Assert.Equal("gpt-5.6-sol", ModelOf(analysis));
+        Assert.Equal("opus", ModelOf(applier));
+        Assert.Equal("model_reasoning_effort=high", ArgAfter(analysis.BuildAnalysisRun("C:/repo", "{}", Scratch()), "-c"));
+        Assert.Equal("low", ArgAfter(applier.BuildFreeformRun("C:/repo", Scratch()), "--effort"));
+    }
+
+    /// <summary>A role entry outranks every legacy setting, including the fleet-wide provider.</summary>
+    [Fact]
+    public void ARoleEntryOutranksTheLegacySettings()
+    {
+        var factory = FactoryWithJson("""
+            { "agentProvider": "claude", "workerModel": "claude-opus-5", "workerReasoningEffort": "xhigh",
+              "agentRoles": { "analysis": { "provider": "gemini", "model": "flash" } } }
+            """);
+
+        var role = factory.Role(AgentRoles.Analysis);
+        Assert.Equal(new AgentRole("gemini", "flash", "xhigh"), role);
+        // A role with no entry still reads the legacy settings.
+        Assert.Equal(new AgentRole("claude", "claude-opus-5", "xhigh"), factory.Role(AgentRoles.Applier));
+    }
+
+    /// <summary>
+    /// A role's model that belongs to another provider is the provider's default, never the
+    /// mismatched name; and reflection's default is the provider's reflection model, not its worker.
+    /// </summary>
+    [Fact]
+    public void AMismatchedRoleModelFallsBackToThatProvidersDefault()
+    {
+        var factory = FactoryWithJson("""
+            { "agentRoles": {
+                "analysis":   { "provider": "codex", "model": "claude-opus-5-5" },
+                "reflection": { "provider": "codex", "model": "" } } }
+            """);
+
+        Assert.Equal(CodexAgentProvider.DefaultModel, factory.Role(AgentRoles.Analysis).Model);
+        Assert.Equal(CodexAgentProvider.DefaultReflectionModel, factory.Role(AgentRoles.Reflection).Model);
+    }
+
+    /// <summary>
+    /// The rate-limit meter reads Claude's subscription, so it has something to say while any one
+    /// role runs on Claude, and nothing once none does.
+    /// </summary>
+    [Fact]
+    public void TheMeterFollowsWhetherAnyRoleUsesClaude()
+    {
+        var allCodex = "{ \"agentRoles\": {" + string.Join(",",
+            AgentRoles.All.Select(r => $"\"{r}\": {{ \"provider\": \"codex\" }}")) + "} }";
+        Assert.False(FactoryWithJson(allCodex).UsesClaude);
+
+        var oneClaude = allCodex.Replace("\"qa-test\": { \"provider\": \"codex\" }", "\"qa-test\": { \"provider\": \"claude\" }");
+        Assert.True(FactoryWithJson(oneClaude).UsesClaude);
+    }
+
+    /// <summary>
+    /// The heartbeat's own list of the roles it runs has to match this one. A role missing there
+    /// would leave its CLI unchecked at startup and its processes unreaped.
+    /// </summary>
+    [Fact]
+    public void TheHeartbeatsRoleListMatches()
+    {
+        var ps1 = File.ReadAllText(Path.Combine(RepoRoot(), "data", "heartbeat-common.ps1"));
+        var declared = Regex.Match(ps1, @"\$AgentRoleKeys\s*=\s*@\(([^)]*)\)");
+        Assert.True(declared.Success, "No $AgentRoleKeys in heartbeat-common.ps1");
+        var keys = Regex.Matches(declared.Groups[1].Value, "'([^']+)'").Select(m => m.Groups[1].Value);
+        Assert.Equal(AgentRoles.HeartbeatRoles, keys);
+    }
+
+    private static AgentProviderFactory FactoryWithJson(string json)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "whetstone-tests", Guid.NewGuid().ToString("n"));
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "config.json"), json);
+        return new AgentProviderFactory(new ProjectRegistry(new DashboardPaths(root)));
     }
 
     private static string RepoRoot()

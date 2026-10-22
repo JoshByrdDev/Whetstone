@@ -96,6 +96,11 @@ if (-not (Test-Path $PromptStewardFile)) {
     exit 1
 }
 
+# --- The steward's role: its own provider, model and effort, like every pipeline phase ---
+$stewardRole   = Get-AgentRole -Role $StewardSkill
+$AgentProvider = $stewardRole.Provider
+$model         = $stewardRole.Model
+
 # --- Tools ---
 # One server, and it is the steward's own door on the dashboard: /mcp/steward lists the steward's
 # tools and nothing a worker has, exactly as /mcp lists a worker's and none of these.
@@ -106,7 +111,6 @@ $env:WHETSTONE_TICKET_ID = ""
 $env:WHETSTONE_PROJECT   = "$Project"
 $env:WHETSTONE_SKILL     = $StewardSkill
 
-$model = Get-PhaseModel -Skill $StewardSkill
 $conventionsFile = Get-ConventionsFile -Provider $AgentProvider -WorkDir $workDir
 $memoryIndex = if ($launch.memoryIndex) { "$($launch.memoryIndex)" } else { "(this project keeps no notes store)" }
 $planDir = if ($launch.planUnits) { "$($launch.planUnits)" } else { "(no plan folder is configured for this project)" }
@@ -120,7 +124,7 @@ $prompt = (Get-Content -Path $PromptStewardFile -Raw -Encoding UTF8).
     Replace('{{SKILL_FILE}}', $skillFile)
 
 $agentCmd = Get-AgentWorkerCommand -Provider $AgentProvider -Model $model -Prompt $prompt `
-    -WorkDir $workDir -ToolSetup $toolSetup -ReasoningEffort $WorkerReasoningEffort
+    -WorkDir $workDir -ToolSetup $toolSetup -ReasoningEffort $stewardRole.Effort
 $agentArgs = @($agentCmd.Args)
 
 # A steward reads and decides; it changes no file and runs no command. Where the CLI lets the

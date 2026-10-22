@@ -305,9 +305,9 @@ public class AnalysisRunner : IAnalysisExecutor
         Ticket ticket, AnalysisLens lens, string readDir, string? headSha, string? treeSha, string prompt,
         Requirements reqs, IRunProgress progress, CancellationToken ct)
     {
-        // The analysis may be pinned to a different model from the pipeline's — see
-        // AgentProviderFactory.ResolveForAnalysis.
-        var provider = _providers.ResolveForAnalysis();
+        // The Classroom is a role of its own, with its own provider and model - see
+        // AgentRoles.Analysis.
+        var provider = _providers.For(AgentRoles.Analysis);
         // One analysis runs at a time, so one scratch directory named after the feature is enough.
         var scratch = Path.Combine(_paths.RunDir, "analysis");
 

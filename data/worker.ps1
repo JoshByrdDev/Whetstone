@@ -1077,10 +1077,10 @@ function Invoke-Reflection {
         $tempReflectFile = Join-Path $env:TEMP "claude-reflect-prompt-$TicketId.md"
         Set-Content -Path $tempReflectFile -Value $reflectPrompt -Encoding UTF8
         # NB: a Start-Job runs in a separate process and does NOT inherit script variables, so the
-        # whole command has to be passed in (not rebuilt from $AgentProvider inside the block, which
+        # whole command has to be passed in (not rebuilt from $ReflectProvider inside the block, which
         # is not defined there - providers.ps1 is not sourced in a job).
-        $reflectCmd = Get-AgentReflectionCommand -Provider $AgentProvider -Model $ReflectionModel `
-            -ReasoningEffort $WorkerReasoningEffort
+        $reflectCmd = Get-AgentReflectionCommand -Provider $ReflectProvider -Model $ReflectionModel `
+            -ReasoningEffort $ReflectEffort
         $reflectJob = Start-Job -ScriptBlock {
             param($file, $dir, $cmd)
             # A job is its own process and inherits none of the parent's encoding setup, so the
@@ -1115,7 +1115,7 @@ function Invoke-Reflection {
         else {
             Write-Log "  Reflection timed out - skipping"
             Stop-Job $reflectJob
-            Stop-DescendantAgent -RootPid $PID -Pattern $AgentProvider.ProcessPattern
+            Stop-DescendantAgent -RootPid $PID -Pattern $ReflectProvider.ProcessPattern
             $reflectOutput = ""
         }
         Remove-Job $reflectJob -Force -ErrorAction SilentlyContinue
@@ -1268,10 +1268,20 @@ $isReview    = ($track -eq "Review")
 # The branch under review lives on the review target, not on ticket.branch - a review ticket never
 # owns a branch. Empty for a delivery ticket.
 $reviewBranch = "$($Claim.ticket.review.sourceBranch)".Trim()
-# The model this phase runs on: $WorkerModel unless phaseModels overrides it for this skill.
+# The provider, model and effort this phase runs on: its role in agentRoles, named by the skill. A
+# phase can run on a different CLI from the one before it, so everything below that builds, reads
+# or reaps the agent takes its provider from here rather than from one fleet-wide setting.
 # Resolved once, here, so the command line, the cycle report and the log all name the same thing -
 # a metrics row that disagreed with what actually ran would be worse than no row at all.
-$phaseModel  = Get-PhaseModel -Skill $skill
+$phaseRole       = Get-AgentRole -Role $skill
+$AgentProvider   = $phaseRole.Provider
+$phaseModel      = $phaseRole.Model
+$WorkerReasoningEffort = $phaseRole.Effort
+# Reflection is a role of its own, so it can run on a cheap model of any provider.
+$reflectRole     = Get-AgentRole -Role 'reflection'
+$ReflectProvider = $reflectRole.Provider
+$ReflectionModel = $reflectRole.Model
+$ReflectEffort   = $reflectRole.Effort
 $skillFile   = "$($Claim.project.skillFile)"
 $memoryDir   = "$($Claim.project.memoryDir)"
 $memoryIndex = "$($Claim.project.memoryIndex)"
@@ -1341,7 +1351,7 @@ $runHost = "$($Claim.host)".Trim()
 $onHost  = [bool]$runHost
 $runId   = "$($Claim.runId)".Trim()
 
-Write-Log "--- Working ticket #$ticketId [$projectKey] phase=$phase skill=$skill model=$phaseModel resumed=$resumed ---"
+Write-Log "--- Working ticket #$ticketId [$projectKey] phase=$phase skill=$skill provider=$($AgentProvider.Key) model=$phaseModel effort=$WorkerReasoningEffort resumed=$resumed ---"
 Send-DashboardEvent -Type "cycle_start" -TicketId $ticketId -Phase $phase -Project $projectKey
 
 # Wall clock for the WHOLE cycle, started before the worktree is prepared. On a project whose

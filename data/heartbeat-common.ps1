@@ -82,14 +82,6 @@ $WorkerStallMinutes      = 30
 $WorktreeSetupTimeoutMinutes = 20
 $BaseBranch              = "main"
 $BranchPrefix            = ""
-$WorkerModel             = "claude-opus-5-5"
-$ReflectionModel         = "haiku"
-# Per-phase overrides of $WorkerModel, keyed by SKILL name (speculate / implement / qa-test /
-# refine) rather than by phase: the skill is what the worker already has in hand from the claim,
-# and it is the thing whose prompt the model is being matched to. Absent or empty means "use
-# $WorkerModel", so a config file that has never heard of this setting behaves exactly as it did -
-# and moving one phase leaves the other three provably untouched.
-$PhaseModels             = $null
 $HeartbeatWorkers        = 3
 
 # The ceiling, mirrored from HeartbeatManager.MaxWorkers on the dashboard side. Both halves of the
@@ -125,10 +117,6 @@ if ($null -ne (Get-Global 'heartbeatWorkerStallMinutes'))   { $WorkerStallMinute
 if ($null -ne (Get-Global 'worktreeSetupTimeoutMinutes'))   { $WorktreeSetupTimeoutMinutes = [double](Get-Global 'worktreeSetupTimeoutMinutes') }
 if (Get-Global 'baseBranch') { $BaseBranch = Get-Global 'baseBranch' }
 $configuredPrefix = Get-Global 'branchPrefix'; if ($null -ne $configuredPrefix) { $BranchPrefix = $configuredPrefix }
-if (Get-Global 'workerModel')     { $WorkerModel     = Get-Global 'workerModel' }
-if (Get-Global 'reflectionModel') { $ReflectionModel = Get-Global 'reflectionModel' }
-$configuredPhaseModels = Get-Global 'phaseModels'
-if ($configuredPhaseModels) { $PhaseModels = $configuredPhaseModels }
 if ($null -ne (Get-Global 'heartbeatWorkers')) {
     $HeartbeatWorkers = [int](Get-Global 'heartbeatWorkers')
 }
@@ -561,46 +549,78 @@ function Test-OffHours {
     else                 { return ($now -ge $start -and $now -lt $end) }
 }
 
-# --- The provider, resolved last ---
+# --- Agent roles, resolved last ---
 #
-# Down here rather than up with the rest of the config for one reason: Resolve-AgentModel reports a
-# corrected model through Write-Log, and Write-Log is defined halfway down this file. Reading config
-# is order-free; anything that TALKS is not.
-$AgentProviderName = 'claude'
-if (Get-Global 'agentProvider') { $AgentProviderName = "$(Get-Global 'agentProvider')" }
-$AgentProvider = Get-AgentProvider -Name $AgentProviderName
+# There is no fleet-wide provider. Each kind of run - every pipeline phase by its SKILL name, the
+# steward, and reflection - names its own provider, model and effort under `agentRoles` in global
+# config, so implement can run on codex while qa-test stays on claude. The dashboard's own two runs
+# (the Classroom and the improvement applier) are roles too, read in C# by AgentRoles.Resolve with
+# the same fallbacks as Get-AgentRole below. The two must agree.
+#
+# A role absent from agentRoles is read from the settings that came before it (agentProvider,
+# workerModel, phaseModels, reflectionModel, workerReasoningEffort), so a config file written before
+# roles existed runs exactly as it did.
+#
+# Down here rather than up with the rest of the config because nothing above needs it, and because
+# Get-AgentProvider comes from providers.ps1, which is sourced at the top.
+
+# The roles the heartbeat runs, in pipeline order. Mirrors AgentRoles.HeartbeatRoles in C#, which a
+# test there checks against this line.
+$AgentRoleKeys = @('speculate', 'implement', 'qa-test', 'refine', 'review-pr', 'steward', 'reflection')
+
+# How hard a run thinks when its role does not say. Never "whatever the CLI defaults to": claude's
+# default moves with the model (Opus 5 ran at high, Opus 5.5 at medium). Mirrors
+# AgentProviderFactory.DefaultEffort.
+$DefaultReasoningEffort = 'medium'
+
+function Get-AgentRoleText {
+    param($Value)
+    if ($null -eq $Value -or $Value -isnot [string]) { return '' }
+    return $Value.Trim()
+}
+
+# What one role runs: { Role, Provider (Get-AgentProvider's object), Model, Effort }, every gap
+# filled. A model that is unmistakably another provider's is never handed to this one - it would
+# fail every run with an error that says nothing about the setting that caused it.
+function Get-AgentRole {
+    param([string]$Role)
+
+    $roles = Get-Global 'agentRoles'
+    # Not Get-Prop, which reads a property as a string: the entry is an object.
+    $entry = if ($roles -and $roles.PSObject.Properties[$Role]) { $roles.PSObject.Properties[$Role].Value } else { $null }
+    if ($entry -isnot [System.Management.Automation.PSCustomObject]) { $entry = $null }
+
+    $providerName = if ($entry) { Get-AgentRoleText $entry.provider } else { '' }
+    if (-not $providerName) { $providerName = Get-AgentRoleText (Get-Global 'agentProvider') }
+    $provider = Get-AgentProvider -Name $providerName
+
+    $candidates = if ($entry) { @(Get-AgentRoleText $entry.model) }
+        elseif ($Role -eq 'reflection') { @(Get-AgentRoleText (Get-Global 'reflectionModel')) }
+        else {
+            $phaseModels = Get-Global 'phaseModels'
+            $override = if ($phaseModels) { Get-AgentRoleText (Get-Prop $phaseModels $Role) } else { '' }
+            @($override, (Get-AgentRoleText (Get-Global 'workerModel')))
+        }
+    $model = if ($Role -eq 'reflection') { $provider.DefaultReflectModel } else { $provider.DefaultWorkerModel }
+    foreach ($c in $candidates) {
+        if ($c -and (Test-AgentModelBelongsTo -ProviderKey $provider.Key -Model $c)) { $model = $c; break }
+    }
+
+    $effort = if ($entry) { Get-AgentRoleText $entry.effort } else { '' }
+    if (-not $effort) { $effort = Get-AgentRoleText (Get-Global 'workerReasoningEffort') }
+    if (-not $effort) { $effort = $DefaultReasoningEffort }
+
+    return [pscustomobject]@{ Role = $Role; Provider = $provider; Model = $model; Effort = $effort }
+}
+
+# Every provider some role runs on, once each. The orchestrator checks each one's CLI is installed,
+# and reaps all of their processes - a stuck codex is as much a leak as a stuck claude.
+$AgentProvidersInUse = @()
+foreach ($r in $AgentRoleKeys) {
+    $p = (Get-AgentRole -Role $r).Provider
+    if (-not ($AgentProvidersInUse | Where-Object { $_.Key -eq $p.Key })) { $AgentProvidersInUse += $p }
+}
 
 # Read by Stop-DescendantAgent when a caller does not name a pattern - including the orchestrator,
 # which reaps agents it did not launch.
-$script:AgentProcessPattern = $AgentProvider.ProcessPattern
-
-# A model left pointing at the previous provider is corrected here, once, instead of failing every
-# run for the rest of the session.
-$WorkerModel     = Resolve-AgentModel -Provider $AgentProvider -Model $WorkerModel     -Fallback $AgentProvider.DefaultWorkerModel
-$ReflectionModel = Resolve-AgentModel -Provider $AgentProvider -Model $ReflectionModel -Fallback $AgentProvider.DefaultReflectModel
-
-# Which model this run's SKILL should use. $WorkerModel unless phaseModels names one for it.
-#
-# Resolved here rather than at config-read time because the answer depends on the claim, which does
-# not exist yet when config is read - and because Resolve-AgentModel talks through Write-Log, which
-# is why the other two resolves are down here too.
-#
-# The override goes through Resolve-AgentModel with $WorkerModel as the fallback, not the provider
-# default: a phase left pointing at the other provider's model should land on whatever the fleet is
-# actually running, which is the setting the user last chose, not a constant.
-function Get-PhaseModel {
-    param([string]$Skill)
-
-    $override = "$(Get-Prop $PhaseModels $Skill)".Trim()
-    if (-not $override) { return $WorkerModel }
-    return (Resolve-AgentModel -Provider $AgentProvider -Model $override -Fallback $WorkerModel)
-}
-
-# How hard every run is asked to think - the worker and its reflection alike - where the provider
-# exposes that as a dial: claude's --effort, codex's model_reasoning_effort; gemini has none and
-# ignores this. Blank means medium, never "whatever the CLI defaults to": claude's default moves with
-# the model (Opus 5 ran at high, Opus 5.5 at medium). The dashboard's own runs read the same
-# setting the same way - AgentProviderFactory.DefaultEffort.
-$WorkerReasoningEffort = 'medium'
-$configuredEffort = "$(Get-Global 'workerReasoningEffort')".Trim()
-if ($configuredEffort) { $WorkerReasoningEffort = $configuredEffort }
+$script:AgentProcessPattern = @($AgentProvidersInUse | ForEach-Object { $_.ProcessPattern } | Select-Object -Unique)

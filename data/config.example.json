@@ -25,17 +25,16 @@
   "heartbeatPriorities": [],
   "baseBranch": "main",
   "branchPrefix": "",
-  "_comment_agentProvider": "Which agent CLI the heartbeat drives: 'claude' (Claude Code), 'codex' (OpenAI Codex) or 'gemini' (Google Gemini CLI). The CLI has to be installed and signed in - `claude`, `codex login`, or `gemini` once interactively (or a GEMINI_API_KEY in the environment). Anything unrecognised falls back to claude. Switching provider also switches which model names are valid: a workerModel that unmistakably belongs to a different provider is replaced with the new provider's default rather than passed through, so you cannot strand the fleet on a model its CLI will reject. NOTE: the gemini provider was written from Google's documentation and has never been run - expect to fix something the first time you select it.",
-  "agentProvider": "claude",
-  "workerModel": "claude-opus-5-5",
-  "_comment_phaseModels": "Per-phase overrides of workerModel, keyed by skill name: speculate, implement, qa-test, refine. A phase left out (or set to \"\") runs workerModel, so this only ever changes the phases you name. Use it to spend a more capable model where the leverage is - speculation writes the plan every later phase implements, and is a small fraction of a ticket's runs - without moving the phases that are working. Same model names as workerModel; one belonging to the other provider is dropped, exactly as workerModel's is.",
-  "phaseModels": {
-    "speculate": "",
-    "implement": "",
-    "qa-test": "",
-    "refine": ""
-  },
-  "reflectionModel": "haiku",
-  "_comment_workerReasoningEffort": "How hard EVERY agent run is asked to think - each phase, reflection, the Classroom analysis and walkthrough, and the improvement applier - for providers exposing that as a dial (claude --effort, codex model_reasoning_effort: low|medium|high|xhigh). The Gemini CLI has no such flag and ignores this - Gemini's thinking is a property of the model you pick. Empty means medium, not the CLI's own default: Claude Code's default moves with the model (Opus 5: high, Opus 5.5: medium).",
-  "workerReasoningEffort": "medium"
+  "_comment_agentRoles": "Which agent CLI, model and effort each kind of run takes - there is no fleet-wide provider. Keys: each pipeline phase by skill name (speculate, implement, qa-test, refine, review-pr), steward, reflection, analysis (the Classroom: a ticket's analysis and walkthrough, a unit's report) and applier (the improvement applier). provider is 'claude' (Claude Code), 'codex' (OpenAI Codex) or 'gemini' (Google Gemini CLI); every CLI a role names has to be installed and signed in, and the heartbeat refuses to start while one is missing. model blank or another provider's model runs that provider's default. effort is low|medium|high|xhigh (claude --effort, codex model_reasoning_effort; gemini has no such dial and ignores it), and blank means medium. Only claude runs pass through data/worker-guard.ps1; on codex and gemini the prompt's rules are the whole of the local-only enforcement. A role left out is read from the older agentProvider / workerModel / phaseModels / reflectionModel / analysisModel / workerReasoningEffort settings, and saving from Settings writes every role and removes those.",
+  "agentRoles": {
+    "speculate":  { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "implement":  { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "qa-test":    { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "refine":     { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "review-pr":  { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "steward":    { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "reflection": { "provider": "claude", "model": "haiku", "effort": "medium" },
+    "analysis":   { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" },
+    "applier":    { "provider": "claude", "model": "claude-opus-5-5", "effort": "medium" }
+  }
 }

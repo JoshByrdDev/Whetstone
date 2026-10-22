@@ -246,7 +246,7 @@ public class ClaudeUsageService
         // that has nothing to do with what the fleet is actually spending, which is worse than
         // reporting nothing: the chip is there to be trusted at a glance. There is no cross-provider
         // equivalent to fall back to, so the honest answer is to say so and let the UI hide it.
-        if (_providers.CurrentKind != AgentProviderKind.Claude)
+        if (!_providers.UsesClaude)
         {
             Degrade("unsupported", "Rate-limit headroom is only reported for Claude Code.");
             return;
@@ -390,7 +390,7 @@ public class ClaudeUsageService
     public async Task<bool> NudgeAsync(CancellationToken ct = default)
     {
         if (_isolation.On) return false;
-        if (_providers.CurrentKind != AgentProviderKind.Claude) return false;
+        if (!_providers.UsesClaude) return false;
 
         var psi = new ProcessStartInfo
         {
@@ -444,7 +444,7 @@ public class ClaudeUsageService
     /// dashboard and one whose renewal is merely rate-limited both say nothing at all.
     /// </summary>
     public SignInState InspectSignIn() => new(
-        _providers.CurrentKind == AgentProviderKind.Claude && _signInMessage is not null,
+        _providers.UsesClaude && _signInMessage is not null,
         _signInMessage,
         OperatingSystem.IsWindows());
 
@@ -468,8 +468,8 @@ public class ClaudeUsageService
     public async Task<string?> EnsureSignedInAsync(CancellationToken ct = default)
     {
         if (_isolation.On) return QaIsolation.Refusal("using the Claude login");
-        // Another provider's runs do not read this credential, so there is nothing here to promise.
-        if (_providers.CurrentKind != AgentProviderKind.Claude) return null;
+        // No role runs on Claude, so no run reads this credential and there is nothing to promise.
+        if (!_providers.UsesClaude) return null;
 
         // One renewal at a time. Every caller here is a run about to start, and runs arrive in
         // queues: without this, ten dequeued tickets are ten simultaneous grants against an endpoint

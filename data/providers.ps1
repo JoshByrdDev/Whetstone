@@ -70,7 +70,7 @@ function Get-AgentProvider {
                 DefaultWorkerModel  = 'pro'
                 DefaultReflectModel = 'flash'
                 # Thinking is a property of the model here, not a CLI dial, so there is nothing for
-                # workerReasoningEffort to set.
+                # a role's effort to set.
                 SupportsReasoning   = $false
             }
         }
@@ -147,24 +147,6 @@ function Get-ConventionsFile {
         if ($WorkDir -and (Test-Path (Join-Path $WorkDir $name))) { return $name }
     }
     return $preferred
-}
-
-# Guard against a model name left over from the other provider. Switching provider in Settings and
-# forgetting the model would otherwise hand `claude-opus-5` to codex, which fails per run, every run,
-# with an error that says nothing about the real cause. Only an unambiguous mismatch is corrected -
-# anything else is passed through untouched, so a new model slug never needs code here to work.
-function Resolve-AgentModel {
-    param($Provider, [string]$Model, [string]$Fallback)
-
-    $m = "$Model".Trim()
-    if (-not $m) { return $Fallback }
-    if (-not (Test-AgentModelBelongsTo -ProviderKey $Provider.Key -Model $m)) {
-        if (Get-Command Write-Log -ErrorAction SilentlyContinue) {
-            Write-Log "  Model '$m' is not an $($Provider.DisplayName) model - falling back to '$Fallback'."
-        }
-        return $Fallback
-    }
-    return $m
 }
 
 # ---- Per-run tool configuration --------------------------------------------

@@ -205,7 +205,7 @@ public class UnitReportRunner
                 next is null ? null : $"unit {next.Number}, {TicketGitService.UnitTitle(next)} ({string.Join(", ", next.Outcomes)})",
                 analysisPaths));
 
-            var provider = _providers.ResolveForAnalysis();
+            var provider = _providers.For(AgentRoles.Analysis);
             var run = await AgentJsonRunner.RunAsync(provider, dir, Path.Combine(scratch, "run"), prompt,
                 AnalysisDocument.JsonSchema, progress, Timeout, "unit report", _log, ct);
             if (run.Outcome is not { } outcome) return (null, run.Error);

@@ -48,9 +48,14 @@ $script:WorkedSinceSleepNotice   = $false
 $script:TicketsWorkedSinceNotice = @()
 
 # --- Prerequisites ---
-if (-not (Get-Command $AgentProvider.Exe -ErrorAction SilentlyContinue)) {
-    Write-Host "ERROR: '$($AgentProvider.Exe)' command not found in PATH. Install the $($AgentProvider.DisplayName) CLI first, or change the agent provider in Settings." -ForegroundColor Red
-    exit 1
+# Every CLI some role runs on. One that is missing would fail every run of its roles, each with
+# the same error, so it stops the fleet here instead - naming the roles that need it.
+foreach ($p in $AgentProvidersInUse) {
+    if (-not (Get-Command $p.Exe -ErrorAction SilentlyContinue)) {
+        $needs = ($AgentRoleKeys | Where-Object { (Get-AgentRole -Role $_).Provider.Key -eq $p.Key }) -join ', '
+        Write-Host "ERROR: '$($p.Exe)' command not found in PATH, and these roles run on it: $needs. Install the $($p.DisplayName) CLI first, or move those roles to another provider in Settings." -ForegroundColor Red
+        exit 1
+    }
 }
 if (-not (Test-Path $PromptFile)) {
     Write-Host "ERROR: Prompt file not found at $PromptFile" -ForegroundColor Red

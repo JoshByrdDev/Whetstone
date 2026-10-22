@@ -225,6 +225,9 @@ public sealed class ClaudeAgentProvider : AgentProvider
     /// </summary>
     public const string DefaultModel = "claude-opus-5-5";
 
+    /// <summary>What reflection runs when its role names no model. The family alias, so it follows Haiku.</summary>
+    public const string DefaultReflectionModel = "haiku";
+
     private readonly string _model;
     private readonly string? _effort;
     private readonly string? _configDir;
@@ -509,6 +512,9 @@ public sealed class CodexAgentProvider : AgentProvider
     /// <summary>The flagship of the current generation; the Classroom document is worth it.</summary>
     public const string DefaultModel = "gpt-5.6-sol";
 
+    /// <summary>What reflection runs when its role names no model.</summary>
+    public const string DefaultReflectionModel = "gpt-5.6-luna";
+
     private readonly string _model;
     private readonly string? _effort;
 
@@ -727,6 +733,9 @@ public sealed class GeminiAgentProvider : AgentProvider
     /// flagship is, so this default cannot go stale the way <c>gemini-3.1-pro-preview</c> will.
     /// </summary>
     public const string DefaultModel = "pro";
+
+    /// <summary>What reflection runs when its role names no model. A routing alias, like the default.</summary>
+    public const string DefaultReflectionModel = "flash";
 
     /// <summary>
     /// The tools the read-only analysis run may have. Both spellings of each on purpose: the
@@ -1207,11 +1216,11 @@ public static class AgentModels
 // ---------------------------------------------------------------------------
 
 /// <summary>
-/// Which provider the dashboard is currently pointed at, read fresh from global config each time.
+/// The provider each of the dashboard's own runs takes, read fresh from global config each time.
 /// <para>
-/// Not cached on purpose. The provider is a Settings toggle, and a value captured at startup would
-/// mean the setting silently does nothing until the dashboard is restarted — which, here, also kills
-/// every in-flight worker.
+/// Not cached on purpose. A role's provider is a Settings choice, and a value captured at startup
+/// would mean the setting silently does nothing until the dashboard is restarted, which here also
+/// kills every in-flight worker.
 /// </para>
 /// </summary>
 public class AgentProviderFactory
@@ -1223,81 +1232,39 @@ public class AgentProviderFactory
         (_registry, _isolation) = (registry, isolation ?? QaIsolation.Off);
 
     /// <summary>
-    /// The configured provider. An unrecognised name falls back to Claude, which is the incumbent:
-    /// a typo in config.json must not silently stop the dashboard working.
-    /// </summary>
-    public AgentProviderKind CurrentKind => Configured().Trim().ToLowerInvariant() switch
-    {
-        "codex" => AgentProviderKind.Codex,
-        "gemini" => AgentProviderKind.Gemini,
-        _ => AgentProviderKind.Claude,
-    };
-
-    /// <summary>The pipeline's provider, on the configured worker model.</summary>
-    public AgentProvider Resolve() => Build(Str("workerModel"));
-
-    /// <summary>
-    /// The provider for a Classroom analysis.
-    /// <para>
-    /// Separate from <see cref="Resolve"/> because the two jobs are not alike. A worker writes code
-    /// against a spec and its output is checked by QA and by a human at review; an analysis is read
-    /// once, believed, and never verified by anything downstream — which makes it the run where
-    /// paying for a stronger model can be worth it even when the pipeline is not.
-    /// </para>
-    /// <para>
-    /// Falls back to the worker model when unset, and unset is stored as an ABSENCE rather than a
-    /// copy — the same rule <c>phaseModels</c> follows. A copy would pin the analysis to whatever
-    /// the worker model happened to be the day it was saved, so changing the worker model later
-    /// would leave the analysis silently behind on the old one.
-    /// </para>
-    /// </summary>
-    public AgentProvider ResolveForAnalysis() =>
-        Build(Str("analysisModel") is { } over && over.Trim().Length > 0 ? over : Str("workerModel"));
-
-    /// <summary>
-    /// How hard every run thinks when Settings has never been told. Never "whatever the CLI
-    /// defaults to": Claude Code's default moves with the model (Opus 5 ran at high, Opus 5.5 at
-    /// medium), so a blank would quietly mean something else after each model change. The
-    /// heartbeat reads the same setting with the same fallback, in heartbeat-common.ps1.
+    /// How hard a run thinks when its role has never been told. Never "whatever the CLI defaults
+    /// to": Claude Code's default moves with the model (Opus 5 ran at high, Opus 5.5 at medium), so
+    /// a blank would quietly mean something else after each model change. The heartbeat reads the
+    /// same fallback, in heartbeat-common.ps1.
     /// </summary>
     public const string DefaultEffort = "medium";
 
-    /// <summary>The one effort setting, which governs the pipeline, the Classroom and the applier alike.</summary>
-    public string Effort =>
-        Str("workerReasoningEffort") is { } e && e.Trim().Length > 0 ? e.Trim() : DefaultEffort;
+    /// <summary>What a role is set to, every gap filled. See <see cref="AgentRoles"/>.</summary>
+    public AgentRole Role(string role) => AgentRoles.Resolve(_registry.GetGlobalConfig(), role);
 
-    // A QA copy gets a provider that builds no command, whatever asked for one.
-    private AgentProvider Build(string? model) => _isolation.On ? new RefusedAgentProvider() : CurrentKind switch
-    {
-        AgentProviderKind.Codex => new CodexAgentProvider(Honour("codex", model, CodexAgentProvider.DefaultModel), Effort),
-        // No effort dial on this CLI: thinking is a property of the model picked.
-        AgentProviderKind.Gemini => new GeminiAgentProvider(Honour("gemini", model, GeminiAgentProvider.DefaultModel)),
-        // Claude reads the same setting as the other two. It used to be the exception - the two C#
-        // runs took whatever the CLI defaulted to - which made `workerModel` a field that governed
-        // the heartbeat's workers and silently did nothing to an analysis. The panel said Opus 5 and
-        // the finished document said otherwise, which is the worst of both. Effort follows the same
-        // rule, for the same reason.
-        _ => new ClaudeAgentProvider(Honour("claude", model, ClaudeAgentProvider.DefaultModel), Effort,
-            ClaudeAccounts.Active(_registry.GetGlobalConfig()).ConfigDir),
-    };
-
-    private string Configured() => Str("agentProvider") ?? "claude";
+    /// <summary>The provider for one role, on that role's model and effort.</summary>
+    public AgentProvider For(string role) => Build(Role(role));
 
     /// <summary>
-    /// Honour a configured model only when this provider could plausibly take it. Switching provider
-    /// and forgetting the model would otherwise hand <c>claude-opus-5</c> to codex and fail every
-    /// run with an error that says nothing about the real cause — the same guard the PowerShell half
-    /// applies in <c>Resolve-AgentModel</c>, over the same table.
+    /// Whether any role runs on Claude. The rate-limit meter reads Claude Code's own subscription,
+    /// so it has something to say exactly when this is true.
     /// </summary>
-    private static string Honour(string provider, string? configured, string fallback)
+    public bool UsesClaude
     {
-        var model = configured?.Trim();
-        if (string.IsNullOrEmpty(model)) return fallback;
-        return AgentModels.BelongsTo(provider, model) ? model : fallback;
+        get
+        {
+            var cfg = _registry.GetGlobalConfig();
+            return AgentRoles.All.Any(r => AgentRoles.Resolve(cfg, r).Provider == "claude");
+        }
     }
 
-    private string? Str(string key) =>
-        _registry.GetGlobalConfig().TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.String
-            ? v.GetString()
-            : null;
+    // A QA copy gets a provider that builds no command, whatever asked for one.
+    private AgentProvider Build(AgentRole role) => _isolation.On ? new RefusedAgentProvider() : role.Provider switch
+    {
+        "codex" => new CodexAgentProvider(role.Model, role.Effort),
+        // No effort dial on this CLI: thinking is a property of the model picked.
+        "gemini" => new GeminiAgentProvider(role.Model),
+        _ => new ClaudeAgentProvider(role.Model, role.Effort,
+            ClaudeAccounts.Active(_registry.GetGlobalConfig()).ConfigDir),
+    };
 }

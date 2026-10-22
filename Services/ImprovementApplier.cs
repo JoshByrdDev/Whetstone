@@ -88,7 +88,7 @@ public class ImprovementApplier
 
         try
         {
-            var provider = _providers.Resolve();
+            var provider = _providers.For(AgentRoles.Applier);
             _run = provider.BuildFreeformRun(repoRoot, scratch);
 
             _process = new Process

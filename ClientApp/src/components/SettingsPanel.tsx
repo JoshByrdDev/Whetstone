@@ -221,18 +221,13 @@ interface GlobalConfig {
   heartbeatWorkers: number;
   /** The hard ceiling the server enforces — not editable, just what the UI offers. */
   maxHeartbeatWorkers: number;
-  /** Which agent CLI runs the work. The model lists below depend on it. */
-  agentProvider: string;
-  workerModel: string;
-  reflectionModel: string;
-  /** Per-phase overrides of workerModel, keyed by skill. A phase absent from this map runs
-   *  workerModel — absence is the "default" state, not an empty string. */
-  phaseModels: Record<string, string>;
-  /** Overrides workerModel for the Classroom analysis alone. Empty means "follow workerModel",
-   *  stored as an absence for the same reason phaseModels are. */
-  analysisModel: string;
-  /** Passed to providers that expose a reasoning dial; ignored by those that do not. */
-  workerReasoningEffort: string;
+  /** What each kind of run takes, keyed by role. Served with every gap filled, so what is on
+   *  screen is what runs. There is no fleet-wide provider. */
+  agentRoles: Record<string, AgentRoleSetting>;
+  /** The roles, labelled and grouped, in the order the table lists them. */
+  agentRoleCatalog: AgentRoleOption[];
+  /** The effort levels a role may take. */
+  agentEfforts: string[];
   /** Whether a token is already saved. The token itself is never sent back to the browser. */
   claudeOauthTokenSet: boolean;
   /** Write-only: absent unless the user typed one, so saving without touching it keeps the stored
@@ -243,8 +238,6 @@ interface GlobalConfig {
   /** Served by the API rather than hardcoded here, so the two halves cannot disagree about
    *  which providers and models exist. */
   agentProviders: AgentProviderOption[];
-  /** The phases phaseModels may name, in pipeline order — served for the same reason. */
-  workerPhases: WorkerPhaseOption[];
   /** The notifications this server knows how to send, and the channels it can send them through —
    *  served alongside the config for the same reason as agentProviders. */
   notificationEventCatalog: NotificationEventOption[];
@@ -261,8 +254,20 @@ interface NotificationEventOption { key: string; label: string; description: str
 
 interface NotificationChannelOption { key: string; label: string; description: string }
 
-/** One pipeline phase, by the skill name phaseModels is keyed by. */
-interface WorkerPhaseOption { key: string; label: string; description: string }
+/** One role's choice: which CLI, which of its models, how hard it thinks. */
+interface AgentRoleSetting { provider: string; model: string; effort: string }
+
+/** One kind of run, as the server names and groups it. `reflection` picks from the provider's
+ *  reflection models rather than its worker models. */
+interface AgentRoleOption {
+  key: string;
+  label: string;
+  group: 'pipeline' | 'fleet' | 'dashboard';
+  description: string;
+  reflection: boolean;
+  /** Whether it runs commands in a worktree, which is where the command guard matters. */
+  runsCommands: boolean;
+}
 
 interface AgentProviderOption {
   key: string;
@@ -272,6 +277,8 @@ interface AgentProviderOption {
   defaultReflectionModel: string;
   supportsReasoningEffort: boolean;
   reportsUsage: boolean;
+  /** Whether its runs pass through the command guard. Only Claude Code's do. */
+  hasGuard: boolean;
   workerModels: ModelOption[];
   reflectionModels: ModelOption[];
   /** A caveat worth showing before this one is selected. Absent for a provider with none. */
@@ -520,7 +527,6 @@ function GlobalSettings() {
   // one is deliberate: a stale bundle inventing a provider the server does not know about would
   // offer a setting that silently does nothing.
   const providers = cfg.agentProviders ?? [];
-  const provider = providers.find(p => p.key === cfg.agentProvider);
   // Same reasoning for the notification list: what is on offer is whatever the server can actually
   // send, so a stale bundle cannot show a tickbox for a notification nothing posts.
   const events = cfg.notificationEventCatalog ?? [];
@@ -532,17 +538,6 @@ function GlobalSettings() {
   const channelReady = cfg.notificationChannel === 'ntfy'
     ? !!cfg.ntfyTopic
     : cfg.slackWebhookUrl !== undefined ? !!cfg.slackWebhookUrl : cfg.slackWebhookUrlSet;
-  // And again for the phases: the pipeline decides which exist, not this bundle.
-  const phases = cfg.workerPhases ?? [];
-  const phaseModels = cfg.phaseModels ?? {};
-  // Setting a phase back to "" removes it rather than storing a blank. The server would drop it
-  // either way, but leaving it in would make the panel show a saved override that is about to
-  // vanish on the next load.
-  const setPhaseModel = (key: string, model: string) => {
-    const next = { ...phaseModels };
-    if (model) next[key] = model; else delete next[key];
-    update({ phaseModels: next });
-  };
 
   return (
     <div className="space-y-6">
@@ -704,7 +699,7 @@ function GlobalSettings() {
         </p>
         <SelectField
           label="Concurrent Agents"
-          description="Every agent is a full Claude session drawing on the same rate-limit window and the same machine."
+          description="Every agent is a full CLI session on this machine. Those on the same provider share its rate limits."
           value={String(cfg.heartbeatWorkers)}
           onChange={v => update({ heartbeatWorkers: Number(v) || 1 })}
           options={Array.from({ length: cfg.maxHeartbeatWorkers || 3 }, (_, i) => ({
@@ -726,117 +721,14 @@ function GlobalSettings() {
         </div>
       </FieldGroup>
 
-      <FieldGroup title="Agent Provider">
-        <p className="text-xs text-gray-500 -mt-2 mb-3">
-          Which agent CLI runs the work, and the models it runs. Applies on the next cycle. The CLI has to be
-          installed and signed in{provider ? <> — this one is <code>{provider.executable}</code></> : null}.
-        </p>
-        <SelectField
-          label="Provider"
-          description="Every phase, the Classroom analysis and the improvement applier all run through this CLI."
-          value={cfg.agentProvider}
-          onChange={v => {
-            // The models go with the provider. Sent in the same update so the panel never shows a
-            // model the newly-selected CLI would reject — the server drops a mismatched one anyway,
-            // but then the field would read as blank until the next load.
-            const next = providers.find(p => p.key === v);
-            update({
-              agentProvider: v,
-              workerModel: next?.defaultWorkerModel ?? '',
-              reflectionModel: next?.defaultReflectionModel ?? '',
-              // The per-phase overrides go with them. Every one of them names a model of the
-              // outgoing provider, so the server would drop the lot on save regardless; clearing
-              // here means the panel says so now rather than after the next load.
-              phaseModels: {},
-              // Same for the Classroom override, and back to blank rather than the new provider's
-              // default: blank means "follow the worker model", which is where a fresh provider
-              // should start.
-              analysisModel: '',
-            });
-          }}
-          options={providers.map(p => ({ value: p.key, label: p.label }))}
+      <FieldGroup title="Agents & Models">
+        <AgentRolesField
+          roles={cfg.agentRoles ?? {}}
+          catalog={cfg.agentRoleCatalog ?? []}
+          providers={providers}
+          efforts={cfg.agentEfforts ?? []}
+          onChange={agentRoles => update({ agentRoles })}
         />
-        <div className="grid grid-cols-2 gap-4">
-          <SelectField
-            label="Worker Model"
-            description="Runs the per-ticket work. Every phase, unless it is given its own below."
-            value={cfg.workerModel}
-            onChange={v => update({ workerModel: v })}
-            options={provider?.workerModels ?? []}
-          />
-          <SelectField
-            label="Reflection Model"
-            description="Runs the post-cycle lessons-learned summary."
-            value={cfg.reflectionModel}
-            onChange={v => update({ reflectionModel: v })}
-            options={provider?.reflectionModels ?? []}
-          />
-          {/* Its own field rather than a per-phase row: the analysis is not a pipeline phase, and
-              it is the run where a different model is most defensible — a worker's output is
-              checked by QA and by a human at review, while an analysis is read once and believed. */}
-          <SelectField
-            label="Classroom Analysis Model"
-            description="Runs the on-demand teaching analysis. Left on Default it follows the Worker Model."
-            value={cfg.analysisModel ?? ''}
-            onChange={v => update({ analysisModel: v })}
-            options={[
-              { value: '', label: `Default (${modelLabel(provider, cfg.workerModel)})` },
-              ...(provider?.workerModels ?? []),
-            ]}
-          />
-          {/* One setting for every run rather than one per model: the runs above differ in which
-              model they take, not in how carefully they should think. */}
-          {provider?.supportsReasoningEffort && (
-            <SelectField
-              label="Effort"
-              description="How hard every run thinks: each phase, reflection, the Classroom analysis and walkthrough, and the improvement applier. Higher is slower and spends more tokens."
-              value={cfg.workerReasoningEffort || 'medium'}
-              onChange={v => update({ workerReasoningEffort: v })}
-              options={[
-                { value: 'low', label: 'Low' },
-                { value: 'medium', label: 'Medium (default)' },
-                { value: 'high', label: 'High' },
-                { value: 'xhigh', label: 'Extra high' },
-              ]}
-            />
-          )}
-        </div>
-        {phases.length > 0 && (
-          <div className="border-t border-hair pt-4 space-y-3">
-            <div>
-              <p className="text-xs font-medium text-gray-400">Per-phase worker models</p>
-              <p className="text-[11px] text-gray-600 mt-1">
-                Run one phase on a different model without moving the others. Anything left on{' '}
-                <span className="text-gray-500">Default</span> uses the Worker Model above, so it
-                changes when that does.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              {phases.map(ph => (
-                <SelectField
-                  key={ph.key}
-                  label={ph.label}
-                  description={ph.description}
-                  value={phaseModels[ph.key] ?? ''}
-                  onChange={v => setPhaseModel(ph.key, v)}
-                  options={[
-                    { value: '', label: `Default (${modelLabel(provider, cfg.workerModel)})` },
-                    ...(provider?.workerModels ?? []),
-                  ]}
-                />
-              ))}
-            </div>
-          </div>
-        )}
-        {provider?.note && (
-          <p className="text-xs text-amber-500/80">{provider.note}</p>
-        )}
-        {provider && !provider.reportsUsage && (
-          <p className="text-xs text-amber-500/80">
-            The rate-limit meter in the header only reads Claude Code's subscription, so it stays hidden while
-            this provider is selected.
-          </p>
-        )}
       </FieldGroup>
 
       <FieldGroup title="Claude Accounts">
@@ -935,13 +827,262 @@ function GlobalSettings() {
   );
 }
 
+// ---------- Agents & models ---------------------------------------------------
+
+const ROLE_GROUPS: { key: AgentRoleOption['group']; title: string; hint: string }[] = [
+  { key: 'pipeline', title: 'Pipeline', hint: 'One run per phase of a ticket.' },
+  { key: 'fleet', title: 'Beside the pipeline', hint: 'Also started by the heartbeat.' },
+  { key: 'dashboard', title: 'Dashboard', hint: 'Started from the board, on demand.' },
+];
+
+const EFFORT_LABEL: Record<string, string> = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high' };
+
+/** The models a role picks from: reflection has its own short list of cheap ones. */
+function modelsFor(provider: AgentProviderOption | undefined, reflection: boolean): ModelOption[] {
+  if (!provider) return [];
+  return reflection ? provider.reflectionModels : provider.workerModels;
+}
+
+/** What a role runs when it moves to a provider: that provider's own default for it. */
+function defaultFor(provider: AgentProviderOption | undefined, reflection: boolean): string {
+  if (!provider) return '';
+  return reflection ? provider.defaultReflectionModel : provider.defaultWorkerModel;
+}
+
+/** A provider's name alone, without its maker or "CLI", which every row would otherwise repeat
+ *  and a phone-width select would cut off. */
+function shortLabel(p: AgentProviderOption): string {
+  return p.label.replace(/^(Anthropic|OpenAI|Google) /, '').replace(/ (Code|CLI)$/, '');
+}
+
 /**
- * What to call a worker model on screen. Falls back to the raw slug rather than to a blank or to
- * "unknown": a model saved by hand, or one added to the config before this build knew about it, is
- * still the honest answer to "what does Default mean here".
+ * One row per kind of run, each with its own provider, model and effort. There is no fleet-wide
+ * provider to inherit from: what a row says is what that run takes.
+ *
+ * The bar at the top is a shortcut, not a setting. It writes the same three choices into every
+ * row at once (reflection takes the provider's own reflection model) and is not stored.
  */
-function modelLabel(provider: AgentProviderOption | undefined, value: string): string {
-  return provider?.workerModels.find(m => m.value === value)?.label ?? value;
+function AgentRolesField({ roles, catalog, providers, efforts, onChange }: {
+  roles: Record<string, AgentRoleSetting>;
+  catalog: AgentRoleOption[];
+  providers: AgentProviderOption[];
+  efforts: string[];
+  onChange: (roles: Record<string, AgentRoleSetting>) => void;
+}) {
+  const byKey = (key: string) => providers.find(p => p.key === key);
+  const first = providers[0];
+  const [bulk, setBulk] = useState<AgentRoleSetting>({
+    provider: first?.key ?? 'claude',
+    model: first?.defaultWorkerModel ?? '',
+    effort: 'medium',
+  });
+  const bulkProvider = byKey(bulk.provider);
+
+  const applyToAll = () => {
+    const next: Record<string, AgentRoleSetting> = {};
+    for (const role of catalog) {
+      next[role.key] = {
+        provider: bulk.provider,
+        model: role.reflection ? defaultFor(bulkProvider, true) : bulk.model,
+        effort: bulk.effort,
+      };
+    }
+    onChange({ ...roles, ...next });
+  };
+
+  // Every CLI some row runs on, once each: what has to be installed and signed in.
+  const inUse = providers.filter(p => catalog.some(r => roles[r.key]?.provider === p.key));
+  // The runs that act on a worktree without the guard behind them. Reflection and the dashboard's
+  // two are left out: they cannot act, or never had the guard on any provider.
+  const unguarded = catalog.filter(r => r.runsCommands && byKey(roles[r.key]?.provider ?? '')?.hasGuard === false);
+
+  return (
+    <div className="space-y-5">
+      <p className="text-xs text-gray-500 -mt-2">
+        Each kind of run picks its own CLI, model and effort, so one phase can run on Codex while the next runs on
+        Claude. Changes apply to the next run that starts.
+        {inUse.length > 0 && (
+          <>
+            {' '}Needs installed and signed in:{' '}
+            {inUse.map((p, i) => (
+              <Fragment key={p.key}>{i > 0 && ', '}<code className="text-gray-400">{p.executable}</code></Fragment>
+            ))}.
+          </>
+        )}
+      </p>
+
+      {/* The shortcut: three choices and one button, set apart so it does not read as a row. */}
+      <div className="border border-dashed border-hair p-3 space-y-2" style={{ clipPath: chamfer(8) }}>
+        <div className="text-[11px] text-gray-500">Set every role at once</div>
+        <div className="grid grid-cols-[9rem_minmax(0,1fr)_7.5rem_auto] max-sm:grid-cols-3 gap-2 items-center">
+          <MiniSelect
+            label="Provider for every role"
+            value={bulk.provider}
+            onChange={v => setBulk({ ...bulk, provider: v, model: defaultFor(byKey(v), false) })}
+            options={providers.map(p => ({ value: p.key, label: shortLabel(p) }))}
+          />
+          <MiniSelect
+            label="Model for every role"
+            value={bulk.model}
+            onChange={v => setBulk({ ...bulk, model: v })}
+            options={modelsFor(bulkProvider, false)}
+          />
+          <EffortSelect
+            label="Effort for every role"
+            provider={bulkProvider}
+            efforts={efforts}
+            value={bulk.effort}
+            onChange={v => setBulk({ ...bulk, effort: v })}
+          />
+          <button
+            type="button"
+            onClick={applyToAll}
+            className="orbit-tap max-sm:col-span-3 text-xs px-3 py-1.5 rounded border border-hair text-gray-300 hover:bg-gray-800 whitespace-nowrap"
+          >
+            Apply to all
+          </button>
+        </div>
+      </div>
+
+      {ROLE_GROUPS.map(group => {
+        const rows = catalog.filter(r => r.group === group.key);
+        if (rows.length === 0) return null;
+        return (
+          <div key={group.key}>
+            <div className="flex items-baseline gap-2 mb-1.5">
+              <span className="text-xs font-medium text-gray-300">{group.title}</span>
+              <span className="text-[11px] text-gray-600">{group.hint}</span>
+            </div>
+            {/* Column heads at a desk only: on a phone each select names itself. */}
+            <div className="max-sm:hidden grid grid-cols-[minmax(0,1fr)_9rem_11rem_7.5rem] gap-2 px-2 pb-1 text-[10px] uppercase tracking-wider text-gray-600">
+              <span>Role</span><span>Provider</span><span>Model</span><span>Effort</span>
+            </div>
+            <div className="border-y border-hair">
+              {rows.map((role, i) => (
+                <AgentRoleRow
+                  key={role.key}
+                  first={i === 0}
+                  role={role}
+                  value={roles[role.key] ?? { provider: first?.key ?? 'claude', model: defaultFor(first, role.reflection), effort: 'medium' }}
+                  providers={providers}
+                  efforts={efforts}
+                  onChange={next => onChange({ ...roles, [role.key]: next })}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      {unguarded.length > 0 && (
+        <p className="text-xs text-amber-500/80">
+          {unguarded.map(r => r.label).join(', ')} {unguarded.length === 1 ? 'runs' : 'run'} without the command
+          guard. Only Claude Code's runs pass through it. On Codex and Gemini the prompt's rules are all that keeps a
+          run on this machine, and nothing stops a command that ignores them.
+        </p>
+      )}
+      {inUse.filter(p => p.note).map(p => (
+        <p key={p.key} className="text-xs text-amber-500/80">{shortLabel(p)}: {p.note}</p>
+      ))}
+      {inUse.length > 0 && !inUse.some(p => p.reportsUsage) && (
+        <p className="text-xs text-amber-500/80">
+          No role runs on Claude, so the rate-limit meter in the header has nothing to read and stays hidden.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AgentRoleRow({ role, value, providers, efforts, onChange, first }: {
+  role: AgentRoleOption;
+  value: AgentRoleSetting;
+  providers: AgentProviderOption[];
+  efforts: string[];
+  onChange: (next: AgentRoleSetting) => void;
+  first: boolean;
+}) {
+  const provider = providers.find(p => p.key === value.provider);
+  const flagged = role.runsCommands && provider?.hasGuard === false;
+  return (
+    <div className={`grid grid-cols-[minmax(0,1fr)_9rem_11rem_7.5rem] max-sm:grid-cols-3 gap-2 items-center px-2 py-2.5 ${first ? '' : 'border-t border-hair'}`}>
+      <div className="min-w-0 max-sm:col-span-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm text-gray-200 truncate">{role.label}</span>
+          {flagged && (
+            <span
+              className="shrink-0 text-[10px] px-1.5 py-px rounded border border-amber-500/40 text-amber-500/90"
+              title="This provider has no hook for the command guard. The prompt's rules are the only enforcement."
+            >
+              no guard
+            </span>
+          )}
+        </div>
+        {role.description && <p className="text-[11px] text-gray-600 mt-0.5">{role.description}</p>}
+      </div>
+      <MiniSelect
+        label={`${role.label} provider`}
+        value={value.provider}
+        // A new provider brings its own default model: the old one would be another CLI's name.
+        onChange={v => onChange({ ...value, provider: v, model: defaultFor(providers.find(p => p.key === v), role.reflection) })}
+        options={providers.map(p => ({ value: p.key, label: shortLabel(p) }))}
+      />
+      <MiniSelect
+        label={`${role.label} model`}
+        value={value.model}
+        onChange={v => onChange({ ...value, model: v })}
+        options={modelsFor(provider, role.reflection)}
+      />
+      <EffortSelect
+        label={`${role.label} effort`}
+        provider={provider}
+        efforts={efforts}
+        value={value.effort}
+        onChange={v => onChange({ ...value, effort: v })}
+      />
+    </div>
+  );
+}
+
+/** Effort, or a disabled stand-in for a provider with no dial, where the model decides instead. */
+function EffortSelect({ label, provider, efforts, value, onChange }: {
+  label: string; provider: AgentProviderOption | undefined; efforts: string[];
+  value: string; onChange: (v: string) => void;
+}) {
+  if (provider && !provider.supportsReasoningEffort) {
+    return (
+      <MiniSelect label={label} value="" onChange={() => {}} disabled
+        options={[{ value: '', label: 'Set by model' }]} />
+    );
+  }
+  return (
+    <MiniSelect
+      label={label}
+      value={value}
+      onChange={onChange}
+      options={efforts.map(e => ({ value: e, label: EFFORT_LABEL[e] ?? e }))}
+    />
+  );
+}
+
+/** A select without a visible label: the column head says what it is, and so does its own name. */
+function MiniSelect({ label, value, onChange, options, disabled }: {
+  label: string; value: string; onChange: (v: string) => void;
+  options: { value: string; label: string }[]; disabled?: boolean;
+}) {
+  return (
+    <select
+      aria-label={label}
+      title={label}
+      value={value}
+      disabled={disabled}
+      onChange={e => onChange(e.target.value)}
+      className="w-full min-w-0 bg-gray-900 border border-hair rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:border-gray-500 disabled:opacity-50"
+    >
+      {/* Keep an unknown saved value visible instead of silently blank. */}
+      {!options.some(o => o.value === value) && value && <option value={value}>{value}</option>}
+      {options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+    </select>
+  );
 }
 
 function SelectField({ label, description, value, onChange, options }: {

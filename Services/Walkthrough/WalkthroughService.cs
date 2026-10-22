@@ -104,7 +104,7 @@ public class WalkthroughService
         var (prompt, ctx) = (m.Prompt, m.Ctx);
 
         // ---- the script, checked, with one repair round ----
-        var provider = _providers.ResolveForAnalysis();
+        var provider = _providers.For(AgentRoles.Analysis);
         var readDir = m.ReadDir;
         var scratch = Path.Combine(_paths.RunDir, "walkthrough");
         var tally = new Tally();

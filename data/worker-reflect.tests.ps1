@@ -56,11 +56,11 @@ if "%FAKE_WARN%"=="1" echo Permission allow rule (.claude\settings.json): Write(
 if exist "%FAKE_REPLY%" type "%FAKE_REPLY%"
 '@
 
-$AgentProvider = [pscustomobject]@{
+$ReflectProvider = [pscustomobject]@{
     Key = 'claude'; Exe = $fakeCli; DisplayName = 'stand-in'; ProcessPattern = @('no-such-process*'); SupportsReasoning = $true
 }
 $ReflectionModel = 'haiku'
-$WorkerReasoningEffort = 'medium'
+$ReflectEffort = 'medium'
 
 # One reflection over a fresh project folder and notes store. $Reply of $null means the CLI prints
 # nothing on stdout at all.

@@ -13,10 +13,5 @@
   "heartbeatWorkers": 3,
   "worktreeRetentionDays": 2,
   "baseBranch": "main",
-  "branchPrefix": "",
-  "agentProvider": "claude",
-  "workerModel": "claude-opus-5-5",
-  "phaseModels": {},
-  "reflectionModel": "haiku",
-  "workerReasoningEffort": "medium"
+  "branchPrefix": ""
 }

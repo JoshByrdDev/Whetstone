@@ -32,11 +32,8 @@ public static class ConfigEndpoints
         "heartbeatWorkers",
         // Branch enforcement: base branch new feature branches fork from, and their name prefix.
         "baseBranch", "branchPrefix",
-        // Which agent CLI runs the work, the models it runs, and how hard it is asked to think.
-        // phaseModels overrides workerModel for named phases only; see PhaseModels below.
-        // analysisModel overrides workerModel for the Classroom run only; absent means "follow it".
-        "agentProvider", "workerModel", "reflectionModel", "phaseModels", "analysisModel",
-        "workerReasoningEffort",
+        // Which CLI, model and effort each kind of run takes, one entry per role. See AgentRoles.
+        "agentRoles",
         // The dashboard's own Claude login, for the rate-limit meter. See ClaudeUsageService.
         "claudeOauthToken",
         // The Claude logins the fleet can be switched between. Which one is in force is not here:
@@ -60,6 +57,7 @@ public static class ConfigEndpoints
         string defaultReflectionModel,
         bool supportsReasoningEffort,
         bool reportsUsage,
+        bool hasGuard,
         ModelChoice[] workerModels,
         ModelChoice[] reflectionModels,
         // Shown in Settings under the provider picker; null for one with nothing to warn about.
@@ -76,12 +74,15 @@ public static class ConfigEndpoints
             key: "claude",
             label: "Anthropic Claude Code",
             executable: "claude",
-            defaultWorkerModel: "claude-opus-5-5",
-            defaultReflectionModel: "haiku",
+            defaultWorkerModel: ClaudeAgentProvider.DefaultModel,
+            defaultReflectionModel: ClaudeAgentProvider.DefaultReflectionModel,
             // --effort. Claude Code's own default moves with the model (Opus 5: high, Opus 5.5:
             // medium), so an unset field would mean a different thing after every model change.
             supportsReasoningEffort: true,
             reportsUsage: true,
+            // The only provider whose runs pass through data/worker-guard.ps1. The others have no
+            // hook the guard can sit in, so the prompt is all that keeps them local.
+            hasGuard: true,
             // The family aliases first: Claude Code resolves each to the newest model in it, so these
             // never go stale. The pinned ids below them stay for a run that has to be reproducible.
             workerModels: new[]
@@ -102,11 +103,12 @@ public static class ConfigEndpoints
             key: "codex",
             label: "OpenAI Codex",
             executable: "codex",
-            defaultWorkerModel: "gpt-5.6-sol",
-            defaultReflectionModel: "gpt-5.6-luna",
+            defaultWorkerModel: CodexAgentProvider.DefaultModel,
+            defaultReflectionModel: CodexAgentProvider.DefaultReflectionModel,
             supportsReasoningEffort: true,
             // No cross-provider equivalent of the rate-limit meter, so the chip hides itself.
             reportsUsage: false,
+            hasGuard: false,
             workerModels: new[]
             {
                 new ModelChoice("gpt-5.6-sol", "GPT-5.6 Sol (flagship)"),
@@ -125,12 +127,13 @@ public static class ConfigEndpoints
             // The routing ALIASES rather than dated slugs. Google's concrete ids carry a version and
             // a -preview suffix that both move, and a default naming one goes stale silently: the
             // run fails on a model name the CLI no longer serves. `pro` and `flash` do not move.
-            defaultWorkerModel: "pro",
-            defaultReflectionModel: "flash",
+            defaultWorkerModel: GeminiAgentProvider.DefaultModel,
+            defaultReflectionModel: GeminiAgentProvider.DefaultReflectionModel,
             // Thinking is a per-model property here rather than a CLI dial, so there is nothing for
             // the Reasoning Effort field to set and it hides itself.
             supportsReasoningEffort: false,
             reportsUsage: false,
+            hasGuard: false,
             workerModels: new[]
             {
                 new ModelChoice("pro", "Pro (most capable)"),
@@ -151,51 +154,38 @@ public static class ConfigEndpoints
     };
 
     /// <summary>
-    /// The catalogue entry for a provider key, falling back to the incumbent. Everything that needs
-    /// a per-provider default reads it from here, so the table above is the single answer to "what
-    /// does this provider run" rather than one of several that can drift apart.
+    /// What each role is called on screen, which group it sits in, and what choosing for it buys.
+    /// Pipeline phases are keyed by SKILL name, which is what the worker has in hand when it
+    /// resolves its role.
     /// </summary>
-    private static AgentProviderOption Provider(string key) =>
-        AgentProviders.FirstOrDefault(p => p.key == key) ?? AgentProviders[0];
-
-    /// <summary>
-    /// The stored provider name as one the catalogue knows. An unrecognised value falls back to
-    /// claude, which is the incumbent: a typo in config.json must not silently stop the fleet.
-    /// </summary>
-    private static string NormalizeProvider(string? stored)
+    private static readonly Dictionary<string, (string Label, string Group, string Description)> RoleLabelling = new()
     {
-        var key = (stored ?? "").Trim().ToLowerInvariant();
-        return AgentProviders.Any(p => p.key == key) ? key : "claude";
-    }
-
-    /// <summary>
-    /// What each pipeline phase is called on screen, and what choosing a model there actually buys.
-    /// Keyed by SKILL name, which is what <c>phaseModels</c> is keyed by and what the worker has in
-    /// hand when it resolves the model for a run.
-    /// </summary>
-    private static readonly Dictionary<string, (string Label, string Description)> PhaseLabelling = new()
-    {
-        ["speculate"] = ("Speculate",
-            "Writes the plan every later phase then implements. A small share of a ticket's runs, " +
-            "and the place a wrong assumption is cheapest to fix and hardest to catch later."),
-        ["implement"] = ("Implement", "Writes the code against that plan. Most of a ticket's runs and most of its tokens."),
-        ["qa-test"] = ("QA test", "Drives the running app in a browser and files what it finds."),
-        ["refine"] = ("Refine", "Answers the QA findings and tidies the branch before hand-off."),
-        ["review-pr"] = ("Peer review",
-            "Reads someone else's branch, drives it in a browser, and stages feedback for you to " +
-            "send. Changes no code, on any track — reading and judging is the whole job."),
+        ["speculate"] = ("Speculate", "pipeline",
+            "Writes the plan every later phase implements. A small share of the runs, and the cheapest " +
+            "place to catch a wrong assumption."),
+        ["implement"] = ("Implement", "pipeline", "Writes the code against that plan. Most of a ticket's runs and tokens."),
+        ["qa-test"] = ("QA test", "pipeline", "Drives the running app in a browser and files what it finds."),
+        ["refine"] = ("Refine", "pipeline", "Answers the QA findings and tidies the branch before hand-off."),
+        ["review-pr"] = ("Peer review", "pipeline",
+            "Reads someone else's branch, drives it in a browser, and stages feedback for you to send."),
+        [AgentRoles.Steward] = ("Steward", "fleet",
+            "Stands in for a ticket's owner between runs, on projects that switch it on. Reads and decides; changes no file."),
+        [AgentRoles.Reflection] = ("Reflection", "fleet", "Writes the lessons-learned note after each worker run."),
+        [AgentRoles.Analysis] = ("Classroom", "dashboard", "A ticket's teaching analysis and walkthrough, and a unit's report."),
+        [AgentRoles.Applier] = ("Improvement applier", "dashboard", "Applies the improvements you approved to a project's skills, notes and prompts, for you to review."),
     };
 
     /// <summary>
-    /// The phases a per-phase override may name, in pipeline order. Derived from
-    /// <see cref="PhaseMachine.AllSkills"/> rather than written out again, so a further skill
-    /// added to the pipeline cannot end up quietly unconfigurable - it appears in Settings under its
-    /// own bare name, which is a visible gap rather than a silent absence.
+    /// Every role, in the order Settings lists them. runsCommands marks the heartbeat runs that act
+    /// on a worktree, which is where a missing command guard matters. Reflection runs locked down
+    /// (read-only, or with approvals on), so it cannot act, and the dashboard's two never had the
+    /// guard on any provider. Derived from <see cref="AgentRoles.All"/>, so a skill added to the
+    /// pipeline appears under its own bare name: a visible gap, not a silent one.
     /// </summary>
-    private static readonly object[] WorkerPhases = PhaseMachine.AllSkills
-        .Select(skill => PhaseLabelling.TryGetValue(skill, out var t)
-            ? new { key = skill, label = t.Label, description = t.Description }
-            : new { key = skill, label = skill, description = "" })
+    private static readonly object[] RoleCatalog = AgentRoles.All
+        .Select(role => RoleLabelling.TryGetValue(role, out var t)
+            ? new { key = role, label = t.Label, group = t.Group, description = t.Description, reflection = role == AgentRoles.Reflection, runsCommands = t.Group == "pipeline" || role == AgentRoles.Steward }
+            : new { key = role, label = role, group = "pipeline", description = "", reflection = false, runsCommands = true })
         .ToArray();
 
     /// <summary>
@@ -281,7 +271,6 @@ public static class ConfigEndpoints
         app.MapGet("/api/config", (ProjectRegistry registry, DashboardPaths paths) =>
         {
             var g = registry.GetGlobalConfig();
-            var agentProvider = NormalizeProvider(Str(g, "agentProvider", "claude"));
             return Results.Ok(new
             {
                 dashboardUrl = Str(g, "dashboardUrl", "http://localhost:5338"),
@@ -317,32 +306,17 @@ public static class ConfigEndpoints
                 // Branch enforcement: feature branches fork from baseBranch and are named branchPrefix + key.
                 baseBranch = Str(g, "baseBranch", "main"),
                 branchPrefix = Str(g, "branchPrefix", ""),
-                // Which agent CLI runs the work, and the models it runs. The defaults follow the
-                // selected provider: a config file still naming the previous provider's model would
-                // otherwise show a value the CLI is going to reject on every cycle.
-                agentProvider = agentProvider,
-                workerModel = Str(g, "workerModel", DefaultWorkerModel(agentProvider)),
-                reflectionModel = Str(g, "reflectionModel", DefaultReflectionModel(agentProvider)),
-                // Per-phase overrides of workerModel, keyed by skill - only the phases that
-                // actually have one. An absent phase means "run workerModel", and it is stored as
-                // an absence rather than as a copy of workerModel on purpose: a copy would silently
-                // pin that phase to whatever the default happened to be the day it was saved, and
-                // changing the default later would then move three phases instead of four.
-                phaseModels = PhaseModels(g, agentProvider),
-                // The Classroom analysis, which may run on a different model from the pipeline.
-                // Empty is the real default and means "follow workerModel" - stored as an absence
-                // for the same reason phaseModels are, so raising the worker model later carries
-                // the analysis with it instead of leaving it pinned to yesterday's default.
-                analysisModel = ModelOrBlank(g, "analysisModel", agentProvider),
-                // The phases those overrides may name, so a stale bundle cannot offer one the
-                // pipeline does not run - the same reasoning as agentProviders below.
-                workerPhases = WorkerPhases,
-                // Passed through as the provider's reasoning dial where it has one; ignored where
-                // it does not. Empty means "whatever the CLI defaults to".
-                // Blank reads as the default the runs actually use, so the panel cannot show one
-                // level while every run takes another.
-                workerReasoningEffort = Str(g, "workerReasoningEffort", "").Trim() is { Length: > 0 } effort
-                    ? effort : AgentProviderFactory.DefaultEffort,
+                // Every role as it will actually run, with each gap filled - including a config
+                // written before roles existed, read through the settings that came before. So the
+                // panel shows what runs, never a blank the run would fill differently.
+                agentRoles = AgentRoles.All.ToDictionary(r => r, r =>
+                {
+                    var role = AgentRoles.Resolve(g, r);
+                    return new { provider = role.Provider, model = role.Model, effort = role.Effort };
+                }),
+                // The roles, labelled and grouped, so a stale bundle cannot offer one nothing runs.
+                agentRoleCatalog = RoleCatalog,
+                agentEfforts = AgentRoles.Efforts,
                 // Whether the dashboard has a Claude login of its own, NOT the token itself: the
                 // Settings panel only needs to know whether to offer "set" or "replace", and a
                 // long-lived subscription token has no business being in a GET body every time
@@ -359,7 +333,7 @@ public static class ConfigEndpoints
             });
         });
 
-        app.MapPut("/api/config", async (HttpRequest request, DashboardPaths paths) =>
+        app.MapPut("/api/config", async (HttpRequest request, DashboardPaths paths, ProjectRegistry registry) =>
         {
             var incoming = await ReadObject(request);
             if (incoming is null) return Results.BadRequest(new { error = "Invalid JSON body" });
@@ -391,49 +365,33 @@ public static class ConfigEndpoints
                 catch { target.Remove("heartbeatWorkers"); }   // not a number — fall back to the default
             }
 
-            // A model that belongs to the other provider is DROPPED rather than stored, so the GET
-            // above falls back to the selected provider's default. Switching provider and leaving
-            // the old model behind would otherwise fail every run with an error about a model name,
-            // which says nothing about the setting that actually caused it. The heartbeat applies
-            // the same rule to whatever it reads (Resolve-AgentModel), so the two cannot disagree.
-            var selected = NormalizeProvider(target["agentProvider"]?.GetValue<string>());
-            foreach (var key in new[] { "workerModel", "reflectionModel" })
+            // Every role is stored whole, and the settings it replaced go once it is. A role left
+            // out of the body keeps what it runs today, read through those older settings before
+            // they are removed, so a partial body cannot silently move a role to the defaults.
+            if (incoming.ContainsKey("agentRoles"))
             {
-                var model = target[key]?.GetValue<string>()?.Trim();
-                if (!string.IsNullOrEmpty(model) && !AgentModels.BelongsTo(selected, model)) target.Remove(key);
-            }
-
-            // The analysis override takes both rules: another provider's model is dropped, and so is
-            // a BLANK. Blank is how the panel says "follow the worker model", and writing it back
-            // would store an empty model name that the CLI rejects on every run.
-            if (target.ContainsKey("analysisModel"))
-            {
-                var model = target["analysisModel"]?.GetValue<string>()?.Trim();
-                if (string.IsNullOrEmpty(model) || !AgentModels.BelongsTo(selected, model))
-                    target.Remove("analysisModel");
-                else
-                    target["analysisModel"] = model;
-            }
-
-            // The same rule inside the per-phase map, plus two of its own. A phase the pipeline does
-            // not run is dropped, so a typo cannot sit in the file looking like a setting. A BLANK is
-            // dropped too: blank is how the Settings panel says "no override here", and writing it
-            // back would pin that phase to the empty string - a model name the CLI rejects on every
-            // cycle. What is left is rebuilt rather than edited in place, so the file ends up
-            // carrying per-phase models exactly when there are some and nothing when there are none.
-            if (target.ContainsKey("phaseModels"))
-            {
-                var stored = target["phaseModels"] as JsonObject;
-                var kept = new JsonObject();
-                foreach (var skill in PhaseMachine.AllSkills)
+                var current = registry.GetGlobalConfig();
+                var sent = incoming["agentRoles"] as JsonObject;
+                var roles = new JsonObject();
+                foreach (var role in AgentRoles.All)
                 {
-                    if (stored?[skill] is not JsonValue value) continue;
-                    if (!value.TryGetValue<string>(out var raw)) continue;
-                    var model = raw?.Trim();
-                    if (!string.IsNullOrEmpty(model) && AgentModels.BelongsTo(selected, model)) kept[skill] = model;
+                    var was = AgentRoles.Resolve(current, role);
+                    var entry = sent?[role] as JsonObject;
+                    var provider = entry?["provider"] is JsonValue p && p.TryGetValue<string>(out var ps)
+                        ? AgentRoles.NormalizeProvider(ps) : was.Provider;
+                    // A blank model, or one that is unmistakably another provider's, would fail
+                    // every run on a model name; it becomes the provider's default instead.
+                    var model = entry?["model"] is JsonValue m && m.TryGetValue<string>(out var ms) ? ms.Trim() : null;
+                    if (entry is null) model = was.Model;
+                    if (string.IsNullOrEmpty(model) || !AgentModels.BelongsTo(provider, model))
+                        model = AgentRoles.DefaultModel(provider, role);
+                    var effort = entry?["effort"] is JsonValue e && e.TryGetValue<string>(out var es) ? es.Trim() : null;
+                    if (entry is null) effort = was.Effort;
+                    if (!AgentRoles.Efforts.Contains(effort)) effort = AgentProviderFactory.DefaultEffort;
+                    roles[role] = new JsonObject { ["provider"] = provider, ["model"] = model, ["effort"] = effort };
                 }
-                if (kept.Count > 0) target["phaseModels"] = kept;
-                else target.Remove("phaseModels");
+                target["agentRoles"] = roles;
+                foreach (var key in AgentRoles.LegacyKeys) target.Remove(key);
             }
 
             // Stored with every directory spelled out, and not at all when there are none. Removing
@@ -872,51 +830,6 @@ public static class ConfigEndpoints
     /// <summary>A loaded object's serialised form, to hand back to <see cref="SaveObject"/> so it
     /// can tell a real edit from a no-op.</summary>
     internal static string Snapshot(JsonObject obj) => obj.ToJsonString(WriteOptions);
-
-    /// <summary>
-    /// The stored per-phase model overrides, filtered to phases the pipeline actually runs and to
-    /// models the selected provider will accept. Filtered on the way OUT as well as on the way in,
-    /// for the same reason <c>workerModel</c> is: a hand-edited config file must not be able to show
-    /// the Settings panel a phase pinned to a model the CLI is going to reject on every cycle.
-    /// A phase with no override is simply absent, which is what the client renders as "default".
-    /// </summary>
-    private static Dictionary<string, string> PhaseModels(Dictionary<string, JsonElement> cfg, string provider)
-    {
-        var overrides = new Dictionary<string, string>();
-        if (!cfg.TryGetValue("phaseModels", out var stored) || stored.ValueKind != JsonValueKind.Object)
-            return overrides;
-
-        foreach (var skill in PhaseMachine.AllSkills)
-        {
-            if (!stored.TryGetProperty(skill, out var v) || v.ValueKind != JsonValueKind.String) continue;
-            var model = v.GetString()?.Trim();
-            if (!string.IsNullOrEmpty(model) && AgentModels.BelongsTo(provider, model)) overrides[skill] = model;
-        }
-        return overrides;
-    }
-
-    /// <summary>
-    /// An optional model override, or blank when there is none.
-    /// <para>
-    /// Unlike <c>workerModel</c> this has no per-provider default to fall back on: blank IS the
-    /// value, and it means "follow the worker model". Filtered on the way out for the same reason
-    /// every other model is — a hand-edited file must not be able to show the panel an override the
-    /// CLI would reject on every run.
-    /// </para>
-    /// </summary>
-    private static string ModelOrBlank(Dictionary<string, JsonElement> cfg, string key, string provider)
-    {
-        var model = Str(cfg, key, "").Trim();
-        return model.Length > 0 && AgentModels.BelongsTo(provider, model) ? model : "";
-    }
-
-    /// <summary>
-    /// The models a provider runs when the config names none, read from the catalogue above rather
-    /// than written out again — so adding a provider is one entry in the table.
-    /// </summary>
-    private static string DefaultWorkerModel(string provider) => Provider(provider).defaultWorkerModel;
-
-    private static string DefaultReflectionModel(string provider) => Provider(provider).defaultReflectionModel;
 
     private static string Str(Dictionary<string, JsonElement> cfg, string key, string fallback) =>
         cfg.TryGetValue(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? fallback : fallback;

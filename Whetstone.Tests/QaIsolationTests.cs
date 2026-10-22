@@ -242,7 +242,7 @@ public class QaIsolationTests : IDisposable
         var paths = new DashboardPaths(Path.Combine(_root, "data"));
         var factory = new AgentProviderFactory(new ProjectRegistry(paths, On), On);
 
-        foreach (var provider in new[] { factory.Resolve(), factory.ResolveForAnalysis() })
+        foreach (var provider in new[] { factory.For(AgentRoles.Applier), factory.For(AgentRoles.Analysis) })
         {
             Assert.IsType<RefusedAgentProvider>(provider);
             var ex = Assert.Throws<InvalidOperationException>(() => provider.BuildFreeformRun(_root, _root));
