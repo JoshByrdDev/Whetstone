@@ -1249,13 +1249,13 @@ public class AgentProviderFactory
     /// Whether any role runs on Claude. The rate-limit meter reads Claude Code's own subscription,
     /// so it has something to say exactly when this is true.
     /// </summary>
-    public bool UsesClaude
+    public bool UsesClaude => UsesProvider("claude");
+
+    /// <summary>Whether any role runs on this provider - what decides which usage meters are drawn.</summary>
+    public bool UsesProvider(string provider)
     {
-        get
-        {
-            var cfg = _registry.GetGlobalConfig();
-            return AgentRoles.All.Any(r => AgentRoles.Resolve(cfg, r).Provider == "claude");
-        }
+        var cfg = _registry.GetGlobalConfig();
+        return AgentRoles.All.Any(r => AgentRoles.Resolve(cfg, r).Provider == provider);
     }
 
     // A QA copy gets a provider that builds no command, whatever asked for one.

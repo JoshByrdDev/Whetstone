@@ -2138,6 +2138,8 @@ if (-not $limitReset -and -not $onHost) {
 # Last, because reflection is the final thing that runs the agent CLI and it needs the same setup.
 # Some providers are configured by handing them a directory of their own, and for those that
 # directory holds a COPY OF A LOGIN - so it does not outlive the run that needed it.
+# Codex's usage report lives in that directory too, so it is copied out first - see Save-CodexUsage.
+if ($AgentProvider.Key -eq 'codex' -and $toolSetup.Cleanup) { Save-CodexUsage -CodexHome $toolSetup.Cleanup }
 if ($toolSetup.Cleanup -and (Test-Path $toolSetup.Cleanup)) {
     Remove-Item -Path $toolSetup.Cleanup -Recurse -Force -ErrorAction SilentlyContinue
 }

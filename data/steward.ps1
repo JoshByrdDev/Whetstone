@@ -255,6 +255,7 @@ $why = if ($limitReset) { "the account's usage limit refused the run" }
        else { "the run ended without closing itself" }
 Release-StewardRun -Reason $why
 
+if ($AgentProvider.Key -eq 'codex' -and $toolSetup.Cleanup) { Save-CodexUsage -CodexHome $toolSetup.Cleanup }   # before the home goes - see Save-CodexUsage
 if ($toolSetup.Cleanup) { Remove-Item -Path $toolSetup.Cleanup -Recurse -Force -ErrorAction SilentlyContinue }
 
 Write-Log "Steward run for [$Project] over after ${elapsedMin}min."

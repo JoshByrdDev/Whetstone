@@ -1179,9 +1179,12 @@ function AgentRolesField({ roles, catalog, providers, efforts, onChange }: {
       {inUse.filter(p => p.note).map(p => (
         <p key={p.key} className="text-xs text-amber-500/80">{shortLabel(p)}: {p.note}</p>
       ))}
-      {inUse.length > 0 && !inUse.some(p => p.reportsUsage) && (
+      {/* Claude and Codex each get a usage meter; Gemini reports nothing a meter could read. */}
+      {inUse.some(p => p.key === 'gemini') && (
         <p className="text-xs text-amber-500/80">
-          No role runs on Claude, so the rate-limit meter in the header has nothing to read and stays hidden.
+          No usage metrics are supported for Gemini. Gemini CLI doesn't report its usage, so the header and the
+          Metrics tab can't show its headroom, and a Gemini usage limit isn't recognised: a run it refuses fails and
+          is retried like any other.
         </p>
       )}
     </div>

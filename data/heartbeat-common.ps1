@@ -507,6 +507,60 @@ function Receive-AgentWatchdog {
 $LegacyUsageLimitFile = Join-Path $RunDir "usage-limit.json"
 function Get-UsageLimitFile([string]$Provider) { return (Join-Path $RunDir "usage-limit-$Provider.json") }
 
+# --- Codex's own usage report ---
+#
+# Codex writes its rate-limit windows into each session's log (a token_count event carrying
+# rate_limits: used_percent, window_minutes, resets_at) and nowhere a headless run prints them. A
+# fleet run's log lives in its throwaway CODEX_HOME, which is deleted when the run ends - so before
+# that, the last report is copied to run/usage-codex.json, where the dashboard's Codex meter reads it
+# (CodexUsageService). Only a newer report replaces the one there. Never fails a run: it is a meter.
+$CodexUsageFile = Join-Path $RunDir "usage-codex.json"
+
+function Find-RateLimits {
+    param($Obj)
+    if ($null -eq $Obj -or $Obj -isnot [System.Management.Automation.PSCustomObject]) { return $null }
+    foreach ($p in $Obj.PSObject.Properties) {
+        if ($p.Name -eq 'rate_limits' -and $p.Value -is [System.Management.Automation.PSCustomObject]) { return $p.Value }
+        $inner = Find-RateLimits $p.Value
+        if ($inner) { return $inner }
+    }
+    return $null
+}
+
+function Save-CodexUsage {
+    param([string]$CodexHome)
+    try {
+        $sessions = Join-Path $CodexHome 'sessions'
+        if (-not (Test-Path $sessions)) { return }
+        $file = Get-ChildItem -Path $sessions -Recurse -Filter '*.jsonl' -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+        if (-not $file) { return }
+        $lines = [System.IO.File]::ReadAllLines($file.FullName)
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            if ($lines[$i] -notmatch '"rate_limits"\s*:\s*\{') { continue }
+            $obj = $null
+            try { $obj = $lines[$i] | ConvertFrom-Json } catch { continue }
+            $limits = Find-RateLimits $obj
+            if (-not $limits) { continue }
+            $at = if ($obj.PSObject.Properties['timestamp'] -and "$($obj.timestamp)") { [datetimeoffset]"$($obj.timestamp)" } else { [datetimeoffset](Get-Date) }
+
+            if (Test-Path $CodexUsageFile) {
+                $held = $null
+                try { $held = [datetimeoffset]"$((Get-Content $CodexUsageFile -Raw | ConvertFrom-Json).capturedAt)" } catch { }
+                if ($held -and $held -ge $at) { return }
+            }
+            $json = @{ capturedAt = $at.ToString('o'); rate_limits = $limits } | ConvertTo-Json -Depth 8 -Compress
+            $tmp = "$CodexUsageFile.$PID.tmp"
+            [System.IO.File]::WriteAllText($tmp, $json, (New-Object System.Text.UTF8Encoding($false)))
+            Move-Item -Path $tmp -Destination $CodexUsageFile -Force
+            return
+        }
+    }
+    catch {
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log "  Could not read Codex's usage report: $($_.Exception.Message)" }
+    }
+}
+
 # Record that this provider's account refused a run, until $ResetsAt.
 function Set-UsageLimitPause {
     param([string]$Provider, [datetime]$ResetsAt, [string]$Text, [int]$TicketId = 0)

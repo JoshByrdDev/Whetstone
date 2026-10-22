@@ -110,8 +110,8 @@ public static class ConfigEndpoints
             defaultWorkerModel: CodexAgentProvider.DefaultModel,
             defaultReflectionModel: CodexAgentProvider.DefaultReflectionModel,
             supportsReasoningEffort: true,
-            // No cross-provider equivalent of the rate-limit meter, so the chip hides itself.
-            reportsUsage: false,
+            // Its own meter, from the windows Codex writes into its session logs - CodexUsageService.
+            reportsUsage: true,
             hasGuard: false,
             workerModels: new[]
             {

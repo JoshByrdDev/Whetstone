@@ -84,6 +84,7 @@ builder.Services.AddSingleton<NotificationSender>();
 // restart — which here would also kill every in-flight worker. The heartbeat's own runs have the
 // same abstraction on the PowerShell side, in data/providers.ps1.
 builder.Services.AddSingleton<AgentProviderFactory>();
+builder.Services.AddSingleton<CodexUsageService>();
 builder.Services.AddSingleton<ImprovementApplier>();
 // The Classroom's generator: an on-demand, read-only agent run that teaches one ticket. It takes no
 // lease and creates no worktree, so it never contends with the heartbeat's workers for a ticket.

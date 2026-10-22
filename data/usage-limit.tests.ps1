@@ -14,7 +14,7 @@ $ErrorActionPreference = 'Stop'
 
 $common = Join-Path $PSScriptRoot 'heartbeat-common.ps1'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($common, [ref]$null, [ref]$null)
-foreach ($name in @('Get-UsageLimitReset', 'Get-AgentRoleText', 'Get-AgentRole', 'Get-UsageLimitFile', 'Set-UsageLimitPause',
+foreach ($name in @('Find-RateLimits', 'Save-CodexUsage', 'Get-UsageLimitReset', 'Get-AgentRoleText', 'Get-AgentRole', 'Get-UsageLimitFile', 'Set-UsageLimitPause',
                     'Get-UsageLimitPause', 'Get-PausedProviders', 'Get-OpenSkills')) {
     $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
     if (-not $fn) { throw "$name not found in heartbeat-common.ps1" }
@@ -81,6 +81,37 @@ try {
     Check "codex's dated form" ((Get-UsageLimitReset -Text "You've hit your usage limit. Try again at Oct 23rd, 2026 3:42 PM." -Now $now).ToString($fmt)) '2026-10-23 15:42'
     Check "codex's 'try again later' pauses an hour" ((Get-UsageLimitReset -Text "You've hit your usage limit. Try again later." -Now $now).ToString($fmt)) '2026-10-22 11:00'
     Check 'a run that is not a limit is not paused' (Get-UsageLimitReset -Text 'Tests passed. Rate limits are documented in README.' -Now $now) ''
+
+    # Codex's usage report, copied out of a run's own home before it is deleted.
+    $CodexUsageFile = Join-Path $RunDir 'usage-codex.json'
+    $codexHome = Join-Path $RunDir 'codex-home.t'
+    $day = Join-Path $codexHome 'sessions\2026\10\22'
+    New-Item -ItemType Directory -Path $day -Force | Out-Null
+    function Write-Session([string]$At, [double]$Used) {
+        @(
+            '{"timestamp":"2026-10-22T13:00:00.000Z","type":"session_meta","payload":{"id":"x"}}',
+            ('{"timestamp":"' + $At + '","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":{"used_percent":' + $Used + ',"window_minutes":300,"resets_at":1792700000},"secondary":{"used_percent":12.5,"window_minutes":10080,"resets_at":1793000000},"plan_type":"pro"}}}'),
+            ('{"timestamp":"' + $At + '","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}')
+        ) | Set-Content -Path (Join-Path $day 'rollout-1.jsonl') -Encoding ascii
+    }
+
+    Write-Session '2026-10-22T14:00:00.000Z' 42
+    Save-CodexUsage -CodexHome $codexHome
+    $saved = Get-Content $CodexUsageFile -Raw | ConvertFrom-Json
+    Check 'the last report is copied out' $saved.rate_limits.primary.used_percent 42
+    Check 'with both windows' $saved.rate_limits.secondary.window_minutes 10080
+    Check 'a later line with no limits is passed over' $saved.rate_limits.plan_type 'pro'
+
+    Write-Session '2026-10-22T12:00:00.000Z' 90
+    Save-CodexUsage -CodexHome $codexHome
+    Check 'an older report does not replace a newer one' (Get-Content $CodexUsageFile -Raw | ConvertFrom-Json).rate_limits.primary.used_percent 42
+
+    Write-Session '2026-10-22T15:00:00.000Z' 55
+    Save-CodexUsage -CodexHome $codexHome
+    Check 'a newer one does' (Get-Content $CodexUsageFile -Raw | ConvertFrom-Json).rate_limits.primary.used_percent 55
+
+    Save-CodexUsage -CodexHome (Join-Path $RunDir 'no-such-home')
+    Check 'a home with no sessions changes nothing' (Get-Content $CodexUsageFile -Raw | ConvertFrom-Json).rate_limits.primary.used_percent 55
 }
 finally {
     Remove-Item $RunDir -Recurse -Force -ErrorAction SilentlyContinue

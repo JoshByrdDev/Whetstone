@@ -186,21 +186,79 @@ function NudgeButton({ onClick, busy }: { onClick: () => void; busy: boolean }) 
   );
 }
 
+// ---------- Which meters to draw ------------------------------------------------
+
+/** Which providers some role runs on - one meter each for Claude and Codex, none for Gemini. */
+interface UsageProviders { claude: boolean; codex: boolean; gemini: boolean }
+
+function useUsageProviders(): UsageProviders | null {
+  const [providers, setProviders] = useState<UsageProviders | null>(null);
+  useEffect(() => {
+    let active = true;
+    const load = () =>
+      fetch('/api/usage/providers')
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (active && d) setProviders(d); })
+        .catch(() => { /* keep the last answer; the next tick is the retry */ });
+    load();
+    const timer = setInterval(load, POLL_MS);
+    return () => { active = false; clearInterval(timer); };
+  }, []);
+  return providers;
+}
+
+// ---------- Codex ----------------------------------------------------------------
+
+/**
+ * Codex's windows, as Codex last reported them. Not a live reading: Codex writes its limits down only
+ * while a session runs, and the dashboard reads that report (see CodexUsageService). `fetchedAt` is
+ * when the report was made, so the meter can say how old it is.
+ */
+function useCodexUsage(enabled: boolean): Usage | null {
+  const [usage, setUsage] = useState<Usage | null>(null);
+  useEffect(() => {
+    if (!enabled) { setUsage(null); return; }
+    let active = true;
+    const load = () =>
+      fetch('/api/usage/codex')
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (active) setUsage(d ? { ...d, account: '', accounts: [] } : null); })
+        .catch(() => { /* keep the last value */ });
+    load();
+    const timer = setInterval(load, POLL_MS);
+    return () => { active = false; clearInterval(timer); };
+  }, [enabled]);
+  return usage;
+}
+
+/** "as of 2:14pm", or "as of Thu 2:14pm" once it is not today's. */
+function asOf(iso: string | null): string | null {
+  const when = formatReset(iso);
+  return when ? `as of ${when}` : null;
+}
+
+// ---------- The app bar ------------------------------------------------------------
+
+/** The provider's name ahead of its meter - only when two meters sit side by side. */
+function Tag({ children }: { children: string }) {
+  return <span className="text-gray-600">{children}</span>;
+}
+
 /**
  * App-bar chip: the tightest window as a percent plus its reset, with every window in the tooltip.
  * Stays quiet when there is nothing useful to say - an unauthenticated or never-polled dashboard
  * renders nothing here rather than an error the user did not ask about.
  */
-export function HeaderUsage() {
+function ClaudeChip({ tag }: { tag: boolean }) {
   const { usage, nudge, nudging, switchAccount, switching } = useClaudeUsage();
   if (!usage) return null;
-  // A different agent provider is selected, and this meter only measures one subscription. Nothing
-  // is wrong and nothing is fixable, so there is nothing to say.
+  // No role runs on Claude, and this meter only measures Claude's subscription.
   if (usage.status === 'unsupported') return null;
 
   // On every branch below, including the ones that otherwise say nothing: an account with no
   // numbers is exactly the one you need to be able to switch away from.
   const picker = <AccountPicker usage={usage} onSwitch={switchAccount} busy={switching} />;
+  const label = tag ? <Tag>Claude</Tag> : null;
 
   const worst = leading(usage.limits);
   if (!worst) {
@@ -210,6 +268,7 @@ export function HeaderUsage() {
     if (usage.status === 'forbidden' || nudgeable(usage.status)) {
       return (
         <span className="flex items-center gap-1.5 text-xs text-gray-500" title={usage.message ?? ''}>
+          {label}
           {picker}
           {/* Three different problems, so three different words. "usage expired" over a renewal the
               dashboard is merely waiting to retry would send the user looking for a dead login. */}
@@ -237,6 +296,7 @@ export function HeaderUsage() {
       className="flex items-center gap-1.5 text-xs"
       title={summary(usage)}
     >
+      {label}
       {/* The picker, the bar and the reset time stay at the desk. On a phone the percent is the
           whole glance - the bar it shares with a full fleet's pulse has no room for more - and the
           Metrics tab has every window spelled out. The picker still shows there whenever there
@@ -261,56 +321,157 @@ export function HeaderUsage() {
   );
 }
 
-/**
- * The same data given room to breathe, for the Metrics tab: one labelled meter per window, so the
- * weekly ceiling is visible next to the session one rather than hidden behind a tooltip.
- */
-export function UsageMeters() {
-  const { usage } = useClaudeUsage();
-  if (!usage) return null;
-  // See HeaderUsage: the panel would be a heading over a permanent apology.
-  if (usage.status === 'unsupported') return null;
-
+/** Codex's chip: the same glance as Claude's, from Codex's last report, with its age in the tooltip. */
+function CodexChip({ tag }: { tag: boolean }) {
+  const usage = useCodexUsage(true);
+  if (!usage || usage.status === 'unsupported') return null;
+  const label = tag ? <Tag>Codex</Tag> : null;
+  const worst = leading(usage.limits);
+  if (!worst) {
+    return (
+      <span className="flex items-center gap-1.5 text-xs text-gray-500" title={usage.message ?? ''}>
+        {label}codex usage unknown
+      </span>
+    );
+  }
+  const t = tone(worst);
+  const reset = formatReset(worst.resetsAt);
+  const age = asOf(usage.fetchedAt);
   return (
-    <div className="bg-gray-900 border border-hair rounded-lg p-4">
-      <div className="flex items-baseline justify-between mb-3">
-        <h3 className="text-sm font-semibold text-gray-300">Rate-limit headroom</h3>
-        <span className="text-xs text-gray-600">
-          {usage.status === 'ok' && usage.fetchedAt
-            ? `updated ${formatWakeTime(new Date(usage.fetchedAt))}`
-            : usage.message}
-        </span>
-      </div>
+    <span className="flex items-center gap-1.5 text-xs" title={[summary({ ...usage, fetchedAt: null }), age && `Reported ${age}`].filter(Boolean).join('\n')}>
+      {label}
+      <span className="h-1.5 w-10 rounded-full bg-gray-800 overflow-hidden max-sm:hidden">
+        <span className={`block h-full rounded-full ${t.bar}`} style={{ width: `${Math.min(100, Math.max(2, worst.percent))}%` }} />
+      </span>
+      <span className={`font-medium ${t.text}`}>{Math.round(worst.percent)}%</span>
+      {reset && <span className="text-gray-500 whitespace-nowrap max-sm:hidden">resets {reset}</span>}
+    </span>
+  );
+}
 
+const GEMINI_UNKNOWN = "Gemini CLI doesn't report its usage, so there is nothing to show for it.";
+
+/**
+ * Up to two chips: Claude's and Codex's, each only while some role runs on that provider. A board
+ * running only Gemini gets a quiet "usage unknown" instead of nothing, so an empty bar is never
+ * mistaken for a meter that failed to load.
+ */
+export function HeaderUsage() {
+  const providers = useUsageProviders();
+  // Until the first answer, Claude's chip alone: it hides itself when no role runs on Claude.
+  if (!providers) return <ClaudeChip tag={false} />;
+  const both = providers.claude && providers.codex;
+  if (!providers.claude && !providers.codex) {
+    return providers.gemini
+      ? <span className="text-xs text-gray-500" title={GEMINI_UNKNOWN}>usage unknown</span>
+      : null;
+  }
+  return (
+    <span className="flex items-center gap-3">
+      {providers.claude && <ClaudeChip tag={both} />}
+      {providers.codex && <CodexChip tag={both} />}
+    </span>
+  );
+}
+
+// ---------- The Metrics tab --------------------------------------------------------
+
+/** One labelled bar per window. */
+function MeterRows({ limits }: { limits: UsageLimit[] }) {
+  return (
+    <div className="space-y-3">
+      {limits.map(l => {
+        const t = tone(l);
+        const reset = formatReset(l.resetsAt);
+        return (
+          <div key={`${l.kind}-${l.label}`}>
+            <div className="flex items-baseline justify-between text-xs mb-1">
+              <span className="text-gray-400">{l.label}</span>
+              <span className="text-gray-600">
+                <span className={`font-medium ${t.text}`}>{Math.round(l.percent)}%</span>
+                {reset && ` · resets ${reset}`}
+              </span>
+            </div>
+            <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
+              <div
+                className={`h-full rounded-full ${t.bar}`}
+                style={{ width: `${Math.min(100, Math.max(1, l.percent))}%` }}
+              />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MeterCard({ title, note, children }: { title: string; note: string | null; children: React.ReactNode }) {
+  return (
+    <div className="bg-gray-900 border border-hair rounded-lg p-4 min-w-0">
+      <div className="flex items-baseline justify-between gap-3 mb-3">
+        <h3 className="text-sm font-semibold text-gray-300">{title}</h3>
+        {note && <span className="text-xs text-gray-600 truncate">{note}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function ClaudeMeters() {
+  const { usage } = useClaudeUsage();
+  if (!usage || usage.status === 'unsupported') return null;
+  return (
+    <MeterCard
+      title="Claude headroom"
+      note={usage.status === 'ok' && usage.fetchedAt ? `updated ${formatWakeTime(new Date(usage.fetchedAt))}` : usage.message}
+    >
       {usage.limits.length === 0 ? (
         <p className="text-xs text-gray-500">
           No usage data yet. This reads Claude Code's own login, which only stays fresh while somebody is
           running the CLI — run <code className="text-gray-400">claude</code> once if it stays empty.
         </p>
-      ) : (
-        <div className="space-y-3">
-          {usage.limits.map(l => {
-            const t = tone(l);
-            const reset = formatReset(l.resetsAt);
-            return (
-              <div key={`${l.kind}-${l.label}`}>
-                <div className="flex items-baseline justify-between text-xs mb-1">
-                  <span className="text-gray-400">{l.label}</span>
-                  <span className="text-gray-600">
-                    <span className={`font-medium ${t.text}`}>{Math.round(l.percent)}%</span>
-                    {reset && ` · resets ${reset}`}
-                  </span>
-                </div>
-                <div className="h-1.5 rounded-full bg-gray-800 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${t.bar}`}
-                    style={{ width: `${Math.min(100, Math.max(1, l.percent))}%` }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
+      ) : <MeterRows limits={usage.limits} />}
+    </MeterCard>
+  );
+}
+
+function CodexMeters() {
+  const usage = useCodexUsage(true);
+  if (!usage || usage.status === 'unsupported') return null;
+  return (
+    <MeterCard title="Codex headroom" note={asOf(usage.fetchedAt)}>
+      {usage.limits.length === 0 ? (
+        <p className="text-xs text-gray-500">
+          {usage.message ?? 'No Codex usage reported yet.'} It updates each time a Codex run finishes.
+        </p>
+      ) : <MeterRows limits={usage.limits} />}
+    </MeterCard>
+  );
+}
+
+/**
+ * The same data given room to breathe, for the Metrics tab: one card per provider in use, side by
+ * side, each with every window spelled out rather than hidden behind a tooltip.
+ */
+export function UsageMeters() {
+  const providers = useUsageProviders();
+  if (!providers) return null;
+  if (!providers.claude && !providers.codex) {
+    if (!providers.gemini) return null;
+    return (
+      <MeterCard title="Usage unknown" note={null}>
+        <p className="text-xs text-gray-500">{GEMINI_UNKNOWN} Every role runs on Gemini, so no headroom is shown here.</p>
+      </MeterCard>
+    );
+  }
+  return (
+    <div className="space-y-2">
+      <div className={`grid gap-4 ${providers.claude && providers.codex ? 'sm:grid-cols-2' : ''}`}>
+        {providers.claude && <ClaudeMeters />}
+        {providers.codex && <CodexMeters />}
+      </div>
+      {providers.gemini && (
+        <p className="text-[11px] text-gray-600">Roles on Gemini are not counted above: Gemini CLI doesn't report its usage.</p>
       )}
     </div>
   );

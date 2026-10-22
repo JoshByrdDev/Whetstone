@@ -95,6 +95,40 @@ public static class UsageEndpoints
             return Results.Ok(new { account = usage.AccountName, status = usage.Current.Status });
         });
 
+        // Which providers some role runs on - which meters the app bar and the Metrics tab draw. A
+        // provider no role uses gets no meter; Gemini reports no usage at all, so a board running
+        // only Gemini shows that its usage is unknown rather than showing nothing.
+        app.MapGet("/api/usage/providers", (AgentProviderFactory providers) => Results.Ok(new
+        {
+            claude = providers.UsesProvider("claude"),
+            codex = providers.UsesProvider("codex"),
+            gemini = providers.UsesProvider("gemini"),
+        }));
+
+        // Codex's windows, as last reported by Codex itself - see CodexUsageService. The same limit
+        // shape as /api/usage, so one meter draws either.
+        app.MapGet("/api/usage/codex", (CodexUsageService codex) =>
+        {
+            var s = codex.Current();
+            return Results.Ok(new
+            {
+                status = s.Status,
+                message = s.Message,
+                fetchedAt = s.CapturedAt,
+                plan = s.Plan,
+                limits = s.Limits.Select(l => new
+                {
+                    kind = l.Kind,
+                    group = l.Kind,
+                    label = l.Label,
+                    percent = l.Percent,
+                    severity = "",
+                    resetsAt = l.ResetsAt,
+                    isActive = l.IsActive,
+                }),
+            });
+        });
+
         app.MapGet("/api/usage", (ClaudeUsageService usage) =>
         {
             var s = usage.Current;
