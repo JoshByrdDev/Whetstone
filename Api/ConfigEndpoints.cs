@@ -525,7 +525,7 @@ public static class ConfigEndpoints
         });
 
         // Create a new project (registration only — skills + heartbeat are set up separately).
-        app.MapPost("/api/projects", async (ProjectUpsertRequest req, ProjectRegistry registry, DashboardPaths paths, DashboardDbContext db, QaIsolation isolation) =>
+        app.MapPost("/api/projects", async (ProjectUpsertRequest req, ProjectRegistry registry, DashboardPaths paths, DashboardDbContext db, QaIsolation isolation, ILoggerFactory logs) =>
         {
             var key = req.Key?.Trim().ToLowerInvariant() ?? "";
             if (!KeyPattern.IsMatch(key))
@@ -539,6 +539,11 @@ public static class ConfigEndpoints
             // Lay down the required skills + operational files so the project is immediately
             // workable by the heartbeat (generic templates the user can then customise).
             ProjectScaffolder.ScaffoldMissing(paths, key, req.DisplayName ?? key);
+            // The folder's own repo, with project.json ignored before anything is committed. Only on
+            // create: an existing folder without one may still be tracked by an older checkout of
+            // this repo, and data/migrate-projects-to-nested-repos.ps1 is what moves those.
+            if (ProjectRepo.Initialize(paths.ProjectDir(key)) is { Error: { } repoError })
+                logs.CreateLogger("Projects").LogWarning("Project {Key}'s folder was not made a git repo: {Error}", key, repoError);
             return Results.Ok(BuildDetail(key, registry, paths, await EnabledTracks.OpenByTrackAsync(db)));
         });
 
@@ -664,6 +669,10 @@ public static class ConfigEndpoints
             skills = ProjectScaffolder.SkillStatuses(paths, key)
                 .Select(s => new { name = s.Name, present = s.Present }),
             skillsReady = ProjectScaffolder.SkillsReady(paths, key),
+            // The project folder's own repo: versioned, and pushed somewhere. A folder with neither is
+            // this machine's only copy of the project's skills. See ProjectRepo.
+            folderRepo = ProjectRepo.Read(paths.ProjectDir(key)) is var fr
+                ? new { versioned = fr.Versioned, remote = fr.Remote } : null,
             tracker = new
             {
                 kind = Services.Tracker.TrackerConfig.KindToString(tracker.Kind),

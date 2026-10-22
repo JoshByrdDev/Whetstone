@@ -332,6 +332,8 @@ interface ProjectDetail {
   disabled: boolean;
   skills: SkillStatus[];
   skillsReady: boolean;
+  /** The project folder's own git repo: whether there is one, and origin's URL if it is pushed anywhere. */
+  folderRepo?: { versioned: boolean; remote: string | null } | null;
   tracker: TrackerSettings;
   /** Each provider's default vocabulary, served so the two halves of the app cannot disagree
    *  about it — see the reset in `setTrackerKind`. Keyed by the same token as `tracker.kind`. */
@@ -1575,7 +1577,7 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
         <button onClick={() => setOpen(o => !o)} className="flex items-center gap-3 text-left min-w-0">
           <span className={`text-gray-500 transition-transform ${open ? 'rotate-90' : ''}`}>▶</span>
           <div className="min-w-0">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className={`text-sm font-semibold ${p.disabled ? 'text-gray-500' : 'text-gray-100'}`}>{p.displayName || p.key}</span>
               <span className="text-[11px] font-mono text-gray-500">{p.key}</span>
               {p.disabled && <span className="px-1.5 py-0.5 rounded bg-gray-700 text-gray-400 text-[10px] font-semibold">UNREGISTERED</span>}
@@ -1583,6 +1585,13 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
                 <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${p.skillsReady ? 'bg-emerald-500/10 text-emerald-300' : 'bg-amber-500/10 text-amber-300'}`}
                   title="Required heartbeat skills for this project">
                   {p.skillsReady ? 'Skills ready' : `Skills ${skillsPresent}/${p.skills.length}`}
+                </span>
+              )}
+              {/* Said only when something is wrong: this folder's skills and config exist nowhere else. */}
+              {!p.disabled && p.folderRepo && (!p.folderRepo.versioned || !p.folderRepo.remote) && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 text-[10px] font-semibold"
+                  title={`data/projects/${p.key} is this machine's only copy of its skills and config. See "Each project folder is its own repo" in docs/setup.md.`}>
+                  {p.folderRepo.versioned ? 'No remote' : 'Not versioned'}
                 </span>
               )}
             </div>

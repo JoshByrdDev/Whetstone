@@ -115,6 +115,30 @@ public class SetupCheckTests
     }
 
     [Fact]
+    public void Project_folders_without_a_repo_or_a_remote_are_flagged()
+    {
+        var folders = new[]
+        {
+            ("alpha", new ProjectRepo.State(true, "https://example.com/alpha.git")),
+            ("bravo", new ProjectRepo.State(true, null)),
+        };
+        var item = Item(SetupCheckService.Evaluate(Machine(), AllClaude, Array.Empty<(string, string)>(), folders), "project-folders");
+        Assert.Equal("warn", item.State);
+        Assert.False(item.Required);
+        Assert.Contains("bravo", item.Detail);
+        Assert.DoesNotContain("alpha", item.Detail);
+        Assert.Contains("data/projects/bravo", item.Fix);
+
+        var unversioned = Item(SetupCheckService.Evaluate(Machine(), AllClaude, Array.Empty<(string, string)>(),
+            new[] { ("alpha", new ProjectRepo.State(false, null)) }), "project-folders");
+        Assert.Contains("No git history", unversioned.Detail);
+
+        var fine = Item(SetupCheckService.Evaluate(Machine(), AllClaude, Array.Empty<(string, string)>(),
+            new[] { ("alpha", new ProjectRepo.State(true, "https://example.com/alpha.git")) }), "project-folders");
+        Assert.Equal("ok", fine.State);
+    }
+
+    [Fact]
     public void FindOnPath_follows_path_order_and_pathext()
     {
         var root = Path.Combine(Path.GetTempPath(), "setup-check-" + Guid.NewGuid().ToString("N"));

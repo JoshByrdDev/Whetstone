@@ -38,10 +38,11 @@ public class SetupCheckService
     };
 
     private readonly ProjectRegistry _registry;
+    private readonly DashboardPaths _paths;
     private readonly Probe _probe;
 
-    public SetupCheckService(ProjectRegistry registry, Narrator narrator, HeartbeatManager heartbeat)
-        : this(registry, new Probe(
+    public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Narrator narrator, HeartbeatManager heartbeat)
+        : this(registry, paths, new Probe(
             name => FindOnPath(name, Environment.GetEnvironmentVariable("PATH")),
             name => FindOnPath(name, UserPath()),
             RunGitConfig,
@@ -49,7 +50,8 @@ public class SetupCheckService
             () => heartbeat.StartupError))
     { }
 
-    public SetupCheckService(ProjectRegistry registry, Probe probe) => (_registry, _probe) = (registry, probe);
+    public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Probe probe) =>
+        (_registry, _paths, _probe) = (registry, paths, probe);
 
     public IReadOnlyList<SetupItem> Run()
     {
@@ -63,12 +65,16 @@ public class SetupCheckService
             .Select(k => (Key: k, Path: SafeProjectPath(k)))
             .Where(p => !string.IsNullOrEmpty(p.Path))
             .ToList();
-        return Evaluate(_probe, roles, projects!);
+        var folders = _registry.Projects
+            .Select(k => (Key: k, Repo: ProjectRepo.Read(_paths.ProjectDir(k))))
+            .ToList();
+        return Evaluate(_probe, roles, projects!, folders);
     }
 
     /// <summary>The check itself, over whatever the probe reports. Public for tests.</summary>
     public static IReadOnlyList<SetupItem> Evaluate(Probe probe,
-        IReadOnlyList<(string Role, string Provider)> roles, IReadOnlyList<(string Key, string Path)> projects)
+        IReadOnlyList<(string Role, string Provider)> roles, IReadOnlyList<(string Key, string Path)> projects,
+        IReadOnlyList<(string Key, ProjectRepo.State Repo)>? folders = null)
     {
         var items = new List<SetupItem>();
 
@@ -120,7 +126,31 @@ public class SetupCheckService
                 "Walkthroughs play with captions only: " + narrator,
                 "Run npm install once in data/narrator (the first voiced walkthrough also downloads a ~90MB voice model)."));
 
+        // ---- each project folder's own repo: its skills and config exist nowhere else ----
+        if (folders is { Count: > 0 }) items.Add(Folders(folders));
+
         return items;
+    }
+
+    private static SetupItem Folders(IReadOnlyList<(string Key, ProjectRepo.State Repo)> folders)
+    {
+        const string label = "Project folders backed up";
+        var unversioned = folders.Where(f => !f.Repo.Versioned).Select(f => f.Key).ToList();
+        var local = folders.Where(f => f.Repo.Versioned && f.Repo.Remote is null).Select(f => f.Key).ToList();
+        if (unversioned.Count == 0 && local.Count == 0)
+            return new SetupItem("project-folders", label, "ok", false,
+                "Every project folder is its own repo with a remote.", null);
+
+        var detail = new List<string>();
+        if (unversioned.Count > 0)
+            detail.Add($"No git history of their own: {string.Join(", ", unversioned)}.");
+        if (local.Count > 0)
+            detail.Add($"No remote, so this machine holds the only copy of their skills: {string.Join(", ", local)}.");
+        var key = (unversioned.Count > 0 ? unversioned : local)[0];
+        var fix = unversioned.Count > 0
+            ? "See \"Each project folder is its own repo\" in docs/setup.md."
+            : $"Create an empty private repo, then: git -C data/projects/{key} remote add origin <its URL>, and git -C data/projects/{key} push -u origin HEAD";
+        return new SetupItem("project-folders", label, "warn", false, string.Join(" ", detail), fix);
     }
 
     private static SetupItem Tool(Probe probe, string exe, string label, bool required, string found, string missing, string fix)

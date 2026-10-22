@@ -106,18 +106,19 @@ both config files, and copies every required skill out of `skill-templates/` wit
 re-running it later picks up a template added since without touching a skill you
 have customised.
 
-Then give the folder its own history - the form does not do this yet:
+It also makes the folder its own repo (`ProjectRepo.Initialize`): a `.gitignore`
+that keeps out `project.json` and the runtime files, `git init`, and a baseline
+commit. It refuses that commit if `project.json` would be in it. The step left is
+the remote, which only you can choose. Create an empty private repo, then:
 
 ```
-git -C data/projects/<key> init
-git -C data/projects/<key> add -A
-git -C data/projects/<key> commit -m "Baseline"
 git -C data/projects/<key> remote add origin <private-repo-url>
 git -C data/projects/<key> push -u origin HEAD
 ```
 
-Copy the `.gitignore` from any existing project folder before the `add -A`, or the
-first commit sweeps up `project.json` and its tracker token.
+Settings shows **No remote** on the project, and the System page's Setup check flags
+it, until this is done. `docs/setup.md` §4 has the longer explanation, including a
+folder made before this existed.
 
 What the form does **not** cover, and what you therefore hand-edit into
 `project.defaults.json` afterwards:
