@@ -74,6 +74,38 @@ public class WorkerHostStackTests : IDisposable
         Assert.Equal(1, leases.CapacityFor("alpha:app-stack"));
     }
 
+    /// <summary>
+    /// The board host's own qaLeases follows the same rule as a worker host's: more than one copy
+    /// only of a stack that can run twice, and never past the ceiling.
+    /// </summary>
+    [Fact]
+    public void The_board_hosts_qa_leases_apply_only_to_a_parallel_stacks_project()
+    {
+        File.WriteAllText(Path.Combine(_root, "config.json"), """{ "qaLeases": 4 }""");
+        using var ctx = NewCtx();
+        var leases = new ResourceLeaseService(ctx, _registry);
+        Assert.Equal(4, leases.CapacityFor("alpha:app-stack"));
+        Assert.Equal(1, leases.CapacityFor("bravo:app-stack"));
+        Assert.Equal(1, leases.CapacityFor("nobody:app-stack"));
+        Assert.Equal(1, leases.CapacityFor("ticket:7"));
+
+        File.WriteAllText(Path.Combine(_root, "config.json"), """{ "qaLeases": 40 }""");
+        Assert.Equal(ResourceLeaseService.MaxQaLeases, new ResourceLeaseService(ctx, _registry).CapacityFor("alpha:app-stack"));
+
+        File.WriteAllText(Path.Combine(_root, "config.json"), "{}");
+        Assert.Equal(1, new ResourceLeaseService(ctx, _registry).CapacityFor("alpha:app-stack"));
+    }
+
+    /// <summary>An explicit resourceCapacity entry is the more specific setting, so it wins.</summary>
+    [Fact]
+    public void A_resource_capacity_entry_outranks_qa_leases()
+    {
+        File.WriteAllText(Path.Combine(_root, "config.json"),
+            """{ "qaLeases": 4, "resourceCapacity": { "alpha:app-stack": 2 } }""");
+        using var ctx = NewCtx();
+        Assert.Equal(2, new ResourceLeaseService(ctx, _registry).CapacityFor("alpha:app-stack"));
+    }
+
     [Fact]
     public void A_host_entry_that_names_no_qa_leases_has_one()
     {

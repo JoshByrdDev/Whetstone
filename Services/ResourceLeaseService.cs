@@ -30,10 +30,19 @@ public class ResourceLeaseService
     /// </summary>
     public static string TicketKey(int ticketId) => $"ticket:{ticketId}";
 
+    /// <summary>Most copies of one project's stack this machine may run at once.</summary>
+    public const int MaxQaLeases = 10;
+
+    /// <summary>This machine's <c>qaLeases</c>, 1 unless Settings says more, never past the max.</summary>
+    public static int QaLeases(IReadOnlyDictionary<string, JsonElement> global) =>
+        global.TryGetValue("qaLeases", out var q) && q.ValueKind == JsonValueKind.Number
+            ? Math.Clamp((int)q.GetDouble(), 1, MaxQaLeases) : 1;
+
     /// <summary>
-    /// How many holders a resource allows at once. One unless global config says otherwise
-    /// (<c>"resourceCapacity": { "claude:slot": 3 }</c>) - exclusivity is the point, and a resource
-    /// that safely allows several is the exception worth writing down.
+    /// How many holders a resource allows at once. One unless global config says otherwise: an
+    /// explicit <c>"resourceCapacity": { "claude:slot": 3 }</c> entry, or <c>qaLeases</c> for a
+    /// project that sets <c>parallelStacks</c>. Exclusivity is the point, and a resource that
+    /// safely allows several is the exception worth writing down.
     /// </summary>
     public int CapacityFor(string resourceKey)
     {
@@ -61,6 +70,14 @@ public class ResourceLeaseService
             if (global.TryGetValue("resourceCapacity", out var caps) && caps.ValueKind == JsonValueKind.Object
                 && caps.TryGetProperty(resourceKey, out var v) && v.ValueKind == JsonValueKind.Number)
                 return Math.Max(1, v.GetInt32());
+
+            // This machine's own copies of a project's resource: its qaLeases (Settings), on the
+            // same terms as a worker host's - only for a project whose stack can run more than once
+            // here, because without parallelStacks a second run would bring the stack up on the
+            // same ports. A key naming no project reads as a project without it, and gets one.
+            var sep = resourceKey.IndexOf(':');
+            if (sep > 0 && _registry.GetProjectConfig(resourceKey[..sep]).ParallelStacks)
+                return QaLeases(global);
         }
         catch { /* malformed config must not make every resource unavailable */ }
         return 1;

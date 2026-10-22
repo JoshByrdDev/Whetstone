@@ -28,8 +28,9 @@ public static class ConfigEndpoints
         // Reliability guards + the two eligibility filters for the one global heartbeat: which
         // projects it may claim from, and which priority bands. Both empty = no restriction.
         "heartbeatMaxAttempts", "heartbeatWorkerTimeoutMinutes", "heartbeatWorkerStallMinutes", "heartbeatProjects", "heartbeatPriorities",
-        // How many agents the one orchestrator runs at once (1..HeartbeatManager.MaxWorkers).
-        "heartbeatWorkers",
+        // How many agents the one orchestrator runs at once (1..HeartbeatManager.MaxWorkers), and how
+        // many copies of a parallelStacks project's stack this machine runs at once (qaLeases).
+        "heartbeatWorkers", "qaLeases",
         // Branch enforcement: base branch new feature branches fork from, and their name prefix.
         "baseBranch", "branchPrefix",
         // Which CLI, model and effort each kind of run takes, one entry per role. See AgentRoles.
@@ -299,6 +300,10 @@ public static class ConfigEndpoints
                 // a hand-edited config file can never put the UI and the orchestrator at odds.
                 heartbeatWorkers = Math.Clamp((int)Num(g, "heartbeatWorkers", HeartbeatManager.DefaultWorkers), 1, HeartbeatManager.MaxWorkers),
                 maxHeartbeatWorkers = HeartbeatManager.MaxWorkers,
+                // Copies of one project's stack this machine runs at once, for projects that set
+                // parallelStacks. Clamped on the way out for the same reason heartbeatWorkers is.
+                qaLeases = ResourceLeaseService.QaLeases(g),
+                maxQaLeases = ResourceLeaseService.MaxQaLeases,
                 // Eligible projects for the heartbeat; empty = all (including any added later).
                 heartbeatProjects = StrArray(g, "heartbeatProjects"),
                 // Eligible priority bands (TicketPriority names); empty = all five.
@@ -363,6 +368,15 @@ public static class ConfigEndpoints
                     target["heartbeatWorkers"] = JsonValue.Create(Math.Clamp(n, 1, HeartbeatManager.MaxWorkers));
                 }
                 catch { target.Remove("heartbeatWorkers"); }   // not a number — fall back to the default
+            }
+            if (target["qaLeases"] is JsonNode qa)
+            {
+                try
+                {
+                    var n = (int)qa.GetValue<double>();
+                    target["qaLeases"] = JsonValue.Create(Math.Clamp(n, 1, ResourceLeaseService.MaxQaLeases));
+                }
+                catch { target.Remove("qaLeases"); }
             }
 
             // Every role is stored whole, and the settings it replaced go once it is. A role left

@@ -221,6 +221,10 @@ interface GlobalConfig {
   heartbeatWorkers: number;
   /** The hard ceiling the server enforces — not editable, just what the UI offers. */
   maxHeartbeatWorkers: number;
+  /** Copies of one project's stack this machine runs at once - only for a project that sets
+   *  parallelStacks. Worker hosts have their own, in the Worker Hosts panel. */
+  qaLeases: number;
+  maxQaLeases: number;
   /** What each kind of run takes, keyed by role. Served with every gap filled, so what is on
    *  screen is what runs. There is no fleet-wide provider. */
   agentRoles: Record<string, AgentRoleSetting>;
@@ -437,6 +441,9 @@ function GlobalSettings() {
     const maxAgents = cfg.maxHeartbeatWorkers || 10;
     if (!Number.isInteger(cfg.heartbeatWorkers) || cfg.heartbeatWorkers < 1 || cfg.heartbeatWorkers > maxAgents)
       errors.heartbeatWorkers = `A whole number from 1 to ${maxAgents}`;
+    const maxQa = cfg.maxQaLeases || 10;
+    if (!Number.isInteger(cfg.qaLeases) || cfg.qaLeases < 1 || cfg.qaLeases > maxQa)
+      errors.qaLeases = `A whole number from 1 to ${maxQa}`;
   }
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -701,7 +708,7 @@ function GlobalSettings() {
           only when there is a workable ticket for it, so a quiet board still runs one agent. Takes effect
           the next time the heartbeat is started.
         </p>
-        <div className="max-w-xs">
+        <div className="grid grid-cols-2 max-sm:grid-cols-1 gap-4">
           <Field
             label="Concurrent Agents"
             description={`1 to ${cfg.maxHeartbeatWorkers || 10}. Every agent is a full CLI session on this machine, and those on the same provider share its rate limits.`}
@@ -712,7 +719,23 @@ function GlobalSettings() {
             onChange={v => update({ heartbeatWorkers: v === '' ? NaN : Number(v) })}
             error={errors.heartbeatWorkers}
           />
+          <Field
+            label="QA Leases"
+            description={`1 to ${cfg.maxQaLeases || 10}. How many QA or peer-review runs may use one project's stack on this machine at once. Above 1 only for a project whose config sets parallelStacks; any other always gets one.`}
+            type="number"
+            value={Number.isNaN(cfg.qaLeases) ? '' : cfg.qaLeases}
+            onChange={v => update({ qaLeases: v === '' ? NaN : Number(v) })}
+            error={errors.qaLeases}
+          />
         </div>
+        {/* Only when both numbers are valid, so it never argues with an error under either field. */}
+        {!errors.heartbeatWorkers && !errors.qaLeases && cfg.qaLeases > cfg.heartbeatWorkers && (
+          <p className="text-xs text-gray-500">
+            ⓘ Only {cfg.heartbeatWorkers} agent{cfg.heartbeatWorkers === 1 ? '' : 's'} run{cfg.heartbeatWorkers === 1 ? 's' : ''} at
+            once on this machine, so no more than {cfg.heartbeatWorkers} of the {cfg.qaLeases} QA leases can ever be in use
+            together.
+          </p>
+        )}
       </FieldGroup>
 
       <FieldGroup title="Heartbeat Reliability">
