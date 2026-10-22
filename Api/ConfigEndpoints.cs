@@ -654,6 +654,11 @@ public static class ConfigEndpoints
             resolvedWorktreeRoot = typed.ResolvedWorktreeRoot,
             worktreeSetup = StrArray(cfg, "worktreeSetup"),
             worktreeCopyFiles = StrArray(cfg, "worktreeCopyFiles"),
+            // What the steward runs on the merged result before it merges, and how long each may
+            // take. The timeout is the one part the form edits: what a check runs is the project's
+            // own business, written in its file, and a box that retyped a command could break it.
+            mergeChecks = typed.Steward.MergeChecks
+                .Select(c => new { name = c.Name, run = c.Run, timeoutMinutes = c.TimeoutMinutes }),
             disabled = paths.IsDisabled(key),
             // Required-skill readiness — drives the "set up skills" affordance in Settings.
             skills = ProjectScaffolder.SkillStatuses(paths, key)
@@ -714,6 +719,24 @@ public static class ConfigEndpoints
             : null;
     }
 
+    /// <summary>
+    /// Sets <c>timeoutMinutes</c> on each of <c>steward.mergeChecks</c> named in <paramref name="timeouts"/>,
+    /// clamped to what the steward reads (1..120), leaving everything else in each check as it was.
+    /// A check is named by its <c>name</c>, or by its <c>run</c> when it has none, as StewardConfig does.
+    /// </summary>
+    public static void SetMergeCheckTimeouts(JsonObject file, IReadOnlyDictionary<string, int> timeouts)
+    {
+        if (file["steward"] is not JsonObject steward || steward["mergeChecks"] is not JsonArray checks) return;
+        foreach (var node in checks)
+        {
+            if (node is not JsonObject c) continue;
+            var name = (c["name"] as JsonValue)?.GetValue<string>()?.Trim();
+            if (string.IsNullOrEmpty(name)) name = (c["run"] as JsonValue)?.GetValue<string>()?.Trim();
+            if (name is not null && timeouts.TryGetValue(name, out var minutes))
+                c["timeoutMinutes"] = Math.Clamp(minutes, 1, 120);
+        }
+    }
+
     private static void WriteProjectFiles(string key, ProjectUpsertRequest req, DashboardPaths paths)
     {
         // Committed, non-secret defaults. Snapshotted before the edits so an untouched file is left
@@ -748,11 +771,19 @@ public static class ConfigEndpoints
             defaults["skipClassroomAnalysisByDefault"] = req.SkipClassroomAnalysisByDefault.Value;
         // How the team delivers - by PR or by merging to the base itself. Theirs, not this machine's.
         if (req.MergeInsteadOfPr is not null) defaults["mergeInsteadOfPr"] = req.MergeInsteadOfPr.Value;
-        SaveObject(paths.ProjectConfigDefaults(key), defaults, defaultsBefore);
 
         // Local, gitignored — paths + secrets. Preserve any extra keys (assignedMarker, custom fields).
         var local = LoadObject(paths.ProjectConfig(key));
         var localBefore = Snapshot(local);
+
+        // A merge check's timeout goes into whichever file holds the steward block in force. The two
+        // files merge at the top level, so a `steward` in the local file hides the committed one
+        // whole, and writing the committed one then would change nothing.
+        if (req.MergeCheckTimeouts is { Count: > 0 })
+            SetMergeCheckTimeouts(local["steward"] is JsonObject ? local : defaults, req.MergeCheckTimeouts);
+
+        SaveObject(paths.ProjectConfigDefaults(key), defaults, defaultsBefore);
+
         if (req.ProjectPath is not null) local["projectPath"] = req.ProjectPath.Trim();
         // A machine path, like projectPath — belongs with it, not in the committed defaults.
         if (req.WorktreeRoot is not null) local["worktreeRoot"] = req.WorktreeRoot.Trim();
@@ -908,7 +939,10 @@ public record ProjectUpsertRequest(
     // What a new ticket's "skip classroom analysis" box starts as. Null leaves it alone.
     bool? SkipClassroomAnalysisByDefault = null,
     // Deliver by merging to the base branch instead of raising a PR. Null leaves it alone.
-    bool? MergeInsteadOfPr = null);
+    bool? MergeInsteadOfPr = null,
+    // A steward merge check's time limit in minutes, keyed by the check's name. A name that is not
+    // one of the project's checks is ignored; null leaves every check alone.
+    Dictionary<string, int>? MergeCheckTimeouts = null);
 
 /// <param name="Kind">"jira", "azureDevOps", or "none".</param>
 /// <param name="BaseUrl">The Jira site, or the Azure DevOps organisation URL.</param>

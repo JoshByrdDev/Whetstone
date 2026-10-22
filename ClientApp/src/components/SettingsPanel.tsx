@@ -327,6 +327,8 @@ interface ProjectDetail {
   resolvedWorktreeRoot: string;
   worktreeSetup: string[];
   worktreeCopyFiles: string[];
+  /** What the steward runs on the merged result before merging. Only the timeout is editable here. */
+  mergeChecks?: { name: string; run: string; timeoutMinutes: number }[];
   disabled: boolean;
   skills: SkillStatus[];
   skillsReady: boolean;
@@ -1509,6 +1511,9 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
   if (p.qaApiPort < 1 || p.qaApiPort > 65535) errors.qaApiPort = 'Must be 1-65535';
   if (p.qaWebPort < 1 || p.qaWebPort > 65535) errors.qaWebPort = 'Must be 1-65535';
   if (p.qaApiPort && p.qaWebPort && p.qaApiPort === p.qaWebPort) errors.qaWebPort = 'Must differ from API port';
+  for (const c of p.mergeChecks ?? [])
+    if (!Number.isInteger(c.timeoutMinutes) || c.timeoutMinutes < 1 || c.timeoutMinutes > 120)
+      errors[`check:${c.name}`] = 'Must be 1-120';
   const hasErrors = Object.keys(errors).length > 0;
 
   const save = async () => {
@@ -1524,6 +1529,7 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
           baseBranch: p.baseBranch, branchPrefix: p.branchPrefix,
           worktreeRoot: p.worktreeRoot ?? '', worktreeSetup: p.worktreeSetup ?? [], worktreeCopyFiles: p.worktreeCopyFiles ?? [],
           tracker: p.tracker, qaApiPort: p.qaApiPort, qaWebPort: p.qaWebPort, qaLogin: p.qaLogin,
+          mergeCheckTimeouts: Object.fromEntries((p.mergeChecks ?? []).map(c => [c.name, c.timeoutMinutes])),
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Save failed');
@@ -1666,6 +1672,31 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
               onChange={v => update({ mergeInsteadOfPr: v })}
             />
           </div>
+
+          {/* Only the time limit is editable: what a check runs is written in the project's own
+              file, and the steward reads a timeout past its limit as a reason to send work back. */}
+          {(p.mergeChecks?.length ?? 0) > 0 && (
+            <div>
+              <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                Steward Merge Checks <span className="text-gray-600 normal-case font-normal">(run on the merged result before the steward merges)</span>
+              </h4>
+              <div className="grid grid-cols-2 max-sm:grid-cols-1 gap-4">
+                {p.mergeChecks!.map((c, i) => (
+                  <Field
+                    key={c.name}
+                    label={`${c.name} - timeout (min)`}
+                    description={c.run}
+                    type="number"
+                    value={c.timeoutMinutes}
+                    error={errors[`check:${c.name}`]}
+                    onChange={v => update({
+                      mergeChecks: p.mergeChecks!.map((m, j) => (j === i ? { ...m, timeoutMinutes: Number(v) } : m)),
+                    })}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-2 gap-4">
             <Field label="Base Branch" description="Branch new feature branches fork from. Blank = main." value={p.baseBranch} onChange={v => update({ baseBranch: v })} placeholder="main" />
