@@ -790,12 +790,12 @@ function GlobalSettings() {
             <SelectField
               label="Effort"
               description="How hard every run thinks: each phase, reflection, the Classroom analysis and walkthrough, and the improvement applier. Higher is slower and spends more tokens."
-              value={cfg.workerReasoningEffort || 'high'}
+              value={cfg.workerReasoningEffort || 'medium'}
               onChange={v => update({ workerReasoningEffort: v })}
               options={[
                 { value: 'low', label: 'Low' },
-                { value: 'medium', label: 'Medium' },
-                { value: 'high', label: 'High (default)' },
+                { value: 'medium', label: 'Medium (default)' },
+                { value: 'high', label: 'High' },
                 { value: 'xhigh', label: 'Extra high' },
               ]}
             />

@@ -18,5 +18,5 @@
   "workerModel": "claude-opus-5-5",
   "phaseModels": {},
   "reflectionModel": "haiku",
-  "workerReasoningEffort": "high"
+  "workerReasoningEffort": "medium"
 }

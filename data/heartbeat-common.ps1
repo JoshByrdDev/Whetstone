@@ -598,9 +598,9 @@ function Get-PhaseModel {
 
 # How hard every run is asked to think - the worker and its reflection alike - where the provider
 # exposes that as a dial: claude's --effort, codex's model_reasoning_effort; gemini has none and
-# ignores this. Blank means high, never "whatever the CLI defaults to": claude's default moves with
+# ignores this. Blank means medium, never "whatever the CLI defaults to": claude's default moves with
 # the model (Opus 5 ran at high, Opus 5.5 at medium). The dashboard's own runs read the same
 # setting the same way - AgentProviderFactory.DefaultEffort.
-$WorkerReasoningEffort = 'high'
+$WorkerReasoningEffort = 'medium'
 $configuredEffort = "$(Get-Global 'workerReasoningEffort')".Trim()
 if ($configuredEffort) { $WorkerReasoningEffort = $configuredEffort }

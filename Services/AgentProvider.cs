@@ -1260,7 +1260,7 @@ public class AgentProviderFactory
     /// medium), so a blank would quietly mean something else after each model change. The
     /// heartbeat reads the same setting with the same fallback, in heartbeat-common.ps1.
     /// </summary>
-    public const string DefaultEffort = "high";
+    public const string DefaultEffort = "medium";
 
     /// <summary>The one effort setting, which governs the pipeline, the Classroom and the applier alike.</summary>
     public string Effort =>

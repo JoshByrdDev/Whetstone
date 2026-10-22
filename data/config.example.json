@@ -36,6 +36,6 @@
     "refine": ""
   },
   "reflectionModel": "haiku",
-  "_comment_workerReasoningEffort": "How hard EVERY agent run is asked to think - each phase, reflection, the Classroom analysis and walkthrough, and the improvement applier - for providers exposing that as a dial (claude --effort, codex model_reasoning_effort: low|medium|high|xhigh). The Gemini CLI has no such flag and ignores this - Gemini's thinking is a property of the model you pick. Empty means high, not the CLI's own default: Claude Code's default moves with the model (Opus 5: high, Opus 5.5: medium).",
-  "workerReasoningEffort": "high"
+  "_comment_workerReasoningEffort": "How hard EVERY agent run is asked to think - each phase, reflection, the Classroom analysis and walkthrough, and the improvement applier - for providers exposing that as a dial (claude --effort, codex model_reasoning_effort: low|medium|high|xhigh). The Gemini CLI has no such flag and ignores this - Gemini's thinking is a property of the model you pick. Empty means medium, not the CLI's own default: Claude Code's default moves with the model (Opus 5: high, Opus 5.5: medium).",
+  "workerReasoningEffort": "medium"
 }

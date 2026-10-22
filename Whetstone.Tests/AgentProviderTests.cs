@@ -118,21 +118,21 @@ public class AgentProviderTests
     }
 
     /// <summary>
-    /// Unset is high, not the CLI's default — which for Claude Code moves with the model, so leaving
-    /// it there would let a model change quietly lower how hard the Classroom thinks.
+    /// Unset is medium, not the CLI's default — which for Claude Code moves with the model, so leaving
+    /// it there would let a model change quietly move how hard the Classroom thinks.
     /// </summary>
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void AnUnsetEffortRunsAtHigh(string? stored)
+    public void AnUnsetEffortRunsAtMedium(string? stored)
     {
         var settings = new List<(string, string)> { ("agentProvider", "claude"), ("workerModel", "claude-opus-5-5") };
         if (stored != null) settings.Add(("workerReasoningEffort", stored));
         var factory = FactoryWith(settings.ToArray());
 
         Assert.Equal(AgentProviderFactory.DefaultEffort, factory.Effort);
-        Assert.Equal("high", ArgAfter(factory.ResolveForAnalysis().BuildAnalysisRun("C:/repo", "{}", Scratch()), "--effort"));
+        Assert.Equal("medium", ArgAfter(factory.ResolveForAnalysis().BuildAnalysisRun("C:/repo", "{}", Scratch()), "--effort"));
     }
 
     /// <summary>Codex takes the same setting, in its own spelling, on both of the dashboard's runs.</summary>
