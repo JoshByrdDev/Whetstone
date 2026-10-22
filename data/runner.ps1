@@ -251,15 +251,18 @@ function Start-Run {
     Write-Log "Slot $slot -> ticket #$ticket [$key] $($claim.ticket.phase) / $($claim.skill) (run $($Order.runId), pid $($proc.Id))"
 }
 
-# Read the usage-limit pause a worker here wrote, if it is still in force. A worker writes it into
-# this machine's run/ - the account it hit is this machine's - and the board host is told on the
-# next check-in, which pauses this host's berths and no others.
+# Read the usage-limit pauses a worker here wrote, if any is still in force. A worker writes one per
+# provider into this machine's run/ - the accounts it hit are this machine's - and the board host is
+# told on the next check-in, which pauses this host's berths and no others. The board keeps one pause
+# per host, not one per provider, so a host with any provider paused reports the latest reset: coarser
+# than the board host's own per-provider pause, and wrong only in the safe direction.
 function Get-HostUsageLimit {
-    if (-not (Test-Path $UsageLimitFile)) { return $null }
-    $until = $null
-    try { $until = [datetime](Get-Content -Path $UsageLimitFile -Raw | ConvertFrom-Json).resetsAt } catch { }
-    if ($until -and $until -gt (Get-Date)) { return $until.ToUniversalTime().ToString('o') }
-    Remove-Item $UsageLimitFile -Force -ErrorAction SilentlyContinue
+    $latest = $null
+    foreach ($p in $AgentProvidersInUse) {
+        $until = Get-UsageLimitPause -Provider $p.Key
+        if ($until -and (-not $latest -or $until -gt $latest)) { $latest = $until }
+    }
+    if ($latest) { return $latest.ToUniversalTime().ToString('o') }
     return $null
 }
 

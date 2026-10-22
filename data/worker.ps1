@@ -1894,14 +1894,12 @@ if ($resultIsError -or $summaryLines.Count -le 3) {
 }
 if ($limitReset) {
     $limitText = ($summaryLines | Where-Object { $_ -match "(?i)hit your" } | Select-Object -First 1)
-    Write-Log "  USAGE LIMIT: '$limitText' - the fleet claims nothing until $($limitReset.ToString('yyyy-MM-dd HH:mm')); this run does not count toward the attempt cap."
-    try {
-        @{ resetsAt = $limitReset.ToString("o"); text = "$limitText"; ticketId = [int]$ticketId; at = (Get-Date).ToString("o") } |
-            ConvertTo-Json -Compress | Set-Content -Path $UsageLimitFile -Encoding UTF8
-    }
+    $limitProvider = $AgentProvider.Key
+    Write-Log "  USAGE LIMIT ($limitProvider): '$limitText' - nothing that runs on $limitProvider is claimed until $($limitReset.ToString('yyyy-MM-dd HH:mm')); this run does not count toward the attempt cap."
+    try { Set-UsageLimitPause -Provider $limitProvider -ResetsAt $limitReset -Text $limitText -TicketId ([int]$ticketId) }
     catch { Write-Log "  Could not record the usage limit: $($_.Exception.Message)" }
-    Send-AttemptRefund -TicketId $ticketId -Reason "the account's usage limit refused it ($limitText). The heartbeat resumes after $($limitReset.ToString('yyyy-MM-dd HH:mm'))."
-    Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Usage limit - paused until $($limitReset.ToString('HH:mm'))"
+    Send-AttemptRefund -TicketId $ticketId -Reason "the $limitProvider account's usage limit refused it ($limitText). Its phases resume after $($limitReset.ToString('yyyy-MM-dd HH:mm'))."
+    Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Usage limit ($limitProvider) - paused until $($limitReset.ToString('HH:mm'))"
 }
 
 if ($mcpHardFail) {

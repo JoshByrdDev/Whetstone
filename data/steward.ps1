@@ -225,18 +225,16 @@ $watchdogFired = Receive-AgentWatchdog -Job $watchdog -ActivityFile $activityFil
 $elapsedMin = [math]::Round(((Get-Date) - $startedAt).TotalMinutes, 1)
 
 # Refused by the account's usage limit rather than failed. A steward run is one more session on the
-# same account as the fleet, so it parks the fleet the same way a worker's refusal does.
+# same account as the fleet's runs on that provider, so it pauses them the same way a worker's does.
 $limitReset = $null
 if ($resultIsError -or $summaryLines.Count -le 3) { $limitReset = Get-UsageLimitReset -Text ($summaryLines -join "`n") }
 if ($limitReset) {
     $limitText = ($summaryLines | Where-Object { $_ -match "(?i)hit your" } | Select-Object -First 1)
-    Write-Log "  USAGE LIMIT: '$limitText' - nothing is started until $($limitReset.ToString('yyyy-MM-dd HH:mm'))."
-    try {
-        @{ resetsAt = $limitReset.ToString("o"); text = "$limitText"; ticketId = 0; at = (Get-Date).ToString("o") } |
-            ConvertTo-Json -Compress | Set-Content -Path $UsageLimitFile -Encoding UTF8
-    }
+    $limitProvider = $AgentProvider.Key
+    Write-Log "  USAGE LIMIT ($limitProvider): '$limitText' - nothing that runs on $limitProvider is started until $($limitReset.ToString('yyyy-MM-dd HH:mm'))."
+    try { Set-UsageLimitPause -Provider $limitProvider -ResetsAt $limitReset -Text $limitText }
     catch { Write-Log "  Could not record the usage limit: $($_.Exception.Message)" }
-    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Usage limit - paused until $($limitReset.ToString('HH:mm'))"
+    Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Usage limit ($limitProvider) - paused until $($limitReset.ToString('HH:mm'))"
 }
 elseif ($mcpProblem) {
     Send-DashboardEvent -Type "error" -Project $Project -Phase "Steward" -Error "Steward: its tools were not usable ($mcpProblem)"

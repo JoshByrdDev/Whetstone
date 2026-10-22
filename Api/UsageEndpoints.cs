@@ -82,9 +82,14 @@ public static class UsageEndpoints
             ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
 
             // A usage-limit pause belongs to the account that hit the limit. Left behind, it would
-            // hold the fleet idle until the old account's reset - the wait the switch was made to skip.
-            try { File.Delete(Path.Combine(paths.RunDir, "usage-limit.json")); }
-            catch (IOException) { /* the heartbeat is reading it; it re-checks on its next pass */ }
+            // hold Claude's phases idle until the old account's reset - the wait the switch was made
+            // to skip. Claude's alone: the other providers' accounts did not change. usage-limit.json
+            // is the name from before pauses were per provider, when it was always Claude's.
+            foreach (var name in new[] { "usage-limit-claude.json", "usage-limit.json" })
+            {
+                try { File.Delete(Path.Combine(paths.RunDir, name)); }
+                catch (IOException) { /* the heartbeat is reading it; it re-checks on its next pass */ }
+            }
 
             await usage.RefreshAsync(ct, force: true);
             return Results.Ok(new { account = usage.AccountName, status = usage.Current.Status });

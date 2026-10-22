@@ -144,6 +144,11 @@ function Get-SleepUntilOffHoursEnd {
 # ticket claimed on the dashboard with nobody working it. Reset at the top of each fill loop.
 $ClaimCallFailed = $false
 
+# The phases that may be claimed while some provider is paused at its usage limit; $null means any.
+# Set each pass by the main loop, read by Invoke-ClaimNext.
+$script:OpenSkills = $null
+$script:LastPausedText = $null
+
 # Ask the dashboard for the next ticket to work. Returns the "claimed" object or $null.
 #
 # Called once per free slot per pass. The dashboard hands back a DIFFERENT ticket each time because
@@ -151,8 +156,11 @@ $ClaimCallFailed = $false
 # calling it in a tight loop safe, and the reason the fleet needs no coordination of its own.
 function Invoke-ClaimNext {
     try {
+        # While a provider is paused at its usage limit, only the phases that run elsewhere are
+        # asked for (see Get-OpenSkills); otherwise any.
+        $body = if ($script:OpenSkills) { @{ skills = @($script:OpenSkills) } | ConvertTo-Json -Compress } else { '{}' }
         $resp = Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/claim-next" -Method Post `
-            -ContentType $JsonContentType -Body (ConvertTo-JsonBody '{}') -TimeoutSec 15
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 15
         return $resp.claimed
     }
     catch {
@@ -335,6 +343,8 @@ function Send-StewardAbandon {
 function Start-StewardIfDue {
     if ($Agents.ContainsKey($StewardSlot)) { return $false }
     if (-not (Test-Path $StewardScript)) { return $false }
+    # Its provider is at its usage limit: the run would be refused before it did anything.
+    if (Get-UsageLimitPause -Provider (Get-AgentRole -Role 'steward').Provider.Key) { return $false }
 
     $due = $null
     # Enumerated and filtered, not just wrapped: Windows PowerShell hands a JSON array back as ONE
@@ -752,10 +762,33 @@ while ($true) {
     $launched = 0
     $ClaimCallFailed = $false
 
-    # A worker was refused by the account's usage limit. Every claim before the reset would be
-    # refused the same way, so none is made: agents already out finish, and once the fleet is empty
-    # the orchestrator sleeps straight through to the reset rather than backing off in steps.
-    $limitUntil = Get-UsageLimitPause
+    # A worker was refused by its provider's usage limit. Every claim for a phase on that provider
+    # would be refused the same way before the reset, so those phases are not claimed; phases on
+    # another provider carry on. Only when every phase is paused does the orchestrator stop claiming
+    # altogether: agents already out finish, and once the fleet is empty it sleeps straight through
+    # to the first reset rather than backing off in steps.
+    $paused = Get-PausedProviders
+    $script:OpenSkills = $null
+    $limitUntil = $null
+    $limitFile = $null
+    if ($paused.Count -gt 0) {
+        $open = @(Get-OpenSkills -Paused $paused)
+        $first = $paused.GetEnumerator() | Sort-Object Value | Select-Object -First 1
+        $pausedText = ($paused.GetEnumerator() | Sort-Object Name | ForEach-Object { "$($_.Name) until $($_.Value.ToString('HH:mm'))" }) -join ', '
+        if ($open.Count -gt 0) {
+            $script:OpenSkills = $open
+            if ($pausedText -ne $script:LastPausedText) {
+                Write-Log "Usage limit: $pausedText. Claiming only what runs elsewhere: $($open -join ', ')."
+                $script:LastPausedText = $pausedText
+            }
+        }
+        else {
+            $limitUntil = $first.Value
+            $limitFile = Get-UsageLimitFile $first.Name
+            if ($first.Name -eq 'claude' -and -not (Test-Path $limitFile)) { $limitFile = $LegacyUsageLimitFile }
+        }
+    }
+    else { $script:LastPausedText = $null }
     if ($limitUntil) {
         # The limit is the board host's account's. A worker host spends its own, and reports its
         # own limit, which the API reads into whether it is dispatchable - so its berths still fill.
@@ -767,14 +800,14 @@ while ($true) {
         # Two minutes past the stated time: the reset is quoted to the hour, not the second.
         $sleepSeconds = [math]::Ceiling(($limitUntil - (Get-Date)).TotalSeconds) + 120
         $wakeTime = (Get-Date).AddSeconds($sleepSeconds).ToString("yyyy-MM-dd HH:mm")
-        Write-Log "Usage limit reached - claiming nothing until the reset (wake at $wakeTime)."
+        Write-Log "Usage limit reached on every provider in use ($pausedText) - claiming nothing until the first reset (wake at $wakeTime)."
         Send-DashboardEvent -Type "sleep" -DurationSeconds $sleepSeconds -Text "Usage limit until $wakeTime"
         Send-DashboardEvent -Type "state_change" -Text "sleeping"
-        Send-SleepNotice -Headline "Heartbeat paused - the account hit its usage limit." -Next "Waking at $wakeTime."
-        # Switching the dashboard to another Claude account deletes the pause, since the limit was
-        # the old account's - so the sleep watches for that rather than running out the clock.
-        if (-not (Start-InterruptibleSleep -Seconds $sleepSeconds -WhileExists $UsageLimitFile)) { continue }   # the stop is handled at the top
-        Remove-Item $UsageLimitFile -Force -ErrorAction SilentlyContinue
+        Send-SleepNotice -Headline "Heartbeat paused - every provider in use hit its usage limit ($pausedText)." -Next "Waking at $wakeTime."
+        # Switching the dashboard to another Claude account deletes claude's pause, since the limit
+        # was the old account's - so the sleep watches the first pause's file rather than running out
+        # the clock. The pause itself expires on its own once its time has passed.
+        if (-not (Start-InterruptibleSleep -Seconds $sleepSeconds -WhileExists $limitFile)) { continue }   # the stop is handled at the top
         continue
     }
 
@@ -837,11 +870,18 @@ while ($true) {
         $slept = Start-InterruptibleSleep -Seconds $sleepSeconds -Wakeable
     }
     else {
-        Write-Log "Sleeping $CurrentHeartbeatMinutes min..."
-        Send-DashboardEvent -Type "sleep" -DurationSeconds ($CurrentHeartbeatMinutes * 60) -Text "Sleeping ${CurrentHeartbeatMinutes}m"
+        # With a provider paused, the board may be idle only because its phases were not asked for.
+        # The idle backoff would then sleep past the reset, so the wait ends at the first reset.
+        $sleepMinutes = $CurrentHeartbeatMinutes
+        if ($paused.Count -gt 0) {
+            $toReset = [math]::Ceiling((($paused.Values | Sort-Object | Select-Object -First 1) - (Get-Date)).TotalMinutes) + 2
+            if ($toReset -lt $sleepMinutes) { $sleepMinutes = [math]::Max(1, $toReset) }
+        }
+        Write-Log "Sleeping $sleepMinutes min..."
+        Send-DashboardEvent -Type "sleep" -DurationSeconds ($sleepMinutes * 60) -Text "Sleeping ${sleepMinutes}m"
         Send-DashboardEvent -Type "state_change" -Text "sleeping"
-        Send-SleepNotice -Next "Next check in ${CurrentHeartbeatMinutes} min."
-        $slept = Start-InterruptibleSleep -Seconds ($CurrentHeartbeatMinutes * 60) -Wakeable
+        Send-SleepNotice -Next "Next check in ${sleepMinutes} min."
+        $slept = Start-InterruptibleSleep -Seconds ($sleepMinutes * 60) -Wakeable
     }
 
     if ($script:WokenEarly) {

@@ -498,8 +498,21 @@ function Receive-AgentWatchdog {
 # run that was never allowed to start, and it will be refused again every time until the reset. Read
 # as an ordinary failure it cost #71 all three of its attempts inside a minute and parked it Blocked
 # for two hours waiting on a human. So a worker that sees it writes the reset time here, gives its
-# attempt back, and the orchestrator claims nothing until the time has passed.
-$UsageLimitFile = Join-Path $RunDir "usage-limit.json"
+# attempt back, and the orchestrator claims nothing that would run on that provider until the time
+# has passed.
+#
+# One pause per provider, because each has its own account and its own limit: with implement on
+# codex and qa-test on claude, claude's limit is no reason to stop implement. The file is named by
+# the provider key; the one before pauses were per provider was always claude's, and is read as such.
+$LegacyUsageLimitFile = Join-Path $RunDir "usage-limit.json"
+function Get-UsageLimitFile([string]$Provider) { return (Join-Path $RunDir "usage-limit-$Provider.json") }
+
+# Record that this provider's account refused a run, until $ResetsAt.
+function Set-UsageLimitPause {
+    param([string]$Provider, [datetime]$ResetsAt, [string]$Text, [int]$TicketId = 0)
+    @{ provider = $Provider; resetsAt = $ResetsAt.ToString("o"); text = "$Text"; ticketId = $TicketId; at = (Get-Date).ToString("o") } |
+        ConvertTo-Json -Compress | Set-Content -Path (Get-UsageLimitFile $Provider) -Encoding UTF8
+}
 
 # The reset time in a limit message, as local time; $null when the text is not a limit message at
 # all. The zone in brackets is ignored and the clock read as this machine's: PS 5.1 cannot resolve an
@@ -509,7 +522,9 @@ function Get-UsageLimitReset {
     param([string]$Text, [datetime]$Now = (Get-Date))
     if (-not $Text -or $Text -notmatch "(?i)hit your (?:[\w-]+ )?limit") { return $null }
 
-    $rx = "(?i)resets\s+(?:(?<mon>[a-z]{3})[a-z]*\.?\s+(?<day>\d{1,2}),?\s+(?:at\s+)?)?(?<h>\d{1,2})(?::(?<m>\d{2}))?\s*(?<ap>am|pm)"
+    # Claude says "resets 8pm" or "resets Jan 2, 8pm"; codex says "try again at 3:42 PM" or "try
+    # again at Oct 23rd, 2026 3:42 PM". The year is read past, not used: a reset is never far off.
+    $rx = "(?i)(?:resets|try again at)\s+(?:(?<mon>[a-z]{3})[a-z]*\.?\s+(?<day>\d{1,2})(?:st|nd|rd|th)?,?\s+(?:\d{4},?\s+)?(?:at\s+)?)?(?<h>\d{1,2})(?::(?<m>\d{2}))?\s*(?<ap>am|pm)"
     $m = [regex]::Match($Text, $rx)
     if (-not $m.Success) { return $Now.AddMinutes(60) }
 
@@ -531,15 +546,39 @@ function Get-UsageLimitReset {
     return $at
 }
 
-# When the fleet may claim again, or $null when it may claim now. An expired pause is removed here,
-# so nothing else has to remember to clean it up.
+# When this provider's runs may start again, or $null when they may start now. An expired pause is
+# removed here, so nothing else has to remember to clean it up.
 function Get-UsageLimitPause {
-    if (-not (Test-Path $UsageLimitFile)) { return $null }
-    $until = $null
-    try { $until = [datetime](Get-Content -Path $UsageLimitFile -Raw | ConvertFrom-Json).resetsAt } catch { }
-    if ($until -and $until -gt (Get-Date)) { return $until }
-    Remove-Item $UsageLimitFile -Force -ErrorAction SilentlyContinue
-    return $null
+    param([string]$Provider)
+    $files = @(Get-UsageLimitFile $Provider)
+    if ($Provider -eq 'claude') { $files += $LegacyUsageLimitFile }
+    $latest = $null
+    foreach ($file in $files) {
+        if (-not (Test-Path $file)) { continue }
+        $until = $null
+        try { $until = [datetime](Get-Content -Path $file -Raw | ConvertFrom-Json).resetsAt } catch { }
+        if ($until -and $until -gt (Get-Date)) { if (-not $latest -or $until -gt $latest) { $latest = $until } }
+        else { Remove-Item $file -Force -ErrorAction SilentlyContinue }
+    }
+    return $latest
+}
+
+# Every provider in use that is paused, as key -> resume time. Empty when nothing is.
+function Get-PausedProviders {
+    $paused = @{}
+    foreach ($p in $AgentProvidersInUse) {
+        $until = Get-UsageLimitPause -Provider $p.Key
+        if ($until) { $paused[$p.Key] = $until }
+    }
+    return $paused
+}
+
+# The pipeline skills the orchestrator may claim while some providers are paused: those whose role
+# runs on a provider that is not. Reflection and the steward are not claimed, so they are left out.
+function Get-OpenSkills {
+    param([hashtable]$Paused)
+    return @($AgentRoleKeys | Where-Object { $_ -notin @('steward', 'reflection') } |
+        Where-Object { -not $Paused.ContainsKey((Get-AgentRole -Role $_).Provider.Key) })
 }
 
 function Test-OffHours {
