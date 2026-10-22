@@ -48,6 +48,11 @@ public static class WalkthroughEndpoints
             return ok ? Results.Accepted(value: new { message }) : Results.Conflict(new { message });
         });
 
+        // Whether this machine can voice a walkthrough at all, asked live so the Classroom can say so
+        // before anyone waits on a deck that will come back captions-only. Reads the disk, runs nothing.
+        app.MapGet("/api/narrator", (Narrator narrator, DashboardPaths paths) =>
+            Results.Ok(new { unavailable = narrator.Unavailable(), dir = paths.NarratorDir }));
+
         // A voiced line. Named by content hash, so it never changes once written and can be cached hard.
         app.MapGet("/api/walkthrough-clips/{clip}.wav", (string clip, Narrator narrator, HttpContext http) =>
         {

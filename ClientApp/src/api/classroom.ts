@@ -439,6 +439,14 @@ export const writeWalkthrough = (analysisId: number) =>
 
 export const clipUrl = (clip: string) => `/api/walkthrough-clips/${clip}.wav`;
 
+/** Whether this machine can voice walkthroughs: `unavailable` is why not, or null when it can. */
+export interface NarratorStatus { unavailable: string | null; dir: string }
+
+// One answer per page load: it only changes when someone runs `npm install`, and a reload picks that up.
+let narratorStatus: Promise<NarratorStatus> | null = null;
+export const getNarratorStatus = () =>
+  (narratorStatus ??= fetch('/api/narrator').then(json<NarratorStatus>).catch(e => { narratorStatus = null; throw e; }));
+
 /** An analysis block by its "section.block" address, or null. */
 export function blockAt(doc: Doc, address: string | null | undefined): Block | null {
   const m = /^(\d+)\.(\d+)$/.exec(address ?? '');

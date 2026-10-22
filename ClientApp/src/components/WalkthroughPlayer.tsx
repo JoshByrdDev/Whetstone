@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
-  Analysis, ClassroomTicket, Deck, DeckBeat, DeckCode, DeckImage, DeckScene, Doc, Rect, Walkthrough,
+  Analysis, ClassroomTicket, Deck, DeckBeat, DeckCode, DeckImage, DeckScene, Doc, NarratorStatus, Rect, Walkthrough,
 } from '../api/classroom';
-import { blockAt, clipUrl, getWalkthrough, writeWalkthrough } from '../api/classroom';
+import { blockAt, clipUrl, getNarratorStatus, getWalkthrough, writeWalkthrough } from '../api/classroom';
 import { AnalysisContext, Callout, Question, UserFlow } from './AnalysisBlocks';
 import { lineCls } from './PatchView';
 import { Chip, GhostButton, PrimaryButton } from './ui';
@@ -603,6 +603,8 @@ export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
   const [w, setW] = useState<Walkthrough | null>(null);
   const [open, setOpen] = useState(false);
   const [asked, setAsked] = useState<string | null>(null);
+  const [narrator, setNarrator] = useState<NarratorStatus | null>(null);
+  useEffect(() => { getNarratorStatus().then(setNarrator, () => {}); }, []);
 
   // The subject is rebuilt on every render of the page around it; its key is what says it changed.
   const current = useRef(subject);
@@ -655,12 +657,27 @@ export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
     </div>
   );
 
-  if (!deck) return <div className="mb-7">{notes}</div>;
+  // Said before anything is written, not after: without it a deck comes back silent and the only
+  // hint is a warning under the card naming the first line that failed.
+  const unvoiced = narrator?.unavailable && (
+    <div role="status" className="mb-2 border border-amber-700/50 bg-amber-950/25 px-3 py-2 text-[12px] text-amber-200/90"
+      style={{ clipPath: chamfer(6) }}>
+      <div className="font-semibold">Voice-over is not set up on this machine</div>
+      <div className="mt-0.5 min-w-0 break-words text-amber-200/70">
+        Walkthroughs still play, with captions only. To voice them, run <code className="font-mono">npm install</code> once
+        in <code className="font-mono break-all">{narrator.dir}</code> (Node required; the first voiced walkthrough also
+        downloads a ~90MB voice model), then rewrite this walkthrough. See <code className="font-mono">docs/setup.md</code>.
+      </div>
+    </div>
+  );
+
+  if (!deck) return <div className="mb-7">{unvoiced}{notes}</div>;
 
   const beats = deck.scenes.reduce((n, s) => n + s.beats.length, 0);
 
   return (
     <section className="mb-7">
+      {unvoiced}
       <button
         onClick={() => setOpen(true)}
         title="Play the narrated walkthrough"

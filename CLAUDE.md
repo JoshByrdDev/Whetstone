@@ -7,6 +7,9 @@ things that are *not* discoverable from the code in front of you.
 
 ## Build and run
 
+- A new machine, or a new dependency: `docs/setup.md` is the install list. A change that adds
+  something a fresh clone would not have (a CLI, an `npm install`, a config key) adds a row there, and
+  says in the UI when it is missing rather than failing quietly.
 - Build with `-c Release`. `bin\Debug` is held open by the running instance.
 - Restarting the app kills in-flight heartbeat workers. Verify against an isolated QA copy, started
   from a worktree with `powershell -File data/qa-copy.ps1` (`-Stop` to stop it): this checkout's
