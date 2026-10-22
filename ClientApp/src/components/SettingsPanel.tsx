@@ -33,10 +33,12 @@ function Field({
   disabled?: boolean;
 }) {
   const [revealed, setRevealed] = useState(false);
+  // A column whose description takes up the slack: side by side in a grid row, fields with
+  // descriptions of different lengths still put their boxes on one line. Alone, it changes nothing.
   return (
-    <div>
+    <div className="flex flex-col">
       <label className="block text-sm text-gray-400 mb-1">{label}</label>
-      {description && <p className="text-xs text-gray-500 mb-1.5">{description}</p>}
+      {description && <p className="flex-1 text-xs text-gray-500 mb-1.5">{description}</p>}
       <div className="flex gap-2">
         <input
           type={isSecret && !revealed ? 'password' : type}
@@ -739,14 +741,13 @@ function GlobalSettings() {
 
       <FieldGroup title="Agents">
         <p className="text-xs text-gray-500 -mt-2 mb-3">
-          How many tickets the heartbeat works at once. This is a ceiling, not a target: it fills a slot
-          only when there is a workable ticket for it, so a quiet board still runs one agent. Takes effect
-          the next time the heartbeat is started.
+          How much runs at once on this machine. Both are ceilings, not targets: a slot is filled only when
+          there is work for it, so a quiet board still runs one agent.
         </p>
         <div className="grid grid-cols-2 max-sm:grid-cols-1 gap-4">
           <Field
             label="Concurrent Agents"
-            description={`1 to ${cfg.maxHeartbeatWorkers || 10}. Every agent is a full CLI session on this machine, and those on the same provider share its rate limits.`}
+            description={`1 to ${cfg.maxHeartbeatWorkers || 10}. Tickets worked at once. Applies when the heartbeat next starts.`}
             type="number"
             value={Number.isNaN(cfg.heartbeatWorkers) ? '' : cfg.heartbeatWorkers}
             // Kept as typed, blank included, so the field can be cleared and retyped; the check
@@ -756,21 +757,32 @@ function GlobalSettings() {
           />
           <Field
             label="QA Leases"
-            description={`1 to ${cfg.maxQaLeases || 10}. How many QA or peer-review runs may use one project's stack on this machine at once. Above 1 only for a project whose config sets parallelStacks; any other always gets one.`}
+            description={`1 to ${cfg.maxQaLeases || 10}. QA or peer-review runs that may share one project's stack at once.`}
             type="number"
             value={Number.isNaN(cfg.qaLeases) ? '' : cfg.qaLeases}
             onChange={v => update({ qaLeases: v === '' ? NaN : Number(v) })}
             error={errors.qaLeases}
           />
         </div>
-        {/* Only when both numbers are valid, so it never argues with an error under either field. */}
-        {!errors.heartbeatWorkers && !errors.qaLeases && cfg.qaLeases > cfg.heartbeatWorkers && (
-          <p className="text-xs text-gray-500">
-            ⓘ Only {cfg.heartbeatWorkers} agent{cfg.heartbeatWorkers === 1 ? '' : 's'} run{cfg.heartbeatWorkers === 1 ? 's' : ''} at
-            once on this machine, so no more than {cfg.heartbeatWorkers} of the {cfg.qaLeases} QA leases can ever be in use
-            together.
+        {/* The caveats the two descriptions would otherwise each carry, said once under both. */}
+        <div className="space-y-1 text-[11px] text-gray-600">
+          <p>
+            Every agent is a full CLI session, and agents on the same provider share its rate limits. QA leases above 1
+            apply only to a project whose config sets <code className="text-gray-500">parallelStacks</code>; any other
+            gets one.
           </p>
-        )}
+          {/* Only when both numbers are valid, so it never argues with an error under either field. */}
+          {!errors.heartbeatWorkers && !errors.qaLeases && cfg.qaLeases > cfg.heartbeatWorkers && (
+            <p className="text-xs text-gray-500">
+              ⓘ Only {cfg.heartbeatWorkers} agent{cfg.heartbeatWorkers === 1 ? '' : 's'} run{cfg.heartbeatWorkers === 1 ? 's' : ''} at
+              once on this machine, so no more than {cfg.heartbeatWorkers} of the {cfg.qaLeases} QA leases can ever be in use
+              together.
+            </p>
+          )}
+        </div>
+      </FieldGroup>
+
+      <FieldGroup title="Worker Hosts">
         <CheckField
           label="Show worker hosts"
           description={
