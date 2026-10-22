@@ -829,7 +829,7 @@ function GlobalSettings() {
         />
       </FieldGroup>
 
-      <FieldGroup title="Claude Accounts">
+      <FieldGroup title="Additional Claude Accounts">
         <p className="text-xs text-gray-500 -mt-2 mb-3">
           Other Claude logins the fleet can run on, besides the one Claude Code is already signed in to. Each
           gets a folder of its own to keep its login in. Add one, save, sign in to it once, and the usage chip
