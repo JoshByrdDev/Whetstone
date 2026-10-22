@@ -22,10 +22,11 @@ import { Classroom } from './components/Classroom';
 import { StewardPanel } from './components/StewardPanel';
 import { Backdrop } from './components/Backdrop';
 import { PageHead, SectionRule } from './components/ui';
-import { chamfer, CAPS, DISPLAY } from './components/orbit';
+import { chamfer, CAPS, DISPLAY, MONO } from './components/orbit';
 import { useTheme, track } from './theme';
 import { useTabStatus } from './hooks/useTabStatus';
 import { useNarrow } from './hooks/useNarrow';
+import { useSkillDrift, driftTotal } from './hooks/useSkillDrift';
 import { confirmLeave } from './hooks/useUnsavedGuard';
 
 type Tab = 'board' | 'steward' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
@@ -65,6 +66,9 @@ export default function App() {
   // stuck there. The name gives up its place: the row is exactly as wide as a full fleet's pulse,
   // and nobody holding the app needs telling which app it is.
   const narrow = useNarrow();
+  // A template that moved on since a project's copy was written. Counted here, where it is seen from
+  // every page, because nobody opens the Skills tab to check whether it has news.
+  const skillDrift = driftTotal(useSkillDrift());
   const [tab, setTab] = useState<Tab>('board');
   const [classroomTicket, setClassroomTicket] = useState<number | null>(null);
   // The ticket open in the slide-over on the heartbeat page — the board's own drawer, not a lookalike.
@@ -208,7 +212,9 @@ export default function App() {
             </div>}
             <nav className={narrow ? 'tab-strip flex gap-1 order-last w-full' : 'flex gap-1 flex-wrap'}>
               {TABS.map(t => (
-                <TabButton key={t.id} on={tab === t.id} onClick={() => go(t.id)}>
+                <TabButton key={t.id} on={tab === t.id} onClick={() => go(t.id)}
+                           badge={t.id === 'skills' && skillDrift > 0 ? skillDrift : undefined}
+                           badgeTitle={`${skillDrift} skill file${skillDrift === 1 ? '' : 's'} behind the template`}>
                   {t.label}
                 </TabButton>
               ))}
@@ -307,8 +313,11 @@ export default function App() {
  * that does the work — eight chips of the same size need something that reads as position, not
  * just as emphasis, or the nav looks like eight buttons of which one happens to be brighter.
  */
-function TabButton({ on, onClick, children }: {
-  on: boolean; onClick: () => void; children: React.ReactNode;
+function TabButton({ on, onClick, badge, badgeTitle, children }: {
+  on: boolean; onClick: () => void;
+  /** Something on that page wants attention. A count, so it says how much, not just that. */
+  badge?: number; badgeTitle?: string;
+  children: React.ReactNode;
 }) {
   return (
     <button
@@ -331,6 +340,20 @@ function TabButton({ on, onClick, children }: {
       } as CSSProperties}
     >
       {children}
+      {badge != null && (
+        <span
+          title={badgeTitle}
+          aria-label={badgeTitle}
+          style={{
+            marginLeft: 7, display: 'inline-block', minWidth: 15, padding: '0 4px', verticalAlign: 1,
+            font: `700 9px ${MONO}`, lineHeight: '14px', textAlign: 'center',
+            color: 'var(--w-on-accent)', background: 'var(--w-accent)',
+            boxShadow: '0 0 8px rgb(var(--w-accent-rgb) / .6)', clipPath: chamfer(4),
+          }}
+        >
+          {badge}
+        </span>
+      )}
       {on && (
         <span
           style={{

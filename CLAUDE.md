@@ -256,6 +256,16 @@ diff data/skill-templates/qa-test/skill.md data/projects/<key>/skills/qa-test/sk
 What is left should be only what is genuinely that project's: its compose commands, its ports, its
 local examples. A pipeline rule on one side and not the other is drift, whichever side it is on.
 
+**Other people's projects get the same change through the Skills page.** Whoever pulls a template
+change has project copies this repository never sees, so each copy records the template text it was
+last in step with - its baseline - in `data/projects/<key>/template-base/` (`SkillDriftService`).
+When a template no longer matches a copy's baseline, the Skills tab shows a count, and the page shows
+the template's own diff since then, the commits that made it, and a three-way merge into the copy
+when it is clean. That is by text, not by date, on purpose: a pull stamps every template "now", and
+a local edit would make a stale copy look current. It also makes a template commit's message
+something the people porting it read - say what the change is for, and which of the three kinds
+above it is.
+
 ## A project can have a steward, and its limits are code
 
 A steward stands in for a ticket's owner between worker runs: it files the next tickets from a plan

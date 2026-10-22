@@ -65,6 +65,7 @@ catch (Exception ex) { Console.Error.WriteLine($"lanUrl could not be read: {ex.M
 // projectPath is referenced, as a working directory at run time).
 builder.Services.AddSingleton<DashboardPaths>();
 builder.Services.AddSingleton<ProjectRegistry>();
+builder.Services.AddSingleton<SkillDriftService>();
 // Machines that run workers for this board (docs/worker-hosts-plan.md). In memory; see the class.
 builder.Services.AddSingleton<BoardCommit>();
 builder.Services.AddSingleton<WorkerHostService>();
@@ -314,6 +315,8 @@ app.MapUnitReportEndpoints();
 // The owner's filing tags. Separate routes and separate DTOs from the ticket API, so a label can
 // never ride along into a worker's prompt - see Api/LabelEndpoints.cs.
 app.MapLabelEndpoints();
+// Whether a project's copies of the skill templates have fallen behind them (the Skills tab's badge).
+app.MapSkillDriftEndpoints();
 app.MapStewardEndpoints();
 
 // A ticket's trip through the phases. Its own endpoint rather than a field on the ticket detail,

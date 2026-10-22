@@ -49,6 +49,9 @@ public static class ProjectScaffolder
             Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
             File.WriteAllText(destPath, Fill(File.ReadAllText(templatePath)));
             created.Add(relLabel);
+            // The copy's baseline: what the Skills page compares the template against later, to
+            // say when the template has moved on. See SkillDriftService.
+            SkillDriftService.RecordScaffolded(paths, project, relLabel, templatePath);
         }
 
         // AllSkills, not RequiredSkills: scaffolding lays down everything a project COULD run, while
