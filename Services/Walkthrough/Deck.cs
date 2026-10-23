@@ -17,7 +17,13 @@ namespace Whetstone.Services.Walkthrough;
 /// </summary>
 public static class WalkthroughDeck
 {
-    public static readonly string[] SceneKinds = ["title", "ask", "shot", "code", "flow", "cards", "question"];
+    public static readonly string[] SceneKinds = ["title", "ask", "shot", "code", "flow", "cards", "question", "picture"];
+
+    /// <summary>What a picture is drawn from. Few on purpose: the meaning is in the arrangement, not the shapes.</summary>
+    public static readonly string[] PictureKinds = ["box", "group", "text", "code"];
+    public static readonly string[] PictureLayouts = ["row", "column"];
+    /// <summary>The flow diagram's own words for a change, so a picture and a diagram never disagree on a colour.</summary>
+    public static readonly string[] PictureChanges = ["unchanged", "new", "changed", "removed"];
 
     /// <summary>
     /// Flat like the analysis schema, for the same reason: constrained decoding is far more reliable
@@ -38,7 +44,7 @@ public static class WalkthroughDeck
             "additionalProperties": false,
             "properties": {
               "chapter": { "type": "string" },
-              "kind": { "type": "string", "enum": ["title", "ask", "shot", "code", "flow", "cards", "question"] },
+              "kind": { "type": "string", "enum": ["title", "ask", "shot", "code", "flow", "cards", "question", "picture"] },
               "shot": { "type": "integer", "minimum": 0 },
               "file": { "type": "string" },
               "from": { "type": "integer", "minimum": 1 },
@@ -64,7 +70,47 @@ public static class WalkthroughDeck
                     "box": { "type": "array", "items": { "type": "integer" } },
                     "focus": { "type": "boolean" },
                     "reveal": { "type": "boolean" },
-                    "show": { "type": "integer" }
+                    "show": { "type": "integer" },
+                    "picture": {
+                      "type": "object",
+                      "required": ["items"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "layout": { "type": "string", "enum": ["row", "column"] },
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["id", "text"],
+                            "additionalProperties": false,
+                            "properties": {
+                              "id": { "type": "string" },
+                              "kind": { "type": "string", "enum": ["box", "group", "text", "code"] },
+                              "text": { "type": "string" },
+                              "sub": { "type": "string" },
+                              "change": { "type": "string", "enum": ["unchanged", "new", "changed", "removed"] },
+                              "in": { "type": "string" },
+                              "layout": { "type": "string", "enum": ["row", "column"] }
+                            }
+                          }
+                        },
+                        "arrows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "required": ["from", "to"],
+                            "additionalProperties": false,
+                            "properties": {
+                              "from": { "type": "string" },
+                              "to": { "type": "string" },
+                              "label": { "type": "string" },
+                              "change": { "type": "string", "enum": ["unchanged", "new", "changed", "removed"] }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "lit": { "type": "array", "items": { "type": "string" } }
                   }
                 }
               }
@@ -111,6 +157,29 @@ public static class WalkthroughDeck
         public bool? Focus { get; init; }
         public bool? Reveal { get; init; }
         public int? Show { get; init; }
+        public RawPicture? Picture { get; init; }
+        public IReadOnlyList<string>? Lit { get; init; }
+    }
+
+    public record RawPicture(IReadOnlyList<RawPictureItem>? Items)
+    {
+        public string? Layout { get; init; }
+        public IReadOnlyList<RawArrow>? Arrows { get; init; }
+    }
+
+    public record RawPictureItem(string? Id, string? Text)
+    {
+        public string? Kind { get; init; }
+        public string? Sub { get; init; }
+        public string? Change { get; init; }
+        public string? In { get; init; }
+        public string? Layout { get; init; }
+    }
+
+    public record RawArrow(string? From, string? To)
+    {
+        public string? Label { get; init; }
+        public string? Change { get; init; }
     }
 
     // ---- what is stored and served ----
@@ -149,8 +218,40 @@ public static class WalkthroughDeck
     /// <param name="Quotes">Indexes into the scene's quotes to light.</param>
     /// <param name="Image">Which of the scene's images to show, by name.</param>
     /// <param name="Show">How many cards are showing by this beat.</param>
+    /// <param name="Picture">On a picture scene, what is on screen from this beat on; null holds the last one.</param>
+    /// <param name="Lit">Picture item ids being talked about on this beat.</param>
     public record Cue(IReadOnlyList<int>? Lines, IReadOnlyList<string>? Nodes, IReadOnlyList<int>? Quotes,
-        string? Image, ImageRect? Zoom, ImageRect? Box, bool? Reveal, int? Show);
+        string? Image, ImageRect? Zoom, ImageRect? Box, bool? Reveal, int? Show)
+    {
+        public Picture? Picture { get; init; }
+        public IReadOnlyList<string>? Lit { get; init; }
+    }
+
+    /// <summary>
+    /// A small diagram, described as what is on screen rather than how it moves. Ids persist from beat
+    /// to beat, and the player animates the difference: a new id enters, a missing one leaves, the same
+    /// id with new words or a new place changes or moves there. That one rule is how "we added", "we
+    /// changed", "we removed", "it now goes through" and "we split it" are all told without a scene
+    /// kind for each.
+    /// </summary>
+    /// <param name="Layout">How the top-level items run: "row" or "column".</param>
+    public record Picture(string Layout, IReadOnlyList<PictureItem> Items, IReadOnlyList<Arrow> Arrows);
+
+    /// <param name="In">The group this item sits inside; null at the top level.</param>
+    /// <param name="Layout">On a group, how its children run.</param>
+    public record PictureItem(string Id, string Kind, string Text)
+    {
+        public string? Sub { get; init; }
+        public string Change { get; init; } = "unchanged";
+        public string? In { get; init; }
+        public string? Layout { get; init; }
+    }
+
+    public record Arrow(string From, string To)
+    {
+        public string? Label { get; init; }
+        public string Change { get; init; } = "unchanged";
+    }
 
     public static string Serialize(Deck deck) => JsonSerializer.Serialize(deck, Wire);
 

@@ -383,7 +383,38 @@ export interface DeckCue {
   box?: Rect | null;
   reveal?: boolean | null;
   show?: number | null;
+  /** On a picture scene: the whole picture from this beat on. Absent holds the last one. */
+  picture?: Picture | null;
+  /** Picture item ids pointed at on this beat. */
+  lit?: string[] | null;
 }
+
+/** The flow diagram's words for a change, so a picture and a diagram never disagree on a colour. */
+export type PictureChange = FlowChange;
+
+/**
+ * A small diagram described as what is on screen, not as how it moves. Ids persist between beats and
+ * the player animates the difference - see WalkthroughDeck.Picture on the server.
+ */
+export interface Picture {
+  layout: 'row' | 'column';
+  items: PictureItem[];
+  arrows: PictureArrow[];
+}
+
+export interface PictureItem {
+  id: string;
+  kind: 'box' | 'group' | 'text' | 'code';
+  text: string;
+  sub?: string | null;
+  change: PictureChange;
+  /** The group it sits inside. */
+  in?: string | null;
+  /** On a group: how its children run. */
+  layout?: 'row' | 'column' | null;
+}
+
+export interface PictureArrow { from: string; to: string; label?: string | null; change: PictureChange }
 
 export interface DeckBeat {
   say: string;
@@ -395,7 +426,7 @@ export interface DeckBeat {
   dur: number;
 }
 
-export type SceneKind = 'title' | 'ask' | 'shot' | 'code' | 'flow' | 'cards' | 'question';
+export type SceneKind = 'title' | 'ask' | 'shot' | 'code' | 'flow' | 'cards' | 'question' | 'picture';
 
 export interface DeckScene {
   chapter: string;

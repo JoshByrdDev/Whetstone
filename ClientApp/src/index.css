@@ -68,6 +68,8 @@
   --w-dur-3: .26s;
   /* A camera move on a picture (`.orbit-pan`). Its own speed: the eye follows it, the hand does not. */
   --w-dur-pan: .9s;
+  /* A part of a narrated picture moving to its new place (`.orbit-morph`). */
+  --w-dur-morph: .6s;
 
   /* How far a pointed-at thing travels. Two pixels: enough to answer, not enough to break the
      grid the board is ruled to. Overridable per element for direction (see PickerToggle). */
@@ -206,10 +208,40 @@
    feel instant; here the eye has to follow the picture to know where it has landed. */
 .orbit-pan { transition: transform var(--w-dur-pan) var(--w-ease); }
 
+/* `.orbit-morph` — one part of a picture that changes while a narration explains it: a box that
+   slides to make room, grows to fit new words, turns from "unchanged" to "new". The picture says
+   only where each part should BE (`transform`, `width`, `height`, its colours); this class makes
+   the move. `data-morph` covers the two ends of a part's life: `enter` arrives in place, `exit`
+   leaves from where it last stood. Both are keyframes, not transitions, because a part is mounted
+   already entering or already leaving - the player keeps a leaving part mounted for --w-dur-morph.
+   An arrow is a `path` with `pathLength="1"`, so entering draws it from its tail.
+   Its own speed, between a panel's and a camera's: the eye follows the move to see what changed. */
+.orbit-morph {
+  transition: transform var(--w-dur-morph) var(--w-ease),
+              width var(--w-dur-morph) var(--w-ease),
+              height var(--w-dur-morph) var(--w-ease),
+              opacity var(--w-dur-3) ease,
+              scale var(--w-dur-3) var(--w-ease),
+              background-color var(--w-dur-3) ease,
+              border-color var(--w-dur-3) ease,
+              color var(--w-dur-3) ease;
+}
+@keyframes morph-in   { from { opacity: 0; scale: .92; } to { opacity: 1; scale: 1; } }
+@keyframes morph-out  { to   { opacity: 0; scale: .94; } }
+@keyframes morph-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+.orbit-morph[data-morph="enter"] { animation: morph-in var(--w-dur-morph) var(--w-ease) backwards; }
+.orbit-morph[data-morph="exit"]  { animation: morph-out var(--w-dur-3) ease both; pointer-events: none; }
+path.orbit-morph[data-morph="enter"] {
+  stroke-dasharray: 1;
+  animation: morph-draw var(--w-dur-morph) var(--w-ease) backwards;
+}
+
 /* One exemption for the whole layer. Reduced motion means no travel — it does not mean no
    feedback, so the colour and the hairline still answer. */
 @media (prefers-reduced-motion: reduce) {
-  .orbit-pick, .orbit-tap, .orbit-flank, .orbit-swap, .orbit-pan { transition-duration: .01ms; }
+  .orbit-pick, .orbit-tap, .orbit-flank, .orbit-swap, .orbit-pan, .orbit-morph { transition-duration: .01ms; }
+  .orbit-morph[data-morph="enter"] { animation-name: veil-in; }
+  path.orbit-morph[data-morph="enter"] { animation: none; stroke-dasharray: none; }
   .orbit-spot[data-spot="lit"] { filter: none; }
   .orbit-pick:hover, .orbit-pick:focus-visible, .orbit-pick:active,
   .orbit-tap:hover, .orbit-tap:active { transform: none; }

@@ -189,9 +189,16 @@ class, not a habit:
   First used by the Classroom walkthrough; `UserFlow` takes a `spot` prop that applies it per stop.
 - **`orbit-pan`** — a camera move on a picture: a screenshot zooming to the row that proves the point.
   Its own, slower speed (`--w-dur-pan`), because the eye follows it rather than the hand causing it.
+- **`orbit-morph`** — a part of a narrated picture moving to where it now belongs: a box sliding to
+  make room, re-colouring from unchanged to new. The page only sets where each part should be
+  (`transform`, `width`, `height`, colours); `data-morph="enter"` / `"exit"` cover a part arriving and
+  one kept mounted while it leaves. Its own speed, `--w-dur-morph`. The Classroom walkthrough's
+  `picture` scene (`WalkthroughPicture.tsx`) is its first user: the deck says what is on screen at
+  each beat, by id, and the move is worked out from the difference - so a new kind of explanation
+  needs a new picture, never a new scene kind.
 - **`orbit-row`** — the board's own row shell, which additionally carries its tier's skin.
 
-Durations and travel are `--w-dur-1/2/3` (plus `--w-dur-pan` for `orbit-pan` alone) and `--w-nudge`; the curve for anything that *moves* is
+Durations and travel are `--w-dur-1/2/3` (plus `--w-dur-pan` for `orbit-pan` and `--w-dur-morph` for `orbit-morph`) and `--w-nudge`; the curve for anything that *moves* is
 `--w-ease`. Reduced motion is handled once, in the layer, for every class above.
 
 **The check before you commit a new surface:** does every hovering, opening, or swapping thing on it

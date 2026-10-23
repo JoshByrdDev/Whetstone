@@ -28,12 +28,14 @@ public static class WalkthroughValidator
     public record Attachment(string Name, string Url, int W, int H);
 
     /// <param name="Snippet">Cuts new-side lines from..to of a file, marked from the branch's patch.</param>
+    /// <param name="Vocabulary">Words a picture may use beyond the analysis and the description: the changed files' paths.</param>
     public record Context(
         AnalysisDocument.Doc Doc,
         string Description,
         IReadOnlyList<Shot> Shots,
         IReadOnlyList<Attachment> Attachments,
-        Func<string, int, int, Task<(DiffSnippet.Result? Snippet, string? Error)>> Snippet);
+        Func<string, int, int, Task<(DiffSnippet.Result? Snippet, string? Error)>> Snippet,
+        string Vocabulary = "");
 
     public record Result(IReadOnlyList<Scene> Scenes, IReadOnlyList<string> Problems);
 
@@ -93,6 +95,7 @@ public static class WalkthroughValidator
             case "flow": return Flow(s, ctx, chapter, rawBeats, label, problems);
             case "cards": return Cards(s, ctx, chapter, rawBeats, label, problems);
             case "question": return Question(s, ctx, chapter, rawBeats, label, problems);
+            case "picture": return Picture_(ctx, chapter, rawBeats, label, problems);
         }
         return null;
     }
@@ -325,6 +328,185 @@ public static class WalkthroughValidator
             b.Show is int k ? new Cue(null, null, null, null, null, null, null, Math.Clamp(k, 0, 1)) : null)).ToList())
         { Block = s.Block!.Trim() };
     }
+
+    // ---- picture: a small diagram, animated by what changes between beats ----
+
+    public const int MaxPictureItems = 12;
+    public const int MaxPictureArrows = 10;
+    public const int MaxLabelChars = 48;
+    public const int MaxTextChars = 90;
+
+    private static Scene? Picture_(Context ctx, string chapter, List<RawBeat> beats, string label, List<string> problems)
+    {
+        if (beats[0].Picture is null)
+        {
+            problems.Add($"{label}: a picture scene's first beat must draw a picture. Left out.");
+            return null;
+        }
+        var known = Words(AnalysisDocument.Serialize(ctx.Doc) + " " + ctx.Description + " " + ctx.Vocabulary);
+
+        var outBeats = new List<Beat>();
+        Picture? current = null;
+        foreach (var (b, i) in beats.Select((b, i) => (b, i)))
+        {
+            var where = $"{label}, beat {i + 1}";
+            Picture? drawn = null;
+            if (b.Picture is { } raw)
+            {
+                drawn = Drawing(raw, known, where, problems);
+                if (drawn is null && current is null) { problems.Add($"{label}: its first picture had nothing left to draw. Left out."); return null; }
+                if (drawn is not null) current = drawn;
+            }
+            var ids = current!.Items.Select(x => x.Id).ToHashSet();
+            var lit = new List<string>();
+            foreach (var id in b.Lit ?? Array.Empty<string>())
+            {
+                if (ids.Contains(id)) { if (!lit.Contains(id)) lit.Add(id); }
+                else problems.Add($"{where}: lit \"{id}\" is not in the picture on screen; its ids are {Names(ids)}.");
+            }
+            outBeats.Add(new Beat(b.Say!.Trim(), new Cue(null, null, null, null, null, null, null, null)
+            {
+                Picture = drawn,
+                Lit = lit.Count > 0 ? lit : null,
+            }));
+        }
+        return new Scene(chapter, "picture", outBeats);
+    }
+
+    /// <summary>
+    /// One beat's picture, with every part that does not hold together taken out: a repeated id, a
+    /// group that is not one, an arrow to nothing, and a label whose words appear nowhere in what the
+    /// ticket and its analysis say. That last check is loose - one word in common is enough - because
+    /// a picture's job is to arrange what is known, and the one thing it must not do is introduce a
+    /// part nobody built.
+    /// </summary>
+    private static Picture? Drawing(RawPicture raw, HashSet<string> known, string where, List<string> problems)
+    {
+        var items = new List<PictureItem>();
+        var seen = new HashSet<string>();
+        foreach (var r in raw.Items ?? Array.Empty<RawPictureItem>())
+        {
+            var id = r.Id?.Trim() ?? "";
+            var text = Squash(r.Text);
+            if (!Regex.IsMatch(id, @"^[A-Za-z0-9_-]{1,32}$")) { problems.Add($"{where}: picture id \"{Clip(id, 40)}\" must be a short name of letters, digits, - or _."); continue; }
+            if (!seen.Add(id)) { problems.Add($"{where}: picture id \"{id}\" is used twice; each thing on screen needs its own."); continue; }
+            var kind = r.Kind?.Trim().ToLowerInvariant() is { Length: > 0 } k ? k : "box";
+            if (!PictureKinds.Contains(kind)) { problems.Add($"{where}: \"{id}\" has kind \"{kind}\"; use one of {string.Join(", ", PictureKinds)}."); continue; }
+            if (text.Length == 0 && kind != "group") { problems.Add($"{where}: \"{id}\" has no text."); continue; }
+            var max = kind == "text" ? MaxTextChars : MaxLabelChars;
+            if (text.Length > max) { problems.Add($"{where}: \"{id}\" is {text.Length} characters; a {kind} holds at most {max}. Say the rest aloud."); text = Clip(text, max); }
+            var sub = Squash(r.Sub) is { Length: > 0 } su ? Clip(su, MaxLabelChars) : null;
+            if (Unfounded(text + " " + sub, known) is { } invented)
+            {
+                problems.Add($"{where}: \"{id}\" says \"{Clip(text, 60)}\", and none of its words ({invented}) appear in the analysis, the ticket or the changed files. Name things the way the analysis does. Left out.");
+                continue;
+            }
+            var change = r.Change?.Trim().ToLowerInvariant() is { } c && PictureChanges.Contains(c) ? c : "unchanged";
+            items.Add(new PictureItem(id, kind, text)
+            {
+                Sub = sub,
+                Change = change,
+                In = string.IsNullOrWhiteSpace(r.In) ? null : r.In.Trim(),
+                Layout = kind == "group" ? (r.Layout?.Trim().ToLowerInvariant() == "column" ? "column" : "row") : null,
+            });
+        }
+
+        if (items.Count > MaxPictureItems)
+        {
+            problems.Add($"{where}: the picture has {items.Count} things on it; at most {MaxPictureItems} are drawn. A picture that needs more is two pictures.");
+            items = items.Take(MaxPictureItems).ToList();
+        }
+
+        // A parent must be a group in this picture, and groups may not contain each other in a loop.
+        // Anything that fails is drawn at the top level rather than lost.
+        var groups = items.Where(x => x.Kind == "group").Select(x => x.Id).ToHashSet();
+        string? ParentOf(string id) => items.FirstOrDefault(x => x.Id == id)?.In;
+        for (var n = 0; n < items.Count; n++)
+        {
+            var it = items[n];
+            if (it.In is null) continue;
+            var bad = !groups.Contains(it.In) ? $"\"{it.In}\" is not a group in this picture"
+                : Depth(it.Id, ParentOf) is null ? "its groups contain each other" : null;
+            if (bad is null) continue;
+            problems.Add($"{where}: \"{it.Id}\" is placed in {it.In}, but {bad}; drawn at the top level instead.");
+            items[n] = it with { In = null };
+        }
+        // A group with no title and nothing in it draws a frame around nothing.
+        items = items.Where(x => x.Kind != "group" || x.Text.Length > 0 || items.Any(c => c.In == x.Id)).ToList();
+        if (items.Count == 0) return null;
+
+        var ids = items.Select(x => x.Id).ToHashSet();
+        var arrows = new List<Arrow>();
+        foreach (var a in raw.Arrows ?? Array.Empty<RawArrow>())
+        {
+            var from = a.From?.Trim() ?? "";
+            var to = a.To?.Trim() ?? "";
+            if (!ids.Contains(from) || !ids.Contains(to) || from == to)
+            {
+                problems.Add($"{where}: the arrow {from} -> {to} does not join two things in the picture; its ids are {Names(ids)}.");
+                continue;
+            }
+            if (arrows.Any(x => x.From == from && x.To == to)) continue;
+            var change = a.Change?.Trim().ToLowerInvariant() is { } c && PictureChanges.Contains(c) ? c : "unchanged";
+            arrows.Add(new Arrow(from, to) { Label = Squash(a.Label) is { Length: > 0 } l ? Clip(l, 32) : null, Change = change });
+        }
+        if (arrows.Count > MaxPictureArrows)
+        {
+            problems.Add($"{where}: the picture has {arrows.Count} arrows; at most {MaxPictureArrows} are drawn.");
+            arrows = arrows.Take(MaxPictureArrows).ToList();
+        }
+
+        return new Picture(raw.Layout?.Trim().ToLowerInvariant() == "column" ? "column" : "row", items, arrows);
+    }
+
+    /// <summary>How deep an item is nested, or null when following its parents goes round in a circle.</summary>
+    private static int? Depth(string id, Func<string, string?> parentOf)
+    {
+        var path = new HashSet<string> { id };
+        var depth = 0;
+        for (var p = parentOf(id); p is not null; p = parentOf(p))
+        {
+            if (!path.Add(p)) return null;
+            depth++;
+        }
+        return depth;
+    }
+
+    /// <summary>Words too general to show that a label is about this ticket - they are in every label.</summary>
+    private static readonly HashSet<string> Common = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "that", "this", "with", "from", "into", "then", "when", "only", "each", "every", "more", "less",
+        "than", "they", "their", "there", "here", "what", "which", "will", "would", "were", "been", "have",
+        "does", "done", "make", "made", "used", "uses", "user", "page", "step", "before", "after", "once",
+        "again", "still", "first", "last", "next", "same", "other", "both", "none", "some", "many", "most",
+        "very", "just", "also", "about", "over", "under", "back", "away", "show", "check", "call", "save",
+        "read", "write", "send", "gets", "sets", "list", "item", "value", "data", "code", "change", "changed",
+        "added", "removed", "start", "fail", "fails", "error", "result", "true", "false", "null",
+    };
+
+    /// <summary>Lower-cased words of four letters or more, camelCase and paths split, a plural's s taken off too.</summary>
+    private static HashSet<string> Words(string text)
+    {
+        var spaced = Regex.Replace(text, @"([a-z0-9])([A-Z])", "$1 $2");
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match m in Regex.Matches(spaced, @"[A-Za-z]{4,}"))
+        {
+            var w = m.Value.ToLowerInvariant();
+            set.Add(w);
+            if (w.EndsWith('s')) set.Add(w[..^1]);
+        }
+        return set;
+    }
+
+    /// <summary>A label's meaningful words when not one of them is known; null when it is founded or says nothing checkable.</summary>
+    private static string? Unfounded(string text, HashSet<string> known)
+    {
+        var words = Words(text).Where(w => !Common.Contains(w) && !(w.EndsWith('s') && Common.Contains(w[..^1]))).ToList();
+        if (words.Count == 0 || words.Any(known.Contains)) return null;
+        return string.Join(", ", words.Take(4));
+    }
+
+    private static string Squash(string? s) => string.IsNullOrWhiteSpace(s) ? "" : Regex.Replace(s, @"\s+", " ").Trim();
 
     // ---- helpers ----
 

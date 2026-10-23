@@ -1002,7 +1002,7 @@ const hexPoints = (x: number, y: number, w: number, h: number): [number, number]
 // run which ignores that produces a tall box rather than an unbounded one. Nothing is cut before it.
 const LABEL_LINES = 4;
 
-const FLOW_TONES: Record<FlowChange, { stroke: string; fill: string; chip: string; text: string; line: string }> = {
+export const FLOW_TONES: Record<FlowChange, { stroke: string; fill: string; chip: string; text: string; line: string }> = {
   unchanged: { stroke: 'var(--w-backlog-700)', fill: 'var(--w-void)', chip: 'var(--w-backlog-600)', text: 'var(--w-t400)', line: 'var(--w-backlog-600)' },
   new: { stroke: 'var(--w-done)', fill: 'var(--w-done-950)', chip: 'var(--w-done-600)', text: 'var(--w-done-100)', line: 'var(--w-done-600)' },
   changed: { stroke: 'var(--w-active)', fill: 'var(--w-active-950)', chip: 'var(--w-active-600)', text: 'var(--w-active-200)', line: 'var(--w-active-600)' },

@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type {
-  Analysis, ClassroomTicket, Deck, DeckBeat, DeckCode, DeckImage, DeckScene, Doc, NarratorStatus, Rect, Walkthrough,
+  Analysis, ClassroomTicket, Deck, DeckBeat, DeckCode, DeckImage, DeckScene, Doc, NarratorStatus, Picture, Rect, Walkthrough,
 } from '../api/classroom';
 import { blockAt, clipUrl, getNarratorStatus, getWalkthrough, writeWalkthrough } from '../api/classroom';
 import { AnalysisContext, Callout, Question, UserFlow } from './AnalysisBlocks';
 import { lineCls } from './PatchView';
+import { PictureView } from './WalkthroughPicture';
 import { Chip, GhostButton, PrimaryButton } from './ui';
 import { useVeil } from '../hooks/useVeil';
 import { chamfer, DISPLAY, MONO } from './orbit';
@@ -103,6 +104,9 @@ interface State {
   box: Rect | null;
   revealed: boolean;
   show: number;
+  /** On a picture scene: the picture on screen, which a beat without one keeps. */
+  picture: Picture | null;
+  lit: string[];
 }
 
 function stateAt(deck: Deck, si: number, bi: number): State {
@@ -114,8 +118,10 @@ function stateAt(deck: Deck, si: number, bi: number): State {
   let image = scene.images?.[0]?.name ?? null;
   let revealed = false;
   let show = 0;
+  let picture: Picture | null = null;
   for (let j = 0; j < bi; j++) {
     const c = scene.beats[j].cue;
+    if (c?.picture) picture = c.picture;
     c?.nodes?.forEach(n => seen.add(n));
     if (c?.image) image = c.image;
     if (c?.reveal) revealed = true;
@@ -125,12 +131,14 @@ function stateAt(deck: Deck, si: number, bi: number): State {
   if (c?.image) image = c.image;
   if (c?.reveal) revealed = true;
   if (c?.show != null) show = c.show;
+  if (c?.picture) picture = c.picture;
   const nodes = c?.nodes ?? [];
   nodes.forEach(n => seen.delete(n));
   return {
     lines: c?.lines && c.lines.length === 2 ? c.lines : null,
     nodes, seen: [...seen], quotes: c?.quotes ?? [], image,
     zoom: c?.zoom ?? null, box: c?.box ?? null, revealed, show,
+    picture, lit: c?.lit ?? [],
   };
 }
 
@@ -364,6 +372,7 @@ function SceneView({ scene, state, subject, beat }: {
     case 'flow': return <FlowScene scene={scene} state={state} doc={subject.doc} />;
     case 'cards': return <CardsScene scene={scene} state={state} doc={subject.doc} />;
     case 'question': return <QuestionScene scene={scene} state={state} doc={subject.doc} />;
+    case 'picture': return state.picture ? <PictureView picture={state.picture} lit={state.lit} /> : null;
     default: return null;
   }
 }
