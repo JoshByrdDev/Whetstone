@@ -232,18 +232,32 @@ export function PictureView({ picture, lit }: { picture: Picture; lit: string[] 
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  // The first measure can land before the display face has loaded; measure again once it has.
-  useEffect(() => { document.fonts?.ready.then(() => setFonts(n => n + 1)); }, []);
+  // The first measure can land before a face has loaded - the monospace one is often only asked for
+  // by this very layout - so measure again whenever the laid-out picture changes size. `fonts.ready`
+  // is not enough: it can resolve before a face nothing had requested yet starts loading.
+  useEffect(() => {
+    const el = measureRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setFonts(n => n + 1));
+    ro.observe(el);
+    document.fonts?.addEventListener?.('loadingdone', bump);
+    function bump() { setFonts(n => n + 1); }
+    return () => { ro.disconnect(); document.fonts?.removeEventListener?.('loadingdone', bump); };
+  }, []);
 
   // Measure where flexbox put every id.
   useLayoutEffect(() => {
     const root = measureRef.current;
     if (!root || stage.w === 0) return;
-    const base = root.getBoundingClientRect();
+    // In layout pixels, not screen pixels: the player opens with the dialog scaled a little, and a
+    // picture measured mid-entrance would keep every box 1.5% too narrow for its own words.
+    const box = root.getBoundingClientRect();
+    const s = root.offsetWidth > 0 ? box.width / root.offsetWidth : 1;
+    const base = { left: box.left, top: box.top, width: root.offsetWidth, height: root.offsetHeight };
     const rects: Record<string, R> = {};
     root.querySelectorAll<HTMLElement>('[data-pid]').forEach(el => {
       const r = el.getBoundingClientRect();
-      rects[el.dataset.pid!] = { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height };
+      rects[el.dataset.pid!] = { x: (r.left - base.left) / s, y: (r.top - base.top) / s, w: Math.ceil(r.width / s), h: Math.ceil(r.height / s) };   // offsetWidth rounds, so round the box up rather than clip a word
     });
     setLayout(last => {
       // A re-measure of the same picture (a resize, a font arriving) keeps what it decided.
