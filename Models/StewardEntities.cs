@@ -107,6 +107,13 @@ public enum StewardEntryKind
     /// and handed to every run along with the answers.
     /// </summary>
     OwnerSaid,
+    /// <summary>
+    /// Something the steward means to do about one ticket, for its own later runs: "when this
+    /// merges, set C4 done and note its words". Unlike a <see cref="Call"/> it is read back, by
+    /// every run, until the steward closes it (<see cref="StewardEntry.HandledAt"/>). Written by
+    /// the call that decides it, so a run that dies part-way does not lose it.
+    /// </summary>
+    TicketNote,
 }
 
 /// <summary>

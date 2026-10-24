@@ -413,6 +413,19 @@ public class StewardService
         var mine = all.Where(t => (t.PlanKey ?? "") == key).ToList();
         var current = StewardProgress.Current(plan, states);
         var memo = s?.Memo ?? "";
+        var byId = all.ToDictionary(t => t.Id);
+        // Every open ticket note, by ticket - Done tickets included, since what is left to do after
+        // a merge is most of what these say. A note whose ticket is gone has nothing to act on.
+        var ticketNotes = (await OpenNotesAsync(projectKey, null, ct))
+            .Where(n => n.TicketId is { } id && byId.ContainsKey(id))
+            .GroupBy(n => n.TicketId!.Value)
+            .Select(g => new
+            {
+                ticket = g.Key,
+                phase = byId[g.Key].Phase.ToString(),
+                title = byId[g.Key].Title,
+                notes = g.Select(n => new { n.Id, n.Text, n.At }),
+            }).ToList();
         var waiting = await _db.StewardQuestions.AsNoTracking()
             .Where(q => q.ProjectKey == projectKey && q.Answer == null).OrderBy(q => q.AskedAt).ToListAsync(ct);
 
@@ -446,6 +459,8 @@ public class StewardService
             waitingOnOwner = waiting.Select(q => new { q.Key, q.Question, q.HeldUp, asked = q.AskedAt }),
             done = all.Count - open.Count,
             tickets = rows,
+            // What earlier runs meant to do, by ticket. Each stays until closed with steward_done_with.
+            ticketNotes,
             memo,
             memoLength = $"{memo.Length}/{cfg.Steward.MemoMaxChars}",
             memoTooLong = memo.Length > cfg.Steward.MemoMaxChars
@@ -522,11 +537,16 @@ public class StewardService
         var lastBackward = await _tickets.LastBackwardAtAsync(t.Id);
         var said = t.Comments.Where(c => c.Author != AuthorKind.System).OrderBy(c => c.CreatedAt).ToList();
 
+        var notes = await OpenNotesAsync(projectKey, t.Id, ct);
+
         return new StewardReply("review", null, new
         {
             id = t.Id,
             phase = t.Phase.ToString(),
             title = t.Title,
+            // What an earlier run meant to do about this ticket, first, because it is often why
+            // this review matters. Close each with steward_done_with once it is done.
+            yourNotes = notes.Select(n => new { n.Id, n.Text, n.At }),
             description = t.Description,
             summary = t.ImplementationSummary,
             workItems = t.WorkItems.OrderBy(w => w.Order).Select(w => new { w.Done, scope = w.Scope.ToString(), w.Text }),
@@ -1004,6 +1024,56 @@ public class StewardService
         return new StewardReply("noted");
     }
 
+    /// <summary>The longest a ticket note may be: one thing to do, not an essay.</summary>
+    public const int TicketNoteMaxChars = 600;
+
+    /// <summary>
+    /// Write down something to do about one ticket, for later runs: it is shown by
+    /// <see cref="ReviewAsync"/> and in every run's status until <see cref="DoneWithAsync"/> closes it.
+    /// </summary>
+    public async Task<StewardReply> NoteTicketAsync(string projectKey, int ticketId, string text, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        text = text?.Trim() ?? "";
+        if (text.Length == 0) return Refuse("bad-request", "Say what is to be done, and when.");
+        if (text.Length > TicketNoteMaxChars)
+            return Refuse("bad-request", $"A ticket note is one thing to do, at most {TicketNoteMaxChars} characters. "
+                + "A fact about the repo is not a ticket note; a call for the owner goes on the record.");
+        var (t, no) = await TicketOfAsync(projectKey, ticketId);
+        if (t is null) return no!;
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"note on ticket {ticketId}: {Head(text, 200)}");
+
+        var e = new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.TicketNote, TicketId = ticketId, Text = text };
+        _db.StewardEntries.Add(e);
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("noted", null, new { id = e.Id });
+    }
+
+    /// <summary>Close a ticket note: what it said is done, or no longer to be done.</summary>
+    public async Task<StewardReply> DoneWithAsync(string projectKey, int noteId, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        var e = await _db.StewardEntries.FirstOrDefaultAsync(
+            x => x.Id == noteId && x.ProjectKey == projectKey && x.Kind == StewardEntryKind.TicketNote, ct);
+        if (e is null) return Refuse("not-found", $"There is no ticket note {noteId} here.");
+        if (e.HandledAt is not null) return new StewardReply("already-done");
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"close note {noteId} on ticket {e.TicketId}");
+        e.HandledAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("done");
+    }
+
+    /// <summary>The open ticket notes, oldest first; one ticket's with <paramref name="ticketId"/>.</summary>
+    private async Task<List<StewardEntry>> OpenNotesAsync(string projectKey, int? ticketId, CancellationToken ct)
+    {
+        var q = _db.StewardEntries.AsNoTracking().Where(e => e.ProjectKey == projectKey
+            && e.Kind == StewardEntryKind.TicketNote && e.HandledAt == null);
+        if (ticketId is { } id) q = q.Where(e => e.TicketId == id);
+        return await q.OrderBy(e => e.At).ThenBy(e => e.Id).ToListAsync(ct);
+    }
+
     /// <summary>A release note's kind by name. Null for anything that is not one: a number is not a kind.</summary>
     public static StewardReleaseKind? ParseRelease(string? name)
     {
@@ -1167,6 +1237,11 @@ public class StewardService
             t.Description = PlanLine(t) is { } line ? $"{rest}\n\n{line}" : rest;
         }
         t.UpdatedAt = DateTime.UtcNow;
+        // Out of the plan, the steward has nothing more to do about it.
+        if (unit is null)
+            foreach (var n in await _db.StewardEntries.Where(e => e.TicketId == ticketId
+                         && e.Kind == StewardEntryKind.TicketNote && e.HandledAt == null).ToListAsync(ct))
+                n.HandledAt = DateTime.UtcNow;
         if (cfg.StewardMode != StewardMode.Off)
             await StewardDue.MarkAsync(_db, t.ProjectKey, unit is null
                 ? $"the owner took #{ticketId} out of unit {was}"

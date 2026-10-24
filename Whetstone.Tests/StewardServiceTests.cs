@@ -1094,6 +1094,72 @@ public class StewardServiceTests : IDisposable
         Assert.Null(qs.Single(q => q.Key == "map-provider").AnswerDeliveredAt);
     }
 
+    // ---- ticket notes ----------------------------------------------------------------
+
+    private static string Json(StewardReply r) => System.Text.Json.JsonSerializer.Serialize(r.Data);
+
+    [Fact]
+    public async Task A_ticket_note_is_shown_by_review_and_status_until_it_is_closed()
+    {
+        var id = await AtReview();
+        Assert.Equal("no-run", (await In(s => s.NoteTicketAsync("alpha", id, "Merge it once rebased."))).Answer);
+
+        await Begin();
+        var noted = await In(s => s.NoteTicketAsync("alpha", id, "When it merges, set A1 Done."));
+        Assert.Equal("noted", noted.Answer);
+        var noteId = (int)noted.Data!.GetType().GetProperty("id")!.GetValue(noted.Data)!;
+
+        Assert.Contains("When it merges, set A1 Done.", Json(await In(s => s.ReviewAsync("alpha", id))));
+        var status = Json(await In(s => s.StatusAsync("alpha")));
+        Assert.Contains("ticketNotes", status);
+        Assert.Contains("When it merges, set A1 Done.", status);
+
+        // A run that dies keeps it: the next run is still shown it.
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "killed");
+        Assert.Contains("When it merges, set A1 Done.", await BeginJson());
+
+        Assert.Equal("done", (await In(s => s.DoneWithAsync("alpha", noteId))).Answer);
+        Assert.Equal("already-done", (await In(s => s.DoneWithAsync("alpha", noteId))).Answer);
+        Assert.DoesNotContain("set A1 Done", Json(await In(s => s.ReviewAsync("alpha", id))));
+        Assert.DoesNotContain("set A1 Done", Json(await In(s => s.StatusAsync("alpha"))));
+    }
+
+    [Fact]
+    public async Task A_ticket_note_is_one_thing_on_a_ticket_of_this_project()
+    {
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.NoteTicketAsync("alpha", id, "  "))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.NoteTicketAsync("alpha", id, new string('x', StewardService.TicketNoteMaxChars + 1)))).Answer);
+        Assert.NotEqual("noted", (await In(s => s.NoteTicketAsync("alpha", id + 50, "No such ticket."))).Answer);
+        Assert.Equal("not-found", (await In(s => s.DoneWithAsync("alpha", 9999))).Answer);
+        // Only a ticket note can be closed this way, not a call or a release note.
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.Call, id, "Kept the wording."));
+        var call = Entries().Single(e => e.Kind == StewardEntryKind.Call).Id;
+        Assert.Equal("not-found", (await In(s => s.DoneWithAsync("alpha", call))).Answer);
+    }
+
+    [Fact]
+    public async Task Propose_mode_only_says_it_would_note_a_ticket()
+    {
+        Configure("propose");
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("proposed", (await In(s => s.NoteTicketAsync("alpha", id, "When it merges, set A1 Done."))).Answer);
+        Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.TicketNote);
+    }
+
+    [Fact]
+    public async Task Taking_a_ticket_out_of_the_plan_closes_its_notes()
+    {
+        var id = await Loose();
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A1" }))).Answer);
+        await Begin();
+        await In(s => s.NoteTicketAsync("alpha", id, "When it merges, set A1 Done."));
+        await In(s => s.LinkTicketAsync(id, null, null, null));
+        Assert.NotNull(Entries().Single(e => e.Kind == StewardEntryKind.TicketNote).HandledAt);
+    }
+
     // ---- the owner's link from a ticket to the plan --------------------------------
 
     private async Task<int> Loose(string? description = null)

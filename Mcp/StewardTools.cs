@@ -207,6 +207,24 @@ public class StewardTools
         [Description("What was asked or chosen, the choice, and the place that decides it.")] string text) =>
         s.RecordAsync(project, StewardEntryKind.Call, ticketId, text);
 
+    [McpServerTool(Name = "steward_note_ticket"), Description(
+        "Write down one thing you mean to do about one ticket, for your later runs: 'when this merges, set C4 Done and note " +
+        "its words for release', 'when it is back at review, merge it if only the rebase changed'. Write it the moment you " +
+        "decide it, not at the end of the run: a run that stops part-way keeps what it wrote. It is shown first by " +
+        "steward_review for that ticket and in every run's status (ticketNotes) until you close it with steward_done_with. " +
+        "One thing per note. Not a fact about the repo, and not a call for the owner (that is steward_record_call).")]
+    public static Task<StewardReply> NoteTicket(StewardService s,
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("What is to be done, and when.")] string text) =>
+        s.NoteTicketAsync(project, ticketId, text);
+
+    [McpServerTool(Name = "steward_done_with"), Description(
+        "Close a ticket note, by the id steward_note_ticket gave it: what it said is done, or is no longer to be done. " +
+        "Close it in the same breath as doing it, so the next run is never told to do it again.")]
+    public static Task<StewardReply> DoneWith(StewardService s,
+        [Description("The project key.")] string project, [Description("The note's id.")] int noteId) =>
+        s.DoneWithAsync(project, noteId);
+
     [McpServerTool(Name = "steward_note_for_release"), Description(
         "After merging a ticket that leaves the owner something to read before the base branch is released: a migration and " +
         "what it adds, a line a worker wrote for the owner's own documents (copy it as written, with the file and section it " +

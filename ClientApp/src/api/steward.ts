@@ -63,7 +63,8 @@ export interface StewardPage {
 
 export interface StewardEntry {
   id: number;
-  kind: 'Call' | 'BeforeRelease' | 'OwnerSaid';
+  /** TicketNote: something the steward means to do about the ticket, open until it closes it. */
+  kind: 'Call' | 'BeforeRelease' | 'OwnerSaid' | 'TicketNote';
   ticketId?: number | null;
   ticketTitle?: string | null;
   /** The unit of the plan it belongs to, by way of its ticket. */
