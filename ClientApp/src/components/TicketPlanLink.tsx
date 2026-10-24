@@ -153,7 +153,8 @@ export function TicketPlanLink({ ticket, disabled, onChanged }: {
                                   <span className={`flex-none font-mono text-[11px] ${ticked ? 'text-gray-100' : 'text-gray-500'}`}>
                                     {ticked ? '■' : '□'} {o.outcome}
                                   </span>
-                                  <span className={`min-w-0 text-[11.5px] leading-snug ${ticked ? 'text-gray-200' : 'text-gray-500'}`}>{o.text}</span>
+                                  {/* A spec's outcome can run to a paragraph; two lines are enough to tell them apart. */}
+                                  <span title={o.text} className={`min-w-0 line-clamp-2 text-[11.5px] leading-snug ${ticked ? 'text-gray-200' : 'text-gray-500'}`}>{o.text}</span>
                                 </button>
                               );
                             })}
