@@ -547,15 +547,29 @@ public class StewardService
         var said = await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid).ToListAsync(ct);
 
-        var lines = answered.Select(q => (At: q.AnsweredAt ?? q.AskedAt, Key: (string?)q.Key, Text: $"{q.Question} -> {q.Answer}"))
-            .Concat(said.Select(e => (e.At, Key: (string?)null, e.Text)))
+        // An answer is the option picked, in words. What it was picked over is half of what it
+        // decides - "not the paid provider" is as much the owner's call as "the free one" - so every
+        // option offered comes back with it, marked as the one picked, the steward's own pick, or neither.
+        var lines = answered.Select(q =>
+            {
+                var offered = JsonSerializer.Deserialize<List<BlockOption>>(q.OptionsJson, Json) ?? new();
+                var picked = offered.FirstOrDefault(o => q.Answer!.StartsWith(o.Label.Trim(), StringComparison.OrdinalIgnoreCase));
+                var options = offered.Select(o => new Offered(o.Label, o.Detail, ReferenceEquals(o, picked), o.Recommended)).ToList();
+                return (At: q.AnsweredAt ?? q.AskedAt, Key: (string?)q.Key, Text: $"{q.Question} -> {q.Answer}",
+                    Options: options.Count > 0 ? options : null);
+            })
+            .Concat(said.Select(e => (e.At, Key: (string?)null, e.Text, Options: (List<Offered>?)null)))
             .OrderBy(x => x.At).ToList();
         if (!string.IsNullOrWhiteSpace(query))
-            lines = lines.Where(x => $"{x.Key} {x.Text}".Contains(query.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+            lines = lines.Where(x => $"{x.Key} {x.Text} {string.Join(" ", (x.Options ?? new()).Select(o => $"{o.Label} {o.Detail}"))}"
+                .Contains(query.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
 
         return new StewardReply("decisions", null,
-            lines.Select(x => new { on = x.At.ToLocalTime().ToString("yyyy-MM-dd"), key = x.Key, decided = x.Text }));
+            lines.Select(x => new { on = x.At.ToLocalTime().ToString("yyyy-MM-dd"), key = x.Key, decided = x.Text, offered = x.Options }));
     }
+
+    /// <summary>One option a question offered, as <see cref="DecisionsAsync"/> hands it back.</summary>
+    private sealed record Offered(string Label, string? Detail, bool Picked, bool StewardsPick);
 
     // ---- finished tickets ----------------------------------------------------------
 
@@ -853,6 +867,18 @@ public class StewardService
         await _db.SaveChangesAsync(ct);
         await _tickets.TransitionAsync(ticketId, TicketPhase.Done, $"Closed with nothing to merge: {Head(why, 300)}", TransitionActor.Steward);
         return new StewardReply("closed", null, new { closed = true });
+    }
+
+    /// <summary>
+    /// What a ticket is right now, as far as a merge's answer depends on it: its phase, its branch's
+    /// tip, and how far it is from the base either way. See <see cref="StewardMerges"/>.
+    /// </summary>
+    public async Task<string?> MergeStampAsync(string projectKey, int ticketId, CancellationToken ct = default)
+    {
+        var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId && x.ProjectKey == projectKey, ct);
+        if (t is null) return null;
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        return $"{t.Phase}|{change?.Tip}|{change?.Behind}|{change?.Ahead}";
     }
 
     public async Task<StewardReply> RebaseAsync(string projectKey, int ticketId, CancellationToken ct = default)

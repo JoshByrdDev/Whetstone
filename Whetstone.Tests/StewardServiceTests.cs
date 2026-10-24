@@ -987,6 +987,53 @@ public class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_kept_answer_is_not_handed_out_once_the_ticket_has_changed_since()
+    {
+        var started = 0;
+        var checks = new TaskCompletionSource<StewardReply>();
+        var stamp = "NeedsReview|tip-a|2|1";
+        var merges = new StewardMerges((_, _) => { started++; return checks.Task; }, (_, _) => Task.FromResult<string?>(stamp))
+            { Wait = TimeSpan.FromMilliseconds(50) };
+
+        // The call that asked gave up before the answer came; the answer is kept.
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+        checks.SetResult(new StewardReply("behind"));
+        await Task.Delay(20);
+
+        // The steward rebased in between: the kept 'behind' is about a branch that is gone.
+        stamp = "NeedsReview|tip-b|0|1";
+        checks = new TaskCompletionSource<StewardReply>();
+        checks.SetResult(new StewardReply("merged"));
+        Assert.Equal("merged", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(2, started);
+    }
+
+    [Fact]
+    public async Task A_kept_answer_is_handed_out_while_the_ticket_is_as_it_was()
+    {
+        var started = 0;
+        var checks = new TaskCompletionSource<StewardReply>();
+        var stamp = "NeedsReview|tip-a|0|1";
+        var merges = new StewardMerges((_, _) => { started++; return checks.Task; }, (_, _) => Task.FromResult<string?>(stamp))
+            { Wait = TimeSpan.FromMilliseconds(50) };
+
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+        checks.SetResult(new StewardReply("check-failed"));
+        await Task.Delay(20);
+        Assert.Equal("check-failed", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(1, started);
+
+        // A merge that succeeded moved the ticket to Done, and its answer still reaches the steward.
+        checks = new TaskCompletionSource<StewardReply>();
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+        checks.SetResult(new StewardReply("merged"));
+        await Task.Delay(20);
+        stamp = "Done|tip-a|0|0";
+        Assert.Equal("merged", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(2, started);
+    }
+
+    [Fact]
     public async Task A_call_that_drops_does_not_take_the_merge_with_it()
     {
         var started = 0;
@@ -1312,6 +1359,20 @@ public class StewardServiceTests : IDisposable
         Assert.Contains("\"unit\":2,\"outcome\":\"A1\"", status);
         Assert.DoesNotContain("\"unit\":1,\"outcome\":\"A1\"", status);   // Done: nothing for a run to do
         Assert.DoesNotContain("\"unit\":2,\"outcome\":\"A2\"", status);
+    }
+
+    [Fact]
+    public async Task A_decision_comes_back_with_every_option_it_was_picked_from()
+    {
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question()));
+        await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "A new one (Costs money). Only for texts."));
+
+        var d = Json(await In(s => s.DecisionsAsync("alpha", null)));
+        Assert.Contains("\"Label\":\"A new one\",\"Detail\":\"Costs money\",\"Picked\":true,\"StewardsPick\":false", d);
+        Assert.Contains("\"Label\":\"The one we already pay for\",\"Detail\":\"No new bill\",\"Picked\":false,\"StewardsPick\":true", d);
+        // A search finds it by an option it turned down, too.
+        Assert.Contains("sms-provider", Json(await In(s => s.DecisionsAsync("alpha", "no new bill"))));
     }
 
     // ---- the gaps its own tools left --------------------------------------------------

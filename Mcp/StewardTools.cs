@@ -59,7 +59,8 @@ public class StewardTools
 
     [McpServerTool(Name = "steward_decisions"), Description(
         "What the owner has decided through you: every answer to a question you asked and every standing instruction they " +
-        "left, oldest first. Each is a decision made. Pass a query to get only those that mention it - the full list grows " +
+        "left, oldest first. Each is a decision made. An answer comes with every option it was picked from ('offered': " +
+        "picked, your own pick, or neither), because what was turned down is decided too. Pass a query to get only those that mention it - the full list grows " +
         "for as long as the project runs, so search it before answering a blocked ticket or writing a ticket's criteria.")]
     public static Task<StewardReply> Decisions(StewardService s,
         [Description("The project key.")] string project,
