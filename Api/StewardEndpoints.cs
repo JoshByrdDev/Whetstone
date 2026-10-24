@@ -13,6 +13,8 @@ public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
 public record StewardNewPlan(string? Key, string? Name, string? Folder);
+/// <summary>A ticket's place in a plan. <c>Unit</c> null takes it out; <c>Plan</c> null is the one being worked.</summary>
+public record TicketPlanLink(string? Plan, int? Unit, IReadOnlyList<string>? Outcomes);
 
 /// <summary>
 /// The owner's side of a project's steward, and the two calls whatever launches a run needs.
@@ -214,6 +216,15 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerClearsFlagAsync(project ?? "", id, flag, ct);
             return r.Answer == "cleared" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The owner's link from a ticket to a unit of a plan: set it, change it, or (unit null)
+        // take the ticket out of the plan. No tool behind it, like everything else that is the owner's.
+        app.MapPut("/api/tickets/{id:int}/plan", async (int id, TicketPlanLink body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.LinkTicketAsync(id, body.Plan, body.Unit, body.Outcomes, ct);
+            return r.Answer is "linked" or "unchanged" ? Results.Ok(r)
+                : r.Answer == "not-found" ? Results.NotFound(r) : Results.BadRequest(r);
         });
 
         app.MapPost("/api/steward/said", async (string? project, StewardSaidRequest req, StewardService steward, CancellationToken ct) =>

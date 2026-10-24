@@ -753,7 +753,8 @@ public class StewardService
     }
 
     private static string? PlanLine(Ticket t) =>
-        t.PlanUnit is null ? null : $"**Plan**\n\nUnit {t.PlanUnit}: {t.PlanOutcomes}.";
+        t.PlanUnit is null ? null
+            : $"**Plan**\n\nUnit {t.PlanUnit}{(string.IsNullOrWhiteSpace(t.PlanOutcomes) ? "" : $": {t.PlanOutcomes}")}.";
 
     // ---- the next tickets ---------------------------------------------------------
 
@@ -1100,6 +1101,72 @@ public class StewardService
         }
         return new StewardReply("cleared", null, new { flag = raised.Flag, tip = change.Tip });
     }
+
+    /// <summary>
+    /// The owner links a ticket to a unit of one of the project's plans, and to which of its
+    /// outcomes it carries, or unlinks it (<paramref name="unit"/> null). The link is what every
+    /// count of a unit's progress is taken from, so it is checked against the plan as committed:
+    /// the unit and each outcome must be in it. Outcomes are optional - a ticket can belong to a
+    /// unit without carrying any one of its outcomes. Not the steward's: no tool reaches this.
+    /// </summary>
+    public async Task<StewardReply> LinkTicketAsync(int ticketId, string? planKey, int? unit, IReadOnlyList<string>? outcomes,
+        CancellationToken ct = default)
+    {
+        var t = await _db.Tickets.FirstOrDefaultAsync(x => x.Id == ticketId, ct);
+        if (t is null) return Refuse("not-found", $"There is no ticket {ticketId}.");
+        var cfg = Config(t.ProjectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{t.ProjectKey}'.");
+
+        string? key = null;
+        string? title = null;
+        var picked = new List<string>();
+        if (unit is not null)
+        {
+            var plan = planKey is null ? cfg.Steward.Plan : cfg.Steward.PlanByKey(planKey);
+            if (plan is null || !plan.Configured) return Refuse("no-plan", $"This project has no plan '{planKey}'.");
+            var units = await _git.PlanOfAsync(t.ProjectKey, plan, ct);
+            var u = units.FirstOrDefault(x => x.Number == unit);
+            if (u is null) return Refuse("bad-request", $"{plan.DisplayName} has no unit {unit}.");
+            picked = (outcomes ?? Array.Empty<string>()).Select(o => o.Trim()).Where(o => o.Length > 0).Distinct().ToList();
+            if (picked.Where(o => !u.Outcomes.Contains(o)).ToList() is { Count: > 0 } unknown)
+                return Refuse("bad-request", $"{u.File} has no outcome {string.Join(", ", unknown)}.");
+            // In the spec's own order, whatever order they were ticked in.
+            picked = u.Outcomes.Where(picked.Contains).ToList();
+            key = plan.Key;
+            title = $"{plan.DisplayName}, unit {u.Number}";
+        }
+
+        var joined = unit is null ? null : string.Join(", ", picked);
+        if ((t.PlanKey ?? "") == (key ?? "") && t.PlanUnit == unit && (t.PlanOutcomes ?? "") == (joined ?? ""))
+            return new StewardReply("unchanged");
+
+        var was = t.PlanUnit;
+        t.PlanKey = key;
+        t.PlanUnit = unit;
+        t.PlanOutcomes = joined;
+        // A ticket the steward filed carries its link as a line in its description too, for the
+        // agents that read it. Kept in step, never added to a description that had none.
+        if (t.Description is { } d && PlanLineAt.IsMatch(d))
+        {
+            var rest = PlanLineAt.Replace(d, "").TrimEnd();
+            t.Description = PlanLine(t) is { } line ? $"{rest}\n\n{line}" : rest;
+        }
+        t.UpdatedAt = DateTime.UtcNow;
+        if (cfg.StewardMode != StewardMode.Off)
+            await StewardDue.MarkAsync(_db, t.ProjectKey, unit is null
+                ? $"the owner took #{ticketId} out of unit {was}"
+                : $"the owner linked #{ticketId} to unit {unit}");
+        await _db.SaveChangesAsync(ct);
+
+        await _tickets.AddCommentAsync(ticketId, unit is null
+            ? "Taken out of the plan by the owner."
+            : $"Linked to {title}{(picked.Count > 0 ? $" ({string.Join(", ", picked)})" : "")} by the owner.", AuthorKind.System);
+        if (cfg.StewardMode != StewardMode.Off) _heartbeat?.Wake();
+        return new StewardReply("linked", null, new { plan = key, unit, outcomes = picked });
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex PlanLineAt = new(
+        @"(\r?\n)*\*\*Plan\*\*\r?\n\r?\nUnit \d+[^\r\n]*\s*$");
 
     /// <summary>A standing instruction from the owner that answers no question.</summary>
     public async Task<StewardReply> OwnerSaysAsync(string projectKey, string text, CancellationToken ct = default)

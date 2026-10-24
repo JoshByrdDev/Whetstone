@@ -127,6 +127,14 @@ export const answerStewardQuestion = (project: string, key: string, answer: stri
     method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answer }),
   }).then(json<{ answer: string }>);
 
+/** A ticket's place in a plan: the plan's key, the unit's number, the outcomes it carries. */
+export interface TicketPlanLink { key: string; unit: number; outcomes: string[] }
+
+/** Link a ticket to a unit of a plan (plan null is the one being worked), or unit null to take it out. */
+export const setTicketPlan = (ticketId: number, link: { plan?: string | null; unit: number | null; outcomes?: string[] }) =>
+  fetch(`/api/tickets/${ticketId}/plan`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(link) })
+    .then(json<{ answer: string }>);
+
 export interface StewardPlanTicket { id: number; phase: string; title: string }
 
 export interface StewardPlanOutcome {

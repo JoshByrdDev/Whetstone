@@ -214,7 +214,13 @@ public record TicketDetailDto(
     bool SkipClassroomAnalysis = false,
     // The analysis this refinement pass was handed and what refinement has ruled on each of its
     // findings. Null when the ticket's current pass was handed none.
-    IndependentReviewDto? IndependentReview = null);
+    IndependentReviewDto? IndependentReview = null,
+    // The unit of a plan this ticket belongs to, and which of its outcomes it carries. Set by a
+    // steward when it files the ticket, or by the owner from the drawer. Null when it is in no plan.
+    TicketPlanDto? Plan = null);
+
+/// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
+public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
 
 /// <summary>One finding of the independent analysis, and refinement's ruling on it.</summary>
 public record GateFindingDto(int Id, string Kind, string Title, string Text,
@@ -347,7 +353,10 @@ public static class TicketMapper
                 .Select(c => ToReviewComment(c, t.ReviewTarget)).ToList(),
         HeldForExpansion(t),
         t.SkipClassroomAnalysis,
-        ToIndependentReview(t));
+        ToIndependentReview(t),
+        t.PlanUnit is { } unit
+            ? new TicketPlanDto(t.PlanKey ?? "", unit, StewardProgress.OutcomesOf(t))
+            : null);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

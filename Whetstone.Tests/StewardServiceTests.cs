@@ -1038,6 +1038,88 @@ public class StewardServiceTests : IDisposable
             Task.FromResult<IReadOnlyList<StewardFlag>>(flags);
     }
 
+    // ---- the owner's link from a ticket to the plan --------------------------------
+
+    private async Task<int> Loose(string? description = null)
+    {
+        await using var ctx = NewCtx();
+        var t = new Ticket { ProjectKey = "alpha", Title = "Made by hand", Description = description, Phase = TicketPhase.Backlog };
+        ctx.Tickets.Add(t);
+        await ctx.SaveChangesAsync();
+        return t.Id;
+    }
+
+    private async Task<StewardState?> State() { await using var ctx = NewCtx(); return await ctx.StewardStates.FindAsync("alpha"); }
+
+    [Fact]
+    public async Task The_owner_links_a_hand_made_ticket_to_a_unit_and_the_steward_is_owed_a_run()
+    {
+        var id = await Loose();
+        var r = await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A2", "A1", "A1" }));
+        Assert.Equal("linked", r.Answer);
+
+        var t = await Reload(id);
+        Assert.Equal(1, t.PlanUnit);
+        Assert.Equal("", t.PlanKey);
+        Assert.Equal("A1, A2", t.PlanOutcomes); // the spec's order, once each
+        Assert.Contains($"linked #{id} to unit 1", (await State())!.DueReason);
+    }
+
+    [Fact]
+    public async Task A_unit_can_be_linked_without_naming_an_outcome_and_a_draft_unit_counts()
+    {
+        var id = await Loose();
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 2, null))).Answer);
+        var t = await Reload(id);
+        Assert.Equal(2, t.PlanUnit);
+        Assert.Equal("", t.PlanOutcomes);
+    }
+
+    [Fact]
+    public async Task A_unit_or_outcome_the_plan_does_not_have_is_refused_and_nothing_changes()
+    {
+        var id = await Loose();
+        Assert.Equal("bad-request", (await In(s => s.LinkTicketAsync(id, null, 9, null))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "Q9" }))).Answer);
+        Assert.Equal("no-plan", (await In(s => s.LinkTicketAsync(id, "nope", 1, null))).Answer);
+        Assert.Equal("not-found", (await In(s => s.LinkTicketAsync(id + 100, null, 1, null))).Answer);
+        Assert.Null((await Reload(id)).PlanUnit);
+    }
+
+    [Fact]
+    public async Task Taking_a_filed_ticket_out_of_the_plan_clears_the_link_and_its_line_in_the_description()
+    {
+        await Begin();
+        Assert.Equal("created", (await In(s => s.CreateAsync("alpha", Draft(outcomes: new[] { "A1" })))).Answer);
+        int id;
+        await using (var ctx = NewCtx()) id = (await ctx.Tickets.SingleAsync()).Id;
+        Assert.Contains("Unit 1: A1.", (await Reload(id)).Description);
+
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A2" }))).Answer);
+        var moved = (await Reload(id)).Description!;
+        Assert.Contains("Unit 1: A2.", moved);
+        Assert.DoesNotContain("Unit 1: A1.", moved);
+
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, null, null))).Answer);
+        var t = await Reload(id);
+        Assert.Null(t.PlanUnit);
+        Assert.Null(t.PlanKey);
+        Assert.Null(t.PlanOutcomes);
+        Assert.DoesNotContain("**Plan**", t.Description);
+        Assert.StartsWith(Whole[..20], t.Description);
+    }
+
+    [Fact]
+    public async Task Linking_works_with_the_steward_off_and_owes_it_nothing()
+    {
+        Configure("off");
+        var id = await Loose("Something to fix.");
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A1" }))).Answer);
+        Assert.Equal("Something to fix.", (await Reload(id)).Description); // no line added to one that had none
+        Assert.Null((await State())?.DueReason);
+        Assert.Equal("unchanged", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A1" }))).Answer);
+    }
+
     /// <summary>A repository with one agreed unit (A1, A2), one draft, and a branch that is ready to merge.</summary>
     private sealed class FakeGit : IStewardGit
     {
