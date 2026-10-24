@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { Chip, GhostButton, PageHead, Panel, SectionRule } from './ui';
 import { BODY, DISPLAY, MONO, TIER, chamfer } from './orbit';
@@ -9,7 +9,7 @@ import { StewardPlan } from './StewardPlan';
 import { StewardRecord } from './StewardRecord';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { DecisionSheet } from './DecisionSheet';
-import { Fold, OptionRow, ago, label, remember, remembered } from './stewardParts';
+import { OptionRow, ago, label, remember, remembered } from './stewardParts';
 import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
@@ -124,9 +124,9 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const waitingCount = (page?.waiting.length ?? 0) + heldCount;
   // What a release still asks of its owner: the notes that are something to do, not only to know.
   const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && e.release !== 'Note').length;
-  const sub = !page ? 'Loading' : off ? 'No steward for this project'
-    : runningNow || page.running ? 'A run is in progress'
-    : `Last run ${ago(page.lastRunEndedAt)}${page.due ? ` - a run is due: ${page.dueReason}` : page.resting ? ' - resting until something changes' : ''}`;
+  // Where the steward stands is the card's to say, on the Now tab; the head only says what the
+  // page cannot show at all.
+  const sub = !page ? 'Loading' : off ? 'No steward for this project' : undefined;
 
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4">
@@ -158,16 +158,9 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
         </Panel>
       )}
 
-      {page && (
-        <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t500)', margin: '2px 0 18px' }}>
-          {MODES.find(m => m.id === page.mode)?.says}
-          {page.mode !== page.modeSetting && page.fullUnavailable && <> {page.fullUnavailable}</>}
-        </div>
-      )}
-
       {page && !off && (
         <>
-          <div className="flex flex-wrap gap-2" style={{ marginBottom: 18 }}>
+          <div className="flex flex-wrap gap-2" style={{ margin: '6px 0 18px' }}>
             <Chip on={view === 'now'} onClick={() => show('now')} title="What is waiting on you, and what it is doing">
               Now{waitingCount > 0 ? ` ${waitingCount}` : ''}
             </Chip>
@@ -184,10 +177,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
               {/* The steward itself on the left, what it needs from you on the right. One column
                   on a phone, the steward first: it says why the right side is what it is. */}
               <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-6 items-start" style={{ marginBottom: 32 }}>
-                <StewardCard
-                  running={runningNow || page.running} due={page.due ? page.dueReason ?? 'something changed' : null}
-                  resting={page.resting} lastRunEndedAt={page.lastRunEndedAt} live={live}
-                />
+                <StewardCard page={page} running={runningNow || page.running} fleet={state.status} live={live} />
 
                 <div className="min-w-0">
                   <SectionRule title="Waiting on you" colour={TIER.blocked.c} count={waitingCount} />
@@ -205,24 +195,6 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 </div>
               </div>
 
-              <Fold id="last-run" open title="Last run" colour={TIER.queue.c} meta={page.lastRunEndedAt ? ago(page.lastRunEndedAt) : undefined}>
-                <Panel className="mb-8">
-                  <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: 'var(--w-t200)' }}>
-                    {page.lastRunSummary ?? 'No run has finished yet.'}
-                  </div>
-                  {page.memo && (
-                    <details className="mt-3">
-                      <summary className="orbit-tap cursor-pointer" style={{ ...label(), display: 'inline-block' }}>
-                        Its memo to its next run
-                      </summary>
-                      <pre
-                        className="mt-2 whitespace-pre-wrap"
-                        style={{ font: `400 11.5px/1.55 ${MONO}`, color: 'var(--w-t400)' }}
-                      >{page.memo}</pre>
-                    </details>
-                  )}
-                </Panel>
-              </Fold>
             </div>
           )}
 
@@ -348,19 +320,28 @@ function OptionsCard({ project, q, onAnswer }: {
 }
 
 /**
- * The steward as a presence: the theme's mascot in the mood of what it is doing, and under it
- * its own strand of the live feed. The mascot animates itself by mood, so a working steward
- * bobs, one with a run due stands by, and one with nothing to find sleeps.
+ * The steward as a presence: the theme's mascot in the mood of what it is doing, where it stands
+ * in one honest sentence, what its last run did, and under that its own strand of the live feed.
+ * The mascot animates itself by mood, so a working steward bobs, one with a run due stands by,
+ * and one with nothing to find sleeps.
  */
-function StewardCard({ running, due, resting, lastRunEndedAt, live }: {
-  running: boolean; due: string | null; resting: boolean; lastRunEndedAt?: string | null; live: HeartbeatEvent[];
+function StewardCard({ page, running, fleet, live }: {
+  page: StewardPage; running: boolean; fleet: DashboardState['status']; live: HeartbeatEvent[];
 }) {
-  const mood: Mood = running ? 'running' : due ? 'idle' : 'sleeping';
-  const word = running ? 'Working' : due ? 'A run is due' : resting ? 'Resting' : 'Standing by';
+  // Only the heartbeat starts a run, so a run that is due is due "shortly" only while it is going.
+  const held = page.due && !running && (fleet === 'stopped' || fleet === 'off-hours');
+  const mood: Mood = running ? 'running' : held ? 'stopped' : page.due ? 'idle' : 'sleeping';
+  const word = running ? 'Working' : page.due ? 'A run is due' : page.resting ? 'Resting' : 'Standing by';
+  const when = running
+    ? page.lastRunStartedAt ? `started ${ago(page.lastRunStartedAt)}` : null
+    : page.lastRunEndedAt ? `last run ${ago(page.lastRunEndedAt)}` : null;
   const line = running ? 'A run is in progress. What it thinks, says and does shows below as it happens.'
-    : due ? `Starts shortly: ${due}.`
-    : resting ? 'Nothing to find until a ticket comes back, you answer something, or the base branch moves.'
-    : `Waiting for something to change.`;
+    : held ? fleet === 'off-hours'
+      ? 'Waiting for working hours: the heartbeat starts no run until then.'
+      : 'Waiting for the heartbeat. Nothing starts a run while it is stopped.'
+    : page.due ? "Starts on the heartbeat's next pass."
+    : page.resting ? 'Nothing to do until a ticket comes back, you answer something, or the base branch moves.'
+    : 'Waiting for something to change.';
   const heard = live.length > 0 ? `last heard ${ago(live[live.length - 1].timestamp)}` : null;
 
   return (
@@ -369,13 +350,18 @@ function StewardCard({ running, due, resting, lastRunEndedAt, live }: {
         <div style={{ padding: 6 }}><AgentMascot mood={mood} size={64} /></div>
         <div className="min-w-0">
           <div style={{ font: `700 17px ${DISPLAY}`, color: 'var(--w-t100)', letterSpacing: '.02em' }}>Steward</div>
-          <div style={{ ...label(running ? TIER.active.c : 'var(--w-t400)'), marginTop: 3 }}>
-            {word}{!running && lastRunEndedAt ? ` - last run ${ago(lastRunEndedAt)}` : ''}
+          {/* Why it is due, on hover: the list repeats what the page already shows, so it is not spelled out. */}
+          <div style={{ ...label(running ? TIER.active.c : 'var(--w-t400)'), marginTop: 3 }}
+            title={page.due && page.dueReason ? `Due because ${page.dueReason}` : undefined}>
+            {word}{when ? ` - ${when}` : ''}
           </div>
           <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 5 }}>{line}</div>
         </div>
       </div>
-      <div className="flex items-center justify-between" style={{ ...label(), marginBottom: 6 }}>
+
+      <LastRun summary={page.lastRunSummary} memo={page.memo} />
+
+      <div className="flex items-center justify-between" style={{ ...label(), margin: '16px 0 6px' }}>
         <span>Live</span>
         {heard && <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>{heard}</span>}
       </div>
@@ -384,6 +370,42 @@ function StewardCard({ running, due, resting, lastRunEndedAt, live }: {
         empty="Nothing from this steward in the recent feed. When a run starts, it shows here as it happens."
       />
     </Panel>
+  );
+}
+
+/** What the last run did, held to a few lines until asked for, and its memo to the next run. */
+function LastRun({ summary, memo }: { summary?: string | null; memo: string }) {
+  const [whole, setWhole] = useState(false);
+  const [long, setLong] = useState(false);
+  const text = useRef<HTMLDivElement>(null);
+  // Only offer "more" when the clamp is actually hiding something.
+  useLayoutEffect(() => {
+    const el = text.current;
+    if (el && !whole) setLong(el.scrollHeight > el.clientHeight + 1);
+  }, [summary, whole]);
+
+  return (
+    <div>
+      <div style={{ ...label(), marginBottom: 6 }}>Last run</div>
+      <div ref={text} className={whole ? '' : 'line-clamp-5'}
+        style={{ font: `400 12.5px/1.55 ${BODY}`, color: summary ? 'var(--w-t200)' : 'var(--w-t500)' }}>
+        {summary ?? 'No run has finished yet.'}
+      </div>
+      {(long || whole) && (
+        <button type="button" onClick={() => setWhole(w => !w)} className="orbit-tap"
+          style={{ ...label('var(--w-t300)'), marginTop: 4 }}>
+          {whole ? 'less' : 'more'}
+        </button>
+      )}
+      {memo && (
+        <details className="mt-2">
+          <summary className="orbit-tap cursor-pointer" style={{ ...label(), display: 'inline-block' }}>
+            Its memo to the next run
+          </summary>
+          <pre className="mt-2 whitespace-pre-wrap" style={{ font: `400 11.5px/1.55 ${MONO}`, color: 'var(--w-t400)' }}>{memo}</pre>
+        </details>
+      )}
+    </div>
   );
 }
 
