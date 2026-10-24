@@ -249,6 +249,7 @@ public partial class StewardService
             sync = await _git.SyncFromAsync(projectKey, cfg.Steward.SyncFrom, cfg.StewardMode == StewardMode.Propose, ct);
 
         var (still, gone) = await FreshReasonsAsync(projectKey, why, ct);
+        var walkthroughs = await WalkthroughsAsync(cfg, ct);
 
         return new StewardReply("started", null, new
         {
@@ -275,6 +276,8 @@ public partial class StewardService
             // The slice's decisions in force, provisional ones coming due, rulings reading a decision
             // that no longer holds, open follow-ups and instructions.
             briefing = await BriefingAsync(cfg, ct),
+            // Walk-throughs the board closed (passed: Z1 done) or filed (every other outcome done).
+            walkthroughs,
             status = (await StatusAsync(projectKey, ct)).Data,
         });
     }
@@ -1013,6 +1016,8 @@ public partial class StewardService
         if (unit is null) return Refuse("bad-request", $"The plan has no unit numbered {d.Unit}.");
         if (!unit.Agreed) return Refuse("unit-not-agreed", $"{unit.File} is not agreed. Only the owner agrees a unit of the plan.");
         var outcomes = (d.Outcomes ?? Array.Empty<string>()).Select(o => o.Trim()).Where(o => o.Length > 0).Distinct().ToList();
+        if (WalkthroughOf(cfg.Steward.Plan, unit) is { } walk && outcomes.Contains(walk))
+            return Refuse("board", $"{walk} is the walk-through, and the board files it once every other outcome of the unit is done.");
         if (outcomes.Count == 0) return Refuse("bad-request", "Say which of the unit's outcomes this ticket delivers.");
         if (outcomes.Where(o => !unit.Outcomes.Contains(o)).ToList() is { Count: > 0 } unknown)
             return Refuse("bad-request", $"{unit.File} has no outcome {string.Join(", ", unknown)}.");
@@ -1069,6 +1074,8 @@ public partial class StewardService
         if (u is null || !u.Agreed) return Refuse("unit-not-agreed", $"Unit {unit} is not an agreed unit of the plan.");
         outcome = outcome?.Trim() ?? "";
         if (!u.Outcomes.Contains(outcome)) return Refuse("bad-request", $"{u.File} has no outcome {outcome}.");
+        if (outcome == WalkthroughOf(cfg.Steward.Plan, u) && st == StewardOutcomeState.Done)
+            return Refuse("board", $"{outcome} is the walk-through: the board calls it done when its ticket passes QA, and nothing else does.");
         if (note?.Length > 400)
             return Refuse("bad-request", "The note is a line for the next run: what is left to file and what it waits on. 400 characters at most. What a merged ticket built is in the code.");
         if (st == StewardOutcomeState.Done && moreToFile)

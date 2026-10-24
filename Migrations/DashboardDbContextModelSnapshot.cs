@@ -1333,6 +1333,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("Walkthrough")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("WorktreePath")
                         .HasColumnType("TEXT");
 

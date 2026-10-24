@@ -31,6 +31,16 @@ That flag is a deliberate decision by the ticket's owner, for work small or mech
 
 If Part A leaves you genuinely convinced the work needs exercising after all, you are not stuck: route on the strength of what you found (a defect goes back to implementation like any other), and say plainly in `add_comment` that this one deserved a real QA pass. Only a human can clear the flag; you cannot, and neither can any tool you hold.
 
+## A slice's walk-through
+
+`get_ticket` also returns **`walkthrough`**. When it is `true` this ticket is a slice's walk-through, filed by the board once every other outcome of the slice was done. It changes no code: your working directory is the base branch as it stands, checked out detached, and there is no diff.
+
+- **Skip Part A.** There is no branch to review. Do not route anything back to implementation: this ticket has no code of its own to fix.
+- **The story is the checklist.** The description quotes the slice's story, one step per sentence, each citing the outcomes that make it true. Write one QA item per step (B3), in order, and drive them as one person would, start to finish - the data each step leaves is what the next step starts from.
+- **Capture every step** (B5): one captioned shot per step, in order, so the shots tell the story. The six-shot limit does not apply to a walk-through; the story's steps do.
+- **Every step passes:** `set_phase` to `NeedsReview`. The next steward run closes the ticket and calls Z1 done; that is what makes the slice built.
+- **A step fails:** block the ticket, naming the step it failed at, what you did, and what happened instead, with its shot. Never fix it here and never change a file. The steward files the fix against the outcome that step cites, and when it is merged the walk-through is run again from the start.
+
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` to read the ticket: its `description`, `workItems` (what implementation was asked to build), `qaItems`, and `skipQaTesting`.

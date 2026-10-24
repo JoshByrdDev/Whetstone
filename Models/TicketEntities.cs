@@ -368,6 +368,16 @@ public class Ticket
     public bool SkipQaTesting { get; set; }
 
     /// <summary>
+    /// A slice's walk-through, filed by the board once every other outcome of the slice is done
+    /// (docs/plans-as-slices.md, section 4). It changes no code: it is tested on the base branch
+    /// as it stands, by a QA run that drives the slice's story end to end and captures each step.
+    /// A pass goes to NeedsReview, where the next steward run closes it and calls Z1 done; a step
+    /// that fails blocks it with the step, because there is no code of its own to send back.
+    /// Set at creation, never by a tool.
+    /// </summary>
+    public bool Walkthrough { get; set; }
+
+    /// <summary>
     /// Hand this ticket to refinement without waiting for an independent Classroom analysis of it.
     /// <para>
     /// By default a delivery ticket in NeedsRefinement is not claimed until an analysis of its

@@ -251,6 +251,88 @@ public partial class StewardServiceTests
         Assert.Contains("built", late.Why);
     }
 
+    // ---- piece 8: the walk-through driven -------------------------------------------------------
+
+    private const string WithWalkthrough = "# Unit 1: booking\n\n> **Status: agreed 2026-01-01.**\n\n## The walk-through this unit makes possible\n\n"
+        + "A customer books a visit (A1). The business sees it on its day (A2).\n\n## Outcomes\n\n- **A1.** One.\n- **A2.** Two.\n\n### Z. Closing\n\n"
+        + "- **Z1.** The walk-through above, driven end to end.\n";
+
+    private async Task Done(int unit, params string[] outcomes)
+    {
+        await using var ctx = NewCtx();
+        foreach (var o in outcomes)
+            ctx.StewardOutcomes.Add(new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = unit, Outcome = o, State = StewardOutcomeState.Done });
+        await ctx.SaveChangesAsync();
+    }
+
+    [Fact]
+    public void The_walk_through_is_the_Z_outcome_that_says_so_never_just_Z1()
+    {
+        var p = new StewardPlan("docs/units", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed, StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
+        Assert.Equal("Z1", StewardService.WalkthroughOf(p, TicketGitService.ReadUnit(p, 1, "docs/units/01-a.md", WithWalkthrough)));
+        Assert.Null(StewardService.WalkthroughOf(p, TicketGitService.ReadUnit(p, 1, "docs/units/01-a.md",
+            "> **Status: agreed.**\n\n- **A1.** One.\n- **Z1.** Security: nobody reaches another's data.\n")));
+    }
+
+    [Fact]
+    public async Task The_board_files_the_walk_through_once_the_rest_is_done_and_a_pass_calls_it_done()
+    {
+        _git.First = WithWalkthrough;
+        await Begin();
+        // The steward never files it or calls it done: the board does both.
+        Assert.Equal("board", (await In(s => s.CreateAsync("alpha", Draft("Drive the walk-through", 1, "Z1")))).Answer);
+        Assert.Equal("board", (await In(s => s.SetOutcomeAsync("alpha", 1, "Z1", "Done", false, null))).Answer);
+        await In(s => s.EndAsync("alpha", "x", false));
+
+        await Done(1, "A1");
+        await Begin();
+        await In(s => s.EndAsync("alpha", "x", false));
+        await using (var ctx = NewCtx()) Assert.False(await ctx.Tickets.AnyAsync(t => t.Walkthrough));   // A2 is not done yet
+
+        await Done(1, "A2");
+        var begin = Json(await Begin());
+        Assert.Contains("walk-through, straight to QA", begin);
+        await In(s => s.EndAsync("alpha", "x", false));
+        int id;
+        await using (var ctx = NewCtx())
+        {
+            var t = await ctx.Tickets.SingleAsync(x => x.Walkthrough);
+            id = t.Id;
+            Assert.Equal(TicketPhase.NeedsQa, t.Phase);
+            Assert.Equal("Z1", t.PlanOutcomes);
+            Assert.Contains("1. A customer books a visit (A1).", t.Description);
+            Assert.Equal(id, (await ctx.StewardUnits.SingleAsync(u => u.Unit == 1)).WalkthroughTicketId);
+        }
+        // Filed once.
+        await Begin();
+        await In(s => s.EndAsync("alpha", "x", false));
+        await using (var ctx = NewCtx()) Assert.Single(await ctx.Tickets.Where(t => t.Walkthrough).ToListAsync());
+
+        // Its QA has two ways out: to review, or blocked. No refinement, no implementation.
+        await using (var ctx = NewCtx())
+        {
+            var tickets = new TicketService(ctx);
+            await tickets.TransitionAsync(id, TicketPhase.QaTesting, null);
+            await Assert.ThrowsAsync<InvalidTransitionException>(() => tickets.TransitionAsync(id, TicketPhase.NeedsRefinement, null));
+            await Assert.ThrowsAsync<InvalidTransitionException>(() => tickets.TransitionAsync(id, TicketPhase.NeedsImplementation, null));
+            await tickets.TransitionAsync(id, TicketPhase.NeedsReview, "every step passed");
+        }
+        Assert.Contains("walk-through passed, so Z1 is done", Json(await Begin()));
+        Assert.Equal(TicketPhase.Done, (await Reload(id)).Phase);
+        await using (var ctx = NewCtx())
+            Assert.Equal(StewardOutcomeState.Done, (await ctx.StewardOutcomes.SingleAsync(o => o.Unit == 1 && o.Outcome == "Z1")).State);
+    }
+
+    [Fact]
+    public async Task A_slice_whose_Z1_is_not_a_walk_through_is_closed_by_the_steward_as_before()
+    {
+        _git.First = "> **Status: agreed 2026-01-01.**\n\n- **A1.** One.\n- **Z1.** Security: nobody reaches another's data.\n";
+        await Done(1, "A1");
+        await Begin();
+        await using (var ctx = NewCtx()) Assert.False(await ctx.Tickets.AnyAsync(t => t.Walkthrough));
+        Assert.Equal("recorded", (await In(s => s.SetOutcomeAsync("alpha", 1, "Z1", "Done", false, null))).Answer);
+    }
+
     // ---- piece 3: not decisions -----------------------------------------------------------------
 
     [Fact]

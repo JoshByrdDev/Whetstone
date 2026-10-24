@@ -425,6 +425,21 @@ public static class PhaseMachine
         return next;
     }
 
+    /// <summary>
+    /// The legal next phases for one ticket. Every ticket's are its track's, except a walk-through
+    /// in QA: it has no code to send back or refine, so it passes to NeedsReview or blocks.
+    /// </summary>
+    public static IEnumerable<TicketPhase> NextPhasesFor(Ticket t) =>
+        t.Walkthrough && t.Phase == TicketPhase.QaTesting
+            ? new[] { TicketPhase.NeedsReview, TicketPhase.Blocked }
+            : NextPhases(t.Phase, t.Track);
+
+    /// <summary><see cref="CanTransition"/> for one ticket, with a walk-through's QA exits.</summary>
+    public static bool CanTransitionFor(Ticket t, TicketPhase to) =>
+        t.Walkthrough && t.Phase == TicketPhase.QaTesting
+            ? to is TicketPhase.NeedsReview or TicketPhase.Blocked
+            : CanTransition(t.Phase, to, t.Track);
+
     /// <summary>Every phase either track can reach — what the board's own metadata endpoint lists.</summary>
     public static IEnumerable<TicketPhase> AllNextPhases(TicketPhase from) =>
         NextPhases(from, TicketTrack.Delivery)
