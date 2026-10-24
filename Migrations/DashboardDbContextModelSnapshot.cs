@@ -890,13 +890,6 @@ namespace Whetstone.Migrations
                     b.Property<string>("LastRunSummary")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("Memo")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("MemoUpdatedAt")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("RestingAtSha")
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");

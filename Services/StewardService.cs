@@ -31,16 +31,18 @@ public record StewardAsk(
 /// <summary>A steward's record kept elsewhere, to be taken in once. See <see cref="StewardService.ImportAsync"/>.</summary>
 public record StewardImport(
     IReadOnlyList<StewardImportQuestion>? Questions = null, IReadOnlyList<StewardImportEntry>? Entries = null,
-    IReadOnlyList<StewardImportOutcome>? Outcomes = null, IReadOnlyList<StewardImportTicket>? Tickets = null,
-    string? Memo = null);
+    IReadOnlyList<StewardImportOutcome>? Outcomes = null, IReadOnlyList<StewardImportTicket>? Tickets = null);
 
 /// <summary>A question as it was asked; with <paramref name="Answer"/> when the owner has answered it.</summary>
 public record StewardImportQuestion(string Key, string Question, string? Why = null,
     IReadOnlyList<BlockOption>? Options = null, string? HeldUp = null, DateTime? AskedAt = null,
     string? Answer = null, DateTime? AnsweredAt = null);
 
-/// <param name="Kind">Call, BeforeRelease or OwnerSaid.</param>
-public record StewardImportEntry(string Kind, string Text, int? TicketId = null, DateTime? At = null);
+/// <param name="Kind">Any record kind: Call, BeforeRelease, OwnerSaid, TicketNote, Ruling or Learned.</param>
+/// <param name="Basis">A ruling's: what it rests on.</param>
+/// <param name="Key">A learned fact's suggested note key.</param>
+public record StewardImportEntry(string Kind, string Text, int? TicketId = null, DateTime? At = null,
+    string? Basis = null, string? Key = null);
 
 public record StewardImportOutcome(int Unit, string Outcome, string State, bool MoreToFile = false, string? Note = null);
 
@@ -1966,8 +1968,7 @@ public class StewardService
     /// <para>
     /// The owner's to run, once, when a project's stand-in moves into the dashboard from wherever
     /// it lived before. Safe to run again: a question already here by its key is left alone, an
-    /// identical line is not added twice, an outcome is set to what the import says, and the memo
-    /// is only filled when there is none. Everything it brings in is history, so none of it is
+    /// identical line is not added twice, and an outcome is set to what the import says. Everything it brings in is history, so none of it is
     /// handed to the next run as news - that run finds it where every later one will.
     /// </para>
     /// </summary>
@@ -2008,6 +2009,8 @@ public class StewardService
             {
                 ProjectKey = projectKey, Kind = kind, TicketId = e.TicketId, Text = text, At = e.At ?? now,
                 DeliveredAt = kind == StewardEntryKind.OwnerSaid ? now : null,
+                Basis = kind == StewardEntryKind.Ruling ? e.Basis?.Trim() : null,
+                Placed = kind == StewardEntryKind.Learned ? NoteKey(e.Key) : null,
             });
             if (kind == StewardEntryKind.OwnerSaid) said++; else entries++;
         }
@@ -2036,17 +2039,8 @@ public class StewardService
             tickets++;
         }
 
-        var s = await StewardDue.StateAsync(_db, projectKey);
-        var memo = false;
-        if (!string.IsNullOrWhiteSpace(import.Memo) && string.IsNullOrWhiteSpace(s.Memo))
-        {
-            s.Memo = import.Memo.Replace("\r\n", "\n").Trim();
-            s.MemoUpdatedAt = now;
-            memo = true;
-        }
-
         await _db.SaveChangesAsync(ct);
-        return new StewardReply("imported", null, new { questions, ownerSaid = said, entries, outcomes, tickets, memo });
+        return new StewardReply("imported", null, new { questions, ownerSaid = said, entries, outcomes, tickets });
     }
 
     private static string Head(string s, int max)

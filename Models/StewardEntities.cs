@@ -208,23 +208,15 @@ public class StewardEntry
 /// <summary>
 /// What a project's steward carries from one run to the next, and what decides whether it runs.
 /// <para>
-/// A run starts from nothing: the plan, the board and this row. <see cref="Memo"/> was its own
-/// note to its next run and is the only free text here, held to a length because every run reads
-/// all of it - a memo left to grow is a tax on every run after.
+/// A run starts from nothing but the plan, the board and the record. This row is not a note to
+/// the next run - there is none any more (docs/steward-without-memo.md) - only when runs happened,
+/// why one is owed, and the day's count of tickets filed.
 /// </para>
 /// </summary>
 public class StewardState
 {
     /// <summary>One row per project; the project's key is the row's.</summary>
     public string ProjectKey { get; set; } = "";
-
-    /// <summary>
-    /// Retired: what a run once wrote to the next. Nothing writes it and no run is shown it; it is
-    /// kept, readable from the owner's side, until each project's last memo has been sorted into
-    /// the places that replaced it (docs/steward-without-memo.md), then dropped.
-    /// </summary>
-    public string Memo { get; set; } = "";
-    public DateTime? MemoUpdatedAt { get; set; }
 
     /// <summary>
     /// Why a run is owed, or null when none is. Set by whatever changed (a ticket came for review,

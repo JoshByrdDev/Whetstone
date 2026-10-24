@@ -63,7 +63,6 @@ public static class StewardEndpoints
                 lastRunEndedAt = s?.LastRunEndedAt,
                 lastRunSummary = s?.LastRunSummary,
                 resting = s?.RestingAtSha is not null,
-                memo = s?.Memo ?? "",
                 waiting = questions.Where(q => q.Answer is null).Select(Question),
                 answered = questions.Where(q => q.Answer is not null).OrderByDescending(q => q.AnsweredAt).Select(Question),
             });

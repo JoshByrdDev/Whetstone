@@ -481,8 +481,7 @@ public class StewardServiceTests : IDisposable
                 new StewardImportEntry("Call", "Kept the wording: unit 1, A2.", id),
             },
             Outcomes: new[] { new StewardImportOutcome(1, "A1", "InProgress", true, "The screen is left.") },
-            Tickets: new[] { new StewardImportTicket(id, 1, new[] { "A1" }) },
-            Memo: "Swept group A.");
+            Tickets: new[] { new StewardImportTicket(id, 1, new[] { "A1" }) });
 
         Assert.Equal("imported", (await In(s => s.ImportAsync("alpha", import))).Answer);
         Assert.Equal("imported", (await In(s => s.ImportAsync("alpha", import))).Answer);   // again: nothing doubles
@@ -492,7 +491,6 @@ public class StewardServiceTests : IDisposable
             Assert.Equal(2, await ctx.StewardQuestions.CountAsync());
             Assert.Equal(2, await ctx.StewardEntries.CountAsync());
             Assert.Equal("A1", (await ctx.Tickets.FindAsync(id))!.PlanOutcomes);
-            Assert.Equal("Swept group A.", (await ctx.StewardStates.FindAsync("alpha"))!.Memo);
         }
 
         // History, not news: the first run is not handed any of it as new, and can still find it.
