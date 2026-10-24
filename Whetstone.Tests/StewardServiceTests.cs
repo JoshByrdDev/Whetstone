@@ -408,7 +408,7 @@ public partial class StewardServiceTests : IDisposable
     private static StewardAsk Question(string key = "sms-provider") => new(key,
         "Which provider sends our texts?", "The first notice ticket cannot be written without one.",
         new[] { new BlockOption("The one we already pay for", "No new bill", true), new BlockOption("A new one", "Costs money") },
-        "Every ticket that sends a text.");
+        "Every ticket that sends a text.", Touches: Array.Empty<int>());
 
     [Fact]
     public async Task A_question_is_asked_once_for_good()

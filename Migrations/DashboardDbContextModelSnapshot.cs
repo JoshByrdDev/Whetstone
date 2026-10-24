@@ -978,6 +978,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("OptionChangesJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("OptionsJson")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -1004,6 +1007,10 @@ namespace Whetstone.Migrations
 
                     b.Property<int?>("TicketId")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("Touches")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Why")
                         .IsRequired()

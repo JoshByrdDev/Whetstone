@@ -282,6 +282,7 @@ public class DashboardDbContext : DbContext
             e.Property(q => q.RemindedOn).HasMaxLength(10);
             e.Property(q => q.PlanKey).HasMaxLength(40);
             e.Property(q => q.Decisions).HasMaxLength(400);
+            e.Property(q => q.Touches).HasMaxLength(400);
             // Asked once, for good: this is what refuses a run that has forgotten it already asked.
             e.HasIndex(q => new { q.ProjectKey, q.Key }).IsUnique();
         });

@@ -72,6 +72,20 @@ public class StewardQuestion
     /// <summary>Those decisions' numbers, comma separated, in the order asked.</summary>
     public string? Decisions { get; set; }
 
+    /// <summary>
+    /// The register's decisions this question bears on, comma separated: the steward's claim, made
+    /// when it asks, of what an answer could change. Empty is a claim too - that nothing does. Null
+    /// on a question asked before questions said.
+    /// </summary>
+    public string? Touches { get; set; }
+
+    /// <summary>
+    /// Which of <see cref="Touches"/> each option would change, as a JSON object from an option's
+    /// label to numbers. The card starts from it when that option is picked; the owner's ticks are
+    /// what the answer replaces.
+    /// </summary>
+    public string? OptionChangesJson { get; set; }
+
     public DateTime AskedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>The owner's answer, in their words or their click. Null while it waits.</summary>

@@ -24,9 +24,12 @@ public record StewardTicketDraft(
     IReadOnlyList<int>? DependsOn = null, string? Priority = null, bool CodeReviewOnly = false);
 
 /// <summary>What a steward wants to put to the owner.</summary>
+/// <param name="Touches">The register's decisions the question bears on; empty when none does. Required.</param>
+/// <param name="Changes">For each option, by its label, which of <paramref name="Touches"/> picking it would change.</param>
 public record StewardAsk(
     string Key, string Question, string Why, IReadOnlyList<BlockOption>? Options, string HeldUp, int? TicketId = null,
-    int? Unit = null, IReadOnlyList<int>? Decisions = null);
+    int? Unit = null, IReadOnlyList<int>? Decisions = null, IReadOnlyList<int>? Touches = null,
+    IReadOnlyDictionary<string, IReadOnlyList<int>>? Changes = null);
 
 /// <summary>A steward's record kept elsewhere, to be taken in once. See <see cref="StewardService.ImportAsync"/>.</summary>
 public record StewardImport(
@@ -1140,6 +1143,36 @@ public partial class StewardService
                 return Refuse("bad-request", "Mark exactly one option as the one you would pick.");
         }
 
+        // What it touches is the steward's claim, made where the owner can see it: an override is
+        // declared when it is asked about, never found afterwards.
+        if (a.Touches is null)
+            return Refuse("bad-request", "Say which decisions this bears on (touches), by number, from steward_decisions - an empty list when none does.");
+        var touches = a.Touches.Distinct().ToList();
+        if (touches.Count > 0)
+        {
+            await EnsureRegisterAsync(cfg, ct);
+            var all = await RegisterAsync(projectKey, track: false, ct);
+            var map = ReplacedIndex(all);
+            foreach (var n in touches)
+            {
+                var d = all.FirstOrDefault(x => x.Number == n);
+                if (d is null) return Refuse("bad-request", $"There is no decision #{n}.");
+                var st = StatusOf(d, map);
+                if (st.Name == Withdrawn) return Refuse("bad-request", $"#{n} is withdrawn: there is nothing in force to touch.");
+                if (st.Name == Replaced)
+                    return Refuse("bad-request", $"#{n} no longer holds; touch what replaced it ({string.Join(", ", st.ReplacedBy.Select(r => $"#{r.By}"))}).");
+            }
+        }
+        var changes = new Dictionary<string, List<int>>();
+        foreach (var (label, nums) in a.Changes ?? new Dictionary<string, IReadOnlyList<int>>())
+        {
+            if (options.All(o => !string.Equals(o.Label.Trim(), label.Trim(), StringComparison.OrdinalIgnoreCase)))
+                return Refuse("bad-request", $"\"{label}\" is not one of the options.");
+            if (nums.FirstOrDefault(n => !touches.Contains(n)) is var stray and > 0)
+                return Refuse("bad-request", $"An option can only change a decision the question touches; #{stray} is not in touches.");
+            if (nums.Count > 0) changes[label.Trim()] = nums.Distinct().ToList();
+        }
+
         if (await _db.StewardQuestions.AnyAsync(q => q.ProjectKey == projectKey && q.Key == key, ct))
             return Refuse("already-asked", $"\"{key}\" has been asked already. A question is asked once.");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"ask the owner: {a.Question.Trim()}");
@@ -1156,6 +1189,8 @@ public partial class StewardService
             PlanUnit = a.Unit,
             PlanKey = a.Unit is null ? null : cfg.Steward.Plan.Key,
             Decisions = asks.Count == 0 ? null : string.Join(",", asks),
+            Touches = string.Join(",", touches),
+            OptionChangesJson = changes.Count == 0 ? null : JsonSerializer.Serialize(changes, Json),
         });
         await _db.SaveChangesAsync(ct);
 
@@ -1387,18 +1422,32 @@ public partial class StewardService
     // ---- the owner's side: no steward verb reaches these --------------------------------
 
     /// <summary>The owner's answer to one waiting question. A decision made, and a reason to run.</summary>
-    public async Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, CancellationToken ct = default)
+    public Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, CancellationToken ct = default) =>
+        OwnerAnswersAsync(projectKey, key, answer, null, ct);
+
+    /// <summary>
+    /// The owner's answer, and which of the decisions the question touched it replaces. Null
+    /// <paramref name="replaces"/> takes what the picked option said it would change; an empty list
+    /// replaces nothing. Only a decision the question touched can be replaced this way: the override
+    /// is the one the owner was shown.
+    /// </summary>
+    public async Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, IReadOnlyList<int>? replaces,
+        CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(answer)) return Refuse("bad-request", "The answer is empty.");
         var q = await _db.StewardQuestions.FirstOrDefaultAsync(x => x.ProjectKey == projectKey && x.Key == key, ct);
         if (q is null) return Refuse("not-waiting", $"No question named \"{key}\".");
         if (q.Answer is not null) return Refuse("not-waiting", $"\"{key}\" was answered on {q.AnsweredAt:yyyy-MM-dd}.");
+        var touched = Numbers(q.Touches);
+        var picked = replaces?.Distinct().ToList() ?? ChangesOf(q, answer);
+        if (picked.FirstOrDefault(n => !touched.Contains(n)) is var stray and > 0)
+            return Refuse("bad-request", $"\"{key}\" does not touch #{stray}, so its answer cannot replace it. Record a change to #{stray} on the register instead.");
 
         q.Answer = Regex.Replace(answer.Trim(), @"\s*\n\s*", " ");
         q.AnsweredAt = DateTime.UtcNow;
         // The answer is a decision, and the register is where its status lives from now on.
         if (Config(projectKey) is { } c) await EnsureRegisterAsync(c, ct);
-        await AnswerDecisionAsync(q, ct);
+        await AnswerDecisionAsync(q, picked, ct);
         await StewardDue.MarkAsync(_db, projectKey, $"the owner answered {key}");
         await _db.SaveChangesAsync(ct);
         var exported = Config(projectKey) is { } cfg ? await ExportDecisionsAsync(cfg, ct) : null;

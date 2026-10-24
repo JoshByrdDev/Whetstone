@@ -209,18 +209,24 @@ public class StewardTools
         "answer reaches a later run as a decision made. 'already-asked' means it was - never re-ask. Then keep everything " +
         "else moving. When what you need is the owner's answer to decisions a unit's spec leaves open under \"To decide\", " +
         "name the unit and those decisions' numbers instead of summarising them: the board shows the owner each one as the " +
-        "spec writes it, with its options and your pick, and writes the answers into the spec under \"Decided\".")]
+        "spec writes it, with its options and your pick, and writes the answers into the spec under \"Decided\". " +
+        "Before asking, search steward_decisions for the subject, and say in 'touches' every decision in force the question " +
+        "bears on - an empty list is your claim that none does. The owner is shown each touched decision beside the " +
+        "question, and an answer that changes one replaces it in the register; say on each option which it would change.")]
     public static Task<StewardReply> AskOwner(StewardService s,
         [Description("The project key.")] string project,
         [Description("A short name for this question, lowercase with hyphens, like sms-provider. Yours for good.")] string key,
         [Description("The question, as one line a person can answer.")] string question,
         [Description("Why it matters now, with whatever fact the owner needs to choose.")] string why,
         [Description("What is held up until this is answered.")] string heldUp,
-        [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended. Leave out when you name decisions: those are their own options.")] BlockOption[]? options = null,
+        [Description("The numbers of the decisions in force this question bears on, from steward_decisions. Required: an empty list when none does.")] int[] touches,
+        [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended. Leave out when you name decisions: those are their own options.")] StewardOption[]? options = null,
         [Description("The ticket that raised it, when one did.")] int? ticketId = null,
         [Description("The unit of the plan whose open decisions this asks about.")] int? unit = null,
         [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null) =>
-        s.AskAsync(project, new StewardAsk(key, question, why, options, heldUp, ticketId, unit, decisions));
+        s.AskAsync(project, new StewardAsk(key, question, why,
+            options?.Select(o => new BlockOption(o.Label, o.Detail, o.Recommended)).ToList(), heldUp, ticketId, unit, decisions, touches,
+            options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!)));
 
     [McpServerTool(Name = "steward_record_call"), Description(
         "Record a call you made for the owner about one ticket - an answer you gave it, a choice you made in filing it, what " +
@@ -292,3 +298,13 @@ public class StewardTools
             "for their own documents, a step by hand. 'note': only to know.")] string kind) =>
         s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text, kind);
 }
+
+/// <summary>
+/// One option of a steward's question to the owner. Its own shape rather than the worker's
+/// <see cref="BlockOption"/>, because only a steward's question says which decisions an option changes.
+/// </summary>
+public record StewardOption(
+    [Description("The choice itself, as a short phrase a person can pick off a list.")] string Label,
+    [Description("What taking it costs and rules out, in a line.")] string? Detail = null,
+    [Description("Set on the ONE option you would pick.")] bool Recommended = false,
+    [Description("Which of the question's touched decisions picking this would change, by number. Empty when it leaves them as they are.")] int[]? Changes = null);

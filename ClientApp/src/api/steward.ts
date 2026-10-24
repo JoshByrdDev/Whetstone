@@ -35,6 +35,10 @@ export interface StewardQuestion {
   /** The unit whose open decisions this asks about; with `decisions`, it is answered on those. */
   unit?: number | null;
   decisions?: number[];
+  /** The register's decisions it bears on, with their rules, as the steward claimed when it asked. */
+  touches?: { number: number; rule?: string | null }[];
+  /** Which of those each option, by its label, would change. */
+  changes?: Record<string, number[]> | null;
   askedAt: string;
   answer?: string | null;
   answeredAt?: string | null;
@@ -132,9 +136,10 @@ export const setStewardMode = (project: string, mode: StewardMode) =>
   fetch(`/api/steward/mode?${q(project)}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ mode }) })
     .then(json<{ mode: StewardMode; modeSetting: StewardMode }>);
 
-export const answerStewardQuestion = (project: string, key: string, answer: string) =>
+/** Answer a question; `replaces` is which of the decisions it touches the answer replaces. */
+export const answerStewardQuestion = (project: string, key: string, answer: string, replaces?: number[]) =>
   fetch(`/api/steward/questions/${encodeURIComponent(key)}/answer?${q(project)}`, {
-    method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answer }),
+    method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answer, replaces }),
   }).then(json<{ answer: string }>);
 
 /** A ticket's place in a plan: the plan's key, the unit's number, the outcomes it carries. */

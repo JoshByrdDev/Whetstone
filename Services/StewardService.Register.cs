@@ -589,10 +589,40 @@ public partial class StewardService
             d.DeliveredAt = DateTime.UtcNow;
     }
 
-    /// <summary>Write the decision an answer makes into the register.</summary>
-    private async Task AnswerDecisionAsync(StewardQuestion q, CancellationToken ct)
+    /// <summary>
+    /// Write the decision an answer makes into the register, with the touched decisions it
+    /// replaces. One that stopped holding while the question waited is left as it is: what
+    /// replaced it already says so.
+    /// </summary>
+    private async Task AnswerDecisionAsync(StewardQuestion q, IReadOnlyList<int> replaces, CancellationToken ct)
     {
         if (await _db.StewardDecisions.AnyAsync(d => d.ProjectKey == q.ProjectKey && d.QuestionKey == q.Key, ct)) return;
-        _db.StewardDecisions.Add(FromQuestion(q, await NextNumberAsync(q.ProjectKey, ct), await AboutAsync(q, ct)));
+        var d = FromQuestion(q, await NextNumberAsync(q.ProjectKey, ct), await AboutAsync(q, ct));
+        if (replaces.Count > 0)
+        {
+            var all = await RegisterAsync(q.ProjectKey, track: false, ct);
+            var map = ReplacedIndex(all);
+            foreach (var n in replaces)
+                if (all.FirstOrDefault(x => x.Number == n) is { } old && StatusOf(old, map).Name is InForce or Provisional)
+                    d.Replaces.Add(new StewardDecisionReplace { Number = n, Why = $"The owner's answer to {q.Key}: {Head(q.Question, 200)}" });
+            // The answer reaches the next run anyway; what it stopped is news as well.
+            if (d.Replaces.Count > 0) d.DeliveredAt = null;
+        }
+        _db.StewardDecisions.Add(d);
+    }
+
+    /// <summary>Numbers kept comma separated, as a question keeps the decisions it touches.</summary>
+    internal static List<int> Numbers(string? csv) =>
+        (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(x => int.TryParse(x, out var n) ? n : 0).Where(n => n > 0).Distinct().ToList();
+
+    /// <summary>What the picked option said it would change: the option the answer starts with, by its label.</summary>
+    private static List<int> ChangesOf(StewardQuestion q, string answer)
+    {
+        if (string.IsNullOrEmpty(q.OptionChangesJson)) return new();
+        var map = JsonSerializer.Deserialize<Dictionary<string, List<int>>>(q.OptionChangesJson, Json) ?? new();
+        var hit = map.Where(kv => answer.Trim().StartsWith(kv.Key, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(kv => kv.Key.Length).FirstOrDefault();
+        return hit.Value ?? new();
     }
 }

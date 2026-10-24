@@ -201,7 +201,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                   <div className="flex flex-col gap-3">
                     {page.waiting.map(q => (
                       <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
-                        onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
+                        onAnswer={async (a, replaces) => { await answerStewardQuestion(page.project, q.key, a, replaces); await load(); }} />
                     ))}
                     {inReview.map(t => (
                       <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
@@ -251,7 +251,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
  * the commonest answer is "yes, that one" and it should cost a single press.
  */
 function QuestionCard({ project, q, onAnswer, onSettled }: {
-  project: string; q: StewardQuestion; onAnswer: (answer: string) => Promise<void>;
+  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[]) => Promise<void>;
   /** After it was answered on a unit's own decisions rather than through `onAnswer`. */
   onSettled: () => Promise<void>;
 }) {
@@ -274,10 +274,16 @@ function QuestionCard({ project, q, onAnswer, onSettled }: {
 }
 
 function OptionsCard({ project, q, onAnswer }: {
-  project: string; q: StewardQuestion; onAnswer: (answer: string) => Promise<void>;
+  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[]) => Promise<void>;
 }) {
   const recommended = q.options.findIndex(o => o.recommended);
   const [pick, setPick] = useState<number | 'other'>(recommended >= 0 ? recommended : 'other');
+  // Which touched decisions the answer replaces: what the picked option says it changes, until
+  // the owner says otherwise. Shown, never assumed - the override is the owner's to see.
+  const changesOf = (p: number | 'other') => p === 'other' ? [] : (q.changes?.[q.options[p].label] ?? []);
+  const [replaces, setReplaces] = useState<number[]>(() => changesOf(recommended >= 0 ? recommended : 'other'));
+  const choose = (p: number | 'other') => { setPick(p); setReplaces(changesOf(p)); };
+  const touches = q.touches ?? [];
   const [other, setOther] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -295,7 +301,7 @@ function OptionsCard({ project, q, onAnswer }: {
 
   const send = async () => {
     setBusy(true); setFailed(null);
-    try { await onAnswer(answer); }
+    try { await onAnswer(answer, touches.length > 0 ? replaces : undefined); }
     catch (err) { setFailed(err instanceof Error ? err.message : String(err)); setBusy(false); }
   };
 
@@ -309,11 +315,39 @@ function OptionsCard({ project, q, onAnswer }: {
 
       <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
         {q.options.map((o, i) => (
-          <OptionRow key={i} on={pick === i} onClick={() => setPick(i)} title={o.label} detail={o.detail}
+          <OptionRow key={i} on={pick === i} onClick={() => choose(i)} title={o.label} detail={o.detail}
             tag={o.recommended ? "the steward's pick" : undefined} />
         ))}
-        <OptionRow on={pick === 'other'} onClick={() => setPick('other')} title="Something else" />
+        <OptionRow on={pick === 'other'} onClick={() => choose('other')} title="Something else" />
       </div>
+
+      {touches.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={label()}>Decided already, and touched by this</div>
+          <div className="flex flex-col gap-1.5" style={{ marginTop: 6 }}>
+            {touches.map(t => {
+              const on = replaces.includes(t.number);
+              return (
+                <button key={t.number} type="button" role="checkbox" aria-checked={on}
+                  onClick={() => setReplaces(r => on ? r.filter(n => n !== t.number) : [...r, t.number])}
+                  className="orbit-tap text-left"
+                  style={{
+                    clipPath: chamfer(8), padding: '7px 11px',
+                    background: on ? 'rgb(var(--w-blocked-rgb) / .1)' : 'rgb(var(--w-line-rgb) / .04)',
+                    border: `1px solid ${on ? 'rgb(var(--w-blocked-rgb) / .45)' : 'rgb(var(--w-line-rgb) / .14)'}`,
+                  }}>
+                  <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>
+                    <span style={{ fontWeight: 600 }}>#{t.number}</span> {t.rule ?? ''}
+                  </div>
+                  <div style={{ ...label(on ? TIER.blocked.c : undefined), marginTop: 3 }}>
+                    {on ? `Your answer replaces #${t.number}` : `#${t.number} stands beside your answer`}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {pick === 'other'
         ? (

@@ -6,7 +6,8 @@ using Whetstone.Services;
 
 namespace Whetstone.Api;
 
-public record StewardAnswerRequest(string? Answer);
+/// <summary>An answer, and which touched decisions it replaces; null Replaces takes the picked option's.</summary>
+public record StewardAnswerRequest(string? Answer, IReadOnlyList<int>? Replaces = null);
 public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
@@ -47,6 +48,10 @@ public static class StewardEndpoints
             var questions = await db.StewardQuestions.AsNoTracking()
                 .Where(q => q.ProjectKey == project).OrderBy(q => q.AskedAt).ToListAsync(ct);
             var (due, dueReason) = await steward.DueAsync(project!, ct);
+            // The decisions a waiting question touches, as the owner reads them beside it.
+            var touched = questions.Where(q => q.Answer is null).SelectMany(q => StewardService.Numbers(q.Touches)).Distinct().ToList();
+            var rules = await db.StewardDecisions.AsNoTracking().Where(d => d.ProjectKey == project && touched.Contains(d.Number))
+                .ToDictionaryAsync(d => d.Number, d => d.Rule, ct);
 
             return Results.Ok(new
             {
@@ -64,8 +69,8 @@ public static class StewardEndpoints
                 lastRunEndedAt = s?.LastRunEndedAt,
                 lastRunSummary = s?.LastRunSummary,
                 resting = s?.RestingAtSha is not null,
-                waiting = questions.Where(q => q.Answer is null).Select(Question),
-                answered = questions.Where(q => q.Answer is not null).OrderByDescending(q => q.AnsweredAt).Select(Question),
+                waiting = questions.Where(q => q.Answer is null).Select(q => Question(q, rules)),
+                answered = questions.Where(q => q.Answer is not null).OrderByDescending(q => q.AnsweredAt).Select(q => Question(q, null)),
             });
         });
 
@@ -271,7 +276,7 @@ public static class StewardEndpoints
         app.MapPost("/api/steward/questions/{key}/answer", async (string key, string? project, StewardAnswerRequest req,
             StewardService steward, CancellationToken ct) =>
         {
-            var r = await steward.OwnerAnswersAsync(project ?? "", key, req.Answer ?? "", ct);
+            var r = await steward.OwnerAnswersAsync(project ?? "", key, req.Answer ?? "", req.Replaces, ct);
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
@@ -401,7 +406,7 @@ public static class StewardEndpoints
         });
     }
 
-    private static object Question(StewardQuestion q) => new
+    private static object Question(StewardQuestion q, IReadOnlyDictionary<int, string>? rules) => new
     {
         q.Key,
         q.Question,
@@ -413,6 +418,10 @@ public static class StewardEndpoints
         unit = q.PlanUnit,
         decisions = (q.Decisions ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
             .Select(n => int.TryParse(n, out var i) ? i : 0).Where(i => i > 0),
+        // What it bears on in the register, and which of those each option would change.
+        touches = StewardService.Numbers(q.Touches).Select(n => new { number = n, rule = rules is not null && rules.TryGetValue(n, out var r) ? r : null }),
+        changes = string.IsNullOrEmpty(q.OptionChangesJson) ? null
+            : JsonSerializer.Deserialize<Dictionary<string, List<int>>>(q.OptionChangesJson, Json),
         q.AskedAt,
         q.Answer,
         q.AnsweredAt,
