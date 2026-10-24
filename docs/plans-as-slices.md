@@ -1,7 +1,8 @@
 # A plan is its slices
 
 > Design, 2026-10-24. Its twelve choices confirmed by the owner the same day; three questions are
-> left for the build. Piece 1, the register, built 2026-10-24 (see "Built" at the end).
+> left for the build. Pieces 1 to 8 built 2026-10-24 (see "Built" at the end); piece 9, moving a
+> plan already being worked, is the owner's next step.
 > Summary: A plan stops being a document with slices cut from it. It is its slices - short ideas
 > that are expanded one at a time when their turn comes - plus a one-page charter that decides
 > nothing, and a register of decisions where each decision has one status and an override is
@@ -399,3 +400,38 @@ went its own way:
   until piece 3 makes instructions their own kind. A flag cleared on one ticket is not imported:
   it is kept as a clearance.
 - **Follow-ups are not in this piece.** They come with piece 3.
+
+**Pieces 2 to 8 (2026-10-24).** Where the build went its own way:
+
+- **What an option changes is said by the steward, and ticked by the owner.** Each option of a
+  question names which of its `touches` it would change; the card starts from the picked option's
+  and the owner's ticks are what the answer replaces. An answer can only replace what its question
+  touched: anything else is a change recorded on the register.
+- **An instruction needs its end said.** Without one it is a decision, and goes in the register. The
+  owner gives instructions from the Decisions page; the old owner's-word route still records a
+  decision, unclassified, as piece 1 left it.
+- **Keeping a flagged ruling moves it.** It then reads what replaced the dead decision, so the flag
+  clears without the ruling being rewritten.
+- **The charter rule waits for the charter.** Hard rule 3 takes the section 2 wording, with one
+  exception for a plan that still has only its older single document: its plain statements count
+  until its rules have moved into the register (piece 9).
+- **An idea proposal is the board's yes-or-no.** The steward gives the file and its text; the owner
+  is offered "commit this idea" or "leave the ideas as they are", and nothing goes in the register.
+  A plan with no ideas at all drafts as before, so a plan from before ideas keeps working.
+- **The generated plan file is off by default.** `steward.plan.readable` names it; it is written only
+  when a slice changes stage (agreed, drafted, released, an idea committed). That settles the open
+  question about noise in the base branch's history. The Plan tab always shows it.
+- **A sentence is a split at a full stop before a capital,** and a draft with any uncited sentence is
+  refused, not just reported: the check reads every sentence it splits.
+- **A story question needs an agreed, unbuilt slice and the sentence quoted exactly.** The owner can
+  edit the rewording on the card; leaving it empty keeps the sentence.
+- **The walk-through is found by its words.** It is the Z outcome whose sentence says
+  "walk-through", not Z1 by id: the slices already agreed on the first project to run a steward use
+  Z1 for a security look, and the board must neither file a walk-through for that nor stop the
+  steward filing it.
+- **A ticket that changes no code** (the first open question) is a `Walkthrough` ticket: filed by the
+  board straight into NeedsQa, checked out detached at the base ref as the review track is, with two
+  ways out of QA - NeedsReview on a pass, held to the same proof as any pass, or Blocked with the
+  step that failed. There is no code of its own to send back; the steward files the fix against the
+  outcome the step cites, and answers the block once it is merged. The next run closes a passed
+  walk-through and calls its outcome done.

@@ -296,6 +296,8 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
 | What is decided, and whether it still is | the register (`StewardDecision`, docs/plans-as-slices.md section 3). Recording, replacing, withdrawing, and settling a pair the import flagged are REST routes with no tool behind them; `steward_decisions` only reads. A replacing is stored on the newer decision only, and a number is the project's for good |
+| Ideas are the owner's; a building slice's story changes only with an answer | committing a proposed idea, and rewording a story sentence, happen only on the owner's answer to a question; `steward_draft_unit` refuses a draft no idea stands for, and a story that does not check |
+| A slice's walk-through is the board's | the board files it (`Ticket.Walkthrough`, straight to NeedsQa on the base) and calls it done on a pass; the steward can do neither |
 
 **The words are taken.** "Orchestrator" is `heartbeat.ps1` and "owner" is the human whose ticket it
 is - both everywhere in this code. The stand-in is the *steward*, and a new name for it in one file
