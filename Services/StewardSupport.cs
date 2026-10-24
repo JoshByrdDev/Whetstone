@@ -271,4 +271,20 @@ public static class StewardDue
         s.DueReason = string.Join("; ", reasons.TakeLast(6));
         s.DueSince ??= DateTime.UtcNow;
     }
+
+    private static List<string> Reasons(string? text) =>
+        (text ?? "").Split("; ", StringSplitOptions.RemoveEmptyEntries).ToList();
+
+    /// <summary>
+    /// A run has ended properly: take out the reasons it was handed at its start, and keep any that
+    /// arrived while it ran. The caller saves.
+    /// </summary>
+    public static void Settle(StewardState s)
+    {
+        var handed = Reasons(s.RunDueReason);
+        var left = Reasons(s.DueReason).Where(r => !handed.Contains(r)).ToList();
+        s.DueReason = left.Count > 0 ? string.Join("; ", left) : null;
+        if (s.DueReason is null) s.DueSince = null;
+        s.RunDueReason = null;
+    }
 }

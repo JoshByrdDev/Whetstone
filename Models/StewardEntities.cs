@@ -180,6 +180,13 @@ public class StewardState
     public DateTime? DueSince { get; set; }
 
     /// <summary>
+    /// The due reasons the open run was handed at its start. They stay in <see cref="DueReason"/>
+    /// until the run ends properly, and only then are they taken out, so a run that dies part-way
+    /// leaves the project as due as it found it. Null while no run is open.
+    /// </summary>
+    public string? RunDueReason { get; set; }
+
+    /// <summary>
     /// The base branch's head at the end of a run that left nothing to file. While the head is
     /// still this and nothing is due, there is nothing for a run to find, and none is started.
     /// </summary>

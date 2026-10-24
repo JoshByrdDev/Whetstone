@@ -29,7 +29,9 @@ public class StewardTools
     [McpServerTool(Name = "steward_begin"), Description(
         "Open a run. Call this first, once. 'locked' means another run is still going: stop now and do nothing. " +
         "Otherwise it answers with the mode, why this run was started, any answers and standing instructions the owner has " +
-        "given since the last run (each is a decision made: apply them first), " +
+        "given since the last run that ended properly (each is a decision made: apply them first), " +
+        "When it says the last run did not finish, that run may have acted on some of them already: check the board before " +
+        "acting again. " +
         "the result of bringing the base branch up to date, and the board's status. In 'propose' mode every tool that changes " +
         "something only says what it would have done: carry on exactly as normal, so the owner can read what you would do.")]
     public static Task<StewardReply> Begin(StewardService s, [Description("The project key.")] string project) =>

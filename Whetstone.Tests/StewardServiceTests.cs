@@ -1038,6 +1038,62 @@ public class StewardServiceTests : IDisposable
             Task.FromResult<IReadOnlyList<StewardFlag>>(flags);
     }
 
+    // ---- a run that dies part-way ----------------------------------------------------
+
+    private async Task<string> BeginJson() => System.Text.Json.JsonSerializer.Serialize((await Begin()).Data);
+
+    [Fact]
+    public async Task A_run_that_dies_part_way_leaves_its_answers_and_reasons_for_the_next()
+    {
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question()));
+        await In(s => s.EndAsync("alpha", "asked one question", false));
+        await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "The one we already pay for."));
+
+        // Handed the answer, then killed before steward_end.
+        Assert.Contains("The one we already pay for.", await BeginJson());
+        await using (var c = NewCtx()) Assert.True(await Steward(c).AbandonRunAsync("alpha", "the process ended"));
+        await using (var ctx = NewCtx())
+        {
+            var st = await ctx.StewardStates.FindAsync("alpha");
+            Assert.Contains("the owner answered sms-provider", st!.DueReason);
+            Assert.Contains("the last run did not finish", st.DueReason);
+            Assert.Null((await ctx.StewardQuestions.SingleAsync()).AnswerDeliveredAt);
+        }
+
+        // The next run is handed the same answer, and why it is due.
+        var again = await BeginJson();
+        Assert.Contains("The one we already pay for.", again);
+        Assert.Contains("the last run did not finish", again);
+    }
+
+    [Fact]
+    public async Task A_run_that_ends_settles_what_it_was_handed_and_keeps_what_came_in_meanwhile()
+    {
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question()));
+        await In(s => s.AskAsync("alpha", Question("map-provider")));
+        await In(s => s.EndAsync("alpha", "asked two questions", false));
+        await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "The one we already pay for."));
+
+        await Begin();
+        // While it runs: the owner answers the other, and a ticket comes for review.
+        await Task.Delay(20);
+        await In(s => s.OwnerAnswersAsync("alpha", "map-provider", "None."));
+        await using (var c = NewCtx()) await Steward(c).MarkDueAsync("alpha", "#9 is ready for review");
+        Assert.Equal("ended", (await In(s => s.EndAsync("alpha", "applied an answer", false))).Answer);
+
+        await using var ctx = NewCtx();
+        var st = (await ctx.StewardStates.FindAsync("alpha"))!;
+        Assert.DoesNotContain("sms-provider", st.DueReason);
+        Assert.Contains("map-provider", st.DueReason);
+        Assert.Contains("#9 is ready for review", st.DueReason);
+        Assert.Null(st.RunDueReason);
+        var qs = await ctx.StewardQuestions.ToListAsync();
+        Assert.NotNull(qs.Single(q => q.Key == "sms-provider").AnswerDeliveredAt);
+        Assert.Null(qs.Single(q => q.Key == "map-provider").AnswerDeliveredAt);
+    }
+
     // ---- the owner's link from a ticket to the plan --------------------------------
 
     private async Task<int> Loose(string? description = null)

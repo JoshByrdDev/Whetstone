@@ -213,20 +213,17 @@ public class StewardService
 
         var s = await StewardDue.StateAsync(_db, projectKey);
         var why = s.DueReason;
-        s.DueReason = null;
-        s.DueSince = null;
+        // Handed over, not yet dealt with: the reasons, answers and instructions below are only
+        // marked done by steward_end. A run that dies part-way leaves them for the next one.
+        s.RunDueReason = why;
         s.LastRunStartedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
 
-        // Every answer the owner has given is in front of this run, so none of them is a reason
-        // for another.
-        var fresh = await _db.StewardQuestions
+        var fresh = await _db.StewardQuestions.AsNoTracking()
             .Where(q => q.ProjectKey == projectKey && q.Answer != null && q.AnswerDeliveredAt == null).ToListAsync(ct);
-        foreach (var q in fresh) q.AnswerDeliveredAt = DateTime.UtcNow;
-        var said = await _db.StewardEntries
+        var said = await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid && e.DeliveredAt == null)
             .OrderBy(e => e.At).ToListAsync(ct);
-        foreach (var e in said) e.DeliveredAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
 
         SyncFromResult? sync = null;
         if (cfg!.Steward.SyncFrom.Length > 0)
@@ -258,6 +255,19 @@ public class StewardService
         var exported = await ExportDecisionsAsync(cfg!, ct);
 
         var s = await StewardDue.StateAsync(_db, projectKey);
+        // What this run was handed at its start is dealt with now, and only now. Anything that
+        // arrived while it ran (an answer, a ticket at review) is still news for the next.
+        if (s.LastRunStartedAt is { } began)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var q in await _db.StewardQuestions.Where(q => q.ProjectKey == projectKey && q.Answer != null
+                         && q.AnswerDeliveredAt == null && q.AnsweredAt <= began).ToListAsync(ct))
+                q.AnswerDeliveredAt = now;
+            foreach (var e in await _db.StewardEntries.Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid
+                         && e.DeliveredAt == null && e.At <= began).ToListAsync(ct))
+                e.DeliveredAt = now;
+        }
+        StewardDue.Settle(s);
         s.LastRunEndedAt = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(summary)) s.LastRunSummary = summary.Trim();
         // A run that only proposed changed nothing, so it has not earned the board a rest.
@@ -296,6 +306,11 @@ public class StewardService
             var s = await StewardDue.StateAsync(_db, projectKey);
             s.LastRunEndedAt = DateTime.UtcNow;
             s.RestingAtSha = null;
+            // What it was handed is still due (begin never cleared it), and the next run is told
+            // this one stopped part-way, so it checks what was left half done. The gap between runs
+            // still holds, so a run that dies on every start is not restarted in a loop.
+            s.RunDueReason = null;
+            await StewardDue.MarkAsync(_db, projectKey, "the last run did not finish");
             await _db.SaveChangesAsync();
         }
         return released;

@@ -889,6 +889,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("RunDueReason")
+                        .HasColumnType("TEXT");
+
                     b.HasKey("ProjectKey");
 
                     b.ToTable("StewardStates");

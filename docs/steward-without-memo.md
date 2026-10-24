@@ -161,8 +161,8 @@ owner sees each ruling before it lands.
 Pieces 2-5 add tools the steward is not yet told to use; piece 6 is where the skill switches over,
 so the steward never runs with half a model of where things go.
 
-## Open
+## Decided
 
-- **Does a ruling apply at once, or only once the owner keeps it?** Proposed: at once, reversible,
-  with the unseen count on the Record chip - the same trust as today, made visible. Stricter (held
-  until kept) would stall a run on every new precedent.
+- **A ruling applies at once, and the owner can reverse it.** The Record chip counts the rulings the
+  owner has not yet seen. The same trust as today, made visible; holding each one until kept would
+  stall a run on every new precedent. (Owner, 2026-10-23.)
