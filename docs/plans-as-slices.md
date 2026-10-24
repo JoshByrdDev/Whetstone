@@ -1,6 +1,7 @@
 # A plan is its slices
 
-> Design, 2026-10-24. Not built. For the owner to mark up before any of it is.
+> Design, 2026-10-24. Not built. Its twelve choices confirmed by the owner the same day; three
+> questions are left for the build.
 > Summary: A plan stops being a document with slices cut from it. It is its slices - short ideas
 > that are expanded one at a time when their turn comes - plus a one-page charter that decides
 > nothing, and a register of decisions where each decision has one status and an override is
@@ -325,7 +326,8 @@ Every skill change goes to the template and every project's copy, as `CLAUDE.md`
 
 ## Decided
 
-The choices this design had to make, answered as recommended. Mark any of them up.
+The choices this design had to make. Each was put to the owner on 2026-10-24, and the owner chose
+every one as recommended.
 
 1. **The charter is its own file, not slice 0.** It is a living page; a slice is not.
 2. **The charter decides nothing.** Hard rule 3 names agreed slices and the register only.
