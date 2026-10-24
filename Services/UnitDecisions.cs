@@ -149,6 +149,36 @@ public static class UnitDecisions
         return (string.Join(nl, lines), said, each, null);
     }
 
+    /// <summary>
+    /// The spec with one line added at the end of its "Decided" section - which is made, before
+    /// "Done means" or at the end, when the spec has none. A note there that nothing is decided
+    /// yet stays: it is written once, like everything in that section.
+    /// </summary>
+    public static string AppendDecided(string text, string line)
+    {
+        var (lines, nl) = Lines(text);
+        var decided = lines.FindIndex(l => DecidedHeading.IsMatch(l));
+        if (decided < 0)
+        {
+            var at = lines.FindIndex(l => Regex.IsMatch(l, @"^##\s+Done means\b", RegexOptions.IgnoreCase));
+            var add = new List<string> { "## Decided", "", line, "" };
+            if (at < 0) { if (lines.Count > 0 && lines[^1].Trim().Length > 0) add.Insert(0, ""); lines.AddRange(add); }
+            else lines.InsertRange(at, add);
+            return string.Join(nl, lines);
+        }
+        var end = decided + 1;
+        while (end < lines.Count && !SectionEnd.IsMatch(lines[end])) end++;
+        var last = end;
+        while (last > decided + 1 && lines[last - 1].Trim().Length == 0) last--;
+        var block = new List<string>();
+        if (last > decided + 1) block.Add("");
+        block.Add(line);
+        if (end < lines.Count) block.Add("");
+        lines.RemoveRange(last, end - last);
+        lines.InsertRange(last, block);
+        return string.Join(nl, lines);
+    }
+
     private static string Said(IEnumerable<UnitDecisionOption> options) =>
         string.Join("; and ", options.Select(o => $"({o.Letter}) {o.Text}"));
 

@@ -66,6 +66,83 @@ public partial class StewardServiceTests
         Assert.Contains("one shared number", Json(await In(s => s.DecisionsAsync("alpha", null))));
     }
 
+    // ---- pieces 4 and 5: the charter, and ideas ------------------------------------------------
+
+    private const string Idea3 = "# Unit 3: the day\n\n> **Status: idea.** Written 2026-02-01.\n\nA technician sees their own visits for the day, built on invites. Not their pay.\n";
+
+    [Fact]
+    public async Task The_plan_as_read_is_the_charter_the_projects_decisions_and_every_slice_in_order()
+    {
+        Configure("full", """ "plan": { "units": "docs/units", "charter": "docs/charter.md", "readable": "docs/PLAN-AS-READ.md" } """);
+        _git.InRepo["docs/charter.md"] = "# The plan\n\n## Purpose\n\nTo get people booked.\n";
+        _git.First = "# Unit 1: booking\n\n> **Status: agreed 2026-01-01.**\n\n## The walk-through this unit makes possible\n\nA customer books (A1) and a business sees it (A2).\n\n- **A1.** One.\n- **A2.** Two.\n";
+        _git.More[3] = ("docs/units/03-the-day.md", Idea3);
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Prices never differ.")));
+
+        var text = (await In0(s => s.PlanAsReadAsync("alpha")))!;
+        Assert.Contains("### Purpose", text);                       // the charter, its headings set under the page's
+        Assert.Contains("- **#1** Prices never differ.", text);
+        Assert.Contains("### 1. booking - building", text);
+        Assert.Contains("#### The walk-through", text);              // the slice being worked, in full
+        Assert.Contains("### 3. the day - idea", text);
+        Assert.Contains("A technician sees their own visits for the day", text);
+        Assert.True(text.IndexOf("### 1.") < text.IndexOf("### 2.") && text.IndexOf("### 2.") < text.IndexOf("### 3."));
+
+        // The plan view names an idea's stage, and an idea is never agreed from the board.
+        var view = Json(await In(s => s.PlanViewAsync("alpha")));
+        Assert.Contains("\"stage\":\"idea\"", view);
+        Assert.Contains("An idea is drafted before it is agreed", view);
+    }
+
+    [Fact]
+    public async Task A_plan_of_ideas_is_drafted_only_by_expanding_its_next_idea_in_place()
+    {
+        _git.Second = "# Unit 2: invites\n\n> **Status: idea.**\n\nA business invites its customers.\n";
+        _git.More[3] = ("docs/units/03-the-day.md", Idea3);
+        await Begin();
+        const string draft = "# Unit 2: invites\n\n> **Status: draft, awaiting the owner.**\n\nA business invites its customers.\n\n## The walk-through this unit makes possible\n\nA business sends an invite (A1).\n\n- **A1.** One.\n";
+        Assert.Equal("exists", (await In(s => s.DraftUnitAsync("alpha", "02-other-name.md", draft))).Answer);
+        Assert.Equal("drafted", (await In(s => s.DraftUnitAsync("alpha", "02-second.md", draft))).Answer);
+        Assert.Equal("docs/units/02-second.md", _git.Committed[^1].Path);
+
+        // With no idea at the next number, there is nothing to draft: ideas are the owner's.
+        _git.Second = "# Unit 2\n\n> **Status: agreed 2026-02-02.**\n\n- **A1.** One.\n";
+        _git.More.Clear();
+        _git.More[4] = ("docs/units/04-later.md", Idea3);
+        Assert.Equal("no-idea", (await In(s => s.DraftUnitAsync("alpha", "03-the-day.md", draft.Replace("Unit 2", "Unit 3")))).Answer);
+    }
+
+    [Fact]
+    public async Task The_steward_proposes_an_idea_and_the_board_commits_it_only_on_the_owners_yes()
+    {
+        await Begin();
+        StewardAsk ProposeIdea(string key, string file, string text) => Question(key) with { Options = null, Idea = new StewardIdeaProposal(file, text) };
+        // Never over an agreed slice's number, and only a file that reads as an idea.
+        Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ProposeIdea("idea-one", "01-x.md", Idea3)))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ProposeIdea("idea-one", "03-the-day.md", "# No status\n")))).Answer);
+        // Not over a draft either: that is the steward's to revise.
+        Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ProposeIdea("idea-one", "02-second.md", Idea3)))).Answer);
+
+        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", ProposeIdea("idea-day", "03-the-day.md", Idea3)))).Answer);
+        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", ProposeIdea("idea-pay", "04-pay.md", Idea3)))).Answer);
+        var before = _git.Committed.Count;
+        Assert.Equal("recorded", (await In(s => s.OwnerAnswersAsync("alpha", "idea-pay", StewardService.LeaveIdeas))).Answer);
+        Assert.Equal(before, _git.Committed.Count);
+        Assert.Equal("recorded", (await In(s => s.OwnerAnswersAsync("alpha", "idea-day", StewardService.CommitIdea + "."))).Answer);
+        Assert.Equal(("docs/units/03-the-day.md", Idea3), _git.Committed[^1]);
+        // An idea is the owner's text, not a decision: nothing goes in the register.
+        Assert.DoesNotContain(Register(), d => d.QuestionKey is "idea-day" or "idea-pay");
+    }
+
+    [Fact]
+    public async Task An_agreed_slice_whose_file_or_number_moved_is_flagged()
+    {
+        Assert.DoesNotContain("movedFrom\":\"Slice", Json(await In(s => s.PlanViewAsync("alpha"))));
+        _git.FirstFile = "docs/units/01-renamed.md";
+        var view = Json(await In(s => s.PlanViewAsync("alpha")));
+        Assert.Contains("Slice 1 was agreed as docs/units/01-first.md, and is docs/units/01-renamed.md now", view);
+    }
+
     // ---- piece 3: not decisions -----------------------------------------------------------------
 
     [Fact]

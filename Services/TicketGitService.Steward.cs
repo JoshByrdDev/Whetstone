@@ -6,7 +6,8 @@ namespace Whetstone.Services;
 /// <param name="Number">The leading number of its file name: units are worked in this order.</param>
 /// <param name="Agreed">A person has marked it agreed. Only an agreed unit may be worked.</param>
 /// <param name="Draft">It says it is a draft: written, and waiting for its owner.</param>
-public record PlanUnit(int Number, string File, bool Agreed, bool Draft, IReadOnlyList<string> Outcomes, string Text);
+/// <param name="Idea">Only an idea: a title and a paragraph, not yet drafted. Never agreed or a draft at once.</param>
+public record PlanUnit(int Number, string File, bool Agreed, bool Draft, IReadOnlyList<string> Outcomes, string Text, bool Idea = false);
 
 /// <summary>One outcome of a unit, with the sentence its spec gives it.</summary>
 public record PlanOutcomeText(string Outcome, string Text);
@@ -147,7 +148,8 @@ public partial class TicketGitService
         var agreed = Regex.IsMatch(text, plan.Agreed, o);
         var outcomes = Regex.Matches(text, plan.Outcome, RegexOptions.Multiline)
             .Select(m => m.Groups.Count > 1 ? m.Groups[1].Value : m.Value).Distinct().ToList();
-        return new PlanUnit(number, file, agreed, !agreed && Regex.IsMatch(text, plan.Draft, o), outcomes, text);
+        var draft = !agreed && Regex.IsMatch(text, plan.Draft, o);
+        return new PlanUnit(number, file, agreed, draft, outcomes, text, !agreed && !draft && Regex.IsMatch(text, plan.Idea, o));
     }
 
     /// <summary>

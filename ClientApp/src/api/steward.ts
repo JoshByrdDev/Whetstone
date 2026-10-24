@@ -39,6 +39,10 @@ export interface StewardQuestion {
   touches?: { number: number; rule?: string | null }[];
   /** Which of those each option, by its label, would change. */
   changes?: Record<string, number[]> | null;
+  /** An idea the steward proposes, committed as written on a yes. */
+  idea?: { file: string; text: string } | null;
+  /** For a slice being built: the story sentence an answer changes, and its rewording under each option. */
+  story?: { sentence: string; rewordings?: Record<string, string> | null } | null;
   askedAt: string;
   answer?: string | null;
   answeredAt?: string | null;
@@ -141,9 +145,9 @@ export const setStewardMode = (project: string, mode: StewardMode) =>
     .then(json<{ mode: StewardMode; modeSetting: StewardMode }>);
 
 /** Answer a question; `replaces` is which of the decisions it touches the answer replaces. */
-export const answerStewardQuestion = (project: string, key: string, answer: string, replaces?: number[]) =>
+export const answerStewardQuestion = (project: string, key: string, answer: string, replaces?: number[], story?: string) =>
   fetch(`/api/steward/questions/${encodeURIComponent(key)}/answer?${q(project)}`, {
-    method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answer, replaces }),
+    method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answer, replaces, story }),
   }).then(json<{ answer: string }>);
 
 /** A ticket's place in a plan: the plan's key, the unit's number, the outcomes it carries. */
@@ -226,7 +230,7 @@ export const decideStewardUnit = (project: string, unit: number,
     method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
   }).then(json<{ answer: string; why?: string | null }>);
 
-export type UnitStage = 'draft' | 'notAgreed' | 'agreed' | 'building' | 'built' | 'released';
+export type UnitStage = 'idea' | 'draft' | 'notAgreed' | 'agreed' | 'building' | 'built' | 'released';
 
 export interface StewardPlanName { key: string; name: string; working: boolean }
 
@@ -240,9 +244,15 @@ export interface StewardPlanView {
     plan?: StewardPlanName & { unitsDir: string };
     current?: number | null;
     units?: StewardPlanUnitView[];
+    /** Agreed slices whose file or number changed since they were agreed. */
+    moved?: string[];
   } | null;
-  /** The document the units are cut from, when the project names one. */
+  /** The older single plan document, on a plan from before charters. */
   master?: { file: string; text: string } | null;
+  /** Why the plan exists, its words, where things are. Decides nothing. */
+  charter?: { file: string; text: string } | null;
+  /** The plan as read: charter, the project's decisions, every slice in order. Generated. */
+  readable?: string | null;
 }
 
 /** The plan being worked, or with `plan` one the project has finished. */
@@ -260,9 +270,10 @@ export const setStewardUnitReleased = (project: string, unit: number, released: 
   }).then(json<{ answer: string }>);
 
 /** Start a new plan: its documents into the repo, and the project pointed at it. */
-export const startStewardPlan = (project: string, plan: { key: string; name: string; folder?: string }) =>
+export const startStewardPlan = (project: string,
+  plan: { key: string; name: string; folder?: string; ideas: { title: string; paragraph: string }[] }) =>
   fetch(`/api/steward/plan/new?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(plan) })
-    .then(json<{ answer: string; data: { master: string; first: string }; settings: string }>);
+    .then(json<{ answer: string; data: { charter: string; ideas: string[] }; settings: string }>);
 
 /** A flag on a ticket's change that is the owner's to decide. */
 export interface StewardOwnerFlag {

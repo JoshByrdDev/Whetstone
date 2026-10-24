@@ -212,7 +212,12 @@ public class StewardTools
         "spec writes it, with its options and your pick, and writes the answers into the spec under \"Decided\". " +
         "Before asking, search steward_decisions for the subject, and say in 'touches' every decision in force the question " +
         "bears on - an empty list is your claim that none does. The owner is shown each touched decision beside the " +
-        "question, and an answer that changes one replaces it in the register; say on each option which it would change.")]
+        "question, and an answer that changes one replaces it in the register; say on each option which it would change. " +
+        "To propose an idea - a new slice, one split in two, one reworded - pass idea with its file and whole text: the owner " +
+        "is asked to commit it as written, and the board commits it on a yes. Only the owner changes ideas. For a question " +
+        "about a slice being built whose answer changes a step of its story, pass unit and story: the sentence as it stands " +
+        "and its rewording under each option; the board commits the rewording with the decision. A built slice's story " +
+        "is never rewritten.")]
     public static Task<StewardReply> AskOwner(StewardService s,
         [Description("The project key.")] string project,
         [Description("A short name for this question, lowercase with hyphens, like sms-provider. Yours for good.")] string key,
@@ -224,10 +229,13 @@ public class StewardTools
         [Description("The ticket that raised it, when one did.")] int? ticketId = null,
         [Description("The unit of the plan whose open decisions this asks about.")] int? unit = null,
         [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null,
-        [Description("The open follow-ups this question takes up, by id: they stop waiting once it is asked.")] int[]? followUps = null) =>
+        [Description("The open follow-ups this question takes up, by id: they stop waiting once it is asked.")] int[]? followUps = null,
+        [Description("An idea to propose: the slice file's name (number first, no folder) and its whole text, with its status line saying idea. Asked on its own, without options: the owner commits it or leaves the ideas as they are.")] StewardIdeaProposal? idea = null,
+        [Description("For a slice being built (with unit): the sentence of its story the answer changes, quoted exactly, and its rewording under each option that changes it, by the option's label.")] StewardStoryChange? story = null) =>
         s.AskAsync(project, new StewardAsk(key, question, why,
             options?.Select(o => new BlockOption(o.Label, o.Detail, o.Recommended)).ToList(), heldUp, ticketId, unit, decisions, touches,
-            options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!), followUps));
+            options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!), followUps,
+            idea, story));
 
     [McpServerTool(Name = "steward_record_call"), Description(
         "Record a call you made for the owner about one ticket - an answer you gave it, a choice you made in filing it, what " +

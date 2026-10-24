@@ -14,17 +14,19 @@ import type {
 /**
  * The plan, as something to read and to move along.
  *
- * A plan is one document and the units cut from it, and a person needs three things of it at
- * different moments: where the whole stands (the rail), what one unit promised and how far each
- * promise is (its outcomes, in the spec's own words and order), and the text itself - the unit's
- * spec, or the document all of them come from.
+ * A plan is its slices, a charter that decides nothing, and the register of decisions
+ * (docs/plans-as-slices.md). A person needs three things of it at different moments: where the
+ * whole stands (the rail), what one slice promised and how far each promise is (its outcomes, in the
+ * spec's own words and order), and the plan as read - generated from the charter, the project's
+ * decisions and the slices, never maintained by hand.
  *
- * A unit goes one way: a draft, agreed, building, built, released. Two of those steps are a
- * person's and are taken here - agreeing a draft, and saying a built unit has gone out. Everything
- * between is the steward's and the fleet's, and is only shown.
+ * A slice goes one way: an idea, a draft, agreed, building, built, released. Two of those steps are
+ * a person's and are taken here - agreeing a draft, and saying a built slice has gone out. Ideas are
+ * the owner's too, written in the repo or committed from a steward's proposal. Everything else is
+ * the steward's and the fleet's, and is only shown.
  */
 
-type Selected = number | 'master';
+type Selected = number | 'plan' | 'master';
 
 const STATE_TIER: Record<StewardPlanOutcome['state'], keyof typeof TIER> = {
   NotStarted: 'backlog', InProgress: 'active', Done: 'done',
@@ -35,6 +37,7 @@ const STATE_WORD: Record<StewardPlanOutcome['state'], string> = {
 
 /** Where a unit stands, in words, and the tier that colours it. */
 const STAGE: Record<UnitStage, { word: string; tier: keyof typeof TIER }> = {
+  idea: { word: 'idea', tier: 'backlog' },
   draft: { word: 'draft - yours to agree', tier: 'gate' },
   notAgreed: { word: 'not agreed', tier: 'backlog' },
   agreed: { word: 'agreed', tier: 'queue' },
@@ -45,6 +48,7 @@ const STAGE: Record<UnitStage, { word: string; tier: keyof typeof TIER }> = {
 
 /** The way a unit goes, for the strip that shows how far along it is. */
 const STEPS: { stage: UnitStage; word: string }[] = [
+  { stage: 'idea', word: 'Idea' },
   { stage: 'draft', word: 'Draft' },
   { stage: 'agreed', word: 'Agreed' },
   { stage: 'building', word: 'Building' },
@@ -79,7 +83,7 @@ export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes 
   // built unit to release first, then the one being built.
   const asking = units.find(u => u.stage === 'built') ?? units.find(u => u.stage === 'draft' && !u.cannotAgree);
   const selected: Selected | null = picked ?? asking?.unit ?? current
-    ?? (units.length > 0 ? units[units.length - 1].unit : view?.master ? 'master' : null);
+    ?? (units.length > 0 ? units[units.length - 1].unit : view?.readable ? 'plan' : view?.master ? 'master' : null);
   const unit = typeof selected === 'number' ? units.find(u => u.unit === selected) : undefined;
 
   if (!view) return <Quiet>Reading the plan.</Quiet>;
@@ -99,14 +103,27 @@ export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes 
         </div>
       )}
 
-      {units.length === 0 && !view.master
-        ? <Quiet>{view.why ?? 'This plan has no units yet.'}</Quiet>
+      {(view.plan?.moved?.length ?? 0) > 0 && (
+        <Panel tone={TIER.blocked.c} className="mb-3">
+          {view.plan!.moved!.map((m, i) => (
+            <div key={i} style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>{m}</div>
+          ))}
+        </Panel>
+      )}
+
+      {units.length === 0 && !view.master && !view.readable
+        ? <Quiet>{view.why ?? 'This plan has no slices yet.'}</Quiet>
         : (
           <>
             <div className="flex flex-wrap gap-2" style={{ marginBottom: 14 }}>
+              {view.readable && (
+                <RailItem on={selected === 'plan'} onClick={() => setPicked('plan')} lead="All"
+                  title={plan?.name && plan.name !== 'The plan' ? plan.name : 'The whole plan'}
+                  sub={view.charter ? 'charter, decisions, slices' : 'decisions and slices'} />
+              )}
               {view.master && (
-                <RailItem on={selected === 'master'} onClick={() => setPicked('master')} lead="All"
-                  title={plan?.name && plan.name !== 'The plan' ? plan.name : 'The whole plan'} sub={view.master.file} />
+                <RailItem on={selected === 'master'} onClick={() => setPicked('master')} lead="Doc"
+                  title={view.charter ? 'The older plan document' : 'The plan document'} sub={view.master.file} />
               )}
               {units.map(u => {
                 const s = STAGE[u.stage];
@@ -121,6 +138,11 @@ export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes 
               })}
             </div>
 
+            {selected === 'plan' && view.readable && (
+              <Panel key="plan" className="orbit-swap">
+                <div style={{ maxWidth: 780 }}><Markdown doc text={view.readable} /></div>
+              </Panel>
+            )}
             {selected === 'master' && view.master && (
               <Panel key="master" className="orbit-swap">
                 <div style={{ maxWidth: 780 }}><Markdown doc text={view.master.text} /></div>
@@ -135,7 +157,7 @@ export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes 
           </>
         )}
 
-      {working && <NewPlan project={project} has={units.length > 0 || !!view.master} onStarted={onChanged} />}
+      {working && <NewPlan project={project} has={units.length > 0 || !!view.master || !!view.charter} onStarted={onChanged} />}
     </div>
   );
 }
@@ -203,8 +225,8 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes }: 
   // before a built unit is released.
   const reportable = unit.agreed && (unit.progress.done > 0 || unit.stage === 'built' || unit.stage === 'released');
   const [show, setShow] = useState<Show>(() => {
-    // A draft is there to be read before it is agreed: it opens on its words.
-    if (unit.stage === 'draft') return 'spec';
+    // A draft is there to be read before it is agreed, and an idea is only its words.
+    if (unit.stage === 'draft' || unit.stage === 'idea') return 'spec';
     const was = remembered('plan.show');
     return was === 'spec' || (was === 'report' && reportable) ? was : 'outcomes';
   });
@@ -263,7 +285,9 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes }: 
         : show === 'spec'
         ? <div key="spec" className="orbit-swap" style={{ padding: '14px 16px 18px', maxWidth: 812 }}><Markdown doc text={unit.text} /></div>
         : !anyOutcomes
-          ? <div style={{ font: `400 12px ${BODY}`, color: 'var(--w-t600)', padding: '14px 16px' }}>This spec lists no outcomes the board can read. Open the spec to read it as written.</div>
+          ? <div style={{ font: `400 12px ${BODY}`, color: 'var(--w-t600)', padding: '14px 16px' }}>
+            {unit.stage === 'idea' ? 'An idea has no outcomes yet: the steward writes them when it expands the idea into a draft.' : 'This spec lists no outcomes the board can read. Open the spec to read it as written.'}
+          </div>
           : (
             <div key="outcomes" className="orbit-swap">
               {unit.groups.map(g => {
@@ -520,29 +544,37 @@ function Sentence({ text }: { text: string }) {
 const FIELD = 'w-full min-w-0 rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none';
 
 /**
- * Start a plan. What this makes is two documents with the right shape and nothing in them: the
- * plan, and a first unit as a draft. Writing them is a conversation, not a form - so this ends by
- * saying where they are, for whoever sits down to write them.
+ * Start a plan: its charter, and the ideas it starts from - a title and a paragraph each. The
+ * charter is written afterwards, in the repo; the steward expands the first idea into a draft for
+ * you to agree. Ideas are yours, so they are written here, not by the steward.
  */
 function NewPlan({ project, has, onStarted }: { project: string; has: boolean; onStarted: () => Promise<void> }) {
   const [name, setName] = useState('');
   const [key, setKey] = useState('');
   const [folder, setFolder] = useState('');
+  const [ideas, setIdeas] = useState<{ title: string; paragraph: string }[]>([{ title: '', paragraph: '' }]);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
-  const [made, setMade] = useState<{ master: string; first: string; settings: string } | null>(null);
+  const [made, setMade] = useState<{ charter: string; ideas: string[]; settings: string } | null>(null);
 
   // The key follows the name until somebody types one of their own.
   const [keyTouched, setKeyTouched] = useState(false);
   const slug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
   const theKey = keyTouched ? key : slug(name);
   const theFolder = folder.trim() || (theKey ? `docs/plans/${theKey}` : '');
+  const written = ideas.filter(i => i.title.trim());
+  const ready = name.trim().length >= 3 && !!theKey && written.length > 0 && written.every(i => i.paragraph.trim());
+  const setIdea = (n: number, v: Partial<{ title: string; paragraph: string }>) =>
+    setIdeas(all => all.map((x, i) => (i === n ? { ...x, ...v } : x)));
 
   const start = async () => {
     setBusy(true); setFailed(null);
     try {
-      const r = await startStewardPlan(project, { key: theKey, name: name.trim(), folder: folder.trim() || undefined });
-      setMade({ master: r.data.master, first: r.data.first, settings: r.settings });
+      const r = await startStewardPlan(project, {
+        key: theKey, name: name.trim(), folder: folder.trim() || undefined,
+        ideas: written.map(i => ({ title: i.title.trim(), paragraph: i.paragraph.trim() })),
+      });
+      setMade({ charter: r.data.charter, ideas: r.data.ideas, settings: r.settings });
       await onStarted();
     } catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
@@ -556,10 +588,12 @@ function NewPlan({ project, has, onStarted }: { project: string; has: boolean; o
           {made
             ? (
               <div style={{ font: `400 12.5px/1.6 ${BODY}`, color: 'var(--w-t200)' }}>
-                The plan is started, with nothing in it yet. Two documents are on the base branch:
-                <div style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t300)', margin: '6px 0' }}>{made.master}<br />{made.first}</div>
-                Write the plan first, then the first unit from it, in a session in the repo; each file says what goes where.
-                Then agree the unit here. The project's settings now point at this plan
+                The plan is started. Its charter and ideas are on the base branch:
+                <div style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t300)', margin: '6px 0' }}>
+                  {made.charter}{made.ideas.map(i => <span key={i}><br />{i}</span>)}
+                </div>
+                Write the charter in the repo: why the plan exists, its words, where things are. The steward expands the
+                first idea into a draft for you to agree here. The project's settings now point at this plan
                 (<span style={{ font: `400 11.5px ${MONO}` }}>{made.settings}</span>): commit that file in the project's folder.
               </div>
             )
@@ -568,7 +602,7 @@ function NewPlan({ project, has, onStarted }: { project: string; has: boolean; o
                 <div style={{ font: `400 12px/1.55 ${BODY}`, color: 'var(--w-t400)', marginBottom: 10 }}>
                   {has
                     ? 'A project works one plan at a time. Starting another keeps this one to be read and moves the steward to the new one, so it waits until every ticket of this plan is closed.'
-                    : 'A plan is one document saying what is to be built, and a unit spec for each slice of it. This writes both into the repo with their shape and nothing else, for you to fill in.'}
+                    : 'A plan is a charter that says why, and its slices in order. Each slice starts as an idea: a title and a paragraph. The steward expands one idea at a time into a draft when its turn comes.'}
                 </div>
                 <div className="grid gap-2 sm:grid-cols-3">
                   <label className="min-w-0">
@@ -584,13 +618,34 @@ function NewPlan({ project, has, onStarted }: { project: string; has: boolean; o
                     <input value={folder} onChange={e => setFolder(e.target.value)} placeholder={theFolder || 'docs/plans/its-key'} className={FIELD} />
                   </label>
                 </div>
+
+                <div style={{ ...label(), margin: '14px 0 6px' }}>Its ideas, in order</div>
+                <div className="flex flex-col gap-2">
+                  {ideas.map((idea, n) => (
+                    <div key={n} className="flex flex-col gap-1.5">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span style={{ font: `700 11px ${MONO}`, color: 'var(--w-t400)', flex: 'none' }}>{String(n + 1).padStart(2, '0')}</span>
+                        <input value={idea.title} onChange={e => setIdea(n, { title: e.target.value })}
+                          placeholder="A title: what a person can do at the end" aria-label={`Idea ${n + 1} title`} className={FIELD} />
+                        {ideas.length > 1 && (
+                          <GhostButton onClick={() => setIdeas(all => all.filter((_, i) => i !== n))} title="Take this idea out">Remove</GhostButton>
+                        )}
+                      </div>
+                      <textarea value={idea.paragraph} onChange={e => setIdea(n, { paragraph: e.target.value })} rows={2}
+                        placeholder="One paragraph: who, what they can do at the end, what it builds on, what it is not."
+                        aria-label={`Idea ${n + 1} paragraph`} className={`${FIELD} resize-y`} />
+                    </div>
+                  ))}
+                </div>
+
                 <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 10 }}>
-                  <GhostButton tone="go" disabled={busy || name.trim().length < 3 || !theKey} onClick={start}>
+                  <GhostButton onClick={() => setIdeas(all => [...all, { title: '', paragraph: '' }])}>Another idea</GhostButton>
+                  <GhostButton tone="go" disabled={busy || !ready} onClick={start}>
                     {busy ? 'Starting' : 'Start the plan'}
                   </GhostButton>
                   {theFolder && (
                     <span className="min-w-0 truncate" style={{ font: `400 11px ${MONO}`, color: 'var(--w-t600)' }}>
-                      {theFolder}/PLAN.md, {theFolder}/units/
+                      {theFolder}/charter.md, {theFolder}/slices/
                     </span>
                   )}
                 </div>

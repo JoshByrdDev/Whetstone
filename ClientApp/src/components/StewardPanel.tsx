@@ -5,6 +5,7 @@ import { BODY, DISPLAY, TIER, chamfer } from './orbit';
 import { AgentMascot } from './AgentMascot';
 import type { Mood } from '../theme';
 import { ActivityFeed } from './ActivityFeed';
+import { Markdown } from './Markdown';
 import { StewardPlan } from './StewardPlan';
 import { StewardRecord } from './StewardRecord';
 import { StewardDecisions } from './StewardDecisions';
@@ -201,7 +202,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                   <div className="flex flex-col gap-3">
                     {page.waiting.map(q => (
                       <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
-                        onAnswer={async (a, replaces) => { await answerStewardQuestion(page.project, q.key, a, replaces); await load(); }} />
+                        onAnswer={async (a, replaces, story) => { await answerStewardQuestion(page.project, q.key, a, replaces, story); await load(); }} />
                     ))}
                     {inReview.map(t => (
                       <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
@@ -251,7 +252,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
  * the commonest answer is "yes, that one" and it should cost a single press.
  */
 function QuestionCard({ project, q, onAnswer, onSettled }: {
-  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[]) => Promise<void>;
+  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[], story?: string) => Promise<void>;
   /** After it was answered on a unit's own decisions rather than through `onAnswer`. */
   onSettled: () => Promise<void>;
 }) {
@@ -274,7 +275,7 @@ function QuestionCard({ project, q, onAnswer, onSettled }: {
 }
 
 function OptionsCard({ project, q, onAnswer }: {
-  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[]) => Promise<void>;
+  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[], story?: string) => Promise<void>;
 }) {
   const recommended = q.options.findIndex(o => o.recommended);
   const [pick, setPick] = useState<number | 'other'>(recommended >= 0 ? recommended : 'other');
@@ -282,7 +283,10 @@ function OptionsCard({ project, q, onAnswer }: {
   // the owner says otherwise. Shown, never assumed - the override is the owner's to see.
   const changesOf = (p: number | 'other') => p === 'other' ? [] : (q.changes?.[q.options[p].label] ?? []);
   const [replaces, setReplaces] = useState<number[]>(() => changesOf(recommended >= 0 ? recommended : 'other'));
-  const choose = (p: number | 'other') => { setPick(p); setReplaces(changesOf(p)); };
+  // The sentence of the slice's story this answer rewrites, as the picked option words it, and yours to edit.
+  const rewordingOf = (p: number | 'other') => p === 'other' ? '' : (q.story?.rewordings?.[q.options[p].label] ?? '');
+  const [story, setStory] = useState(() => rewordingOf(recommended >= 0 ? recommended : 'other'));
+  const choose = (p: number | 'other') => { setPick(p); setReplaces(changesOf(p)); setStory(rewordingOf(p)); };
   const touches = q.touches ?? [];
   const [other, setOther] = useState('');
   const [note, setNote] = useState('');
@@ -301,7 +305,7 @@ function OptionsCard({ project, q, onAnswer }: {
 
   const send = async () => {
     setBusy(true); setFailed(null);
-    try { await onAnswer(answer, touches.length > 0 ? replaces : undefined); }
+    try { await onAnswer(answer, touches.length > 0 ? replaces : undefined, q.story && story.trim() ? story.trim() : undefined); }
     catch (err) { setFailed(err instanceof Error ? err.message : String(err)); setBusy(false); }
   };
 
@@ -313,6 +317,16 @@ function OptionsCard({ project, q, onAnswer }: {
 
       {q.ticketId != null && <StewardTicketFlags project={project} ticketId={q.ticketId} />}
 
+      {q.idea && (
+        <div style={{ marginTop: 12 }}>
+          <div style={label()}>The idea, as it would be committed - {q.idea.file}</div>
+          <div style={{
+            marginTop: 6, padding: '10px 14px', clipPath: chamfer(8),
+            background: 'rgb(var(--w-line-rgb) / .04)', border: '1px solid rgb(var(--w-line-rgb) / .14)',
+          }}><Markdown text={q.idea.text} /></div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
         {q.options.map((o, i) => (
           <OptionRow key={i} on={pick === i} onClick={() => choose(i)} title={o.label} detail={o.detail}
@@ -320,6 +334,18 @@ function OptionsCard({ project, q, onAnswer }: {
         ))}
         <OptionRow on={pick === 'other'} onClick={() => choose('other')} title="Something else" />
       </div>
+
+      {q.story && (
+        <div style={{ marginTop: 12 }}>
+          <div style={label()}>The slice's story now says</div>
+          <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 4 }}>{q.story.sentence}</div>
+          <div style={{ ...label(), marginTop: 8 }}>With your answer it will say</div>
+          <textarea value={story} onChange={e => setStory(e.target.value)} rows={2}
+            placeholder="Leave empty to keep the sentence as it is"
+            aria-label="The story sentence, reworded"
+            className="mt-1 w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none" />
+        </div>
+      )}
 
       {touches.length > 0 && (
         <div style={{ marginTop: 12 }}>

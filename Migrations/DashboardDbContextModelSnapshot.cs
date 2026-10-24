@@ -1081,12 +1081,24 @@ namespace Whetstone.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ProposedFile")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProposedText")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Question")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RemindedOn")
                         .HasMaxLength(10)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StoryRewordingsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StorySentence")
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("TicketId")
@@ -1160,6 +1172,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime?>("AgreedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("AgreedFile")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Plan")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -1178,6 +1193,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Unit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("WalkthroughTicketId")
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");

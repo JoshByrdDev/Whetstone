@@ -603,9 +603,9 @@ public partial class StewardService
     /// replaces. One that stopped holding while the question waited is left as it is: what
     /// replaced it already says so.
     /// </summary>
-    private async Task AnswerDecisionAsync(StewardQuestion q, IReadOnlyList<int> replaces, CancellationToken ct)
+    private async Task<StewardDecision?> AnswerDecisionAsync(StewardQuestion q, IReadOnlyList<int> replaces, CancellationToken ct)
     {
-        if (await _db.StewardDecisions.AnyAsync(d => d.ProjectKey == q.ProjectKey && d.QuestionKey == q.Key, ct)) return;
+        if (await _db.StewardDecisions.AnyAsync(d => d.ProjectKey == q.ProjectKey && d.QuestionKey == q.Key, ct)) return null;
         var d = FromQuestion(q, await NextNumberAsync(q.ProjectKey, ct), await AboutAsync(q, ct));
         if (replaces.Count > 0)
         {
@@ -618,6 +618,7 @@ public partial class StewardService
             if (d.Replaces.Count > 0) d.DeliveredAt = null;
         }
         _db.StewardDecisions.Add(d);
+        return d;
     }
 
     /// <summary>Numbers kept comma separated, as a question keeps the decisions it touches.</summary>

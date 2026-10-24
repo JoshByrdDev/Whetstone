@@ -864,17 +864,25 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal(StewardOutcomeState.Done, after.StewardOutcomes.Single(o => o.Plan == "").State);
     }
 
-    private const string PlanTemplate = "# {{NAME}}\n\nStarted {{DATE}}.\n";
-    private const string UnitTemplate = "# Unit 1\n\n> **Status: draft, awaiting the owner.**\n\n- **A1.** A person can ...\n";
+    private const string CharterTemplate = "# {{NAME}}\n\nStarted {{DATE}}. Slices in {{UNITS_DIR}}.\n";
+    private const string IdeaTemplate = "# {{TITLE}}\n\n> **Status: idea.** Written {{DATE}}.\n\n{{PARAGRAPH}}\n";
+    private static readonly StewardNewIdea[] TwoIdeas =
+    {
+        new("A first booking", "A customer books a first visit."),
+        new("Invites", "A business invites its customers."),
+    };
 
     [Fact]
-    public async Task A_new_plan_is_its_two_documents_and_waits_for_the_last_one_to_finish()
+    public async Task A_new_plan_is_its_charter_and_ideas_and_waits_for_the_last_one_to_finish()
     {
-        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "Not A Key", "Next", null, PlanTemplate, UnitTemplate))).Answer);
-        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", "../outside", PlanTemplate, UnitTemplate))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "Not A Key", "Next", null, CharterTemplate, IdeaTemplate, TwoIdeas))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", "../outside", CharterTemplate, IdeaTemplate, TwoIdeas))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate, Array.Empty<StewardNewIdea>()))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate,
+            new[] { new StewardNewIdea("No paragraph", "") }))).Answer);
         // The plan being worked has no key, so "" is taken; and it has a ticket still open.
         var open = await Built(1, "A1", phase: TicketPhase.Implementing);
-        var held = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, PlanTemplate, UnitTemplate));
+        var held = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate, TwoIdeas));
         Assert.Equal("plan-in-flight", held.Answer);
         Assert.Contains($"#{open}", held.Why);
         Assert.Empty(_git.Committed);
@@ -884,14 +892,17 @@ public partial class StewardServiceTests : IDisposable
             (await ctx.Tickets.SingleAsync(t => t.Id == open)).Phase = TicketPhase.Done;
             await ctx.SaveChangesAsync();
         }
-        _git.InRepo["docs/plans/taken/PLAN.md"] = "already here";
-        Assert.Equal("exists", (await In(s => s.OwnerStartsPlanAsync("alpha", "taken", "Taken", null, PlanTemplate, UnitTemplate))).Answer);
+        _git.InRepo["docs/plans/taken/charter.md"] = "already here";
+        Assert.Equal("exists", (await In(s => s.OwnerStartsPlanAsync("alpha", "taken", "Taken", null, CharterTemplate, IdeaTemplate, TwoIdeas))).Answer);
+        Assert.Equal("bad-template", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, "# {{TITLE}}\n", TwoIdeas))).Answer);
 
-        var r = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, PlanTemplate, UnitTemplate));
+        var r = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate, TwoIdeas));
         Assert.Equal("started", r.Answer);
-        Assert.Equal(new[] { "docs/plans/next/PLAN.md", "docs/plans/next/units/01-first-unit.md" }, _git.Committed.Select(c => c.Path));
+        Assert.Equal(new[] { "docs/plans/next/charter.md", "docs/plans/next/slices/01-a-first-booking.md", "docs/plans/next/slices/02-invites.md" },
+            _git.Committed.Select(c => c.Path));
         Assert.StartsWith("# Next thing", _git.Committed[0].Content);
-        Assert.DoesNotContain("{{", _git.Committed[0].Content);
+        Assert.Contains("A business invites its customers.", _git.Committed[2].Content);
+        Assert.All(_git.Committed, c => Assert.DoesNotContain("{{", c.Content));
     }
 
     [Fact]
@@ -899,12 +910,12 @@ public partial class StewardServiceTests : IDisposable
     {
         var paths = new DashboardPaths(_dataRoot);
         var file = paths.ProjectConfigDefaults("alpha");
-        Assert.Null(await StewardPlanFile.StartAsync(file, "next", "Next thing", "docs/plans/next/units", "docs/plans/next/PLAN.md"));
+        Assert.Null(await StewardPlanFile.StartAsync(file, "next", "Next thing", "docs/plans/next/slices", "docs/plans/next/charter.md"));
 
         var cfg = new ProjectRegistry(paths).GetProjectConfig("alpha");
         Assert.Equal("next", cfg.Steward.Plan.Key);
         Assert.Equal("Next thing", cfg.Steward.Plan.DisplayName);
-        Assert.Equal("docs/plans/next/PLAN.md", cfg.Steward.Plan.Master);
+        Assert.Equal("docs/plans/next/charter.md", cfg.Steward.Plan.Charter);
         var past = Assert.Single(cfg.Steward.PastPlans);
         Assert.Equal("docs/units", past.UnitsDir);
         Assert.Same(past, cfg.Steward.PlanByKey(""));
@@ -1598,12 +1609,20 @@ public partial class StewardServiceTests : IDisposable
         /// <summary>The second unit's spec, which a test may give decisions to leave open.</summary>
         public string Second = "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n";
 
+        /// <summary>The first unit's spec, agreed.</summary>
+        public string First = "> **Status: agreed 2026-01-01.**\n\n- **A1.** One.\n- **A2.** Two.\n";
+        /// <summary>The first unit's file: a test renames it to move an agreed slice.</summary>
+        public string FirstFile = "docs/units/01-first.md";
+
+        /// <summary>Slices after the second, by number: a test's ideas.</summary>
+        public SortedDictionary<int, (string File, string Text)> More = new();
+
         public Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PlanUnit>>(new[]
             {
-                TicketGitService.ReadUnit(P, 1, "docs/units/01-first.md", "> **Status: agreed 2026-01-01.**\n\n- **A1.** One.\n- **A2.** Two.\n"),
+                TicketGitService.ReadUnit(P, 1, FirstFile, First),
                 TicketGitService.ReadUnit(P, 2, "docs/units/02-second.md", Second),
-            });
+            }.Concat(More.Select(m => TicketGitService.ReadUnit(P, m.Key, m.Value.File, m.Value.Text))).ToList());
 
         public Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default) =>
             PlanAsync(projectKey, ct);

@@ -7,7 +7,7 @@ using Whetstone.Services;
 namespace Whetstone.Api;
 
 /// <summary>An answer, and which touched decisions it replaces; null Replaces takes the picked option's.</summary>
-public record StewardAnswerRequest(string? Answer, IReadOnlyList<int>? Replaces = null);
+public record StewardAnswerRequest(string? Answer, IReadOnlyList<int>? Replaces = null, string? Story = null);
 public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
@@ -15,7 +15,7 @@ public record StewardUnitReleased(bool? Released);
 public record StewardReverse(string? Because);
 public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
-public record StewardNewPlan(string? Key, string? Name, string? Folder);
+public record StewardNewPlan(string? Key, string? Name, string? Folder, IReadOnlyList<StewardNewIdea>? Ideas = null);
 public record StewardSettlePair(bool? Replaces, string? Why);
 public record StewardInstructionRequest(string? Text, string? Until);
 public record StewardCloseRequest(string? Note);
@@ -176,9 +176,19 @@ public static class StewardEndpoints
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
             var r = await steward.PlanViewAsync(project!, plan, ct);
             var cfg = registry.GetProjectConfig(project!).Steward;
-            var file = (plan is null ? cfg.Plan : cfg.PlanByKey(plan))?.Master ?? "";
+            var which = plan is null ? cfg.Plan : cfg.PlanByKey(plan);
+            var file = which?.Master ?? "";
             var text = file.Length > 0 ? await git.FileAtBaseAsync(project!, file, ct) : null;
-            return Results.Ok(new { r.Answer, r.Why, plan = r.Data, master = text is null ? null : new { file, text } });
+            var charterFile = which?.Charter ?? "";
+            var charter = charterFile.Length > 0 ? await git.FileAtBaseAsync(project!, charterFile, ct) : null;
+            return Results.Ok(new
+            {
+                r.Answer, r.Why, plan = r.Data,
+                master = text is null ? null : new { file, text },
+                charter = charter is null ? null : new { file = charterFile, text = charter },
+                // The plan as read: charter, the project's decisions in force, every slice in order.
+                readable = r.Answer == "plan" ? await steward.PlanAsReadAsync(project!, plan, ct) : null,
+            });
         });
 
         // Agree a draft unit: the commit that has always been what agrees one, made from the board.
@@ -219,19 +229,19 @@ public static class StewardEndpoints
             StewardService steward, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
-            var planTemplate = Path.Combine(paths.DataRoot, "plan-templates", "plan.md");
-            var unitTemplate = Path.Combine(paths.DataRoot, "plan-templates", "unit.md");
-            if (!File.Exists(planTemplate) || !File.Exists(unitTemplate))
-                return Results.BadRequest(new { error = $"The plan templates are missing from {Path.GetDirectoryName(planTemplate)}." });
+            var charterTemplate = Path.Combine(paths.DataRoot, "plan-templates", "charter.md");
+            var ideaTemplate = Path.Combine(paths.DataRoot, "plan-templates", "idea.md");
+            if (!File.Exists(charterTemplate) || !File.Exists(ideaTemplate))
+                return Results.BadRequest(new { error = $"The plan templates are missing from {Path.GetDirectoryName(charterTemplate)}." });
 
             var r = await steward.OwnerStartsPlanAsync(project!, body.Key, body.Name, body.Folder,
-                await File.ReadAllTextAsync(planTemplate, ct), await File.ReadAllTextAsync(unitTemplate, ct), ct);
+                await File.ReadAllTextAsync(charterTemplate, ct), await File.ReadAllTextAsync(ideaTemplate, ct), body.Ideas, ct);
             if (r.Answer != "started") return Results.BadRequest(r);
 
             var made = JsonSerializer.SerializeToElement(r.Data, Json);
             var file = paths.ProjectConfigDefaults(project!);
             var failed = await StewardPlanFile.StartAsync(file, made.GetProperty("key").GetString()!, made.GetProperty("name").GetString()!,
-                made.GetProperty("units").GetString()!, made.GetProperty("master").GetString()!, ct);
+                made.GetProperty("units").GetString()!, made.GetProperty("charter").GetString()!, ct);
             return failed is null
                 ? Results.Ok(new { r.Answer, r.Data, settings = file })
                 : Results.BadRequest(new { answer = "documents-only", why = $"The plan's documents are in the repo, but the project's settings were not changed: {failed}" });
@@ -308,7 +318,7 @@ public static class StewardEndpoints
         app.MapPost("/api/steward/questions/{key}/answer", async (string key, string? project, StewardAnswerRequest req,
             StewardService steward, CancellationToken ct) =>
         {
-            var r = await steward.OwnerAnswersAsync(project ?? "", key, req.Answer ?? "", req.Replaces, ct);
+            var r = await steward.OwnerAnswersAsync(project ?? "", key, req.Answer ?? "", req.Replaces, req.Story, ct);
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
@@ -422,6 +432,11 @@ public static class StewardEndpoints
                 // Where the facts it learns are placed after the run.
                 memoryDir = cfg.ResolvedMemoryDir,
                 planUnits = cfg.Steward.Plan.UnitsDir,
+                // Direction for every draft, deciding nothing; or, on a plan from before charters, its one document.
+                planCharter = cfg.Steward.Plan.Charter,
+                // A draft's shape, for a first draft with no agreed slice before it to follow.
+                draftTemplate = Path.Combine(paths.DataRoot, "plan-templates", "unit.md"),
+                planMaster = cfg.Steward.Plan.Master,
             });
         });
 
@@ -454,6 +469,14 @@ public static class StewardEndpoints
         touches = StewardService.Numbers(q.Touches).Select(n => new { number = n, rule = rules is not null && rules.TryGetValue(n, out var r) ? r : null }),
         changes = string.IsNullOrEmpty(q.OptionChangesJson) ? null
             : JsonSerializer.Deserialize<Dictionary<string, List<int>>>(q.OptionChangesJson, Json),
+        // A proposed idea, committed as written on a yes.
+        idea = q.ProposedFile is null ? null : new { file = q.ProposedFile, text = q.ProposedText },
+        // The story sentence an answer changes, and its rewording under each option.
+        story = q.StorySentence is null ? null : new
+        {
+            sentence = q.StorySentence,
+            rewordings = string.IsNullOrEmpty(q.StoryRewordingsJson) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(q.StoryRewordingsJson, Json),
+        },
         q.AskedAt,
         q.Answer,
         q.AnsweredAt,

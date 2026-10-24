@@ -86,6 +86,21 @@ public class StewardQuestion
     /// </summary>
     public string? OptionChangesJson { get; set; }
 
+    /// <summary>
+    /// An idea the steward proposes - new, split, or rewritten - as the file and the whole text the
+    /// board commits on a yes. Only the owner changes ideas; this is how the steward asks.
+    /// </summary>
+    public string? ProposedFile { get; set; }
+    public string? ProposedText { get; set; }
+
+    /// <summary>
+    /// For a question about a slice being built: the sentence of its story an answer would change,
+    /// and its rewording under each option (a JSON object from an option's label to the new
+    /// sentence). The board commits the rewording with the decision, in the slice's file.
+    /// </summary>
+    public string? StorySentence { get; set; }
+    public string? StoryRewordingsJson { get; set; }
+
     public DateTime AskedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>The owner's answer, in their words or their click. Null while it waits.</summary>
@@ -377,6 +392,16 @@ public class StewardUnit
 
     /// <summary>When the owner agreed it from the board. Null when they agreed it by hand, in the file.</summary>
     public DateTime? AgreedAt { get; set; }
+
+    /// <summary>
+    /// The file it was agreed as. A slice's number is fixed once it is agreed, because tickets and
+    /// outcomes carry it; a renamed or renumbered agreed slice is flagged rather than silently
+    /// treated as a new one.
+    /// </summary>
+    public string? AgreedFile { get; set; }
+
+    /// <summary>When the board filed its walk-through as a ticket, and which (piece 8).</summary>
+    public int? WalkthroughTicketId { get; set; }
 
     /// <summary>When the owner said its work had been released. Null until then.</summary>
     public DateTime? ReleasedAt { get; set; }

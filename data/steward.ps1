@@ -156,11 +156,16 @@ $env:WHETSTONE_SKILL     = $StewardSkill
 $conventionsFile = Get-ConventionsFile -Provider $AgentProvider -WorkDir $workDir
 $memoryIndex = if ($launch.memoryIndex) { "$($launch.memoryIndex)" } else { "(this project keeps no notes store)" }
 $planDir = if ($launch.planUnits) { "$($launch.planUnits)" } else { "(no plan folder is configured for this project)" }
+$planCharter = if ($launch.planCharter) { "$($launch.planCharter)" }
+    elseif ($launch.planMaster) { "(none yet: the plan is still its older single document, $($launch.planMaster))" }
+    else { "(this plan has no charter)" }
 
 $prompt = (Get-Content -Path $PromptStewardFile -Raw -Encoding UTF8).
     Replace('{{PROJECT_KEY}}', $Project).
     Replace('{{PROJECT_NAME}}', $projectName).
     Replace('{{PLAN_DIR}}', $planDir).
+    Replace('{{PLAN_CHARTER}}', $planCharter).
+    Replace('{{DRAFT_TEMPLATE}}', "$($launch.draftTemplate)").
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
     Replace('{{MEMORY_INDEX}}', $memoryIndex).
     Replace('{{SKILL_FILE}}', $skillFile)

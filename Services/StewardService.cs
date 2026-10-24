@@ -29,7 +29,11 @@ public record StewardTicketDraft(
 public record StewardAsk(
     string Key, string Question, string Why, IReadOnlyList<BlockOption>? Options, string HeldUp, int? TicketId = null,
     int? Unit = null, IReadOnlyList<int>? Decisions = null, IReadOnlyList<int>? Touches = null,
-    IReadOnlyDictionary<string, IReadOnlyList<int>>? Changes = null, IReadOnlyList<int>? FollowUps = null);
+    IReadOnlyDictionary<string, IReadOnlyList<int>>? Changes = null, IReadOnlyList<int>? FollowUps = null,
+    StewardIdeaProposal? Idea = null, StewardStoryChange? Story = null);
+
+/// <summary>The sentence of a slice's story an answer would change, and its rewording under each option, by label.</summary>
+public record StewardStoryChange(string Sentence, IReadOnlyDictionary<string, string>? Rewordings);
 
 /// <summary>A steward's record kept elsewhere, to be taken in once. See <see cref="StewardService.ImportAsync"/>.</summary>
 public record StewardImport(
@@ -50,6 +54,9 @@ public record StewardImportEntry(string Kind, string Text, int? TicketId = null,
 public record StewardImportOutcome(int Unit, string Outcome, string State, bool MoreToFile = false, string? Note = null);
 
 public record StewardImportTicket(int Id, int Unit, IReadOnlyList<string> Outcomes, bool FiledBySteward = true);
+
+/// <summary>One idea a new plan starts with: its title, and its paragraph.</summary>
+public record StewardNewIdea(string Title, string? Paragraph);
 
 /// <summary>
 /// A project's steward: everything it may do, and every limit on it.
@@ -1101,7 +1108,11 @@ public partial class StewardService
         var path = $"{p.UnitsDir}/{fileName.Trim()}";
         var there = plan.FirstOrDefault(u => u.Number == number);
         if (there is not null && !string.Equals(there.File, path, StringComparison.OrdinalIgnoreCase))
-            return Refuse("exists", $"Unit {number} is already drafted as {there.File}. Revise that file, under its own name.");
+            return Refuse("exists", $"Unit {number} is already {(there.Idea ? "an idea" : "drafted")} as {there.File}. {(there.Idea ? "Expand" : "Revise")} that file, under its own name.");
+        // A plan of ideas is drafted only from its ideas: the steward writes none, it expands the
+        // next one in place. A plan from before ideas has none, and drafts as it always has.
+        if (there is null && plan.Any(u => u.Idea))
+            return Refuse("no-idea", $"There is no idea numbered {number} to expand. Ideas are the owner's: propose one with steward_ask_owner (idea).");
 
         var unit = TicketGitService.ReadUnit(p, number, path, text ?? "");
         if (unit.Agreed || !unit.Draft)
@@ -1123,8 +1134,9 @@ public partial class StewardService
         var (sha, unchanged, refusal) = await _git.CommitFileAsync(projectKey, path, text!,
             there is null ? $"A draft spec for unit {number}" : $"The draft spec for unit {number}, revised", ct);
         if (refusal is not null) return Refuse("refused", refusal);
+        if (!unchanged && (there is null || there.Idea)) await WriteReadableAsync(cfg, ct);
         return unchanged ? new StewardReply("unchanged")
-            : new StewardReply(there is null ? "drafted" : "revised", null, new { file = path, outcomes = unit.Outcomes.Count, commit = sha });
+            : new StewardReply(there is null || there.Idea ? "drafted" : "revised", null, new { file = path, outcomes = unit.Outcomes.Count, commit = sha });
     }
 
     // ---- what goes to the owner, and the record ---------------------------------------
@@ -1144,8 +1156,13 @@ public partial class StewardService
         // needs no options of its own - and has to name decisions the spec really leaves open, or
         // the owner is handed an empty sheet.
         var asks = (a.Decisions ?? Array.Empty<int>()).Distinct().ToList();
-        if (a.Unit is null != (asks.Count == 0))
-            return Refuse("bad-request", "Name a unit and its decisions together, or neither.");
+        var story = a.Story;
+        if (asks.Count > 0 && a.Unit is null) return Refuse("bad-request", "Name the unit whose open decisions these are.");
+        if (story is not null && a.Unit is null) return Refuse("bad-request", "A story is a slice's: name the slice (unit) it belongs to.");
+        if (a.Unit is not null && asks.Count == 0 && story is null)
+            return Refuse("bad-request", "Name a unit with its open decisions, or with the sentence of its story an answer would change - or neither.");
+        if (a.Idea is not null && (a.Unit is not null || asks.Count > 0))
+            return Refuse("bad-request", "A proposed idea is its own question: ask it without a unit or decisions.");
         if (a.Unit is { } unitNo)
         {
             var spec = (await _git.PlanAsync(projectKey, ct)).FirstOrDefault(u => u.Number == unitNo);
@@ -1153,6 +1170,28 @@ public partial class StewardService
             var open = UnitDecisions.Open(spec.Text).Select(d => d.Number).ToHashSet();
             if (asks.FirstOrDefault(n => !open.Contains(n)) is var missing and > 0)
                 return Refuse("bad-request", $"#{missing} is not an open decision in {spec.File}. Only a decision written under \"To decide\" in the template's shape can be asked this way.");
+            if (story is not null)
+            {
+                // Only a slice being built has a story that changes with the owner's answers: a
+                // draft is the steward's to revise, and a built slice's story is never rewritten.
+                if (!spec.Agreed) return Refuse("bad-request", $"{spec.File} is not agreed: revise the draft's story with steward_draft_unit instead.");
+                if ((await BuiltUnitsAsync(cfg, ct)).Contains(unitNo))
+                    return Refuse("bad-request", $"Slice {unitNo} is built: its story is history and is never rewritten. A later slice says what it changes.");
+                if (string.IsNullOrWhiteSpace(story.Sentence) || !SliceStory.Has(spec.Text, story.Sentence))
+                    return Refuse("bad-request", $"Quote the sentence exactly as {spec.File}'s story has it, once.");
+                if ((story.Rewordings ?? new Dictionary<string, string>()).Count == 0)
+                    return Refuse("bad-request", "Give the sentence's rewording under each option that changes it.");
+                foreach (var label in story.Rewordings!.Keys)
+                    if (options.All(o => !string.Equals(o.Label.Trim(), label.Trim(), StringComparison.OrdinalIgnoreCase)))
+                        return Refuse("bad-request", $"\"{label}\" is not one of the options.");
+            }
+        }
+        if (a.Idea is not null)
+        {
+            if (!cfg.Steward.Plan.Configured) return Refuse("no-plan", "This project has no plan folder for an idea.");
+            if (IdeaRefusal(cfg.Steward.Plan, await _git.PlanAsync(projectKey, ct), a.Idea) is { } no) return Refuse("bad-request", no);
+            // The owner says yes or no to the idea as written: the board's two answers, not the steward's.
+            options = new List<BlockOption> { new(CommitIdea, $"Commit {a.Idea.File.Trim()} as written", true), new(LeaveIdeas) };
         }
         if (asks.Count == 0 || options.Count > 0)
         {
@@ -1213,6 +1252,10 @@ public partial class StewardService
             Decisions = asks.Count == 0 ? null : string.Join(",", asks),
             Touches = string.Join(",", touches),
             OptionChangesJson = changes.Count == 0 ? null : JsonSerializer.Serialize(changes, Json),
+            ProposedFile = a.Idea?.File.Trim(),
+            ProposedText = a.Idea?.Text,
+            StorySentence = story?.Sentence.Trim(),
+            StoryRewordingsJson = story is null ? null : JsonSerializer.Serialize(story.Rewordings, Json),
         });
         await _db.SaveChangesAsync(ct);
 
@@ -1495,7 +1538,14 @@ public partial class StewardService
     /// is the one the owner was shown.
     /// </summary>
     public async Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, IReadOnlyList<int>? replaces,
-        CancellationToken ct = default)
+        CancellationToken ct = default) => await OwnerAnswersAsync(projectKey, key, answer, replaces, null, ct);
+
+    /// <summary>
+    /// As above; for a question about a slice being built, <paramref name="story"/> is the owner's
+    /// own wording of the sentence the answer changes (null takes the picked option's).
+    /// </summary>
+    public async Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, IReadOnlyList<int>? replaces,
+        string? story, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(answer)) return Refuse("bad-request", "The answer is empty.");
         var q = await _db.StewardQuestions.FirstOrDefaultAsync(x => x.ProjectKey == projectKey && x.Key == key, ct);
@@ -1505,17 +1555,63 @@ public partial class StewardService
         var picked = replaces?.Distinct().ToList() ?? ChangesOf(q, answer);
         if (picked.FirstOrDefault(n => !touched.Contains(n)) is var stray and > 0)
             return Refuse("bad-request", $"\"{key}\" does not touch #{stray}, so its answer cannot replace it. Record a change to #{stray} on the register instead.");
+        var cfg = Config(projectKey);
+        var text = Regex.Replace(answer.Trim(), @"\s*\n\s*", " ");
 
-        q.Answer = Regex.Replace(answer.Trim(), @"\s*\n\s*", " ");
+        // A proposed idea is committed on a yes, and is no decision: ideas are the owner's text.
+        var idea = q.ProposedFile is not null;
+        string? ideaDone = null;
+        if (idea && text.StartsWith(CommitIdea, StringComparison.OrdinalIgnoreCase))
+        {
+            if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+            if (await CommitIdeaAsync(cfg, q, ct) is { } no) return Refuse("refused", no);
+            ideaDone = $"{q.ProposedFile} committed";
+        }
+
+        q.Answer = text;
         q.AnsweredAt = DateTime.UtcNow;
-        // The answer is a decision, and the register is where its status lives from now on.
-        if (Config(projectKey) is { } c) await EnsureRegisterAsync(c, ct);
-        await AnswerDecisionAsync(q, picked, ct);
+        StewardDecision? made = null;
+        if (!idea)
+        {
+            // The answer is a decision, and the register is where its status lives from now on.
+            if (cfg is not null) await EnsureRegisterAsync(cfg, ct);
+            made = await AnswerDecisionAsync(q, picked, ct);
+        }
+
+        // An answer about a slice being built rewords the sentence of its story it changes, and
+        // writes itself under "Decided", in one commit: the story stays true, and only answers change it.
+        string? storyDone = null;
+        if (made is not null && cfg is not null && q.StorySentence is not null && q.PlanUnit is { } unit
+            && (story ?? RewordingOf(q, text)) is { Length: > 0 } rewording)
+        {
+            var spec = (await _git.PlanAsync(projectKey, ct)).FirstOrDefault(u => u.Number == unit);
+            if (spec is null || !spec.Agreed) return Refuse("refused", $"Slice {unit} is not an agreed slice now, so its story was not changed and nothing was recorded.");
+            var reworded = SliceStory.Reword(spec.Text, q.StorySentence, rewording);
+            if (reworded is null) return Refuse("refused", $"The sentence is no longer in {spec.File}'s story as it was asked about. Nothing was recorded; answer it without the story, or have it asked again.");
+            reworded = UnitDecisions.AppendDecided(reworded,
+                $"- **(#{made.Number}) {Head(q.Question, 160).TrimEnd('?', '.')}.** Decided by the owner {DateTime.Now:yyyy-MM-dd}: {text.TrimEnd('.')}.");
+            var (sha, _, no) = await _git.CommitFileAsync(projectKey, spec.File, reworded,
+                $"Slice {unit}: #{made.Number}, and the story sentence it changes, by its owner", ct);
+            if (no is not null) return Refuse("refused", no);
+            made.SourceRef = spec.File;
+            storyDone = $"{spec.File} reworded at {sha}";
+        }
+
         await StewardDue.MarkAsync(_db, projectKey, $"the owner answered {key}");
         await _db.SaveChangesAsync(ct);
-        var exported = Config(projectKey) is { } cfg ? await ExportDecisionsAsync(cfg, ct) : null;
+        var exported = cfg is not null ? await ExportDecisionsAsync(cfg, ct) : null;
+        if (ideaDone is not null && cfg is not null) await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
-        return new StewardReply("recorded", exported);
+        return new StewardReply("recorded", string.Join("; ", new[] { exported, ideaDone, storyDone }.Where(x => x is not null)) is { Length: > 0 } w ? w : null);
+    }
+
+    /// <summary>The rewording of a story sentence under the option the answer starts with.</summary>
+    private static string? RewordingOf(StewardQuestion q, string answer)
+    {
+        if (string.IsNullOrEmpty(q.StoryRewordingsJson)) return null;
+        var map = JsonSerializer.Deserialize<Dictionary<string, string>>(q.StoryRewordingsJson, Json) ?? new();
+        return map.Where(kv => answer.StartsWith(kv.Key.Trim(), StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(kv => kv.Key.Length).Select(kv => kv.Value).FirstOrDefault();
     }
 
     /// <summary>
@@ -1805,10 +1901,13 @@ public partial class StewardService
         var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == which.Key).ToListAsync(ct);
         var notes = await UnitNotesAsync(projectKey, which, isWorking, plan, rows, all, track: false, ct);
         var current = isWorking ? StewardProgress.Current(plan, states) : null;
+        var moved = await MovedSlicesAsync(projectKey, which, plan, ct);
 
         return new StewardReply("plan", null, new
         {
             plans,
+            // Agreed slices whose number or file changed since: tickets and outcomes carry those.
+            moved = moved.Values,
             plan = new { which.Key, name = which.DisplayName, working = isWorking, which.UnitsDir },
             current = current?.Number,
             units = plan.Select(u =>
@@ -1833,11 +1932,16 @@ public partial class StewardService
                     // Where it is on the way from a draft to released, in one word.
                     stage = row?.ReleasedAt is not null ? "released" : built ? "built"
                         : u.Agreed ? u.Number == current?.Number ? "building" : "agreed"
-                        : u.Draft ? "draft" : "notAgreed",
+                        : u.Draft ? "draft" : u.Idea ? "idea" : "notAgreed",
+                    movedFrom = moved.TryGetValue(u.Number, out var mv) ? mv : null,
+                    // An idea's paragraph, which is what the plan shows of it.
+                    idea = u.Idea ? SliceStory.IdeaParagraph(u.Text) : null,
+                    story = SliceStory.Find(u.Text)?.Text,
                     agreedAt = row?.AgreedAt,
                     releasedAt = row?.ReleasedAt,
                     // Why a draft cannot be agreed from here, or null when it can (or is not a draft).
-                    cannotAgree = !u.Draft ? null
+                    cannotAgree = u.Idea ? "An idea is drafted before it is agreed: the steward expands it when its turn comes."
+                        : !u.Draft ? null
                         : !isWorking ? "This plan is finished: nothing is filed against it."
                         : earlier.Count > 0 ? $"Unit {earlier[0]} comes first and is not agreed."
                         : TicketGitService.MarkAgreed(which, u.Text, DateTime.Now) is null
@@ -1971,7 +2075,11 @@ public partial class StewardService
         if (no is not null) return Refuse("refused", no);
 
         var summary = $"Unit {unit}: {(n == 0 ? "agreed" : $"{(agree ? "agreed, and " : "")}decided {string.Join("; ", said)}")}. Written into {u.File} at {sha}.";
-        if (agree) (await UnitRowAsync(projectKey, p.Key, unit, ct)).AgreedAt = DateTime.UtcNow;
+        if (agree)
+        {
+            var row = await UnitRowAsync(projectKey, p.Key, unit, ct);
+            (row.AgreedAt, row.AgreedFile) = (DateTime.UtcNow, u.File);
+        }
         // The register holds each decision's status; the spec keeps the words, written once, above.
         foreach (var (number, title, rule) in each)
             _db.StewardDecisions.Add(new StewardDecision
@@ -1992,6 +2100,7 @@ public partial class StewardService
         }
         await _db.SaveChangesAsync(ct);
         var exported = n > 0 || q is not null ? await ExportDecisionsAsync(cfg, ct) : null;
+        if (agree) await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply(agree ? "agreed" : "decided", exported, new
         {
@@ -2044,22 +2153,22 @@ public partial class StewardService
         foreach (var n in notes.Where(n => n.HandledAt is null)) n.HandledAt = now;
         (row.ReleasedAt, row.ReleasedSha) = (now, await _git.BaseHeadAsync(projectKey, ct));
         await _db.SaveChangesAsync(ct);
+        await WriteReadableAsync(cfg, ct);
         return new StewardReply("released", null, new { at = row.ReleasedSha });
     }
 
     /// <summary>
-    /// The owner starts a new plan: its two documents are committed to the base branch - the plan
-    /// itself, and a first unit as a draft - each from a template that says what goes where, so
-    /// whoever writes it (a person, or a session they sit with) has a shape to write into that
-    /// the board can read. Refused while the plan being worked has a ticket still open: a steward
-    /// in the middle of one plan is not handed another.
+    /// The owner starts a new plan: its charter and its first ideas are committed to the base
+    /// branch, each from a template (docs/plans-as-slices.md, "Starting a plan"). The steward then
+    /// expands the first idea into a draft. Refused while a run is open, or while the plan being
+    /// worked has a ticket still open: a steward in the middle of one plan is not handed another.
     /// <para>
     /// It does not write the project's config; the caller does, once this has answered "started",
     /// because where a project's settings live is not this service's to know.
     /// </para>
     /// </summary>
     public async Task<StewardReply> OwnerStartsPlanAsync(string projectKey, string? key, string? name, string? folder,
-        string planTemplate, string unitTemplate, CancellationToken ct = default)
+        string charterTemplate, string ideaTemplate, IReadOnlyList<StewardNewIdea>? ideas, CancellationToken ct = default)
     {
         var cfg = Config(projectKey);
         if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
@@ -2068,6 +2177,10 @@ public partial class StewardService
         if (!StewardPlan.IsKey(key)) return Refuse("bad-request", "The key is the plan's short name: lowercase letters, digits and hyphens, 40 at most.");
         if (name.Length is < 3 or > 80) return Refuse("bad-request", "Give the plan a name a person would call it, 3 to 80 characters.");
         if (cfg.Steward.PlanByKey(key) is not null) return Refuse("exists", $"This project already has a plan with the key \"{key}\".");
+        var wanted = (ideas ?? Array.Empty<StewardNewIdea>()).Where(i => !string.IsNullOrWhiteSpace(i.Title)).ToList();
+        if (wanted.Count == 0) return Refuse("bad-request", "Give at least one idea: a title, and a paragraph on who can do what at the end of it.");
+        if (wanted.Any(i => string.IsNullOrWhiteSpace(i.Paragraph)))
+            return Refuse("bad-request", "Each idea needs its paragraph: who, what they can do at the end, what it builds on, what it is not.");
 
         folder = string.IsNullOrWhiteSpace(folder) ? $"docs/plans/{key}" : folder.Replace('\\', '/').Trim().Trim('/');
         if (folder.Split('/').Any(part => part is "" or "." or ".." || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
@@ -2083,25 +2196,38 @@ public partial class StewardService
                 return Refuse("plan-in-flight", $"{working.DisplayName} still has {open.Count} ticket{(open.Count == 1 ? "" : "s")} open ({string.Join(", ", open.Take(8).Select(i => $"#{i}"))}). Finish or close them first: the plan being worked is the one a steward files against.");
         }
 
-        var master = $"{folder}/PLAN.md";
-        var units = $"{folder}/units";
-        var first = $"{units}/01-first-unit.md";
-        if (await _git.FileAtBaseAsync(projectKey, master, ct) is not null) return Refuse("exists", $"{master} is already in the repo.");
-        if (await _git.FileAtBaseAsync(projectKey, first, ct) is not null) return Refuse("exists", $"{first} is already in the repo.");
-
-        string Fill(string t) => t.Replace("{{NAME}}", name).Replace("{{KEY}}", key).Replace("{{DATE}}", DateTime.Now.ToString("yyyy-MM-dd"))
-            .Replace("{{PLAN_FILE}}", "../PLAN.md").Replace("{{UNITS_DIR}}", "units");
-        var unitText = Fill(unitTemplate);
+        var charter = $"{folder}/charter.md";
+        var units = $"{folder}/slices";
+        if (await _git.FileAtBaseAsync(projectKey, charter, ct) is not null) return Refuse("exists", $"{charter} is already in the repo.");
         var probe = new StewardPlan(units, StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed, StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
-        if (!TicketGitService.ReadUnit(probe, 1, first, unitText).Draft)
-            return Refuse("bad-template", "The unit template does not read as a draft, so it was not written.");
+        var day = DateTime.Now.ToString("yyyy-MM-dd");
+        var files = new List<(string Path, string Text)>();
+        for (var i = 0; i < wanted.Count; i++)
+        {
+            var title = Regex.Replace(wanted[i].Title.Trim(), @"\s+", " ");
+            var slug = Regex.Replace(title.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+            if (slug.Length > 50) slug = slug[..50].Trim('-');
+            var path = $"{units}/{i + 1:00}-{(slug.Length > 0 ? slug : "idea")}.md";
+            var text = ideaTemplate.Replace("{{TITLE}}", title).Replace("{{DATE}}", day)
+                .Replace("{{PARAGRAPH}}", Regex.Replace(wanted[i].Paragraph!.Trim(), @"\s*\n\s*", " "));
+            if (!TicketGitService.ReadUnit(probe, i + 1, path, text).Idea)
+                return Refuse("bad-template", "The idea template does not read as an idea, so nothing was written.");
+            if (await _git.FileAtBaseAsync(projectKey, path, ct) is not null) return Refuse("exists", $"{path} is already in the repo.");
+            files.Add((path, text));
+        }
 
-        var (_, _, no1) = await _git.CommitFileAsync(projectKey, master, Fill(planTemplate), $"{name}: the plan, to be written", ct);
+        string Fill(string t) => t.Replace("{{NAME}}", name).Replace("{{KEY}}", key).Replace("{{DATE}}", day).Replace("{{UNITS_DIR}}", "slices");
+        var (_, _, no1) = await _git.CommitFileAsync(projectKey, charter, Fill(charterTemplate), $"{name}: the charter, to be written", ct);
         if (no1 is not null) return Refuse("refused", no1);
-        var (sha, _, no2) = await _git.CommitFileAsync(projectKey, first, unitText, $"{name}: a first unit, as a draft", ct);
-        if (no2 is not null) return Refuse("refused", $"{master} was committed, but the first unit was not: {no2}");
+        string? sha = null;
+        foreach (var (path, text) in files)
+        {
+            var (s1, _, no2) = await _git.CommitFileAsync(projectKey, path, text, $"{name}: an idea, {Path.GetFileName(path)}", ct);
+            if (no2 is not null) return Refuse("refused", $"{charter} was committed, but {path} was not: {no2}");
+            sha = s1;
+        }
 
-        return new StewardReply("started", null, new { key, name, master, units, first, commit = sha });
+        return new StewardReply("started", null, new { key, name, charter, units, ideas = files.Select(f => f.Path), commit = sha });
     }
 
     /// <summary>

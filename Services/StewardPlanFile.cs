@@ -29,7 +29,7 @@ public static class StewardPlanFile
     /// Make <paramref name="key"/> the plan being worked. Returns why the file was left alone, or
     /// null once it is written.
     /// </summary>
-    public static async Task<string?> StartAsync(string defaultsFile, string key, string name, string units, string master,
+    public static async Task<string?> StartAsync(string defaultsFile, string key, string name, string units, string charter,
         CancellationToken ct = default)
     {
         JsonObject root;
@@ -50,7 +50,7 @@ public static class StewardPlanFile
             if (steward["pastPlans"] is not JsonArray past) steward["pastPlans"] = past = new JsonArray();
             past.Add(was.DeepClone());
         }
-        steward["plan"] = new JsonObject { ["key"] = key, ["name"] = name, ["units"] = units, ["master"] = master };
+        steward["plan"] = new JsonObject { ["key"] = key, ["name"] = name, ["units"] = units, ["charter"] = charter };
 
         await File.WriteAllTextAsync(defaultsFile, root.ToJsonString(Out) + Environment.NewLine, ct);
         return null;

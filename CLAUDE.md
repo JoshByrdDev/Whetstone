@@ -328,7 +328,7 @@ is the prompt's rule alone - the same gap, for the same reason, as the local-onl
 plan numbers its units from one, so a ticket and an outcome carry the plan's key beside the unit
 (`Ticket.PlanKey`, `StewardOutcome.Plan`), and anything that counts a unit's tickets filters on
 both. A count by `PlanUnit` alone is right until the day a second plan starts and wrong from then
-on. Starting one is the owner's (the Steward page, `data/plan-templates/` for the two documents'
+on. Starting one is the owner's (the Steward page, `data/plan-templates/` for the charter's, an idea's and a draft's
 shape) and is refused while the plan being worked has a ticket open.
 
 The rules that outrank that skill are `data/steward-prompt.md`. Changing what a steward may do?
