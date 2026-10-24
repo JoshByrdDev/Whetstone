@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { Chip, GhostButton, PageHead, Panel, SectionRule } from './ui';
-import { BODY, DISPLAY, MONO, TIER, chamfer } from './orbit';
+import { BODY, DISPLAY, TIER, chamfer } from './orbit';
 import { AgentMascot } from './AgentMascot';
 import type { Mood } from '../theme';
 import { ActivityFeed } from './ActivityFeed';
@@ -367,7 +367,7 @@ function StewardCard({ page, running, fleet, live }: {
         </div>
       </div>
 
-      <LastRun summary={page.lastRunSummary} memo={page.memo} />
+      <LastRun summary={page.lastRunSummary} />
 
       <div className="flex items-center justify-between" style={{ ...label(), margin: '16px 0 6px' }}>
         <span>Live</span>
@@ -381,8 +381,8 @@ function StewardCard({ page, running, fleet, live }: {
   );
 }
 
-/** What the last run did, held to a few lines until asked for, and its memo to the next run. */
-function LastRun({ summary, memo }: { summary?: string | null; memo: string }) {
+/** What the last run did, held to a few lines until asked for. */
+function LastRun({ summary }: { summary?: string | null }) {
   const [whole, setWhole] = useState(false);
   const [long, setLong] = useState(false);
   const text = useRef<HTMLDivElement>(null);
@@ -404,14 +404,6 @@ function LastRun({ summary, memo }: { summary?: string | null; memo: string }) {
           style={{ ...label('var(--w-t300)'), marginTop: 4 }}>
           {whole ? 'less' : 'more'}
         </button>
-      )}
-      {memo && (
-        <details className="mt-2">
-          <summary className="orbit-tap cursor-pointer" style={{ ...label(), display: 'inline-block' }}>
-            Its memo to the next run
-          </summary>
-          <pre className="mt-2 whitespace-pre-wrap" style={{ font: `400 11.5px/1.55 ${MONO}`, color: 'var(--w-t400)' }}>{memo}</pre>
-        </details>
       )}
     </div>
   );

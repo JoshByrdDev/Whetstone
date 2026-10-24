@@ -52,7 +52,8 @@ public class StewardTools
     [McpServerTool(Name = "steward_status"), Description(
         "The board as it stands: every open ticket with its phase, what it waits on and any question it asked; the limits " +
         "and how much of each is used; the plan's units and which are agreed; how far the unit being worked is; each outcome's " +
-        "state and tickets; what is waiting on the owner; and your own memo from the last run. Changes nothing.")]
+        "state and tickets; what is waiting on the owner; your open ticket notes (ticketNotes), your rulings in force, facts " +
+        "not yet in the notes store (learnedPending), and what the last three runs did (recentRuns). Changes nothing.")]
     public static Task<StewardReply> Status(StewardService s, [Description("The project key.")] string project) =>
         s.StatusAsync(project);
 
@@ -280,15 +281,4 @@ public class StewardTools
             "infrastructure, an account. 'action': something for the owner to do, check or approve - wording to read, a line " +
             "for their own documents, a step by hand. 'note': only to know.")] string kind) =>
         s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text, kind);
-
-    [McpServerTool(Name = "steward_save_memo"), Description(
-        "Replace your memo to the next run, which starts from nothing but the plan, the board and this. It holds only what " +
-        "the next run needs and cannot read anywhere else: what you took as decided for tickets still to be written, and two " +
-        "short paragraphs on what this run did and what to pick up. Where an outcome stands is set on the outcome; a call " +
-        "about one ticket goes on the record. It has a length limit because every run reads all of it: 'saved-too-long' " +
-        "means cut it and save again.")]
-    public static Task<StewardReply> SaveMemo(StewardService s,
-        [Description("The project key.")] string project,
-        [Description("The whole memo, replacing what was there.")] string memo) =>
-        s.SaveMemoAsync(project, memo);
 }

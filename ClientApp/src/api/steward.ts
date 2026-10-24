@@ -56,7 +56,6 @@ export interface StewardPage {
   lastRunEndedAt?: string | null;
   lastRunSummary?: string | null;
   resting: boolean;
-  memo: string;
   waiting: StewardQuestion[];
   answered: StewardQuestion[];
 }

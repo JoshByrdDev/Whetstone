@@ -88,8 +88,6 @@ public class StewardConfig
     /// <summary>How many times the steward may send one ticket back. The next is the owner's.</summary>
     public int SendBacksPerTicket { get; init; } = 2;
 
-    /// <summary>How long the steward's memo to its next run may be, in characters.</summary>
-    public int MemoMaxChars { get; init; } = 32000;
 
     /// <summary>
     /// A branch merged INTO the base branch at the start of each run, or empty for none. For a
@@ -177,7 +175,6 @@ public class StewardConfig
             CreatedPerDay = Int(limits, "createdPerDay", d.CreatedPerDay, 0, 1000),
             OpenAtOnce = Int(limits, "openAtOnce", d.OpenAtOnce, 1, 1000),
             SendBacksPerTicket = Int(limits, "sendBacksPerTicket", d.SendBacksPerTicket, 0, 20),
-            MemoMaxChars = Int(s, "memoMaxChars", d.MemoMaxChars, 1000, 500000),
             SyncFrom = Str(s, "syncFrom"),
             DecisionsFile = Str(s, "decisionsFile").Replace('\\', '/').TrimStart('/'),
             Plan = PlanFrom(plan),

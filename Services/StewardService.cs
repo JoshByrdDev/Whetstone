@@ -310,6 +310,11 @@ public class StewardService
         StewardDue.Settle(s);
         s.LastRunEndedAt = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(summary)) s.LastRunSummary = summary.Trim();
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Run,
+            Text = string.IsNullOrWhiteSpace(summary) ? "Ended without saying what it did." : summary.Trim(),
+        });
         // A run that only proposed changed nothing, so it has not earned the board a rest.
         s.RestingAtSha = nothingToFile && cfg!.StewardMode != StewardMode.Propose
             ? await _git.BaseHeadAsync(projectKey, ct) : null;
@@ -351,6 +356,10 @@ public class StewardService
             // still holds, so a run that dies on every start is not restarted in a loop.
             s.RunDueReason = null;
             await StewardDue.MarkAsync(_db, projectKey, "the last run did not finish");
+            _db.StewardEntries.Add(new StewardEntry
+            {
+                ProjectKey = projectKey, Kind = StewardEntryKind.Run, Text = $"Did not finish: {reason}.",
+            });
             await _db.SaveChangesAsync();
         }
         return released;
@@ -412,7 +421,7 @@ public class StewardService
     /// <summary>
     /// The board as a steward needs it: every open ticket and what it waits on, the limits and
     /// how much of each is used, the plan and how far it is, what is waiting on the owner, and the
-    /// steward's own memo to itself.
+    /// steward's own notes, rulings and recent runs.
     /// </summary>
     public async Task<StewardReply> StatusAsync(string projectKey, CancellationToken ct = default)
     {
@@ -452,7 +461,9 @@ public class StewardService
         // Only this plan's tickets count toward it: the last plan's unit 1 is not this one's.
         var mine = all.Where(t => (t.PlanKey ?? "") == key).ToList();
         var current = StewardProgress.Current(plan, states);
-        var memo = s?.Memo ?? "";
+        var recentRuns = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Run)
+            .OrderByDescending(e => e.At).ThenByDescending(e => e.Id).Take(3).ToListAsync(ct);
         var byId = all.ToDictionary(t => t.Id);
         // Every open ticket note, by ticket - Done tickets included, since what is left to do after
         // a merge is most of what these say. A note whose ticket is gone has nothing to act on.
@@ -511,10 +522,8 @@ public class StewardService
             // Facts you said with steward_learned that are not in the notes store yet: they go in
             // after this run. Until then the store's index does not list them, so they are here.
             learnedPending = learned.Select(e => e.Text),
-            memo,
-            memoLength = $"{memo.Length}/{cfg.Steward.MemoMaxChars}",
-            memoTooLong = memo.Length > cfg.Steward.MemoMaxChars
-                ? "Your memo is over its limit, and every run reads all of it. Cut it now and save it again." : null,
+            // The last three runs, newest first: what each did, or why it stopped.
+            recentRuns = recentRuns.Select(e => new { e.At, e.Text }),
         });
     }
 
@@ -1371,27 +1380,6 @@ public class StewardService
         foreach (var k in Enum.GetValues<StewardReleaseKind>())
             if (string.Equals(k.ToString(), n, StringComparison.OrdinalIgnoreCase)) return k;
         return null;
-    }
-
-    /// <summary>
-    /// Replace the steward's memo to its next run. Saved even when it is too long - a run that
-    /// could not save would leave the next one nothing - and the answer says so, so it is cut.
-    /// </summary>
-    public async Task<StewardReply> SaveMemoAsync(string projectKey, string memo, CancellationToken ct = default)
-    {
-        var (cfg, off) = await WritableAsync(projectKey);
-        if (cfg is null) return off!;
-        if (cfg.StewardMode == StewardMode.Propose)
-            return new StewardReply("proposed", "Nothing happened in this run, so the memo must not say it did: it was left as it was.");
-
-        var s = await StewardDue.StateAsync(_db, projectKey);
-        s.Memo = (memo ?? "").Replace("\r\n", "\n").Trim();
-        s.MemoUpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-        var over = s.Memo.Length > cfg.Steward.MemoMaxChars;
-        return new StewardReply(over ? "saved-too-long" : "saved", over
-            ? $"The memo is {s.Memo.Length} characters and its limit is {cfg.Steward.MemoMaxChars}: every run reads all of it. Cut it and save again. Where an outcome stands is set on the outcome; a call about one ticket goes on the record; this is only what the next run needs and cannot read anywhere else."
-            : null);
     }
 
     // ---- the owner's side: no steward verb reaches these --------------------------------

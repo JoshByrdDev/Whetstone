@@ -46,7 +46,6 @@ public class StewardServiceTests : IDisposable
 
     private void Configure(string mode, string steward = """
         "limits": { "createdPerDay": 2, "openAtOnce": 3, "sendBacksPerTicket": 1 },
-        "memoMaxChars": 1000,
         "plan": { "units": "docs/units" },
         "neverMerge": ["infra/"]
         """)
@@ -126,7 +125,7 @@ public class StewardServiceTests : IDisposable
     public async Task Nothing_is_changed_outside_a_run()
     {
         Assert.Equal("no-run", (await In(s => s.CreateAsync("alpha", Draft()))).Answer);
-        Assert.Equal("no-run", (await In(s => s.SaveMemoAsync("alpha", "x"))).Answer);
+        Assert.Equal("no-run", (await In(s => s.NoteTicketAsync("alpha", 1, "x"))).Answer);
     }
 
     [Fact]
@@ -956,14 +955,6 @@ public class StewardServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_memo_over_its_limit_is_saved_and_said_to_be_too_long()
-    {
-        await Begin();
-        Assert.Equal("saved", (await In(s => s.SaveMemoAsync("alpha", "Next: file A2 once #1 merges."))).Answer);
-        Assert.Equal("saved-too-long", (await In(s => s.SaveMemoAsync("alpha", new string('x', 1001)))).Answer);
-    }
-
-    [Fact]
     public async Task Only_the_next_unit_can_be_drafted_and_never_as_agreed()
     {
         await Begin();
@@ -1280,6 +1271,29 @@ public class StewardServiceTests : IDisposable
         Configure("propose");
         Assert.Equal("proposed", (await In(s => s.LearnedAsync("alpha", "The seed has two businesses."))).Answer);
         Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.Learned);
+    }
+
+    // ---- the briefing, without a memo -------------------------------------------------
+
+    [Fact]
+    public async Task Every_run_is_handed_what_the_last_three_runs_did_newest_first_and_no_memo()
+    {
+        foreach (var n in new[] { "one", "two", "three", "four" })
+        {
+            await Begin();
+            await In(s => s.EndAsync("alpha", $"Run {n}.", false));
+        }
+        await Begin();
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "the process ended");
+
+        var status = Json(await In(s => s.StatusAsync("alpha")));
+        Assert.Contains("recentRuns", status);
+        Assert.Contains("Did not finish: the process ended.", status);
+        Assert.Contains("Run four.", status);
+        Assert.Contains("Run three.", status);
+        Assert.DoesNotContain("Run two.", status);
+        Assert.True(status.IndexOf("Did not finish", StringComparison.Ordinal) < status.IndexOf("Run four.", StringComparison.Ordinal));
+        Assert.DoesNotContain("\"memo", status);
     }
 
     // ---- the gaps its own tools left --------------------------------------------------

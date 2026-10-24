@@ -131,6 +131,12 @@ public enum StewardEntryKind
     /// store has it - the steward, the workers and the owner's own sessions.
     /// </summary>
     Learned,
+    /// <summary>
+    /// One run, as it ended: its own one-line summary from steward_end, or why it stopped without
+    /// one. The last few are handed to every run (recentRuns), which is all the continuity a run
+    /// needs now that everything else lives on the thing it is about.
+    /// </summary>
+    Run,
 }
 
 /// <summary>
@@ -202,7 +208,7 @@ public class StewardEntry
 /// <summary>
 /// What a project's steward carries from one run to the next, and what decides whether it runs.
 /// <para>
-/// A run starts from nothing: the plan, the board and this row. <see cref="Memo"/> is its own
+/// A run starts from nothing: the plan, the board and this row. <see cref="Memo"/> was its own
 /// note to its next run and is the only free text here, held to a length because every run reads
 /// all of it - a memo left to grow is a tax on every run after.
 /// </para>
@@ -212,6 +218,11 @@ public class StewardState
     /// <summary>One row per project; the project's key is the row's.</summary>
     public string ProjectKey { get; set; } = "";
 
+    /// <summary>
+    /// Retired: what a run once wrote to the next. Nothing writes it and no run is shown it; it is
+    /// kept, readable from the owner's side, until each project's last memo has been sorted into
+    /// the places that replaced it (docs/steward-without-memo.md), then dropped.
+    /// </summary>
     public string Memo { get; set; } = "";
     public DateTime? MemoUpdatedAt { get; set; }
 

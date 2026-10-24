@@ -1,6 +1,7 @@
 # A steward without a memo
 
-> Design, 2026-10-23. Replaces the steward's memo with state that lives on the thing it is about,
+> Design, 2026-10-23. Built through piece 6; piece 7 (sorting each project's last memo) is done with its owner.
+> Original summary: Replaces the steward's memo with state that lives on the thing it is about,
 > is written when it happens, and goes away with that thing. Built in the pieces at the end, each
 > shippable on its own.
 
