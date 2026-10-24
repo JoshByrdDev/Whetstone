@@ -500,19 +500,22 @@ public class StewardService
                 ? (object)"This project has no plan configured (steward.plan.units), so there is nothing to file tickets from."
                 : plan.Select(u => new { unit = u.Number, u.File, u.Agreed, u.Draft, outcomes = u.Outcomes.Count }),
             progress = current is null ? null : StewardProgress.For(current, states, mine),
-            outcomes = current is null ? null : current.Outcomes.Select(o =>
-            {
-                var st = states.FirstOrDefault(x => x.Unit == current.Number && x.Outcome == o);
-                return new
+            // Every outcome not yet Done, in every agreed unit - not only the earliest unit with one
+            // left. One outcome waiting on the owner for weeks would otherwise hide every later
+            // unit's notes from the run, and the notes are where what is left to file now lives.
+            outcomes = plan.Where(u => u.Agreed).SelectMany(u => u.Outcomes.Select(o => (u, o)))
+                .Select(x => (x.u, x.o, st: states.FirstOrDefault(s => s.Unit == x.u.Number && s.Outcome == x.o)))
+                .Where(x => x.st?.State != StewardOutcomeState.Done)
+                .Select(x => new
                 {
-                    outcome = o,
-                    state = (st?.State ?? StewardOutcomeState.NotStarted).ToString(),
-                    moreToFile = st?.MoreToFile ?? false,
-                    note = st?.Note,
-                    tickets = mine.Where(t => t.PlanUnit == current.Number && StewardProgress.OutcomesOf(t).Contains(o))
+                    unit = x.u.Number,
+                    outcome = x.o,
+                    state = (x.st?.State ?? StewardOutcomeState.NotStarted).ToString(),
+                    moreToFile = x.st?.MoreToFile ?? false,
+                    note = x.st?.Note,
+                    tickets = mine.Where(t => t.PlanUnit == x.u.Number && StewardProgress.OutcomesOf(t).Contains(x.o))
                         .Select(t => $"#{t.Id} {t.Phase}"),
-                };
-            }),
+                }),
             waitingOnOwner = waiting.Select(q => new { q.Key, q.Question, q.HeldUp, asked = q.AskedAt }),
             done = all.Count - open.Count,
             tickets = rows,

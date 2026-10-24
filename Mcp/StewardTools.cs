@@ -51,8 +51,8 @@ public class StewardTools
 
     [McpServerTool(Name = "steward_status"), Description(
         "The board as it stands: every open ticket with its phase, what it waits on and any question it asked; the limits " +
-        "and how much of each is used; the plan's units and which are agreed; how far the unit being worked is; each outcome's " +
-        "state and tickets; what is waiting on the owner; your open ticket notes (ticketNotes), your rulings in force, facts " +
+        "and how much of each is used; the plan's units and which are agreed; how far the unit being worked is; every outcome " +
+        "not yet Done in every agreed unit, with its state, note and tickets; what is waiting on the owner; your open ticket notes (ticketNotes), your rulings in force, facts " +
         "not yet in the notes store (learnedPending), and what the last three runs did (recentRuns). Changes nothing.")]
     public static Task<StewardReply> Status(StewardService s, [Description("The project key.")] string project) =>
         s.StatusAsync(project);

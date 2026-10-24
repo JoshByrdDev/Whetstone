@@ -1294,6 +1294,26 @@ public class StewardServiceTests : IDisposable
         Assert.DoesNotContain("\"memo", status);
     }
 
+    [Fact]
+    public async Task The_briefing_lists_every_open_outcome_in_every_agreed_unit_not_only_the_earliest()
+    {
+        _git.Second = "> **Status: agreed 2026-01-02.**\n\n- **A1.** One.\n- **A2.** Two.\n";
+        await In(s => s.ImportAsync("alpha", new StewardImport(Outcomes: new[]
+        {
+            new StewardImportOutcome(1, "A1", "Done"),
+            new StewardImportOutcome(1, "A2", "InProgress", false, "Waits on the owner for weeks."),
+            new StewardImportOutcome(2, "A1", "NotStarted", true, "File after #9 merges."),
+            new StewardImportOutcome(2, "A2", "Done"),
+        })));
+
+        var status = Json(await In(s => s.StatusAsync("alpha")));
+        Assert.Contains("Waits on the owner for weeks.", status);   // unit 1, the earliest with work left
+        Assert.Contains("File after #9 merges.", status);           // unit 2, which used to be hidden behind it
+        Assert.Contains("\"unit\":2,\"outcome\":\"A1\"", status);
+        Assert.DoesNotContain("\"unit\":1,\"outcome\":\"A1\"", status);   // Done: nothing for a run to do
+        Assert.DoesNotContain("\"unit\":2,\"outcome\":\"A2\"", status);
+    }
+
     // ---- the gaps its own tools left --------------------------------------------------
 
     [Fact]
