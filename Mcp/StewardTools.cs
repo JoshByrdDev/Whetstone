@@ -192,9 +192,14 @@ public class StewardTools
         s.SetOutcomeAsync(project, unit, outcome, state, moreToFile, note);
 
     [McpServerTool(Name = "steward_draft_unit"), Description(
-        "Write or revise the DRAFT spec for the unit after the last agreed one, committed to the base branch. One draft " +
-        "ahead, never two. Its status line must say it is a draft: only the owner agrees a unit, and until they do nothing " +
-        "in a draft may be ticketed or used to answer a question. Number what it leaves open from the 'next' that " +
+        "Write or revise the DRAFT spec for the slice after the last agreed one, committed to the base branch. One draft " +
+        "ahead, never two. Where the plan has ideas, it expands the next idea IN PLACE - same file, the idea's paragraph " +
+        "kept at the top as the story's seed - and a slice no idea stands for is refused ('no-idea'). Its status line must " +
+        "say it is a draft: only the owner agrees a slice, and until they do nothing in a draft may be ticketed or used to " +
+        "answer a question. Its story ('The walk-through this unit makes possible') is checked: every sentence cites the " +
+        "outcomes that make it true, like (A1) or (B1, B2), every id cited is an outcome of the draft, and it is at most " +
+        "250 words - otherwise refused ('story'). The answer says what it is past 180 words and which outcomes no step " +
+        "cites: say why each is not part of the walk-through. Number what it leaves open from the 'next' that " +
         "steward_decisions gives: a number the register already holds is refused ('number-taken').")]
     public static Task<StewardReply> DraftUnit(StewardService s,
         [Description("The project key.")] string project,

@@ -968,7 +968,7 @@ public partial class StewardServiceTests : IDisposable
     public async Task Only_the_next_unit_can_be_drafted_and_never_as_agreed()
     {
         await Begin();
-        const string draft = "> **Status: draft, awaiting the owner.**\n\n## Outcomes\n\n- **A1.** Something new.\n";
+        const string draft = "> **Status: draft, awaiting the owner.**\n\n## The walk-through this unit makes possible\n\nA person does something new (A1).\n\n## Outcomes\n\n- **A1.** Something new.\n";
         Assert.Equal("not-next", (await In(s => s.DraftUnitAsync("alpha", "04-later.md", draft))).Answer);
         Assert.Equal("bad-request", (await In(s => s.DraftUnitAsync("alpha", "02-second.md", draft.Replace("draft, awaiting the owner", "agreed")))).Answer);
         Assert.Equal("exists", (await In(s => s.DraftUnitAsync("alpha", "02-other-name.md", draft))).Answer);

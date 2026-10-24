@@ -143,6 +143,114 @@ public partial class StewardServiceTests
         Assert.Contains("Slice 1 was agreed as docs/units/01-first.md, and is docs/units/01-renamed.md now", view);
     }
 
+    // ---- piece 6: the story checked ---------------------------------------------------------------
+
+    private static string DraftWith(string story) =>
+        "# Unit 2: invites\n\n> **Status: draft, awaiting the owner.**\n\n## The walk-through this unit makes possible\n\n" + story
+        + "\n\n## Outcomes\n\n- **A1.** One.\n- **B1.** Two.\n- **B2.** Three.\n- **Z1.** The walk-through, driven.\n";
+
+    [Fact]
+    public void A_story_cites_its_outcomes_in_every_sentence_and_stays_short()
+    {
+        var outcomes = new[] { "A1", "B1", "B2", "Z1" };
+        var ok = SliceStory.Check(DraftWith("A business sends an invite (A1). The customer signs up from it and adds a dog (B1, B2)."), outcomes);
+        Assert.Empty(ok.Errors);
+        Assert.Empty(ok.Uncited);   // Z is the walk-through itself, never cited by it
+
+        var bad = SliceStory.Check(DraftWith("A business sends an invite (A1). The customer is happy. They pay (C9)."), outcomes);
+        Assert.Contains(bad.Errors, e => e.Contains("C9"));
+        Assert.Contains(bad.Errors, e => e.Contains("The customer is happy."));
+        Assert.Equal(new[] { "B1", "B2" }, bad.Uncited);
+        // A parenthesis that is not a citation is not one.
+        Assert.Empty(SliceStory.Cited("They pick a day (any open one)."));
+
+        var words = string.Join(" ", Enumerable.Repeat("A person does a thing (A1).", 50));
+        Assert.Contains(SliceStory.Check(DraftWith(words), outcomes).Errors, e => e.Contains("most is 250"));
+        var longish = string.Join(" ", Enumerable.Repeat("A person does a thing (A1).", 40));
+        var warned = SliceStory.Check(DraftWith(longish), outcomes);
+        Assert.Empty(warned.Errors);
+        Assert.Contains(warned.Notes, n => n.Contains("may be two"));
+        Assert.NotEmpty(SliceStory.Check("# x\n\n- **A1.** One.\n", outcomes).Errors);   // no story at all
+    }
+
+    [Fact]
+    public async Task A_draft_whose_story_does_not_check_is_refused_and_a_good_one_says_what_it_does_not_cite()
+    {
+        await Begin();
+        var refused = await In(s => s.DraftUnitAsync("alpha", "02-second.md", DraftWith("A business sends an invite. They are glad (A1).")));
+        Assert.Equal("story", refused.Answer);
+        Assert.Contains("cites no outcome", refused.Why);
+        var drafted = await In(s => s.DraftUnitAsync("alpha", "02-second.md", DraftWith("A business sends an invite (A1).")));
+        Assert.Equal("revised", drafted.Answer);
+        Assert.Contains("No step cites B1, B2", drafted.Why);
+    }
+
+    // ---- piece 7: the story kept true -----------------------------------------------------------
+
+    private const string Building = "# Unit 2: invites\n\n> **Status: agreed 2026-02-01.**\n\n## The walk-through this unit makes possible\n\n"
+        + "A business sends an invite by email (A1). The customer signs up from it (B1).\n\n## Outcomes\n\n- **A1.** One.\n- **B1.** Two.\n\n## Decided\n\nNothing yet.\n\n## Done means\n\nIt works.\n";
+
+    [Fact]
+    public async Task An_answer_about_a_slice_being_built_rewords_its_story_and_writes_the_decision_in_one_commit()
+    {
+        _git.Second = Building;
+        await Begin();
+        var ask = Question("invite-channel") with
+        {
+            Options = new[] { new BlockOption("By text", "Cheaper to read", true), new BlockOption("By email") },
+            Unit = 2,
+            Story = new StewardStoryChange("A business sends an invite by email (A1).",
+                new Dictionary<string, string> { ["By text"] = "A business sends an invite by text (A1)." }),
+        };
+        // The sentence must be in the story exactly; a built slice's story is never rewritten.
+        Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ask with { Story = ask.Story! with { Sentence = "Not in it." } }))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ask with { Unit = 1 }))).Answer);
+        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", ask))).Answer);
+
+        Assert.Equal("recorded", (await In(s => s.OwnerAnswersAsync("alpha", "invite-channel", "By text (Cheaper to read)."))).Answer);
+        var (path, content) = _git.Committed[^1];
+        Assert.Equal("docs/units/02-second.md", path);
+        Assert.Contains("A business sends an invite by text (A1). The customer signs up from it (B1).", content);
+        var made = Register().Single(d => d.QuestionKey == "invite-channel");
+        Assert.Contains($"- **(#{made.Number}) Which provider sends our texts.** Decided by the owner", content);
+        Assert.True(content.IndexOf("## Decided") < content.IndexOf($"(#{made.Number})") && content.IndexOf($"(#{made.Number})") < content.IndexOf("## Done means"));
+        Assert.Equal(2, made.PlanUnit);
+    }
+
+    [Fact]
+    public async Task A_story_question_answered_another_way_changes_nothing_in_the_story()
+    {
+        _git.Second = Building;
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question("invite-channel") with
+        {
+            Options = new[] { new BlockOption("By text", null, true), new BlockOption("By email") },
+            Unit = 2,
+            Story = new StewardStoryChange("A business sends an invite by email (A1).",
+                new Dictionary<string, string> { ["By text"] = "A business sends an invite by text (A1)." }),
+        }));
+        var before = _git.Committed.Count;
+        Assert.Equal("recorded", (await In(s => s.OwnerAnswersAsync("alpha", "invite-channel", "By email."))).Answer);
+        Assert.Equal(before, _git.Committed.Count);
+
+        // Once the slice is built, its story is history.
+        await using (var ctx = NewCtx())
+        {
+            ctx.StewardOutcomes.AddRange(
+                new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = 2, Outcome = "A1", State = StewardOutcomeState.Done },
+                new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = 2, Outcome = "B1", State = StewardOutcomeState.Done });
+            await ctx.SaveChangesAsync();
+        }
+        var late = await In(s => s.AskAsync("alpha", Question("invite-again") with
+        {
+            Options = new[] { new BlockOption("By text", null, true), new BlockOption("By email") },
+            Unit = 2,
+            Story = new StewardStoryChange("A business sends an invite by email (A1).", new Dictionary<string, string> { ["By text"] = "x (A1)." }),
+        }));
+        Assert.Equal("bad-request", late.Answer);
+        Assert.Contains("built", late.Why);
+    }
+
     // ---- piece 3: not decisions -----------------------------------------------------------------
 
     [Fact]

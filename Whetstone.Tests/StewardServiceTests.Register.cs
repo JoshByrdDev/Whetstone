@@ -65,7 +65,7 @@ public partial class StewardServiceTests
 
         // A draft may not leave a decision open under a number the register holds.
         Assert.Equal("number-taken", (await In(s => s.DraftUnitAsync("alpha", "02-second.md",
-            "> **Status: draft.**\n\n- **A1.** One.\n\n## To decide\n\n- **(#7) Again.** Options: (a) x; (b) y. **Pick: (a)**\n"))).Answer);
+            "> **Status: draft.**\n\n## Story\n\nOne thing happens (A1).\n\n- **A1.** One.\n\n## To decide\n\n- **(#7) Again.** Options: (a) x; (b) y. **Pick: (a)**\n"))).Answer);
         var next = Json(await In(s => s.DecisionsAsync("alpha", null)));
         Assert.Contains("\"next\":11", next);
     }

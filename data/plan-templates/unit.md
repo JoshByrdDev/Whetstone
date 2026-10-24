@@ -1,24 +1,29 @@
 # Unit 1: name it for what a person can do at the end of it
 
-> **Status: draft, awaiting the owner.** Written {{DATE}} from [the plan]({{PLAN_FILE}}) section 4,
-> step 1. Nothing is filed against a draft. Its owner agrees it on the board, or by changing this
-> line to say agreed and committing that.
+> **Status: draft, awaiting the owner.** Expanded {{DATE}} from its idea, kept below as the story's
+> seed. Nothing is filed against a draft. Its owner agrees it on the board, or by changing this line
+> to say agreed and committing that.
 >
-> **How to read it.** A plain statement repeats something the plan decides, and names the section.
-> A choice the plan does not make is a numbered decision under "To decide", with its options.
+> **How to read it.** A decision already made is cited by its number in the register, (#12), and
+> never restated. A choice nothing decides is a numbered decision under "To decide", with its options.
+
+The idea's paragraph, as the owner wrote it.
 
 ## The walk-through this unit makes possible
 
 One paragraph, in the present tense, of a person using what this unit builds from start to finish.
+Each step cites the outcomes that make it true, inline, so it still reads as a story: "...signs in
+(A1), adds their two dogs (B1, B2), picks a day (C1)...". Every sentence cites at least one outcome,
+and every id cited is an outcome below. At most 250 words; past 180, the slice is probably two.
 Everything below is in service of this paragraph. If a thing is not needed to make it true, it is
-in a later unit.
+in a later unit. Once agreed, only the owner's answers change it; once built, nothing does.
 
 ## Fixed for this unit
 
 | | | From |
 |---|---|---|
-| Who it is for | ... | plan section 2 |
-| What it builds on | ... | plan section 2 |
+| Who it is for | ... | the charter, or a decision (#n) |
+| What it builds on | ... | the slice before it |
 
 ## Outcomes
 
@@ -40,7 +45,8 @@ reused or renumbered once the unit is agreed.
 
 What is checked across the whole unit once its outcomes are built, before it is released.
 
-- **Z1.** The walk-through above, driven end to end.
+- **Z1.** The walk-through above, driven end to end. The board files it as a ticket of its own once
+  every other outcome is done, and the unit is built when that ticket passes.
 
 ## Not in this unit
 

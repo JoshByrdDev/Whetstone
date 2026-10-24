@@ -1118,6 +1118,11 @@ public partial class StewardService
         if (unit.Agreed || !unit.Draft)
             return Refuse("bad-request", "Its status line must say it is a draft. Only the owner agrees a unit.");
         if (unit.Outcomes.Count == 0) return Refuse("bad-request", "The draft has no outcomes written the way the plan's other units write them.");
+        // The story is the promise: every step cites the outcomes that make it true, and a story
+        // too long to read is a slice too big to build (docs/plans-as-slices.md, section 4).
+        var story = SliceStory.Check(text ?? "", unit.Outcomes);
+        if (story.Errors.Count > 0)
+            return Refuse("story", string.Join(" ", story.Errors), new { words = story.Words, notes = story.Notes });
         // A decision keeps its number when the owner settles it, and numbers are the project's,
         // once: one the register already holds would be two decisions under one name.
         var asks = UnitDecisions.Open(text ?? "").Select(d => d.Number).ToList();
@@ -1136,7 +1141,8 @@ public partial class StewardService
         if (refusal is not null) return Refuse("refused", refusal);
         if (!unchanged && (there is null || there.Idea)) await WriteReadableAsync(cfg, ct);
         return unchanged ? new StewardReply("unchanged")
-            : new StewardReply(there is null || there.Idea ? "drafted" : "revised", null, new { file = path, outcomes = unit.Outcomes.Count, commit = sha });
+            : new StewardReply(there is null || there.Idea ? "drafted" : "revised", story.Notes.Count > 0 ? string.Join(" ", story.Notes) : null,
+                new { file = path, outcomes = unit.Outcomes.Count, commit = sha, storyWords = story.Words, notCited = story.Uncited });
     }
 
     // ---- what goes to the owner, and the record ---------------------------------------
