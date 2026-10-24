@@ -35,7 +35,7 @@ export function StewardOnTicket({ project, ticketId }: { project: string; ticket
       <div className="text-[11px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-gray-500 mb-2.5">From the steward</div>
       <div className="flex flex-col gap-2">
         {[...rows].reverse().map(e => (
-          <div key={e.id} className="rounded-lg border border-hair px-3 py-2.5" style={{ opacity: e.handledAt ? 0.6 : 1 }}>
+          <div key={e.id} className="rounded-lg border border-hair px-3 py-2.5" style={{ opacity: (e.kind === 'Ruling' ? e.reversedAt : e.handledAt) ? 0.6 : 1 }}>
             <div className="text-[10px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-gray-500 mb-1">
               {e.kind === 'Call' ? 'A call it made for you'
                 : e.kind === 'TicketNote' ? (e.handledAt ? 'It meant to do - done' : 'It means to do')
