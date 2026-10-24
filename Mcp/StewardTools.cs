@@ -72,8 +72,21 @@ public class StewardTools
         "is listed under clearedByOwner, which only the owner sets, from the board. A flag marked 'blocks' means the " +
         "work is not proved: send it back saying what the flag says.")]
     public static Task<StewardReply> Review(StewardService s,
-        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId) =>
-        s.ReviewAsync(project, ticketId);
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("Optional: one part of a long review - record (description, summary, work items, comments), checks " +
+                     "(QA items), findings (independent review), or flags. Leave it out first: a review that fits comes whole, " +
+                     "and one that does not comes as its head and flags with each part's size.")] string? part = null) =>
+        s.ReviewAsync(project, ticketId, part);
+
+    [McpServerTool(Name = "steward_close_unchanged"), Description(
+        "Close a ticket at NeedsReview that has nothing to merge, because what it asked for is already true on the base " +
+        "(steward_merge answered 'nothing-to-merge'). Only when its review holds - its checks passed on the base - and only in " +
+        "full mode; in manage mode closing is the owner's: ask, with the ticket's id. Say why: what on the base already does " +
+        "it. That goes on the record for the owner. Then set its outcomes and note anything for release, as after a merge.")]
+    public static Task<StewardReply> CloseUnchanged(StewardService s,
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("Why there is nothing to merge: what on the base already does what it asked, and where.")] string why) =>
+        s.CloseUnchangedAsync(project, ticketId, why);
 
     [McpServerTool(Name = "steward_diff"), Description(
         "The ticket's change itself, as one diff against its base. A long diff is cut and says so: ask again with a path " +
@@ -87,6 +100,7 @@ public class StewardTools
         "Check a ticket at NeedsReview, then merge it into the base branch and close it. Call it only once you have read the " +
         "review and the diff and are signing the work off. Every answer short of 'merged' names what to do instead: " +
         "'owner' - ask, and leave it unmerged (the owner clears a flag from the board; an answer does not); 'not-proved' - send it back saying what the flags say; 'behind' - rebase, " +
+        "'nothing-to-merge' - its answer says what to do (steward_close_unchanged when the work is already on the base); " +
         "then merge again; 'check-failed' - send it back to NeedsImplementation with the output; 'check-could-not-run' - the " +
         "machine, not the ticket: leave it at review and ask the owner once; 'conflict' - send it back to NeedsImplementation " +
         "naming the files; 'not-in-this-mode' - merging is not yours here. None of them means look for another way. " +

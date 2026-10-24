@@ -28,7 +28,42 @@ public record BranchChange(IReadOnlyList<string> Files, int Behind, int Ahead, s
 public record SyncFromResult(string Answer, int Commits, IReadOnlyList<string> Files, string? Why);
 
 /// <summary>Outcome of one command run on a ticket's worktree before it is merged.</summary>
-public record CheckRun(bool Ok, bool TimedOut, string Output);
+/// <param name="Output">The last lines of what the check printed.</param>
+/// <param name="Failures">
+/// The lines from the WHOLE output that name what failed - a failing test, an assertion, a compiler
+/// error - picked out because the tail alone often ends on a summary that names none of them.
+/// </param>
+public record CheckRun(bool Ok, bool TimedOut, string Output, IReadOnlyList<string>? Failures = null);
+
+/// <summary>Picks out of a check's whole output the lines that say what failed.</summary>
+public static class CheckFailures
+{
+    private static readonly System.Text.RegularExpressions.Regex Failing = new(
+        @"(^\s*(FAIL|FAILED|not ok)\b)|(^\s*[\u25CF\u2715\u2717\u00D7\u274C]\s)|AssertionError|Assertion failed|" +
+        @"\bExpected[: ]|\bReceived:|\berror (TS|CS)\d+|\b[1-9]\d* (failed|failing)\b|^\s*Error:|\bFailed [A-Za-z_.]+\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Each line that names a failure, with the line after it for context, in order, each cut to a
+    /// readable length and the whole held to <paramref name="max"/> lines.
+    /// </summary>
+    public static IReadOnlyList<string> Pick(IReadOnlyList<string> lines, int max = 60)
+    {
+        var picked = new List<string>();
+        var taken = new HashSet<int>();
+        for (var i = 0; i < lines.Count && picked.Count < max; i++)
+        {
+            if (!Failing.IsMatch(lines[i])) continue;
+            foreach (var j in new[] { i, i + 1 })
+            {
+                if (j >= lines.Count || !taken.Add(j) || picked.Count >= max) continue;
+                var l = lines[j].TrimEnd();
+                picked.Add(l.Length > 300 ? l[..300] + " ..." : l);
+            }
+        }
+        return picked;
+    }
+}
 
 /// <summary>
 /// The git a project's steward needs, and nothing else it could ask for.
@@ -343,6 +378,7 @@ public partial class TicketGitService
         var r = await RunAsync("cmd.exe", dir, timeout, ct, "/d", "/c", command);
         var lines = $"{r.Stdout}\n{r.Stderr}".Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0).ToList();
         return new CheckRun(r.Ok, r.ExitCode == -1 && r.Stderr.Contains("did not finish"),
-            string.Join("\n", lines.Skip(Math.Max(0, lines.Count - 40))));
+            string.Join("\n", lines.Skip(Math.Max(0, lines.Count - 40))),
+            r.Ok ? null : CheckFailures.Pick(lines));
     }
 }

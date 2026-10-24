@@ -1282,6 +1282,125 @@ public class StewardServiceTests : IDisposable
         Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.Learned);
     }
 
+    // ---- the gaps its own tools left --------------------------------------------------
+
+    [Fact]
+    public async Task A_review_that_fits_comes_whole_and_one_part_comes_alone()
+    {
+        var id = await AtReview();
+        var whole = Json(await In(s => s.ReviewAsync("alpha", id)));
+        Assert.Contains("\"description\"", whole);
+        Assert.Contains("\"qaItems\"", whole);
+        Assert.Contains("\"flags\"", whole);
+
+        var checks = Json(await In(s => s.ReviewAsync("alpha", id, "checks")));
+        Assert.Contains("\"qaItems\"", checks);
+        Assert.Contains("\"title\"", checks);
+        Assert.DoesNotContain("\"description\"", checks);
+        Assert.Equal("bad-request", (await In(s => s.ReviewAsync("alpha", id, "everything"))).Answer);
+    }
+
+    [Fact]
+    public async Task A_review_too_long_to_send_whole_comes_as_its_head_and_flags_with_each_parts_size()
+    {
+        var id = await AtReview();
+        await using (var c = NewCtx())
+        {
+            var t = await c.Tickets.FindAsync(id);
+            t!.Description = new string('d', StewardService.ReviewMaxChars + 100);
+            await c.SaveChangesAsync();
+        }
+        var r = await In(s => s.ReviewAsync("alpha", id));
+        Assert.Contains("part", r.Why);
+        var head = Json(r);
+        Assert.Contains("\"flags\"", head);
+        Assert.Contains("\"parts\"", head);
+        Assert.DoesNotContain("dddddddddd", head);
+        Assert.Contains("dddddddddd", Json(await In(s => s.ReviewAsync("alpha", id, "record"))));
+    }
+
+    [Fact]
+    public async Task A_run_is_told_which_of_its_reasons_the_board_has_moved_past()
+    {
+        var atReview = await AtReview();
+        await using (var c = NewCtx())
+        {
+            var st = Steward(c);
+            await st.MarkDueAsync("alpha", $"#{atReview} is blocked");        // answered since: now at review
+            await st.MarkDueAsync("alpha", $"#{atReview} is ready for review");
+            await st.MarkDueAsync("alpha", "the owner answered sms-provider");
+        }
+        var begin = (await Begin()).Data!;
+        var because = (string)begin.GetType().GetProperty("because")!.GetValue(begin)!;
+        var gone = (List<string>)begin.GetType().GetProperty("noLongerSo")!.GetValue(begin)!;
+        Assert.Contains($"#{atReview} is ready for review", because);
+        Assert.Contains("the owner answered sms-provider", because);
+        Assert.DoesNotContain("is blocked", because);
+        Assert.Equal($"#{atReview} is blocked (now NeedsReview)", Assert.Single(gone));
+    }
+
+    [Fact]
+    public void The_lines_that_name_a_failure_are_picked_out_of_the_whole_output()
+    {
+        var output = new[]
+        {
+            "> vitest run", " RUN  v2.1.0",
+            " FAIL  src/day.test.ts > the day read > lists a missed visit",
+            "AssertionError: expected 2 to be 3",
+            "   at src/day.test.ts:41:17",
+        }.Concat(Enumerable.Range(1, 80).Select(i => $"  ok line {i}"))
+         .Concat(new[] { " Test Files  1 failed | 40 passed (41)", "      Tests  1 failed | 900 passed (901)" }).ToList();
+
+        var picked = CheckFailures.Pick(output);
+        Assert.Contains(picked, l => l.Contains("FAIL  src/day.test.ts"));
+        Assert.Contains(picked, l => l.Contains("AssertionError: expected 2 to be 3"));
+        Assert.Contains(picked, l => l.Contains("src/day.test.ts:41:17"));   // the line after, for where
+        Assert.Contains(picked, l => l.Contains("1 failed | 900 passed"));
+        Assert.DoesNotContain(picked, l => l.Contains("ok line 40"));
+        Assert.Empty(CheckFailures.Pick(new[] { "all good", "0 failed" }));
+    }
+
+    [Fact]
+    public async Task A_merge_refused_as_not_ready_says_where_the_ticket_went_and_why()
+    {
+        var id = await AtReview();
+        await using (var c = NewCtx())
+            await new TicketService(c).TransitionAsync(id, TicketPhase.NeedsImplementation, "Rebase conflict in src/day.ts");
+        await Begin();
+        var r = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("not-ready", r.Answer);
+        Assert.Contains("left NeedsReview for NeedsImplementation", r.Why);
+        Assert.Contains("Rebase conflict in src/day.ts", r.Why);
+    }
+
+    [Fact]
+    public async Task A_ticket_with_nothing_to_merge_is_closed_in_full_mode_with_its_reason_on_the_record()
+    {
+        _git.Ahead = 0;
+        var id = await AtReview();
+        await Begin();
+        var merge = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("nothing-to-merge", merge.Answer);
+        Assert.Contains("steward_close_unchanged", merge.Why);
+
+        Assert.Equal("bad-request", (await In(s => s.CloseUnchangedAsync("alpha", id, " "))).Answer);
+        Assert.Equal("closed", (await In(s => s.CloseUnchangedAsync("alpha", id, "The day read already lists missed visits (#280)."))).Answer);
+        Assert.Equal(TicketPhase.Done, (await Reload(id)).Phase);
+        Assert.Contains("nothing to merge", Entries().Single(e => e.Kind == StewardEntryKind.Call).Text);
+    }
+
+    [Fact]
+    public async Task Closing_unchanged_is_refused_with_commits_to_merge_or_outside_full_mode()
+    {
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("has-commits", (await In(s => s.CloseUnchangedAsync("alpha", id, "Already there."))).Answer);
+        _git.Ahead = 0;
+        Configure("manage");
+        Assert.Equal("not-in-this-mode", (await In(s => s.CloseUnchangedAsync("alpha", id, "Already there."))).Answer);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+    }
+
     // ---- the owner's link from a ticket to the plan --------------------------------
 
     private async Task<int> Loose(string? description = null)
@@ -1370,6 +1489,8 @@ public class StewardServiceTests : IDisposable
         public string Head = "abc";
         public IReadOnlyList<string> Files = new[] { "src/app.ts" };
         public int Behind;
+        /// <summary>Commits the branch has that the base lacks; none is a ticket with nothing to merge.</summary>
+        public int Ahead = 1;
         /// <summary>The change as the owner would see it; a new value is the ticket reworked.</summary>
         public string ChangeId = "change-1";
         public CheckRun Check = new(true, false, "");
@@ -1400,7 +1521,7 @@ public class StewardServiceTests : IDisposable
             Task.FromResult(InRepo.TryGetValue(path, out var text) ? text : null);
 
         public Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default) =>
-            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, 1, "1 file changed", "main", "tip0123456", ChangeId));
+            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, Ahead, "1 file changed", "main", "tip0123456", ChangeId));
 
         public Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default) =>
             Task.FromResult<(string, bool, int)?>(("diff", false, 4));

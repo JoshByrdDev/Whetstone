@@ -232,10 +232,15 @@ public class StewardService
         if (cfg!.Steward.SyncFrom.Length > 0)
             sync = await _git.SyncFromAsync(projectKey, cfg.Steward.SyncFrom, cfg.StewardMode == StewardMode.Propose, ct);
 
+        var (still, gone) = await FreshReasonsAsync(projectKey, why, ct);
+
         return new StewardReply("started", null, new
         {
             mode = cfg.StewardMode.ToString().ToLowerInvariant(),
-            because = why ?? "nothing in particular: a look at whether anything is left to file",
+            // Why this run was owed, checked against the board as it is now: a ticket that was
+            // blocked when the reason was written may have been answered since.
+            because = still.Count > 0 ? string.Join("; ", still) : "nothing in particular: a look at whether anything is left to file",
+            noLongerSo = gone.Count > 0 ? gone : null,
             newAnswers = fresh.Select(q => new { q.Key, q.Question, q.Answer }),
             newInstructions = said.Select(e => e.Text),
             // Rulings of yours the owner has reversed since the last run that ended properly: stop
@@ -244,6 +249,32 @@ public class StewardService
             sync,
             status = (await StatusAsync(projectKey, ct)).Data,
         });
+    }
+
+    private static readonly Regex TicketReason = new(@"^#(\d+) is (ready for review|blocked)$");
+
+    /// <summary>
+    /// The reasons a run is owed, split into those still true and those the board has moved past.
+    /// Only a reason about where a ticket stands can go stale; every other reason (an answer, an
+    /// instruction, a run that did not finish) is news until a run has dealt with it.
+    /// </summary>
+    private async Task<(List<string> Still, List<string> Gone)> FreshReasonsAsync(string projectKey, string? why, CancellationToken ct)
+    {
+        var still = new List<string>();
+        var gone = new List<string>();
+        var reasons = (why ?? "").Split("; ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var r in reasons)
+        {
+            var m = TicketReason.Match(r);
+            if (!m.Success) { still.Add(r); continue; }
+            var id = int.Parse(m.Groups[1].Value);
+            var phase = await _db.Tickets.AsNoTracking().Where(t => t.Id == id && t.ProjectKey == projectKey)
+                .Select(t => (TicketPhase?)t.Phase).FirstOrDefaultAsync(ct);
+            var want = m.Groups[2].Value == "blocked" ? TicketPhase.Blocked : TicketPhase.NeedsReview;
+            if (phase == want) still.Add(r);
+            else gone.Add($"{r} (now {phase?.ToString() ?? "gone"})");
+        }
+        return (still, gone);
     }
 
     /// <summary>
@@ -545,8 +576,24 @@ public class StewardService
     }
 
     /// <summary>A finished ticket's record, what it changed, and what about it a merge has to weigh.</summary>
-    public async Task<StewardReply> ReviewAsync(string projectKey, int ticketId, CancellationToken ct = default)
+    /// <summary>
+    /// The most of a review sent in one answer. Past it, an MCP client saves the answer to a file the
+    /// steward has no way to read whole - so a long review is sent as its head and its flags, and the
+    /// rest by part.
+    /// </summary>
+    public const int ReviewMaxChars = 24000;
+
+    /// <summary>The parts a long review is read in.</summary>
+    public static readonly string[] ReviewParts = { "record", "checks", "findings", "flags" };
+
+    public async Task<StewardReply> ReviewAsync(string projectKey, int ticketId, CancellationToken ct = default) =>
+        await ReviewAsync(projectKey, ticketId, null, ct);
+
+    public async Task<StewardReply> ReviewAsync(string projectKey, int ticketId, string? part, CancellationToken ct = default)
     {
+        part = part?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(part) && !ReviewParts.Contains(part))
+            return Refuse("bad-request", $"A review's parts are {string.Join(", ", ReviewParts)}.");
         var cfg = Config(projectKey);
         if (Off(cfg, projectKey) is { } off) return off;
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
@@ -557,42 +604,84 @@ public class StewardService
         var said = t.Comments.Where(c => c.Author != AuthorKind.System).OrderBy(c => c.CreatedAt).ToList();
 
         var notes = await OpenNotesAsync(projectKey, t.Id, ct);
+        var qa = t.QaItems.OrderBy(q => q.Order).ToList();
+        var findings = t.GateFindings.OrderBy(f => f.Order).ToList();
 
-        return new StewardReply("review", null, new
+        // Every answer opens with this: which ticket, and what an earlier run meant to do about it -
+        // first, because it is often why this review matters. Close each with steward_done_with.
+        var reply = new Dictionary<string, object?>
         {
-            id = t.Id,
-            phase = t.Phase.ToString(),
-            title = t.Title,
-            // What an earlier run meant to do about this ticket, first, because it is often why
-            // this review matters. Close each with steward_done_with once it is done.
-            yourNotes = notes.Select(n => new { n.Id, n.Text, n.At }),
-            description = t.Description,
-            summary = t.ImplementationSummary,
-            workItems = t.WorkItems.OrderBy(w => w.Order).Select(w => new { w.Done, scope = w.Scope.ToString(), w.Text }),
-            qaItems = t.QaItems.OrderBy(q => q.Order).Select(q => new
+            ["id"] = t.Id,
+            ["phase"] = t.Phase.ToString(),
+            ["title"] = t.Title,
+            ["yourNotes"] = notes.Select(n => new { n.Id, n.Text, n.At }),
+        };
+        var parts = new Dictionary<string, Dictionary<string, object?>>
+        {
+            ["record"] = new()
             {
-                status = q.Status.ToString(),
-                verified = HandoffRequirements.IsVerified(q, lastBackward),
-                byInspection = q.PassedByInspection,
-                q.Text,
-                q.Note,
-            }),
-            codeReviewOnly = t.SkipQaTesting,
-            qaShots = t.QaShots.Count,
-            independentReview = t.GateFindings.OrderBy(f => f.Order)
-                .Select(f => new { f.Title, ruling = f.Ruling?.ToString(), why = f.RulingNote }),
-            sentBackBefore = await SendBacksAsync(t.Id),
-            changed = change is null ? (object)"this ticket has no branch" : change,
-            flags = change is null ? new List<StewardFlag>() : await FlagsAsync(cfg!, t, change, ct),
-            // Owner flags the owner has cleared for this change as it stands: merge does not stop on these.
-            clearedByOwner = change is null ? new List<string>() : (await ClearedAsync(projectKey, t.Id, change, ct)).ToList(),
-            // A worker never edits the owner's own documents: the line it would have written is in
-            // its comment under this heading, wherever in the record that comment now sits.
-            forTheOwnersDocs = said.Where(c => Regex.IsMatch(c.Body, @"for the owner['’]s docs", RegexOptions.IgnoreCase))
-                .Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
-            // The last things the phases said, newest last: the refinement hand-off is where open questions sit.
-            comments = said.TakeLast(4).Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
-        });
+                ["description"] = t.Description,
+                ["summary"] = t.ImplementationSummary,
+                ["workItems"] = t.WorkItems.OrderBy(w => w.Order).Select(w => new { w.Done, scope = w.Scope.ToString(), w.Text }),
+                // A worker never edits the owner's own documents: the line it would have written is in
+                // its comment under this heading, wherever in the record that comment now sits.
+                ["forTheOwnersDocs"] = said.Where(c => Regex.IsMatch(c.Body, @"for the owner['’]s docs", RegexOptions.IgnoreCase))
+                    .Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
+                // The last things the phases said, newest last: the refinement hand-off is where open questions sit.
+                ["comments"] = said.TakeLast(4).Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
+            },
+            ["checks"] = new()
+            {
+                ["codeReviewOnly"] = t.SkipQaTesting,
+                ["qaShots"] = t.QaShots.Count,
+                ["qaItems"] = qa.Select(q => new
+                {
+                    status = q.Status.ToString(),
+                    verified = HandoffRequirements.IsVerified(q, lastBackward),
+                    byInspection = q.PassedByInspection,
+                    q.Text,
+                    q.Note,
+                }),
+            },
+            ["findings"] = new()
+            {
+                ["independentReview"] = findings.Select(f => new { f.Title, ruling = f.Ruling?.ToString(), why = f.RulingNote }),
+            },
+            ["flags"] = new()
+            {
+                ["sentBackBefore"] = await SendBacksAsync(t.Id),
+                ["changed"] = change is null ? "this ticket has no branch" : change,
+                ["flags"] = change is null ? new List<StewardFlag>() : await FlagsAsync(cfg!, t, change, ct),
+                // Owner flags the owner has cleared for this change as it stands: merge does not stop on these.
+                ["clearedByOwner"] = change is null ? new List<string>() : (await ClearedAsync(projectKey, t.Id, change, ct)).ToList(),
+            },
+        };
+
+        if (!string.IsNullOrEmpty(part))
+        {
+            foreach (var kv in parts[part]) reply[kv.Key] = kv.Value;
+            return new StewardReply("review", null, reply);
+        }
+
+        var whole = new Dictionary<string, object?>(reply);
+        foreach (var p in parts.Values) foreach (var kv in p) whole[kv.Key] = kv.Value;
+        if (System.Text.Json.JsonSerializer.Serialize(whole).Length <= ReviewMaxChars)
+            return new StewardReply("review", null, whole);
+
+        // Too long to send whole. The flags are what a merge stops on, so they always come; the rest
+        // is counted, so the steward knows what it is asking for.
+        foreach (var kv in parts["flags"]) reply[kv.Key] = kv.Value;
+        reply["checksAtAGlance"] = new
+        {
+            items = qa.Count,
+            passedAndCurrent = qa.Count(q => q.Status == QaStatus.Passed && HandoffRequirements.IsVerified(q, lastBackward)),
+            byInspection = qa.Count(q => q.PassedByInspection),
+        };
+        reply["findingsAtAGlance"] = new { findings = findings.Count, unruled = findings.Count(f => f.Ruling is null) };
+        reply["parts"] = ReviewParts.ToDictionary(p => p, p => System.Text.Json.JsonSerializer.Serialize(parts[p]).Length);
+        return new StewardReply("review",
+            "Too long to send whole, so this is its head and its flags. Ask again with part = record, checks or findings for the "
+            + "rest; 'parts' gives each one's size in characters.", reply);
     }
 
     /// <summary>The ticket's change itself. With <paramref name="path"/>, one file of it.</summary>
@@ -632,11 +721,14 @@ public class StewardService
         if (t is null) return no!;
         if (t.Track != TicketTrack.Delivery) return Refuse("not-ready", "Only a delivery ticket is merged.");
         if (t.Phase != TicketPhase.NeedsReview)
-            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is merged.");
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is merged.{await LeftReviewAsync(t)}");
 
         var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
         if (change is null || change.Ahead == 0)
-            return Refuse("nothing-to-merge", $"Ticket {ticketId} has no commits that the base lacks.");
+            return Refuse("nothing-to-merge", $"Ticket {ticketId} has no commits that the base lacks: there is nothing to merge. "
+                + "If its review holds because what it asked for is already true on the base, close it with steward_close_unchanged, "
+                + "saying why, then set its outcomes and note anything for release as after a merge. If the work should be "
+                + "there and is not, send it back to NeedsImplementation saying so.");
 
         var flags = await FlagsAsync(cfg, t, change, ct);
         var cleared = await ClearedAsync(projectKey, t.Id, change, ct);
@@ -671,8 +763,9 @@ public class StewardService
                         new { check = c.Name, output = run.Output });
                 return Refuse("check-failed",
                     run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result. Send it back to NeedsImplementation with this."
-                                 : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this.",
-                    new { check = c.Name, output = run.Output });
+                                 : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this: "
+                                   + "'failing' is every line in the whole output that names a failure, 'output' is how it ended.",
+                    new { check = c.Name, failing = run.Failures ?? Array.Empty<string>(), output = run.Output });
             }
         }
 
@@ -697,6 +790,57 @@ public class StewardService
         return new StewardReply("merged", null, new { commit = sha, closed = true });
     }
 
+    /// <summary>
+    /// Why a ticket is no longer at NeedsReview, from the transition that took it away - so a merge
+    /// or a send-back refused as not-ready says where it went and who moved it, not only that it moved.
+    /// Empty when it never was at review.
+    /// </summary>
+    private async Task<string> LeftReviewAsync(Ticket t)
+    {
+        var left = await _db.PhaseTransitions.AsNoTracking()
+            .Where(p => p.TicketId == t.Id && p.From == TicketPhase.NeedsReview)
+            .OrderByDescending(p => p.At).ThenByDescending(p => p.Id).FirstOrDefaultAsync();
+        if (left is null) return "";
+        var mins = (int)(DateTime.UtcNow - left.At).TotalMinutes;
+        var when = mins < 2 ? "just now" : mins < 120 ? $"{mins} minutes ago" : $"{mins / 60} hours ago";
+        var why = string.IsNullOrWhiteSpace(left.Reason) ? "" : $": {Head(left.Reason.Trim(), 300)}";
+        return $" It left NeedsReview for {left.To} {when}, moved by {left.Actor.ToString().ToLowerInvariant()}{why}."
+            + " Nothing for you to do about it now: it comes back to review by itself.";
+    }
+
+    /// <summary>
+    /// Close a ticket at review that has nothing to merge, because what it asked for is already true
+    /// on the base. Only in full mode, which is the mode that closes tickets; only at NeedsReview;
+    /// only when the branch really has no commit the base lacks. The reason goes on the record.
+    /// </summary>
+    public async Task<StewardReply> CloseUnchangedAsync(string projectKey, int ticketId, string why, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        if (cfg.StewardMode == StewardMode.Manage)
+            return Refuse("not-in-this-mode", "Closing a ticket is the owner's in this mode. Ask them, with the ticket's id.");
+        why = why?.Trim() ?? "";
+        if (why.Length == 0) return Refuse("bad-request", "Say why there is nothing to merge: what on the base already does what it asked.");
+        var (t, no) = await TicketOfAsync(projectKey, ticketId);
+        if (t is null) return no!;
+        if (t.Track != TicketTrack.Delivery) return Refuse("not-ready", "Only a delivery ticket is closed this way.");
+        if (t.Phase != TicketPhase.NeedsReview)
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is closed.{await LeftReviewAsync(t)}");
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        if (change is not null && change.Ahead > 0)
+            return Refuse("has-commits", $"Ticket {ticketId} has {change.Ahead} commit(s) the base lacks. It is merged, not closed.");
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"close ticket {ticketId} unchanged: {Head(why, 200)}");
+
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = ticketId,
+            Text = $"Closed with nothing to merge. {why}",
+        });
+        await _db.SaveChangesAsync(ct);
+        await _tickets.TransitionAsync(ticketId, TicketPhase.Done, $"Closed with nothing to merge: {Head(why, 300)}", TransitionActor.Steward);
+        return new StewardReply("closed", null, new { closed = true });
+    }
+
     public async Task<StewardReply> RebaseAsync(string projectKey, int ticketId, CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
@@ -705,7 +849,7 @@ public class StewardService
         if (t is null) return no!;
         if (string.IsNullOrWhiteSpace(t.Branch)) return Refuse("no-branch", $"Ticket {ticketId} has no branch.");
         if (t.Phase != TicketPhase.NeedsReview)
-            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. A branch is only rebased from here while it waits at NeedsReview: at any other time a worker may be in it.");
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. A branch is only rebased from here while it waits at NeedsReview: at any other time a worker may be in it.{await LeftReviewAsync(t)}");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rebase {t.Branch} onto the base");
 
         var r = await _git.RebaseAsync(projectKey, t.Branch, ct);
@@ -733,7 +877,7 @@ public class StewardService
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
         if (t is null) return no!;
         if (t.Phase != TicketPhase.NeedsReview)
-            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is sent back from here.");
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is sent back from here.{await LeftReviewAsync(t)}");
         var before = await SendBacksAsync(ticketId);
         if (before >= cfg.Steward.SendBacksPerTicket)
             return Refuse("limit", $"Ticket {ticketId} has been sent back {before} time(s) already. The next is the owner's: ask.");
