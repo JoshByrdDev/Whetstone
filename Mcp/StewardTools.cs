@@ -29,10 +29,11 @@ public class StewardTools
     [McpServerTool(Name = "steward_begin"), Description(
         "Open a run. Call this first, once. 'locked' means another run is still going: stop now and do nothing. " +
         "Otherwise it answers with the mode, why this run was started, any answers and standing instructions the owner has " +
-        "given since the last run that ended properly (each is a decision made: apply them first), " +
+        "given since the last run that ended properly, and the owner's own changes to the register of decisions " +
+        "(changedDecisions: recorded, withdrawn, or now replacing another) - each is a decision made: apply them first. " +
         "When it says the last run did not finish, that run may have acted on some of them already: check the board before " +
         "acting again. " +
-        "the result of bringing the base branch up to date, and the board's status. In 'propose' mode every tool that changes " +
+        "It also hands over the result of bringing the base branch up to date, and the board's status. In 'propose' mode every tool that changes " +
         "something only says what it would have done: carry on exactly as normal, so the owner can read what you would do.")]
     public static Task<StewardReply> Begin(StewardService s, [Description("The project key.")] string project) =>
         s.BeginAsync(project);
@@ -58,14 +59,21 @@ public class StewardTools
         s.StatusAsync(project);
 
     [McpServerTool(Name = "steward_decisions"), Description(
-        "What the owner has decided through you: every answer to a question you asked and every standing instruction they " +
-        "left, oldest first. Each is a decision made. An answer comes with every option it was picked from ('offered': " +
-        "picked, your own pick, or neither), because what was turned down is decided too. Pass a query to get only those that mention it - the full list grows " +
-        "for as long as the project runs, so search it before answering a blocked ticket or writing a ticket's criteria.")]
+        "The register of decisions: what the owner has decided and is still in force, each by its number (#n). It holds " +
+        "the plan's decisions, every unit's settled decisions, the answers to your questions and the owner's standing " +
+        "words, in one place, with one status each. By default only what is in force comes back; a provisional one is " +
+        "marked with what it lasts until. An answer comes with every option it was picked from ('offered': picked, your " +
+        "own pick, or neither), because what was turned down is decided too. Narrow it by unit (that slice's decisions " +
+        "and the project's), by outcome within a unit, or by a query - search it before answering a blocked ticket, " +
+        "writing a ticket's criteria or asking the owner. Pass history to see replaced and withdrawn decisions too, " +
+        "each with what replaced it; never act on one of those. 'next' is the number a draft's next open decision takes.")]
     public static Task<StewardReply> Decisions(StewardService s,
         [Description("The project key.")] string project,
-        [Description("Optional text to look for in the question, its key or the answer.")] string? query = null) =>
-        s.DecisionsAsync(project, query);
+        [Description("Optional text to look for in the rule, the question, its key or its options.")] string? query = null,
+        [Description("Optional unit of the plan being worked: its decisions, and the project's.")] int? unit = null,
+        [Description("Optional outcome id within that unit, like A2: only the unit's decisions that apply to it.")] string? outcome = null,
+        [Description("True to include replaced and withdrawn decisions, as history.")] bool history = false) =>
+        s.DecisionsAsync(project, query, unit, outcome, history);
 
     [McpServerTool(Name = "steward_review"), Description(
         "A finished ticket's record: what it asked, the summary, work items, each check and whether it carries a current pass, " +
@@ -134,12 +142,12 @@ public class StewardTools
 
     [McpServerTool(Name = "steward_answer_blocked"), Description(
         "Answer a blocked ticket and return it to the queue it stopped in. ONLY from a decision already made: say the choice " +
-        "and quote the place that decides it (the spec and section, the file and line, the owner's answer by its key). Your " +
+        "and quote the decision that settles it by its number (#n), or the spec and section. Your " +
         "answer is handed to the run that picks the ticket up. When something merely broke and the cause has passed, the " +
         "answer is 'retry'. Anything no decision settles is the owner's: leave it blocked and ask.")]
     public static Task<StewardReply> AnswerBlocked(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
-        [Description("The choice, and the place that decides it, quoted.")] string answer) =>
+        [Description("The choice, and the decision that settles it (#n), quoted.")] string answer) =>
         s.AnswerBlockAsync(project, ticketId, answer);
 
     [McpServerTool(Name = "steward_amend"), Description(
@@ -186,7 +194,8 @@ public class StewardTools
     [McpServerTool(Name = "steward_draft_unit"), Description(
         "Write or revise the DRAFT spec for the unit after the last agreed one, committed to the base branch. One draft " +
         "ahead, never two. Its status line must say it is a draft: only the owner agrees a unit, and until they do nothing " +
-        "in a draft may be ticketed or used to answer a question.")]
+        "in a draft may be ticketed or used to answer a question. Number what it leaves open from the 'next' that " +
+        "steward_decisions gives: a number the register already holds is refused ('number-taken').")]
     public static Task<StewardReply> DraftUnit(StewardService s,
         [Description("The project key.")] string project,
         [Description("The file's name, numbered like the plan's other units.")] string fileName,
@@ -244,7 +253,7 @@ public class StewardTools
     [McpServerTool(Name = "steward_rule"), Description(
         "Record a standing call you will apply again: something you have taken as settled for tickets still to be written " +
         "or reviews still to come, like 'a by-inspection pass on an infra/ change is fine when a test asserts the config'. " +
-        "Say what it rests on - the spec and section, the plan's decision, the owner's answer by its key - because a ruling " +
+        "Say what it rests on - the decisions it reads by number (#n), or the spec and section - because a ruling " +
         "is only a reading of decisions already made, never a new one: anything no decision settles is the owner's to " +
         "answer, not yours to rule. It applies at once and every run is handed every ruling in force (status: rulings). " +
         "The owner sees each one and may reverse it; a reversal reaches your next run with what should hold instead. " +
@@ -252,7 +261,7 @@ public class StewardTools
     public static Task<StewardReply> Rule(StewardService s,
         [Description("The project key.")] string project,
         [Description("The ruling, as one sentence you could apply without context.")] string ruling,
-        [Description("What it rests on: the spec and section, the plan's decision, or the owner's answer by its key.")] string restsOn,
+        [Description("What it rests on: the decisions it reads, by number (#n), or the spec and section.")] string restsOn,
         [Description("The ticket that raised it, when one did.")] int? ticketId = null) =>
         s.RuleAsync(project, ruling, restsOn, ticketId);
 

@@ -70,7 +70,7 @@ public record StewardImportTicket(int Id, int Unit, IReadOnlyList<string> Outcom
 /// </list>
 /// </para>
 /// </summary>
-public class StewardService
+public partial class StewardService
 {
     /// <summary>A run that died holding the lease stops the next one, not all of them.</summary>
     private static readonly TimeSpan RunLeaseTtl = TimeSpan.FromMinutes(90);
@@ -229,6 +229,8 @@ public class StewardService
         var reversed = await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt != null && e.DeliveredAt == null)
             .OrderBy(e => e.ReversedAt).ToListAsync(ct);
+        await EnsureRegisterAsync(cfg!, ct);
+        var changed = await UndeliveredAsync(projectKey, ct);
 
         SyncFromResult? sync = null;
         if (cfg!.Steward.SyncFrom.Length > 0)
@@ -248,6 +250,14 @@ public class StewardService
             // Rulings of yours the owner has reversed since the last run that ended properly: stop
             // applying each, and apply what the owner said instead. Each is a decision made.
             reversedRulings = reversed.Select(e => new { e.Id, ruling = e.Text, ownerSaid = e.ReversedBecause }),
+            // The owner's own changes to the register since the last run: a decision recorded,
+            // withdrawn, or now replacing another. Apply what is in force; stop applying what is not.
+            changedDecisions = changed.Select(d => new
+            {
+                number = d.Number, rule = d.Rule,
+                withdrawn = d.WithdrawnAt is null ? null : d.WithdrawnBecause,
+                replaces = d.Replaces.Count == 0 ? null : d.Replaces.Select(r => new { number = r.Number, why = r.Why }),
+            }),
             sync,
             status = (await StatusAsync(projectKey, ct)).Data,
         });
@@ -308,6 +318,7 @@ public class StewardService
             foreach (var e in await _db.StewardEntries.Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling
                          && e.ReversedAt != null && e.DeliveredAt == null && e.ReversedAt <= began).ToListAsync(ct))
                 e.DeliveredAt = now;
+            await DeliveredAsync(projectKey, began, ct);
         }
         StewardDue.Settle(s);
         s.LastRunEndedAt = DateTime.UtcNow;
@@ -368,33 +379,19 @@ public class StewardService
     }
 
     /// <summary>
-    /// Write the owner's decisions out to the project's repo, when it names a file for them.
+    /// Write the register of decisions out to the project's repo, when it names a file for them.
     /// Best-effort by design: the hub is a person's checkout, and when it is busy or dirty this
-    /// says so and leaves it - the next answer, or the end of the next run, writes the whole file
-    /// again, so nothing is lost by skipping once.
+    /// says so and leaves it - the next change to the register, or the end of the next run, writes
+    /// the whole file again, so nothing is lost by skipping once.
     /// </summary>
     private async Task<string?> ExportDecisionsAsync(ProjectConfig cfg, CancellationToken ct)
     {
         var file = cfg.Steward.DecisionsFile;
         if (file.Length == 0 || cfg.StewardMode is StewardMode.Off or StewardMode.Propose) return null;
+        await EnsureRegisterAsync(cfg, ct);
+        if (await RegisterTextAsync(cfg, ct) is not { } text) return null;
 
-        var answered = await _db.StewardQuestions.AsNoTracking()
-            .Where(q => q.ProjectKey == cfg.Name && q.Answer != null).ToListAsync(ct);
-        var said = await _db.StewardEntries.AsNoTracking()
-            .Where(e => e.ProjectKey == cfg.Name && e.Kind == StewardEntryKind.OwnerSaid).ToListAsync(ct);
-        if (answered.Count == 0 && said.Count == 0) return null;
-
-        var lines = answered.Select(q => (At: q.AnsweredAt ?? q.AskedAt,
-                Text: $"- {(q.AnsweredAt ?? q.AskedAt).ToLocalTime():yyyy-MM-dd}, **{q.Key}**: {q.Question} {q.Answer}"))
-            .Concat(said.Select(e => (e.At, Text: $"- {e.At.ToLocalTime():yyyy-MM-dd}: {e.Text.Replace("\n", " ")}")))
-            .OrderBy(x => x.At).Select(x => x.Text);
-        var text = "# Decisions\n\n"
-            + "What this project's owner has decided through its steward: the answers to its questions, and standing "
-            + "instructions, oldest first. Written out by the ticket board from its own record each time one is added; "
-            + "edits made here are overwritten.\n\n"
-            + string.Join("\n\n", lines) + "\n";
-
-        var (sha, unchanged, refusal) = await _git.CommitFileAsync(cfg.Name, file, text, "The owner's decisions, as recorded on the board", ct);
+        var (sha, unchanged, refusal) = await _git.CommitFileAsync(cfg.Name, file, text, "The owner's decisions, written out from the board's register", ct);
         return refusal is not null ? $"not written to {file}: {refusal}" : unchanged ? null : $"written to {file} at {sha}";
     }
 
@@ -530,42 +527,6 @@ public class StewardService
             // The last three runs, newest first: what each did, or why it stopped.
             recentRuns = recentRuns.Select(e => new { e.At, e.Text }),
         });
-    }
-
-    /// <summary>
-    /// Everything the owner has decided through the steward: the answers to its questions and
-    /// their standing instructions, newest last. With <paramref name="query"/>, only those that
-    /// mention it - the full list grows for as long as the project runs.
-    /// </summary>
-    public async Task<StewardReply> DecisionsAsync(string projectKey, string? query, CancellationToken ct = default)
-    {
-        var cfg = Config(projectKey);
-        if (Off(cfg, projectKey) is { } off) return off;
-
-        var answered = await _db.StewardQuestions.AsNoTracking()
-            .Where(q => q.ProjectKey == projectKey && q.Answer != null).ToListAsync(ct);
-        var said = await _db.StewardEntries.AsNoTracking()
-            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid).ToListAsync(ct);
-
-        // An answer is the option picked, in words. What it was picked over is half of what it
-        // decides - "not the paid provider" is as much the owner's call as "the free one" - so every
-        // option offered comes back with it, marked as the one picked, the steward's own pick, or neither.
-        var lines = answered.Select(q =>
-            {
-                var offered = JsonSerializer.Deserialize<List<BlockOption>>(q.OptionsJson, Json) ?? new();
-                var picked = offered.FirstOrDefault(o => q.Answer!.StartsWith(o.Label.Trim(), StringComparison.OrdinalIgnoreCase));
-                var options = offered.Select(o => new Offered(o.Label, o.Detail, ReferenceEquals(o, picked), o.Recommended)).ToList();
-                return (At: q.AnsweredAt ?? q.AskedAt, Key: (string?)q.Key, Text: $"{q.Question} -> {q.Answer}",
-                    Options: options.Count > 0 ? options : null);
-            })
-            .Concat(said.Select(e => (e.At, Key: (string?)null, e.Text, Options: (List<Offered>?)null)))
-            .OrderBy(x => x.At).ToList();
-        if (!string.IsNullOrWhiteSpace(query))
-            lines = lines.Where(x => $"{x.Key} {x.Text} {string.Join(" ", (x.Options ?? new()).Select(o => $"{o.Label} {o.Detail}"))}"
-                .Contains(query.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
-
-        return new StewardReply("decisions", null,
-            lines.Select(x => new { on = x.At.ToLocalTime().ToString("yyyy-MM-dd"), key = x.Key, decided = x.Text, offered = x.Options }));
     }
 
     /// <summary>One option a question offered, as <see cref="DecisionsAsync"/> hands it back.</summary>
@@ -1125,6 +1086,16 @@ public class StewardService
         if (unit.Agreed || !unit.Draft)
             return Refuse("bad-request", "Its status line must say it is a draft. Only the owner agrees a unit.");
         if (unit.Outcomes.Count == 0) return Refuse("bad-request", "The draft has no outcomes written the way the plan's other units write them.");
+        // A decision keeps its number when the owner settles it, and numbers are the project's,
+        // once: one the register already holds would be two decisions under one name.
+        var asks = UnitDecisions.Open(text ?? "").Select(d => d.Number).ToList();
+        if (asks.Count > 0)
+        {
+            await EnsureRegisterAsync(cfg, ct);
+            if (await _db.StewardDecisions.Where(d => d.ProjectKey == projectKey && asks.Contains(d.Number))
+                    .Select(d => (int?)d.Number).FirstOrDefaultAsync(ct) is { } taken)
+                return Refuse("number-taken", $"#{taken} is already decision #{taken} in the register. Number what the draft leaves open from steward_decisions' 'next'.");
+        }
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"{(there is null ? "write" : "revise")} the draft spec {path} ({unit.Outcomes.Count} outcomes)");
 
@@ -1425,6 +1396,9 @@ public class StewardService
 
         q.Answer = Regex.Replace(answer.Trim(), @"\s*\n\s*", " ");
         q.AnsweredAt = DateTime.UtcNow;
+        // The answer is a decision, and the register is where its status lives from now on.
+        if (Config(projectKey) is { } c) await EnsureRegisterAsync(c, ct);
+        await AnswerDecisionAsync(q, ct);
         await StewardDue.MarkAsync(_db, projectKey, $"the owner answered {key}");
         await _db.SaveChangesAsync(ct);
         var exported = Config(projectKey) is { } cfg ? await ExportDecisionsAsync(cfg, ct) : null;
@@ -1571,11 +1545,22 @@ public class StewardService
     public async Task<StewardReply> OwnerSaysAsync(string projectKey, string text, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(text)) return Refuse("bad-request", "There is nothing to record.");
-        if (Config(projectKey) is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
-        _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, Text = text.Trim() });
+        if (Config(projectKey) is not { } cfg) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        await EnsureRegisterAsync(cfg, ct);
+        var said = new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, Text = text.Trim() };
+        _db.StewardEntries.Add(said);
+        await _db.SaveChangesAsync(ct);
+        // Instructions with an end are a kind of their own later (docs/plans-as-slices.md, section 3);
+        // until then the owner's word counts as decided, as it always has.
+        _db.StewardDecisions.Add(new StewardDecision
+        {
+            ProjectKey = projectKey, Number = await NextNumberAsync(projectKey, ct), Rule = said.Text,
+            Source = StewardDecisionSource.OwnerSaid, SourceRef = $"record line {said.Id}", ImportKey = $"said:{said.Id}",
+            MadeAt = said.At, DeliveredAt = DateTime.UtcNow,
+        });
         await StewardDue.MarkAsync(_db, projectKey, "the owner left an instruction");
         await _db.SaveChangesAsync(ct);
-        var exported = await ExportDecisionsAsync(Config(projectKey)!, ct);
+        var exported = await ExportDecisionsAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply("recorded", exported);
     }
@@ -1842,11 +1827,18 @@ public class StewardService
 
         var text = u.Text;
         IReadOnlyList<string> said = Array.Empty<string>();
+        IReadOnlyList<(int Number, string Title, string Rule)> each = Array.Empty<(int, string, string)>();
         if (choices.Count > 0)
         {
-            var (settled, s, refusal) = UnitDecisions.Settle(text, choices, DateTime.Now);
+            var (settled, s, e, refusal) = UnitDecisions.SettleEach(text, choices, DateTime.Now);
             if (settled is null) return Refuse("bad-request", refusal!);
-            (text, said) = (settled, s);
+            (text, said, each) = (settled, s, e);
+            // A settled decision keeps the number its spec gave it, so that number must be free.
+            await EnsureRegisterAsync(cfg, ct);
+            var numbers = each.Select(x => x.Number).ToList();
+            if (await _db.StewardDecisions.Where(d => d.ProjectKey == projectKey && numbers.Contains(d.Number))
+                    .Select(d => (int?)d.Number).FirstOrDefaultAsync(ct) is { } taken)
+                return Refuse("number-taken", $"#{taken} is already a decision in the register, so the spec's #{taken} cannot keep its number. Renumber it in {u.File} from steward_decisions' next number, and commit that.");
         }
         if (agree)
         {
@@ -1868,6 +1860,14 @@ public class StewardService
 
         var summary = $"Unit {unit}: {(n == 0 ? "agreed" : $"{(agree ? "agreed, and " : "")}decided {string.Join("; ", said)}")}. Written into {u.File} at {sha}.";
         if (agree) (await UnitRowAsync(projectKey, p.Key, unit, ct)).AgreedAt = DateTime.UtcNow;
+        // The register holds each decision's status; the spec keeps the words, written once, above.
+        foreach (var (number, title, rule) in each)
+            _db.StewardDecisions.Add(new StewardDecision
+            {
+                ProjectKey = projectKey, Number = number, Title = title, Rule = rule, Source = StewardDecisionSource.Slice,
+                PlanKey = p.Key, PlanUnit = unit, SourceRef = u.File, ImportKey = $"slice:{p.Key}:{number}",
+                QuestionKey = q?.Key, Question = q?.Question, DeliveredAt = DateTime.UtcNow,
+            });
         if (q is not null)
         {
             (q.Answer, q.AnsweredAt) = (summary, DateTime.UtcNow);
@@ -2069,7 +2069,9 @@ public class StewardService
         }
 
         await _db.SaveChangesAsync(ct);
-        return new StewardReply("imported", null, new { questions, ownerSaid = said, entries, outcomes, tickets });
+        // What came in is folded into the register too: it is where decisions are read from.
+        var register = await BuildRegisterAsync(Config(projectKey)!, ct);
+        return new StewardReply("imported", null, new { questions, ownerSaid = said, entries, outcomes, tickets, register });
     }
 
     private static string Head(string s, int max)

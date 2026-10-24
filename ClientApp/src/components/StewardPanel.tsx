@@ -7,17 +7,18 @@ import type { Mood } from '../theme';
 import { ActivityFeed } from './ActivityFeed';
 import { StewardPlan } from './StewardPlan';
 import { StewardRecord } from './StewardRecord';
+import { StewardDecisions } from './StewardDecisions';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { DecisionSheet } from './DecisionSheet';
 import { OptionRow, ago, label, remember, remembered } from './stewardParts';
 import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
-  answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan,
+  answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan, getStewardRegister,
   getStewardStatus, keepStewardRuling, markStewardEntry, reverseStewardRuling, setStewardMode, unseenRuling,
 } from '../api/steward';
 import type {
-  StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardStatus,
+  StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus,
 } from '../api/steward';
 
 /**
@@ -25,13 +26,13 @@ import type {
  *
  * The steward runs unattended and brings a person only what is theirs to decide, so this page is
  * built around that: what is waiting on you comes first and is the only thing here you have to act
- * on. The plan it is working from, and the record of what it did in your place, are each a view of
- * their own beside that one: three different reasons to open this page, and none of them is helped
- * by scrolling past the other two.
+ * on. The plan it is working from, the decisions it works by, and the record of what it did in your
+ * place are each a view of their own beside that one: different reasons to open this page, and none
+ * of them is helped by scrolling past the others.
  */
 
-/** The page's three views, in the order of how often each is the reason somebody came. */
-type View = 'now' | 'plan' | 'record';
+/** The page's views, in the order of how often each is the reason somebody came. */
+type View = 'now' | 'plan' | 'decisions' | 'record';
 
 const MODES: { id: StewardMode; label: string; says: string }[] = [
   { id: 'off', label: 'Off', says: 'No steward. Nothing runs.' },
@@ -46,6 +47,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const [status, setStatus] = useState<StewardStatus | null>(null);
   const [entries, setEntries] = useState<StewardEntry[]>([]);
   const [plan, setPlan] = useState<StewardPlanView | null>(null);
+  const [register, setRegister] = useState<StewardRegister | null>(null);
   // Which of the project's plans is being read: null is the one being worked.
   const [planKey, setPlanKey] = useState<string | null>(null);
   // The unit whose notes the record is showing, when somebody came from that unit's release.
@@ -54,7 +56,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   useEffect(() => { setPlanKey(null); setNotesUnit(null); }, [project]);
   const [view, setView] = useState<View>(() => {
     const v = remembered('view');
-    return v === 'plan' || v === 'record' ? v : 'now';
+    return v === 'plan' || v === 'decisions' || v === 'record' ? v : 'now';
   });
   const show = (v: View) => { setView(v); remember('view', v); };
   const [error, setError] = useState<string | null>(null);
@@ -62,13 +64,15 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const load = useCallback(async () => {
     if (!project) return;
     try {
-      const [p, s, e, pl] = await Promise.all([
+      const [p, s, e, pl, r] = await Promise.all([
         getSteward(project), getStewardStatus(project), getStewardEntries(project),
         // The plan is read from the project's repo, and a repo that cannot be read must not be
         // what stops a person answering a question.
         getStewardPlan(project, planKey).catch(() => ({ why: 'The plan could not be read just now.' } as StewardPlanView)),
+        // So is the register's list of units; the decisions themselves are the board's.
+        getStewardRegister(project).catch(() => null),
       ]);
-      setPage(p); setStatus(s); setEntries(e); setPlan(pl); setError(null);
+      setPage(p); setStatus(s); setEntries(e); setPlan(pl); setRegister(r); setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -77,7 +81,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   // A steward's run changes this page from the outside, so it is re-read on a slow tick. Slow
   // because nothing here is urgent to the second: a question waits for a person either way.
   useEffect(() => {
-    setPage(null); setStatus(null); setEntries([]); setPlan(null);
+    setPage(null); setStatus(null); setEntries([]); setPlan(null); setRegister(null);
     load();
     const t = setInterval(load, 15000);
     return () => clearInterval(t);
@@ -127,6 +131,8 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   // Rulings the steward made that the owner has not yet seen: they apply already, so they count.
   const unseen = entries.filter(unseenRuling).length;
   const recordCount = outstanding + unseen;
+  const inForce = (register?.decisions ?? []).filter(d => d.status === 'inForce' || d.status === 'provisional').length;
+  const pairs = register?.mayConflict.length ?? 0;
   // Where the steward stands is the card's to say, on the Now tab; the head only says what the
   // page cannot show at all.
   const sub = !page ? 'Loading' : off ? 'No steward for this project' : undefined;
@@ -170,6 +176,10 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
             <Chip on={view === 'plan'} onClick={() => show('plan')} title="The plan it works from, and how far each part is">
               The plan{progress ? ` ${progress.percent}%` : ''}
             </Chip>
+            <Chip on={view === 'decisions'} onClick={() => show('decisions')}
+              title={`The register: what is decided and whether it still is${pairs > 0 ? ` - ${pairs} pair${pairs === 1 ? '' : 's'} that may disagree` : ''}`}>
+              Decisions {pairs > 0 ? pairs : inForce > 0 ? inForce : ''}
+            </Chip>
             <Chip on={view === 'record'} onClick={() => show('record')}
               title={`What it did in your place, and what to read before a release${recordCount > 0
                 ? ` - ${[unseen > 0 ? `${unseen} new ruling${unseen === 1 ? '' : 's'}` : '', outstanding > 0 ? `${outstanding} to deal with before a release` : ''].filter(Boolean).join(', ')}`
@@ -211,6 +221,12 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 onPlan={key => { setPlan(null); setPlanKey(key); }}
                 onNotes={unit => { setNotesUnit(unit); show('record'); }}
               />
+            </div>
+          )}
+
+          {view === 'decisions' && (
+            <div key="decisions" className="orbit-swap">
+              <StewardDecisions project={page.project} register={register} onChanged={load} />
             </div>
           )}
 

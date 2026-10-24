@@ -15,6 +15,7 @@ public record StewardReverse(string? Because);
 public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
 public record StewardNewPlan(string? Key, string? Name, string? Folder);
+public record StewardSettlePair(bool? Replaces, string? Why);
 /// <summary>A ticket's place in a plan. <c>Unit</c> null takes it out; <c>Plan</c> null is the one being worked.</summary>
 public record TicketPlanLink(string? Plan, int? Unit, IReadOnlyList<string>? Outcomes);
 
@@ -223,6 +224,44 @@ public static class StewardEndpoints
             return failed is null
                 ? Results.Ok(new { r.Answer, r.Data, settings = file })
                 : Results.BadRequest(new { answer = "documents-only", why = $"The plan's documents are in the repo, but the project's settings were not changed: {failed}" });
+        });
+
+        // The register of decisions: every decision with its status, and the pairs the import
+        // thinks may disagree. Everything that changes it is the owner's, with no tool behind it.
+        app.MapGet("/api/steward/decisions", async (string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.RegisterViewAsync(project ?? "", ct);
+            return r.Answer == "register" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Record a decision directly; with replaces, it is a change to the ones it names.
+        app.MapPost("/api/steward/decisions", async (string? project, StewardNewDecision body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerRecordsDecisionAsync(project ?? "", body, ct);
+            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        app.MapPost("/api/steward/decisions/{number:int}/withdraw", async (int number, string? project, StewardReverse body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerWithdrawsDecisionAsync(project ?? "", number, body.Because, ct);
+            return r.Answer == "withdrawn" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Take what the project already had into the register: run on its own the first time the
+        // register is read, and again from here to fold in what has arrived since.
+        app.MapPost("/api/steward/decisions/import", async (string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerBuildsRegisterAsync(project ?? "", ct);
+            return r.Answer == "built" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // A pair the import thought may disagree: the newer replaces the older, or both stand.
+        app.MapPost("/api/steward/decisions/pairs/{id:int}", async (int id, string? project, StewardSettlePair body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerSettlesConflictAsync(project ?? "", id, body.Replaces ?? false, body.Why, ct);
+            return r.Answer == "settled" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // The plan and how far it is, without a run: the same figures a run is shown.

@@ -294,3 +294,75 @@ export const reverseStewardRuling = (project: string, id: number, because: strin
 export const markStewardEntry = (project: string, id: number, mark: { handled?: boolean; release?: ReleaseKind }) =>
   fetch(`/api/steward/entries/${id}?${q(project)}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(mark) })
     .then(json<{ answer: string }>);
+
+// ---- the register of decisions -----------------------------------------------------------
+
+export type DecisionStatus = 'inForce' | 'replaced' | 'provisional' | 'withdrawn';
+
+/** One option a question offered, as the register hands it back with the decision it made. */
+export interface DecisionOffered { label: string; detail?: string | null; picked: boolean; stewardsPick: boolean }
+
+export interface StewardDecision {
+  number: number;
+  rule: string;
+  title?: string | null;
+  /** "project", or the unit (and outcomes) it applies to, in words. */
+  appliesTo: string;
+  plan?: string | null;
+  unit?: number | null;
+  outcomes?: string | null;
+  status: DecisionStatus;
+  provisionalUntil?: string | null;
+  replaces?: { number: number; why: string }[] | null;
+  replacedBy?: { number: number; why: string }[] | null;
+  withdrawn?: { on: string; because?: string | null } | null;
+  on: string;
+  cameFrom: string;
+  key?: string | null;
+  question?: string | null;
+  offered?: DecisionOffered[] | null;
+  where?: string | null;
+}
+
+export interface DecisionPair { id: number; older: number; newer: number; why: string }
+
+export interface StewardRegister {
+  next: number;
+  plan?: string | null;
+  units: { unit: number; title: string }[];
+  decisions: StewardDecision[];
+  mayConflict: DecisionPair[];
+}
+
+export interface NewDecision {
+  rule: string;
+  title?: string;
+  unit?: number | null;
+  outcomes?: string[];
+  provisional?: boolean;
+  provisionalUnit?: number | null;
+  replaces?: { number: number; why: string }[];
+}
+
+/** The register: every decision with its status, and the pairs the import thinks may disagree. */
+export const getStewardRegister = (project: string) =>
+  fetch(`/api/steward/decisions?${q(project)}`).then(json<{ data: StewardRegister }>).then(r => r.data);
+
+/** Record a decision directly; with `replaces`, it changes the decisions it names. */
+export const recordStewardDecision = (project: string, d: NewDecision) =>
+  fetch(`/api/steward/decisions?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(d) })
+    .then(json<{ answer: string; data: { number: number } }>);
+
+/** Withdraw a decision, with nothing in its place. */
+export const withdrawStewardDecision = (project: string, number: number, because: string) =>
+  fetch(`/api/steward/decisions/${number}/withdraw?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ because }) })
+    .then(json<{ answer: string }>);
+
+/** Settle a pair the import thought may disagree: the newer replaces the older, or both stand. */
+export const settleDecisionPair = (project: string, id: number, replaces: boolean, why?: string) =>
+  fetch(`/api/steward/decisions/pairs/${id}?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ replaces, why }) })
+    .then(json<{ answer: string }>);
+
+/** Take into the register what has arrived since it was built. */
+export const importStewardDecisions = (project: string) =>
+  fetch(`/api/steward/decisions/import?${q(project)}`, { method: 'POST' }).then(json<{ answer: string; data: unknown }>);

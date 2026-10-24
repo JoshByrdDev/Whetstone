@@ -295,6 +295,7 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
 | A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
+| What is decided, and whether it still is | the register (`StewardDecision`, docs/plans-as-slices.md section 3). Recording, replacing, withdrawing, and settling a pair the import flagged are REST routes with no tool behind them; `steward_decisions` only reads. A replacing is stored on the newer decision only, and a number is the project's for good |
 
 **The words are taken.** "Orchestrator" is `heartbeat.ps1` and "owner" is the human whose ticket it
 is - both everywhere in this code. The stand-in is the *steward*, and a new name for it in one file

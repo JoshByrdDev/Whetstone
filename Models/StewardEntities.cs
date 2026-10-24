@@ -242,6 +242,13 @@ public class StewardState
     public DateTime? LastRunEndedAt { get; set; }
     public string? LastRunSummary { get; set; }
 
+    /// <summary>
+    /// When the register of decisions was first built from what the project already had. Until
+    /// then the first read or write of the register builds it, so no decision goes missing between
+    /// the old record and the new.
+    /// </summary>
+    public DateTime? RegisterBuiltAt { get; set; }
+
     /// <summary>The local day the count below belongs to; a new day starts it again.</summary>
     public string? CreatedDay { get; set; }
     public int CreatedCount { get; set; }
@@ -355,4 +362,126 @@ public class StewardUnit
 
     /// <summary>The base branch's head when it was released: what "released" meant that day.</summary>
     public string? ReleasedSha { get; set; }
+}
+
+/// <summary>Where a <see cref="StewardDecision"/> came from.</summary>
+public enum StewardDecisionSource
+{
+    /// <summary>The owner's answer to a question the steward asked.</summary>
+    Question,
+    /// <summary>One of a unit's decisions, settled by the owner and written into its spec under "Decided".</summary>
+    Slice,
+    /// <summary>A row of a plan document's own decisions section, from the day the plan was written.</summary>
+    Plan,
+    /// <summary>Recorded by the owner directly, from the register page.</summary>
+    Owner,
+    /// <summary>A standing word from the owner that answered no question.</summary>
+    OwnerSaid,
+}
+
+/// <summary>
+/// One decision in a project's register: what is true, what it applies to, and whether it still is.
+/// <para>
+/// The register is the one home of a decision's status (docs/plans-as-slices.md, section 3). Its
+/// text is written once, when it is made, and is never edited: a decision that changes is a newer
+/// one that replaces it, and the replacing is stored only on the newer one
+/// (<see cref="StewardDecisionReplace"/>), so "replaced" is never written twice and cannot
+/// disagree with itself. A spec's "Decided" section and the decisions file are copies written out
+/// from here.
+/// </para>
+/// </summary>
+public class StewardDecision
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>
+    /// <c>#n</c>: one sequence per project, never reused. A unit's decision keeps the number its
+    /// spec gave it; everything else takes the next one after the highest in use.
+    /// </summary>
+    public int Number { get; set; }
+
+    /// <summary>What is true, in a sentence or two. Written once.</summary>
+    public string Rule { get; set; } = "";
+
+    /// <summary>A unit decision's short title, as its spec gives it.</summary>
+    public string? Title { get; set; }
+
+    /// <summary>
+    /// What it applies to. No unit: the project as a whole. A unit (with the plan it belongs to,
+    /// since a unit's number means nothing without its plan): that slice. With outcomes too, comma
+    /// separated: only those outcomes of it.
+    /// </summary>
+    public string? PlanKey { get; set; }
+    public int? PlanUnit { get; set; }
+    public string? Outcomes { get; set; }
+
+    /// <summary>
+    /// Provisional: in force only until a named point. With <see cref="ProvisionalUnit"/>, until that
+    /// unit of the same plan is built; without, until the owner says.
+    /// </summary>
+    public bool Provisional { get; set; }
+    public int? ProvisionalUnit { get; set; }
+
+    /// <summary>Withdrawn by the owner, with nothing in its place.</summary>
+    public DateTime? WithdrawnAt { get; set; }
+    public string? WithdrawnBecause { get; set; }
+
+    public StewardDecisionSource Source { get; set; }
+
+    /// <summary>The question it answered, by key, with the question and its options as they were asked.</summary>
+    public string? QuestionKey { get; set; }
+    public string? Question { get; set; }
+    public string? OptionsJson { get; set; }
+
+    /// <summary>Where it was read from or written to: a spec file, a plan document, a record line.</summary>
+    public string? SourceRef { get; set; }
+
+    /// <summary>What the register's import knows it by, so taking in the same record twice adds nothing.</summary>
+    public string? ImportKey { get; set; }
+
+    /// <summary>The day it was made, which for an imported decision is the day its source says.</summary>
+    public DateTime MadeAt { get; set; } = DateTime.UtcNow;
+    public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// When its status last changed: recorded, withdrawn, or given something to replace. With
+    /// <see cref="DeliveredAt"/> null, a change the next run is handed as news - for what reaches
+    /// the register by no other road a run already watches (an answer, an instruction).
+    /// </summary>
+    public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeliveredAt { get; set; }
+
+    public List<StewardDecisionReplace> Replaces { get; set; } = new();
+}
+
+/// <summary>One decision a newer one overrides, and in a line why. Kept only on the newer decision.</summary>
+public class StewardDecisionReplace
+{
+    public int Id { get; set; }
+    public int DecisionId { get; set; }
+
+    /// <summary>The number of the decision replaced.</summary>
+    public int Number { get; set; }
+    public string Why { get; set; } = "";
+}
+
+/// <summary>
+/// Two decisions the register's import thinks may disagree, put to the owner rather than assumed.
+/// Settled by the owner: the newer replaces the older, or both stand.
+/// </summary>
+public class StewardDecisionConflict
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+    public int Older { get; set; }
+    public int Newer { get; set; }
+
+    /// <summary>What the two have in common that made the import think so.</summary>
+    public string Why { get; set; } = "";
+    public DateTime FoundAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>"replaced" or "both-stand", once the owner has said.</summary>
+    public string? Settled { get; set; }
+    public DateTime? SettledAt { get; set; }
 }

@@ -1,7 +1,7 @@
 # A plan is its slices
 
-> Design, 2026-10-24. Not built. Its twelve choices confirmed by the owner the same day; three
-> questions are left for the build.
+> Design, 2026-10-24. Its twelve choices confirmed by the owner the same day; three questions are
+> left for the build. Piece 1, the register, built 2026-10-24 (see "Built" at the end).
 > Summary: A plan stops being a document with slices cut from it. It is its slices - short ideas
 > that are expanded one at a time when their turn comes - plus a one-page charter that decides
 > nothing, and a register of decisions where each decision has one status and an override is
@@ -371,3 +371,31 @@ Found in the same review of how plans are worked, and worth doing alongside:
 - **Release, apart from slices.** Release notes pile up while release is tied to a unit. A release
   as a cut of the base branch at a commit, covering whatever is merged by then, matches how a
   project that deploys on push actually ships.
+
+## Built
+
+**Piece 1, the register (2026-10-24).** `StewardDecision` with `StewardDecisionReplace` (what each
+replaces, on the newer only) and `StewardDecisionConflict` (the import's pairs). Where the build
+went its own way:
+
+- **The register builds itself.** The first read or write of a project's register imports what the
+  project already had, so no run ever reads an empty register in place of the old record. The
+  owner can import again from the register page to fold in what has arrived since; it adds nothing
+  twice.
+- **Numbers a spec has given are held.** The next number is after the highest in the register *and*
+  every number a spec of the plan being worked uses, open or decided, because an open decision
+  keeps its spec's number when it is settled. `steward_draft_unit` refuses a draft whose open
+  decisions reuse a number, and `steward_decisions` says the `next` one.
+- **Hard rule 3 keeps the plan's plain statements for now.** The section 2 wording makes the plan
+  document decide nothing, which is only safe once its rules have moved into the register (pieces 4
+  and 9). Until then the rule names the register and agreed specs first, still counts a plain
+  statement in the plan, and says the register wins where they disagree.
+- **A pair can be the same decision.** Most of what the conflict check finds on a real record is
+  one decision kept twice (a plan row and the spec that settled it, with no `#n` between them). The
+  owner settles a pair three ways: the newer replaces the older, the same decision (the older goes
+  to history pointing at the newer), or both stand. The check weighs rare words over common ones,
+  so a long note and a product's own name do not match everything.
+- **The owner's word is still a decision.** `OwnerSaid` lines become register rows, unclassified,
+  until piece 3 makes instructions their own kind. A flag cleared on one ticket is not imported:
+  it is kept as a clearance.
+- **Follow-ups are not in this piece.** They come with piece 3.

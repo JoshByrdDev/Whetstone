@@ -32,6 +32,9 @@ public class DashboardDbContext : DbContext
     public DbSet<StewardState> StewardStates => Set<StewardState>();
     public DbSet<StewardOutcome> StewardOutcomes => Set<StewardOutcome>();
     public DbSet<StewardClearance> StewardClearances => Set<StewardClearance>();
+    public DbSet<StewardDecision> StewardDecisions => Set<StewardDecision>();
+    public DbSet<StewardDecisionReplace> StewardDecisionReplaces => Set<StewardDecisionReplace>();
+    public DbSet<StewardDecisionConflict> StewardDecisionConflicts => Set<StewardDecisionConflict>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -315,6 +318,37 @@ public class DashboardDbContext : DbContext
             e.Property(c => c.ChangeId).HasMaxLength(64);
             e.Property(c => c.Sha).HasMaxLength(64);
             e.HasIndex(c => new { c.ProjectKey, c.TicketId, c.Flag, c.ChangeId }).IsUnique();
+        });
+
+        // The register of decisions. A number is the project's for good, and what one replaces
+        // hangs off the newer decision only.
+        b.Entity<StewardDecision>(e =>
+        {
+            e.Property(d => d.ProjectKey).HasMaxLength(128);
+            e.Property(d => d.Title).HasMaxLength(300);
+            e.Property(d => d.PlanKey).HasMaxLength(64);
+            e.Property(d => d.Outcomes).HasMaxLength(200);
+            e.Property(d => d.Source).HasConversion<string>().HasMaxLength(16);
+            e.Property(d => d.QuestionKey).HasMaxLength(64);
+            e.Property(d => d.SourceRef).HasMaxLength(400);
+            e.Property(d => d.ImportKey).HasMaxLength(200);
+            e.HasIndex(d => new { d.ProjectKey, d.Number }).IsUnique();
+            e.HasIndex(d => new { d.ProjectKey, d.ImportKey });
+            e.HasMany(d => d.Replaces).WithOne().HasForeignKey(r => r.DecisionId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<StewardDecisionReplace>(e =>
+        {
+            e.Property(r => r.Why).HasMaxLength(600);
+            e.HasIndex(r => new { r.DecisionId, r.Number }).IsUnique();
+        });
+
+        b.Entity<StewardDecisionConflict>(e =>
+        {
+            e.Property(c => c.ProjectKey).HasMaxLength(128);
+            e.Property(c => c.Why).HasMaxLength(600);
+            e.Property(c => c.Settled).HasMaxLength(16);
+            e.HasIndex(c => new { c.ProjectKey, c.Older, c.Newer }).IsUnique();
         });
 
         b.Entity<StewardState>(e =>

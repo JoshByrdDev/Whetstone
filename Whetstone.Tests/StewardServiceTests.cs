@@ -17,7 +17,7 @@ namespace Whetstone.Tests;
 /// lines is.
 /// </para>
 /// </summary>
-public class StewardServiceTests : IDisposable
+public partial class StewardServiceTests : IDisposable
 {
     private readonly SqliteConnection _conn;
     private readonly DbContextOptions<DashboardDbContext> _options;
@@ -517,8 +517,9 @@ public class StewardServiceTests : IDisposable
 
         var last = _git.Committed[^1];
         Assert.Equal("docs/decisions.md", last.Path);
-        Assert.Contains("**sms-provider**: Which provider sends our texts? The one we already pay for.", last.Content);
-        Assert.Contains("A ticket carries one whole outcome.", last.Content);
+        Assert.Contains("- **#1** The one we already pay for. (", last.Content);
+        Assert.Contains("answering `sms-provider`: Which provider sends our texts?", last.Content);
+        Assert.Contains("- **#2** A ticket carries one whole outcome.", last.Content);
     }
 
     [Fact]
