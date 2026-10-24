@@ -3,9 +3,10 @@ import { Chip, GhostButton, Panel } from './ui';
 import { BODY, MONO, TIER } from './orbit';
 import { Fold, Quiet, label, remember, remembered } from './stewardParts';
 import {
+  closeStewardInstruction, confirmStewardDecision, dropStewardFollowUp, giveStewardInstruction,
   recordStewardDecision, settleDecisionPair, withdrawStewardDecision,
 } from '../api/steward';
-import type { DecisionPair, NewDecision, StewardDecision, StewardRegister } from '../api/steward';
+import type { DecisionPair, NewDecision, StewardDecision, StewardFollowUp, StewardInstruction, StewardRegister } from '../api/steward';
 
 /**
  * The register of decisions, as its owner reads it: what is in force for the whole project and for
@@ -63,6 +64,10 @@ export function StewardDecisions({ project, register, onChanged }: {
   return (
     <>
       <Pairs project={project} pairs={register.mayConflict} byNumber={byNumber} onChanged={onChanged} />
+      <ComingDue project={project} due={register.due.map(n => byNumber.get(n)).filter((d): d is StewardDecision => !!d)}
+        onChanged={onChanged} onChange={n => setWriting({ replaces: n })} />
+      <FollowUps project={project} rows={register.followUps} byNumber={byNumber} onChanged={onChanged} />
+      <Instructions project={project} rows={register.instructions} onChanged={onChanged} />
 
       <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 10 }}>
         <Chip on={shown === 'force'} onClick={() => pick('force')} title="Decided, and still so">In force {force.length}</Chip>
@@ -337,5 +342,145 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
         </div>
       </Panel>
     </div>
+  );
+}
+
+/**
+ * Provisional decisions whose point has come: each is confirmed, replaced by a newer decision, or
+ * let lapse (withdrawn). Until the owner says, it is still in force and still marked provisional.
+ */
+function ComingDue({ project, due, onChanged, onChange }: {
+  project: string; due: StewardDecision[]; onChanged: () => Promise<void>; onChange: (n: number) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  if (due.length === 0) return null;
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true); setFailed(null);
+    try { await fn(); await onChanged(); }
+    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Fold id="decisions.due" open title="Provisional, and due" colour={TIER.gate.c} count={due.length} meta="their point has come">
+      <div className="flex flex-col gap-2 mb-8">
+        {due.map(d => (
+          <Panel key={d.number}>
+            <div style={label()}>#{d.number} - until {d.provisionalUntil} - {d.appliesTo}</div>
+            <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)', marginTop: 3 }}>{d.rule}</div>
+            <div className="flex gap-2 flex-wrap" style={{ marginTop: 10 }}>
+              <GhostButton tone="go" disabled={busy} onClick={() => act(() => confirmStewardDecision(project, d.number))}>Confirm it</GhostButton>
+              <GhostButton disabled={busy} onClick={() => onChange(d.number)}>Replace it</GhostButton>
+              <GhostButton tone="danger" disabled={busy}
+                onClick={() => act(() => withdrawStewardDecision(project, d.number, `Lapsed: provisional until ${d.provisionalUntil}.`))}>Let it lapse</GhostButton>
+            </div>
+          </Panel>
+        ))}
+        {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c }}>{failed}</div>}
+      </div>
+    </Fold>
+  );
+}
+
+/** What the owner left open in an answer, each waiting until a question or an idea takes it up. */
+function FollowUps({ project, rows, byNumber, onChanged }: {
+  project: string; rows: StewardFollowUp[]; byNumber: Map<number, StewardDecision>; onChanged: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<number | null>(null);
+  const open = rows.filter(f => !f.citedBy && !f.droppedAt);
+  const taken = rows.length - open.length;
+  if (rows.length === 0) return null;
+  const drop = async (id: number) => {
+    setBusy(id);
+    try { await dropStewardFollowUp(project, id); await onChanged(); } finally { setBusy(null); }
+  };
+  return (
+    <Fold id="decisions.followups" title="Left open in your answers" colour={TIER.active.c} count={open.length}
+      meta={taken > 0 ? `${taken} taken up or dropped` : undefined}>
+      {open.length === 0
+        ? <Quiet>Everything you left open has been taken up.</Quiet>
+        : (
+          <Panel pad={false} className="mb-8">
+            {open.map(f => (
+              <div key={f.id} className="flex gap-3 items-start flex-wrap" style={{ padding: '9px 14px', borderBottom: '1px solid rgb(var(--w-line-rgb) / .06)' }}>
+                <div className="min-w-0 flex-1">
+                  <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>{f.text}</div>
+                  <div style={{ ...label(), marginTop: 3 }}>
+                    from #{f.decision}{byNumber.get(f.decision) ? `: ${byNumber.get(f.decision)!.rule.slice(0, 80)}` : ''}
+                  </div>
+                </div>
+                <GhostButton disabled={busy === f.id} onClick={() => drop(f.id)} title="Nothing to take up">Drop</GhostButton>
+              </div>
+            ))}
+          </Panel>
+        )}
+    </Fold>
+  );
+}
+
+/**
+ * Instructions: something to do until a condition holds. Never in the register - each ends, and
+ * the steward closes it when its end comes and says how. The owner gives one here, or closes one.
+ */
+function Instructions({ project, rows, onChanged }: {
+  project: string; rows: StewardInstruction[]; onChanged: () => Promise<void>;
+}) {
+  const [text, setText] = useState('');
+  const [until, setUntil] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [closed, setClosed] = useState(false);
+  const open = rows.filter(i => !i.closedAt);
+  const done = rows.filter(i => i.closedAt);
+  const act = async (fn: () => Promise<unknown>, after?: () => void) => {
+    setBusy(true); setFailed(null);
+    try { await fn(); after?.(); await onChanged(); }
+    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  const field = 'w-full min-w-0 rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none';
+  return (
+    <Fold id="decisions.instructions" title="Instructions" colour="var(--w-accent)" count={open.length}
+      meta="to do until something holds; not decisions">
+      <div className="mb-8">
+        {open.length > 0 && (
+          <Panel pad={false} className="mb-3">
+            {open.map(i => (
+              <div key={i.id} className="flex gap-3 items-start flex-wrap" style={{ padding: '9px 14px', borderBottom: '1px solid rgb(var(--w-line-rgb) / .06)' }}>
+                <div className="min-w-0 flex-1">
+                  <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>{i.text}</div>
+                  <div style={{ ...label(), marginTop: 3 }}>until {i.until}</div>
+                </div>
+                <GhostButton disabled={busy} onClick={() => act(() => closeStewardInstruction(project, i.id))} title="It no longer applies">Close</GhostButton>
+              </div>
+            ))}
+          </Panel>
+        )}
+        <Panel>
+          <div style={label()}>Give an instruction</div>
+          <input value={text} onChange={e => setText(e.target.value)} placeholder="What to do: hold merges, raise a limit, leave a ticket alone"
+            aria-label="The instruction" className={`${field} mt-2`} />
+          <input value={until} onChange={e => setUntil(e.target.value)} placeholder="Until: the condition that ends it"
+            aria-label="When it ends" className={`${field} mt-2`} />
+          <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 10 }}>
+            <GhostButton tone="go" disabled={busy || !text.trim() || !until.trim()}
+              onClick={() => act(() => giveStewardInstruction(project, text.trim(), until.trim()), () => { setText(''); setUntil(''); })}>
+              Give it
+            </GhostButton>
+            {done.length > 0 && <Chip on={closed} onClick={() => setClosed(!closed)}>Closed {done.length}</Chip>}
+            {failed && <span style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c }}>{failed}</span>}
+          </div>
+        </Panel>
+        {closed && (
+          <div key="closed" className="orbit-swap flex flex-col gap-1" style={{ marginTop: 8 }}>
+            {done.map(i => (
+              <div key={i.id} style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t500)', padding: '2px 4px' }}>
+                {i.text} <span style={{ color: 'var(--w-t600)' }}>- closed by {i.closedBy}{i.closedNote ? `: ${i.closedNote}` : ''}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </Fold>
   );
 }

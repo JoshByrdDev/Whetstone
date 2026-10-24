@@ -223,10 +223,11 @@ public class StewardTools
         [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended. Leave out when you name decisions: those are their own options.")] StewardOption[]? options = null,
         [Description("The ticket that raised it, when one did.")] int? ticketId = null,
         [Description("The unit of the plan whose open decisions this asks about.")] int? unit = null,
-        [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null) =>
+        [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null,
+        [Description("The open follow-ups this question takes up, by id: they stop waiting once it is asked.")] int[]? followUps = null) =>
         s.AskAsync(project, new StewardAsk(key, question, why,
             options?.Select(o => new BlockOption(o.Label, o.Detail, o.Recommended)).ToList(), heldUp, ticketId, unit, decisions, touches,
-            options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!)));
+            options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!), followUps));
 
     [McpServerTool(Name = "steward_record_call"), Description(
         "Record a call you made for the owner about one ticket - an answer you gave it, a choice you made in filing it, what " +
@@ -268,8 +269,30 @@ public class StewardTools
         [Description("The project key.")] string project,
         [Description("The ruling, as one sentence you could apply without context.")] string ruling,
         [Description("What it rests on: the decisions it reads, by number (#n), or the spec and section.")] string restsOn,
+        [Description("The numbers of the register's decisions it reads. Required: an empty list when it reads only a spec. When one is replaced or withdrawn, the ruling is flagged.")] int[] reads,
         [Description("The ticket that raised it, when one did.")] int? ticketId = null) =>
-        s.RuleAsync(project, ruling, restsOn, ticketId);
+        s.RuleAsync(project, ruling, restsOn, ticketId, reads);
+
+    [McpServerTool(Name = "steward_close_instruction"), Description(
+        "Close one of the owner's instructions whose end has come - 'hold merges until that test is fixed', and the test is " +
+        "fixed - saying how it came. Until it is closed it is in force and every run is handed it (status: instructions). " +
+        "An instruction is not a decision: it is never in the register, and closing it changes nothing decided.")]
+    public static Task<StewardReply> CloseInstruction(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The instruction's id, from status or the briefing.")] int id,
+        [Description("How its end came: what is now true, and where to see it.")] string how) =>
+        s.CloseInstructionAsync(project, id, how);
+
+    [McpServerTool(Name = "steward_follow_up"), Description(
+        "Record something the owner left open in an answer - 'let's talk about a dynamic role', 'so this will need to be " +
+        "a permission' - against the decision the answer made. Read every answer for these: the owner fills in no extra " +
+        "field. Each waits on the register page until a question you ask (followUps) or an idea takes it up, or the owner " +
+        "drops it; every run is handed the open ones (briefing: followUps).")]
+    public static Task<StewardReply> FollowUp(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The decision whose answer left it, by number.")] int decision,
+        [Description("What was left open, in a line, quoting the owner where you can.")] string text) =>
+        s.FollowUpAsync(project, decision, text);
 
     [McpServerTool(Name = "steward_learned"), Description(
         "Put a fact about the repo into the project's notes store: where a screen or a function lives, how a check or the " +

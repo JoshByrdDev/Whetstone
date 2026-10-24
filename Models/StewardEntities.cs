@@ -213,6 +213,13 @@ public class StewardEntry
     public string? ReversedBecause { get; set; }
 
     /// <summary>
+    /// For a <see cref="StewardEntryKind.Ruling"/>: the register's decisions it reads, comma
+    /// separated. When one of them is replaced or withdrawn the ruling is flagged, rather than
+    /// standing quietly on a decision that no longer holds. Null on a ruling made before rulings said.
+    /// </summary>
+    public string? Reads { get; set; }
+
+    /// <summary>
     /// For a <see cref="StewardEntryKind.Learned"/> fact: its suggested note key while queued, and
     /// once placed, where it went ("new note x", "folded into x", "filed for review").
     /// </summary>
@@ -478,6 +485,54 @@ public class StewardDecisionReplace
     /// <summary>The number of the decision replaced.</summary>
     public int Number { get; set; }
     public string Why { get; set; } = "";
+}
+
+/// <summary>
+/// Something the owner told the steward to do for a while: "hold merges until that test is fixed".
+/// Not a decision - it has an end, and it is never in the register. The steward closes it when its
+/// end has come, and says how; the owner can close it at any time.
+/// </summary>
+public class StewardInstruction
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+    public string Text { get; set; } = "";
+
+    /// <summary>The condition that ends it, in the owner's words: "until the test is fixed".</summary>
+    public string Until { get; set; } = "";
+    public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>When a run was first handed it. Until then it is news.</summary>
+    public DateTime? DeliveredAt { get; set; }
+
+    public DateTime? ClosedAt { get; set; }
+    /// <summary>"steward" or "owner".</summary>
+    public string? ClosedBy { get; set; }
+    /// <summary>How its end came, or why the owner closed it.</summary>
+    public string? ClosedNote { get; set; }
+}
+
+/// <summary>
+/// An open item the owner left in an answer - "let's talk about a dynamic role" - recorded by the
+/// steward against the decision it came with. It waits on the register page until a question or
+/// an idea takes it up, or the owner drops it.
+/// </summary>
+public class StewardFollowUp
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>The decision whose answer left it.</summary>
+    public int Decision { get; set; }
+    public string Text { get; set; } = "";
+    public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>What took it up: "question:&lt;key&gt;" or "idea:&lt;file&gt;". Null while it waits.</summary>
+    public string? CitedBy { get; set; }
+    public DateTime? CitedAt { get; set; }
+
+    /// <summary>When the owner dropped it, as nothing to take up.</summary>
+    public DateTime? DroppedAt { get; set; }
 }
 
 /// <summary>

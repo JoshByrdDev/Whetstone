@@ -35,6 +35,8 @@ public class DashboardDbContext : DbContext
     public DbSet<StewardDecision> StewardDecisions => Set<StewardDecision>();
     public DbSet<StewardDecisionReplace> StewardDecisionReplaces => Set<StewardDecisionReplace>();
     public DbSet<StewardDecisionConflict> StewardDecisionConflicts => Set<StewardDecisionConflict>();
+    public DbSet<StewardInstruction> StewardInstructions => Set<StewardInstruction>();
+    public DbSet<StewardFollowUp> StewardFollowUps => Set<StewardFollowUp>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -342,6 +344,21 @@ public class DashboardDbContext : DbContext
         {
             e.Property(r => r.Why).HasMaxLength(600);
             e.HasIndex(r => new { r.DecisionId, r.Number }).IsUnique();
+        });
+
+        b.Entity<StewardInstruction>(e =>
+        {
+            e.Property(i => i.ProjectKey).HasMaxLength(128);
+            e.Property(i => i.Until).HasMaxLength(600);
+            e.Property(i => i.ClosedBy).HasMaxLength(16);
+            e.HasIndex(i => new { i.ProjectKey, i.ClosedAt });
+        });
+
+        b.Entity<StewardFollowUp>(e =>
+        {
+            e.Property(f => f.ProjectKey).HasMaxLength(128);
+            e.Property(f => f.CitedBy).HasMaxLength(300);
+            e.HasIndex(f => new { f.ProjectKey, f.Decision });
         });
 
         b.Entity<StewardDecisionConflict>(e =>

@@ -80,6 +80,9 @@ export interface StewardEntry {
   at: string;
   /** A ruling's: what it rests on. */
   basis?: string | null;
+  /** A ruling's: the decisions it reads, and what happened to one that no longer holds. */
+  reads?: number[];
+  flagged?: string | null;
   /** A ruling's: when the owner reversed it, and what they said should hold instead. */
   reversedAt?: string | null;
   reversedBecause?: string | null;
@@ -88,7 +91,8 @@ export interface StewardEntry {
 }
 
 /** A ruling in force that the owner has not yet kept or reversed. */
-export const unseenRuling = (e: StewardEntry) => e.kind === 'Ruling' && !e.handledAt && !e.reversedAt;
+/** A ruling the owner has to look at: new, or reading a decision that no longer holds. */
+export const unseenRuling = (e: StewardEntry) => e.kind === 'Ruling' && !e.reversedAt && (!e.handledAt || !!e.flagged);
 
 export type ReleaseKind = 'Migration' | 'Config' | 'Action' | 'Note';
 
@@ -331,12 +335,23 @@ export interface StewardDecision {
 
 export interface DecisionPair { id: number; older: number; newer: number; why: string }
 
+export interface StewardFollowUp { id: number; decision: number; text: string; at: string; citedBy?: string | null; droppedAt?: string | null }
+
+export interface StewardInstruction {
+  id: number; text: string; until: string; at: string;
+  closedAt?: string | null; closedBy?: string | null; closedNote?: string | null;
+}
+
 export interface StewardRegister {
   next: number;
   plan?: string | null;
   units: { unit: number; title: string }[];
   decisions: StewardDecision[];
   mayConflict: DecisionPair[];
+  /** Provisional decisions whose point has come. */
+  due: number[];
+  followUps: StewardFollowUp[];
+  instructions: StewardInstruction[];
 }
 
 export interface NewDecision {
@@ -371,3 +386,20 @@ export const settleDecisionPair = (project: string, id: number, replaces: boolea
 /** Take into the register what has arrived since it was built. */
 export const importStewardDecisions = (project: string) =>
   fetch(`/api/steward/decisions/import?${q(project)}`, { method: 'POST' }).then(json<{ answer: string; data: unknown }>);
+
+/** A provisional decision whose point has come, confirmed so it holds like any other. */
+export const confirmStewardDecision = (project: string, number: number) =>
+  fetch(`/api/steward/decisions/${number}/confirm?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);
+
+/** Something to do until a condition holds: an instruction, not a decision. */
+export const giveStewardInstruction = (project: string, text: string, until: string) =>
+  fetch(`/api/steward/instructions?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ text, until }) })
+    .then(json<{ answer: string }>);
+
+export const closeStewardInstruction = (project: string, id: number, note?: string) =>
+  fetch(`/api/steward/instructions/${id}/close?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ note }) })
+    .then(json<{ answer: string }>);
+
+/** A follow-up that is nothing to take up. */
+export const dropStewardFollowUp = (project: string, id: number) =>
+  fetch(`/api/steward/followups/${id}/drop?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);

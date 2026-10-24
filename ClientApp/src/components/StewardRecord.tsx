@@ -335,6 +335,12 @@ function RulingCard({ e, onKeep, onReverse }: {
           {e.basis && (
             <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 4 }}>
               <span style={{ color: 'var(--w-t500)' }}>Rests on: </span>{e.basis}
+              {e.reads && e.reads.length > 0 && <span style={{ color: 'var(--w-t500)' }}> - reads {e.reads.map(n => `#${n}`).join(', ')}</span>}
+            </div>
+          )}
+          {!gone && e.flagged && (
+            <div style={{ font: `500 12px/1.5 ${BODY}`, color: TIER.blocked.c, marginTop: 4 }}>
+              It reads a decision that no longer holds: {e.flagged}. Keep it or reverse it.
             </div>
           )}
           {gone && e.reversedBecause && (
@@ -345,7 +351,10 @@ function RulingCard({ e, onKeep, onReverse }: {
         </div>
         {!gone && !reversing && (
           <div className="flex flex-none items-center gap-2">
-            {isNew && <GhostButton tone="go" disabled={busy} onClick={() => act(() => onKeep(e.id))} title="Let it stand. It stops counting as new.">Keep</GhostButton>}
+            {(isNew || !!e.flagged) && (
+              <GhostButton tone="go" disabled={busy} onClick={() => act(() => onKeep(e.id))}
+                title={e.flagged ? 'Let it stand on the decisions that replaced the ones it read.' : 'Let it stand. It stops counting as new.'}>Keep</GhostButton>
+            )}
             <GhostButton disabled={busy} onClick={() => { setReversing(true); setFailed(null); }} title="Stop it applying, and say what holds instead">Reverse</GhostButton>
           </div>
         )}

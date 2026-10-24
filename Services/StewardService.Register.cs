@@ -508,6 +508,7 @@ public partial class StewardService
         var titles = await UnitTitlesAsync(cfg, ct);
         var pairs = await _db.StewardDecisionConflicts.AsNoTracking()
             .Where(c => c.ProjectKey == projectKey && c.Settled == null).OrderBy(c => c.Older).ThenBy(c => c.Newer).ToListAsync(ct);
+        var built = await BuiltUnitsAsync(cfg, ct);
         return new StewardReply("register", null, new
         {
             next = await NextNumberAsync(projectKey, ct),
@@ -515,6 +516,14 @@ public partial class StewardService
             units = titles.Where(t => t.Key.Item1 == cfg.Steward.Plan.Key).OrderBy(t => t.Key.Item2).Select(t => new { unit = t.Key.Item2, title = t.Value }),
             decisions = all.Select(d => Shape(d, StatusOf(d, replaced), titles)),
             mayConflict = pairs.Select(c => new { c.Id, c.Older, c.Newer, c.Why }),
+            // Provisional decisions whose unit is built: the owner confirms, replaces or lets each lapse.
+            due = all.Where(d => d.Provisional && d.WithdrawnAt is null && !replaced.ContainsKey(d.Number)
+                && d.ProvisionalUnit is { } u && built.Contains(u)).Select(d => d.Number),
+            followUps = (await _db.StewardFollowUps.AsNoTracking().Where(f => f.ProjectKey == projectKey).OrderBy(f => f.At).ToListAsync(ct))
+                .Select(f => new { f.Id, decision = f.Decision, f.Text, f.At, f.CitedBy, f.DroppedAt }),
+            instructions = (await _db.StewardInstructions.AsNoTracking().Where(i => i.ProjectKey == projectKey)
+                    .OrderByDescending(i => i.ClosedAt == null).ThenByDescending(i => i.At).Take(200).ToListAsync(ct))
+                .Select(i => new { i.Id, i.Text, i.Until, i.At, i.ClosedAt, i.ClosedBy, i.ClosedNote }),
         });
     }
 

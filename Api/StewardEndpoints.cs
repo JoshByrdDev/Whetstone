@@ -17,6 +17,8 @@ public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
 public record StewardNewPlan(string? Key, string? Name, string? Folder);
 public record StewardSettlePair(bool? Replaces, string? Why);
+public record StewardInstructionRequest(string? Text, string? Until);
+public record StewardCloseRequest(string? Note);
 /// <summary>A ticket's place in a plan. <c>Unit</c> null takes it out; <c>Plan</c> null is the one being worked.</summary>
 public record TicketPlanLink(string? Plan, int? Unit, IReadOnlyList<string>? Outcomes);
 
@@ -88,6 +90,7 @@ public static class StewardEndpoints
             var tickets = await db.Tickets.AsNoTracking().Where(t => ids.Contains(t.Id))
                 .Select(t => new { t.Id, t.Title, t.PlanUnit, t.PlanKey }).ToDictionaryAsync(t => t.Id, ct);
             var goesOutWith = await steward.ReleaseUnitOfNotesAsync(project!, ct);
+            var flagged = await steward.RulingFlagsAsync(project!, ct);
             return Results.Ok(rows.Select(e =>
             {
                 var t = e.TicketId is { } id && tickets.TryGetValue(id, out var found) ? found : null;
@@ -112,6 +115,9 @@ public static class StewardEndpoints
                     e.Basis,
                     e.ReversedAt,
                     e.ReversedBecause,
+                    // The decisions it reads, and whether one of them no longer holds.
+                    reads = StewardService.Numbers(e.Reads),
+                    flagged = flagged.TryGetValue(e.Id, out var flag) ? flag : null,
                     // A learned fact's: where it went in the notes store, once placed.
                     e.Placed,
                 };
@@ -259,6 +265,32 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerBuildsRegisterAsync(project ?? "", ct);
             return r.Answer == "built" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // A provisional decision whose point has come: confirmed, so it holds like any other.
+        app.MapPost("/api/steward/decisions/{number:int}/confirm", async (int number, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerConfirmsDecisionAsync(project ?? "", number, ct);
+            return r.Answer == "confirmed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Instructions: something to do until a condition holds. Not decisions, never in the register.
+        app.MapPost("/api/steward/instructions", async (string? project, StewardInstructionRequest body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerInstructsAsync(project ?? "", body.Text, body.Until, ct);
+            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+        app.MapPost("/api/steward/instructions/{id:int}/close", async (int id, string? project, StewardCloseRequest body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerClosesInstructionAsync(project ?? "", id, body.Note, ct);
+            return r.Answer == "closed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // A follow-up the owner says is nothing to take up.
+        app.MapPost("/api/steward/followups/{id:int}/drop", async (int id, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerDropsFollowUpAsync(project ?? "", id, ct);
+            return r.Answer == "dropped" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // A pair the import thought may disagree: the newer replaces the older, or both stand.

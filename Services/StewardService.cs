@@ -29,7 +29,7 @@ public record StewardTicketDraft(
 public record StewardAsk(
     string Key, string Question, string Why, IReadOnlyList<BlockOption>? Options, string HeldUp, int? TicketId = null,
     int? Unit = null, IReadOnlyList<int>? Decisions = null, IReadOnlyList<int>? Touches = null,
-    IReadOnlyDictionary<string, IReadOnlyList<int>>? Changes = null);
+    IReadOnlyDictionary<string, IReadOnlyList<int>>? Changes = null, IReadOnlyList<int>? FollowUps = null);
 
 /// <summary>A steward's record kept elsewhere, to be taken in once. See <see cref="StewardService.ImportAsync"/>.</summary>
 public record StewardImport(
@@ -234,6 +234,8 @@ public partial class StewardService
             .OrderBy(e => e.ReversedAt).ToListAsync(ct);
         await EnsureRegisterAsync(cfg!, ct);
         var changed = await UndeliveredAsync(projectKey, ct);
+        var instructed = await _db.StewardInstructions.AsNoTracking()
+            .Where(i => i.ProjectKey == projectKey && i.ClosedAt == null && i.DeliveredAt == null).OrderBy(i => i.At).ToListAsync(ct);
 
         SyncFromResult? sync = null;
         if (cfg!.Steward.SyncFrom.Length > 0)
@@ -249,7 +251,8 @@ public partial class StewardService
             because = still.Count > 0 ? string.Join("; ", still) : "nothing in particular: a look at whether anything is left to file",
             noLongerSo = gone.Count > 0 ? gone : null,
             newAnswers = fresh.Select(q => new { q.Key, q.Question, q.Answer }),
-            newInstructions = said.Select(e => e.Text),
+            newInstructions = said.Select(e => e.Text)
+                .Concat(instructed.Select(i => $"[instruction {i.Id}] {i.Text} - until {i.Until}. Close it with steward_close_instruction when that comes.")),
             // Rulings of yours the owner has reversed since the last run that ended properly: stop
             // applying each, and apply what the owner said instead. Each is a decision made.
             reversedRulings = reversed.Select(e => new { e.Id, ruling = e.Text, ownerSaid = e.ReversedBecause }),
@@ -262,6 +265,9 @@ public partial class StewardService
                 replaces = d.Replaces.Count == 0 ? null : d.Replaces.Select(r => new { number = r.Number, why = r.Why }),
             }),
             sync,
+            // The slice's decisions in force, provisional ones coming due, rulings reading a decision
+            // that no longer holds, open follow-ups and instructions.
+            briefing = await BriefingAsync(cfg, ct),
             status = (await StatusAsync(projectKey, ct)).Data,
         });
     }
@@ -322,6 +328,8 @@ public partial class StewardService
                          && e.ReversedAt != null && e.DeliveredAt == null && e.ReversedAt <= began).ToListAsync(ct))
                 e.DeliveredAt = now;
             await DeliveredAsync(projectKey, began, ct);
+            foreach (var i in await _db.StewardInstructions.Where(i => i.ProjectKey == projectKey && i.DeliveredAt == null && i.At <= began).ToListAsync(ct))
+                i.DeliveredAt = now;
         }
         StewardDue.Settle(s);
         s.LastRunEndedAt = DateTime.UtcNow;
@@ -485,6 +493,8 @@ public partial class StewardService
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt == null)
             .OrderBy(e => e.At).ToListAsync(ct);
         var learned = await UnplacedAsync(projectKey, ct);
+        var flags = await RulingFlagsAsync(projectKey, ct);
+        var instructions = await OpenInstructionsAsync(projectKey, ct);
 
         return new StewardReply("status", null, new
         {
@@ -523,7 +533,15 @@ public partial class StewardService
             ticketNotes,
             // Your standing rulings, in force until the owner reverses one. Apply them as you would
             // a decision already made - they are readings of decisions, never new ones.
-            rulings = rulings.Select(e => new { e.Id, ruling = e.Text, restsOn = e.Basis, ticket = e.TicketId, keptByOwner = e.HandledAt != null }),
+            rulings = rulings.Select(e => new
+            {
+                e.Id, ruling = e.Text, restsOn = e.Basis, reads = Numbers(e.Reads), ticket = e.TicketId, keptByOwner = e.HandledAt != null,
+                // A ruling reading a decision that no longer holds: apply it no further until the owner says.
+                flagged = flags.TryGetValue(e.Id, out var f) ? f : null,
+            }),
+            // What the owner told you to do for a while, each with its end. Close one with
+            // steward_close_instruction when its end has come.
+            instructions = instructions.Select(i => new { i.Id, i.Text, i.Until }),
             // Facts you said with steward_learned that are not in the notes store yet: they go in
             // after this run. Until then the store's index does not list them, so they are here.
             learnedPending = learned.Select(e => e.Text),
@@ -1173,9 +1191,13 @@ public partial class StewardService
             if (nums.Count > 0) changes[label.Trim()] = nums.Distinct().ToList();
         }
 
+        var (citing, notWaiting) = await FollowUpsToCiteAsync(projectKey, a.FollowUps, ct);
+        if (notWaiting is not null) return notWaiting;
+
         if (await _db.StewardQuestions.AnyAsync(q => q.ProjectKey == projectKey && q.Key == key, ct))
             return Refuse("already-asked", $"\"{key}\" has been asked already. A question is asked once.");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"ask the owner: {a.Question.Trim()}");
+        Cite(citing, $"question:{key}");
 
         _db.StewardQuestions.Add(new StewardQuestion
         {
@@ -1282,7 +1304,15 @@ public partial class StewardService
     /// with the decision or document it rests on. It applies at once, is handed to every run, and
     /// is the owner's to keep or reverse.
     /// </summary>
-    public async Task<StewardReply> RuleAsync(string projectKey, string text, string basis, int? ticketId = null, CancellationToken ct = default)
+    public async Task<StewardReply> RuleAsync(string projectKey, string text, string basis, int? ticketId = null, CancellationToken ct = default) =>
+        await RuleAsync(projectKey, text, basis, ticketId, null, ct);
+
+    /// <summary>
+    /// As above, with the register's decisions the ruling reads. When one of them is replaced or
+    /// withdrawn the ruling is flagged on the record and in the next briefing.
+    /// </summary>
+    public async Task<StewardReply> RuleAsync(string projectKey, string text, string basis, int? ticketId, IReadOnlyList<int>? reads,
+        CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
         if (cfg is null) return off!;
@@ -1300,9 +1330,26 @@ public partial class StewardService
             && e.ReversedAt == null).ToListAsync(ct);
         if (live.FirstOrDefault(e => string.Equals(e.Text.Trim(), text, StringComparison.OrdinalIgnoreCase)) is { } had)
             return new StewardReply("already-ruled", "That ruling is already in force.", new { id = had.Id });
+        var read = (reads ?? Array.Empty<int>()).Distinct().ToList();
+        if (read.Count > 0)
+        {
+            await EnsureRegisterAsync(cfg, ct);
+            var all = await RegisterAsync(projectKey, track: false, ct);
+            var map = ReplacedIndex(all);
+            foreach (var n in read)
+            {
+                var d = all.FirstOrDefault(x => x.Number == n);
+                if (d is null) return Refuse("bad-request", $"There is no decision #{n}.");
+                if (StatusOf(d, map).Name is Replaced or Withdrawn) return Refuse("bad-request", $"#{n} no longer holds: a ruling cannot read it.");
+            }
+        }
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rule: {Head(text, 200)}");
 
-        var r = new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.Ruling, TicketId = ticketId, Text = text, Basis = basis };
+        var r = new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Ruling, TicketId = ticketId, Text = text, Basis = basis,
+            Reads = reads is null ? null : string.Join(",", read),
+        };
         _db.StewardEntries.Add(r);
         await _db.SaveChangesAsync(ct);
         return new StewardReply("ruled", null, new { id = r.Id });
@@ -1315,6 +1362,22 @@ public partial class StewardService
         if (e is null) return Refuse("not-found", $"There is no ruling {id} here.");
         if (e.ReversedAt is not null) return Refuse("bad-request", "That ruling was reversed.");
         e.HandledAt ??= DateTime.UtcNow;
+        // Kept while it reads a decision that no longer holds: it stands on what replaced it now,
+        // and a withdrawn one it read drops out of what it reads.
+        if (e.Reads is not null && Config(projectKey) is { } cfg)
+        {
+            var all = await RegisterAsync(projectKey, track: false, ct);
+            var map = ReplacedIndex(all);
+            var now = new List<int>();
+            foreach (var n in Numbers(e.Reads))
+            {
+                var d = all.FirstOrDefault(x => x.Number == n);
+                var st = d is null ? null : StatusOf(d, map);
+                if (st?.Name == Replaced) now.AddRange(st.ReplacedBy.Select(r => r.By));
+                else if (st?.Name != Withdrawn) now.Add(n);
+            }
+            e.Reads = string.Join(",", now.Distinct());
+        }
         await _db.SaveChangesAsync(ct);
         return new StewardReply("kept");
     }
