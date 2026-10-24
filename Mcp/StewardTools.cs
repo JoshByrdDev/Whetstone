@@ -225,6 +225,21 @@ public class StewardTools
         [Description("The project key.")] string project, [Description("The note's id.")] int noteId) =>
         s.DoneWithAsync(project, noteId);
 
+    [McpServerTool(Name = "steward_rule"), Description(
+        "Record a standing call you will apply again: something you have taken as settled for tickets still to be written " +
+        "or reviews still to come, like 'a by-inspection pass on an infra/ change is fine when a test asserts the config'. " +
+        "Say what it rests on - the spec and section, the plan's decision, the owner's answer by its key - because a ruling " +
+        "is only a reading of decisions already made, never a new one: anything no decision settles is the owner's to " +
+        "answer, not yours to rule. It applies at once and every run is handed every ruling in force (status: rulings). " +
+        "The owner sees each one and may reverse it; a reversal reaches your next run with what should hold instead. " +
+        "Record it the moment you make the call. Not a call about one ticket (steward_record_call), not a fact about the repo.")]
+    public static Task<StewardReply> Rule(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The ruling, as one sentence you could apply without context.")] string ruling,
+        [Description("What it rests on: the spec and section, the plan's decision, or the owner's answer by its key.")] string restsOn,
+        [Description("The ticket that raised it, when one did.")] int? ticketId = null) =>
+        s.RuleAsync(project, ruling, restsOn, ticketId);
+
     [McpServerTool(Name = "steward_note_for_release"), Description(
         "After merging a ticket that leaves the owner something to read before the base branch is released: a migration and " +
         "what it adds, a line a worker wrote for the owner's own documents (copy it as written, with the file and section it " +

@@ -700,6 +700,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime>("At")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Basis")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("DeliveredAt")
                         .HasColumnType("TEXT");
 
@@ -718,6 +721,12 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("Release")
                         .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReversedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReversedBecause")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Text")

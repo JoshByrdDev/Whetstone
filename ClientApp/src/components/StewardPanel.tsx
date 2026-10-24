@@ -14,7 +14,7 @@ import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
   answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan,
-  getStewardStatus, markStewardEntry, setStewardMode,
+  getStewardStatus, keepStewardRuling, markStewardEntry, reverseStewardRuling, setStewardMode, unseenRuling,
 } from '../api/steward';
 import type {
   StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardStatus,
@@ -124,6 +124,9 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const waitingCount = (page?.waiting.length ?? 0) + heldCount;
   // What a release still asks of its owner: the notes that are something to do, not only to know.
   const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && e.release !== 'Note').length;
+  // Rulings the steward made that the owner has not yet seen: they apply already, so they count.
+  const unseen = entries.filter(unseenRuling).length;
+  const recordCount = outstanding + unseen;
   // Where the steward stands is the card's to say, on the Now tab; the head only says what the
   // page cannot show at all.
   const sub = !page ? 'Loading' : off ? 'No steward for this project' : undefined;
@@ -167,8 +170,11 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
             <Chip on={view === 'plan'} onClick={() => show('plan')} title="The plan it works from, and how far each part is">
               The plan{progress ? ` ${progress.percent}%` : ''}
             </Chip>
-            <Chip on={view === 'record'} onClick={() => show('record')} title="What it did in your place, and what to read before a release">
-              The record{outstanding > 0 ? ` ${outstanding}` : ''}
+            <Chip on={view === 'record'} onClick={() => show('record')}
+              title={`What it did in your place, and what to read before a release${recordCount > 0
+                ? ` - ${[unseen > 0 ? `${unseen} new ruling${unseen === 1 ? '' : 's'}` : '', outstanding > 0 ? `${outstanding} to deal with before a release` : ''].filter(Boolean).join(', ')}`
+                : ''}`}>
+              The record{recordCount > 0 ? ` ${recordCount}` : ''}
             </Chip>
           </div>
 
@@ -213,6 +219,8 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
               <StewardRecord
                 entries={entries} answered={page.answered} unit={notesUnit} onUnit={setNotesUnit}
                 onMark={async (id, mark) => { await markStewardEntry(page.project, id, mark); await load(); }}
+                onKeep={async id => { await keepStewardRuling(page.project, id); await load(); }}
+                onReverse={async (id, because) => { await reverseStewardRuling(page.project, id, because); await load(); }}
               />
             </div>
           )}

@@ -114,6 +114,15 @@ public enum StewardEntryKind
     /// the call that decides it, so a run that dies part-way does not lose it.
     /// </summary>
     TicketNote,
+    /// <summary>
+    /// A standing call the steward made and will apply again - "a 'by inspection' pass is fine for
+    /// infra/ changes" - with what it rests on (<see cref="StewardEntry.Basis"/>). Every run is
+    /// handed every live ruling, so it is applied by being read, not remembered. It applies at
+    /// once; the owner keeps it (<see cref="StewardEntry.HandledAt"/>, "seen") or reverses it
+    /// (<see cref="StewardEntry.ReversedAt"/>), and a reversal reaches the next run like an answer.
+    /// A ruling is still only a reading of decisions already made: it decides nothing the owner has not.
+    /// </summary>
+    Ruling,
 }
 
 /// <summary>
@@ -158,9 +167,22 @@ public class StewardEntry
 
     /// <summary>
     /// When the owner ticked this off as read or dealt with. The owner's alone: no tool sets it, so
-    /// a steward cannot clear its own notes out of the way of a release.
+    /// a steward cannot clear its own notes out of the way of a release. For a
+    /// <see cref="StewardEntryKind.Ruling"/>, when the owner saw it (kept or reversed it).
+    /// For a <see cref="StewardEntryKind.TicketNote"/>, when the steward closed it.
     /// </summary>
     public DateTime? HandledAt { get; set; }
+
+    /// <summary>For a <see cref="StewardEntryKind.Ruling"/>: the decision or document it rests on.</summary>
+    public string? Basis { get; set; }
+
+    /// <summary>
+    /// For a <see cref="StewardEntryKind.Ruling"/>: when the owner reversed it, and in their words
+    /// what should hold instead. A reversed ruling is no longer handed to runs; the reversal is,
+    /// once, through <see cref="DeliveredAt"/>.
+    /// </summary>
+    public DateTime? ReversedAt { get; set; }
+    public string? ReversedBecause { get; set; }
 }
 
 /// <summary>

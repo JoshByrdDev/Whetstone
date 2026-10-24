@@ -224,6 +224,9 @@ public class StewardService
         var said = await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid && e.DeliveredAt == null)
             .OrderBy(e => e.At).ToListAsync(ct);
+        var reversed = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt != null && e.DeliveredAt == null)
+            .OrderBy(e => e.ReversedAt).ToListAsync(ct);
 
         SyncFromResult? sync = null;
         if (cfg!.Steward.SyncFrom.Length > 0)
@@ -235,6 +238,9 @@ public class StewardService
             because = why ?? "nothing in particular: a look at whether anything is left to file",
             newAnswers = fresh.Select(q => new { q.Key, q.Question, q.Answer }),
             newInstructions = said.Select(e => e.Text),
+            // Rulings of yours the owner has reversed since the last run that ended properly: stop
+            // applying each, and apply what the owner said instead. Each is a decision made.
+            reversedRulings = reversed.Select(e => new { e.Id, ruling = e.Text, ownerSaid = e.ReversedBecause }),
             sync,
             status = (await StatusAsync(projectKey, ct)).Data,
         });
@@ -265,6 +271,9 @@ public class StewardService
                 q.AnswerDeliveredAt = now;
             foreach (var e in await _db.StewardEntries.Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid
                          && e.DeliveredAt == null && e.At <= began).ToListAsync(ct))
+                e.DeliveredAt = now;
+            foreach (var e in await _db.StewardEntries.Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling
+                         && e.ReversedAt != null && e.DeliveredAt == null && e.ReversedAt <= began).ToListAsync(ct))
                 e.DeliveredAt = now;
         }
         StewardDue.Settle(s);
@@ -428,6 +437,9 @@ public class StewardService
             }).ToList();
         var waiting = await _db.StewardQuestions.AsNoTracking()
             .Where(q => q.ProjectKey == projectKey && q.Answer == null).OrderBy(q => q.AskedAt).ToListAsync(ct);
+        var rulings = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt == null)
+            .OrderBy(e => e.At).ToListAsync(ct);
 
         return new StewardReply("status", null, new
         {
@@ -461,6 +473,9 @@ public class StewardService
             tickets = rows,
             // What earlier runs meant to do, by ticket. Each stays until closed with steward_done_with.
             ticketNotes,
+            // Your standing rulings, in force until the owner reverses one. Apply them as you would
+            // a decision already made - they are readings of decisions, never new ones.
+            rulings = rulings.Select(e => new { e.Id, ruling = e.Text, restsOn = e.Basis, ticket = e.TicketId, keptByOwner = e.HandledAt != null }),
             memo,
             memoLength = $"{memo.Length}/{cfg.Steward.MemoMaxChars}",
             memoTooLong = memo.Length > cfg.Steward.MemoMaxChars
@@ -1065,6 +1080,76 @@ public class StewardService
         return new StewardReply("done");
     }
 
+    /// <summary>The longest a ruling, or what it rests on, may be.</summary>
+    public const int RulingMaxChars = 600;
+
+    /// <summary>
+    /// Record a standing call: something the steward has taken as settled and will apply again,
+    /// with the decision or document it rests on. It applies at once, is handed to every run, and
+    /// is the owner's to keep or reverse.
+    /// </summary>
+    public async Task<StewardReply> RuleAsync(string projectKey, string text, string basis, int? ticketId = null, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        text = text?.Trim() ?? "";
+        basis = basis?.Trim() ?? "";
+        if (text.Length == 0) return Refuse("bad-request", "Say what you will take as settled from now on.");
+        if (basis.Length == 0)
+            return Refuse("bad-request", "Say what it rests on: the spec and section, the plan's decision, or the owner's answer by its key. "
+                + "A ruling that rests on nothing the owner decided is a question for the owner.");
+        if (text.Length > RulingMaxChars || basis.Length > RulingMaxChars)
+            return Refuse("bad-request", $"A ruling and what it rests on are each at most {RulingMaxChars} characters: one call, not a policy.");
+        if (ticketId is { } tid && (await TicketOfAsync(projectKey, tid)).Item1 is null)
+            return Refuse("not-found", $"There is no ticket {tid} here.");
+        var live = await _db.StewardEntries.AsNoTracking().Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling
+            && e.ReversedAt == null).ToListAsync(ct);
+        if (live.FirstOrDefault(e => string.Equals(e.Text.Trim(), text, StringComparison.OrdinalIgnoreCase)) is { } had)
+            return new StewardReply("already-ruled", "That ruling is already in force.", new { id = had.Id });
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rule: {Head(text, 200)}");
+
+        var r = new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.Ruling, TicketId = ticketId, Text = text, Basis = basis };
+        _db.StewardEntries.Add(r);
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("ruled", null, new { id = r.Id });
+    }
+
+    /// <summary>The owner has read a ruling and lets it stand. Not a reason to run. No tool reaches this.</summary>
+    public async Task<StewardReply> OwnerKeepsRulingAsync(string projectKey, int id, CancellationToken ct = default)
+    {
+        var e = await RulingAsync(projectKey, id, ct);
+        if (e is null) return Refuse("not-found", $"There is no ruling {id} here.");
+        if (e.ReversedAt is not null) return Refuse("bad-request", "That ruling was reversed.");
+        e.HandledAt ??= DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("kept");
+    }
+
+    /// <summary>
+    /// The owner reverses a ruling, saying what should hold instead. It stops being handed to runs,
+    /// and the reversal reaches the next run as a decision made. No tool reaches this.
+    /// </summary>
+    public async Task<StewardReply> OwnerReversesRulingAsync(string projectKey, int id, string because, CancellationToken ct = default)
+    {
+        because = because?.Trim() ?? "";
+        if (because.Length == 0) return Refuse("bad-request", "Say what should hold instead: the steward reads it as a decision made.");
+        var e = await RulingAsync(projectKey, id, ct);
+        if (e is null) return Refuse("not-found", $"There is no ruling {id} here.");
+        if (e.ReversedAt is not null) return Refuse("bad-request", "That ruling is already reversed.");
+        e.ReversedAt = DateTime.UtcNow;
+        e.ReversedBecause = because;
+        e.HandledAt ??= e.ReversedAt;
+        e.DeliveredAt = null;
+        if (Config(projectKey)?.StewardMode is { } m && m != StewardMode.Off)
+            await StewardDue.MarkAsync(_db, projectKey, $"the owner reversed ruling {id}");
+        await _db.SaveChangesAsync(ct);
+        _heartbeat?.Wake();
+        return new StewardReply("reversed");
+    }
+
+    private Task<StewardEntry?> RulingAsync(string projectKey, int id, CancellationToken ct) =>
+        _db.StewardEntries.FirstOrDefaultAsync(x => x.Id == id && x.ProjectKey == projectKey && x.Kind == StewardEntryKind.Ruling, ct);
+
     /// <summary>The open ticket notes, oldest first; one ticket's with <paramref name="ticketId"/>.</summary>
     private async Task<List<StewardEntry>> OpenNotesAsync(string projectKey, int? ticketId, CancellationToken ct)
     {
@@ -1279,6 +1364,8 @@ public class StewardService
     {
         var e = await _db.StewardEntries.FirstOrDefaultAsync(x => x.Id == id && x.ProjectKey == projectKey, ct);
         if (e is null) return Refuse("no-entry", $"No line {id} in this project's record.");
+        if (e.Kind == StewardEntryKind.TicketNote) return Refuse("bad-request", "A ticket note is the steward's own, and it closes it.");
+        if (e.Kind == StewardEntryKind.Ruling) return Refuse("bad-request", "A ruling is kept or reversed, not ticked off.");
         if (release is not null)
         {
             if (e.Kind != StewardEntryKind.BeforeRelease) return Refuse("bad-request", "Only a note for a release has a kind.");

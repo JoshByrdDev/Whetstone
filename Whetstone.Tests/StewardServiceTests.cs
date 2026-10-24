@@ -1160,6 +1160,79 @@ public class StewardServiceTests : IDisposable
         Assert.NotNull(Entries().Single(e => e.Kind == StewardEntryKind.TicketNote).HandledAt);
     }
 
+    // ---- rulings ----------------------------------------------------------------------
+
+    private const string InfraRule = "A by-inspection pass on an infra/ change is fine when a test asserts the config.";
+
+    private async Task<int> Ruled()
+    {
+        var r = await In(s => s.RuleAsync("alpha", InfraRule, "the owner's answer infra-checks"));
+        Assert.Equal("ruled", r.Answer);
+        return Entries().Single(e => e.Kind == StewardEntryKind.Ruling).Id;
+    }
+
+    [Fact]
+    public async Task A_ruling_applies_at_once_and_every_run_is_handed_it()
+    {
+        Assert.Equal("no-run", (await In(s => s.RuleAsync("alpha", InfraRule, "x"))).Answer);
+        await Begin();
+        var id = await Ruled();
+        Assert.Equal("already-ruled", (await In(s => s.RuleAsync("alpha", InfraRule.ToUpperInvariant(), "again"))).Answer);
+        Assert.Contains("infra-checks", Json(await In(s => s.StatusAsync("alpha"))));
+        await In(s => s.EndAsync("alpha", "ruled once", false));
+        Assert.Contains(InfraRule, await BeginJson());
+
+        // Keeping it changes nothing for the steward but the owner's mark.
+        Assert.Equal("kept", (await In(s => s.OwnerKeepsRulingAsync("alpha", id))).Answer);
+        Assert.Contains("\"keptByOwner\":true", Json(await In(s => s.StatusAsync("alpha"))));
+    }
+
+    [Fact]
+    public async Task A_ruling_must_say_what_it_rests_on()
+    {
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.RuleAsync("alpha", InfraRule, " "))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.RuleAsync("alpha", "", "the spec"))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.RuleAsync("alpha", new string('x', StewardService.RulingMaxChars + 1), "the spec"))).Answer);
+        Assert.Equal("not-found", (await In(s => s.RuleAsync("alpha", InfraRule, "the spec", 999))).Answer);
+    }
+
+    [Fact]
+    public async Task A_reversed_ruling_stops_being_handed_over_and_its_reversal_reaches_the_next_run_once()
+    {
+        await Begin();
+        var id = await Ruled();
+        await In(s => s.EndAsync("alpha", "ruled once", false));
+
+        Assert.Equal("bad-request", (await In(s => s.OwnerReversesRulingAsync("alpha", id, "  "))).Answer);
+        Assert.Equal("reversed", (await In(s => s.OwnerReversesRulingAsync("alpha", id, "Every infra/ change is run on the stack."))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerKeepsRulingAsync("alpha", id))).Answer);
+        await using (var c = NewCtx()) Assert.Contains($"the owner reversed ruling {id}", (await c.StewardStates.FindAsync("alpha"))!.DueReason);
+
+        // Handed to the next run, which dies: handed again.
+        var first = await BeginJson();
+        Assert.Contains("Every infra/ change is run on the stack.", first);
+        Assert.DoesNotContain($"\"restsOn\"", first);
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "killed");
+        Assert.Contains("Every infra/ change is run on the stack.", await BeginJson());
+
+        // Once a run ends properly, it is delivered and not handed over again.
+        await In(s => s.EndAsync("alpha", "applied the reversal", false));
+        Assert.DoesNotContain("Every infra/ change is run on the stack.", await BeginJson());
+    }
+
+    [Fact]
+    public async Task The_owners_tick_box_does_not_reach_rulings_or_ticket_notes()
+    {
+        var t = await AtReview();
+        await Begin();
+        var id = await Ruled();
+        await In(s => s.NoteTicketAsync("alpha", t, "When it merges, set A1 Done."));
+        var note = Entries().Single(e => e.Kind == StewardEntryKind.TicketNote).Id;
+        Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", id, true, null))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", note, true, null))).Answer);
+    }
+
     // ---- the owner's link from a ticket to the plan --------------------------------
 
     private async Task<int> Loose(string? description = null)

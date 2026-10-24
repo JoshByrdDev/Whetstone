@@ -64,7 +64,7 @@ export interface StewardPage {
 export interface StewardEntry {
   id: number;
   /** TicketNote: something the steward means to do about the ticket, open until it closes it. */
-  kind: 'Call' | 'BeforeRelease' | 'OwnerSaid' | 'TicketNote';
+  kind: 'Call' | 'BeforeRelease' | 'OwnerSaid' | 'TicketNote' | 'Ruling';
   ticketId?: number | null;
   ticketTitle?: string | null;
   /** The unit of the plan it belongs to, by way of its ticket. */
@@ -75,7 +75,15 @@ export interface StewardEntry {
   handledAt?: string | null;
   text: string;
   at: string;
+  /** A ruling's: what it rests on. */
+  basis?: string | null;
+  /** A ruling's: when the owner reversed it, and what they said should hold instead. */
+  reversedAt?: string | null;
+  reversedBecause?: string | null;
 }
+
+/** A ruling in force that the owner has not yet kept or reversed. */
+export const unseenRuling = (e: StewardEntry) => e.kind === 'Ruling' && !e.handledAt && !e.reversedAt;
 
 export type ReleaseKind = 'Migration' | 'Config' | 'Action' | 'Note';
 
@@ -273,6 +281,15 @@ export const getStewardEntriesForTicket = (project: string, ticketId: number) =>
   fetch(`/api/steward/entries?${q(project)}&ticket=${ticketId}`).then(json<StewardEntry[]>);
 
 /** Tick a line off or un-tick it, or say what kind of release note it is. */
+/** Let one of the steward's rulings stand. */
+export const keepStewardRuling = (project: string, id: number) =>
+  fetch(`/api/steward/rulings/${id}/keep?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);
+
+/** Reverse one of the steward's rulings, saying what should hold instead. */
+export const reverseStewardRuling = (project: string, id: number, because: string) =>
+  fetch(`/api/steward/rulings/${id}/reverse?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ because }) })
+    .then(json<{ answer: string }>);
+
 export const markStewardEntry = (project: string, id: number, mark: { handled?: boolean; release?: ReleaseKind }) =>
   fetch(`/api/steward/entries/${id}?${q(project)}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(mark) })
     .then(json<{ answer: string }>);

@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { Chip, Panel } from './ui';
+import { Chip, GhostButton, Panel } from './ui';
 import { BODY, MONO, TIER, chamfer } from './orbit';
 import { Markdown } from './Markdown';
 import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
+import { unseenRuling } from '../api/steward';
 import type { ReleaseKind, StewardEntry, StewardQuestion } from '../api/steward';
 
 /**
@@ -24,8 +25,9 @@ const KINDS: { id: ReleaseKind; title: string; says: string; tier: keyof typeof 
 
 type Mark = (id: number, mark: { handled?: boolean; release?: ReleaseKind }) => Promise<void>;
 
-export function StewardRecord({ entries, answered, onMark, unit, onUnit }: {
+export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, unit, onUnit }: {
   entries: StewardEntry[]; answered: StewardQuestion[]; onMark: Mark;
+  onKeep: (id: number) => Promise<void>; onReverse: (id: number, because: string) => Promise<void>;
   /** Show only the notes that go out with this unit of the plan; null is all of them. */
   unit: number | null; onUnit: (unit: number | null) => void;
 }) {
@@ -33,9 +35,11 @@ export function StewardRecord({ entries, answered, onMark, unit, onUnit }: {
   const notes = useMemo(() => entries.filter(e => e.kind === 'BeforeRelease').map(e => ({ ...e, release: e.release ?? 'Note' as const })), [entries]);
   const calls = useMemo(() => entries.filter(e => e.kind === 'Call'), [entries]);
   const said = useMemo(() => entries.filter(e => e.kind === 'OwnerSaid'), [entries]);
+  const rulings = useMemo(() => entries.filter(e => e.kind === 'Ruling'), [entries]);
 
   return (
     <>
+      <Rulings rows={rulings} onKeep={onKeep} onReverse={onReverse} />
       <ReleaseNotes notes={notes} onMark={onMark} unit={unit} onUnit={onUnit} />
 
       <Fold id="Call" title="Calls it made for you" colour={TIER.gate.c} count={calls.filter(e => !e.handledAt).length}
@@ -251,5 +255,115 @@ function EntryRow({ e, open, onToggle, onMark, tickTitle, retag }: {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The steward's standing calls: each applies from the moment it is made and is handed to every run,
+ * so this is where the owner sees the precedents being set in their name. New ones first, each with
+ * what it rests on; keep it and it stops counting as new, reverse it and say what holds instead,
+ * and the next run is told.
+ */
+function Rulings({ rows, onKeep, onReverse }: {
+  rows: StewardEntry[]; onKeep: (id: number) => Promise<void>; onReverse: (id: number, because: string) => Promise<void>;
+}) {
+  const [showReversed, setShowReversed] = useState(false);
+  const live = rows.filter(e => !e.reversedAt);
+  const unseen = live.filter(unseenRuling);
+  const kept = live.filter(e => !unseenRuling(e));
+  const reversed = rows.filter(e => e.reversedAt);
+
+  return (
+    <Fold id="Ruling" open title="Its rulings" colour="var(--w-accent)" count={unseen.length}
+      meta={live.length > 0 ? `${live.length} in force` : undefined}>
+      {rows.length === 0
+        ? <Quiet>No rulings yet. When the steward takes something as settled and means to apply it again, it shows here.</Quiet>
+        : (
+          <div className="flex flex-col gap-2 mb-8">
+            {[...unseen, ...kept].map(e => <RulingCard key={e.id} e={e} onKeep={onKeep} onReverse={onReverse} />)}
+            {live.length === 0 && <Quiet>No ruling is in force.</Quiet>}
+            {reversed.length > 0 && (
+              <div>
+                <Chip on={showReversed} onClick={() => setShowReversed(!showReversed)} title="The rulings you reversed, and what you said instead">
+                  Reversed {reversed.length}
+                </Chip>
+                {showReversed && (
+                  <div key="rev" className="orbit-swap flex flex-col gap-2" style={{ marginTop: 8 }}>
+                    {reversed.map(e => <RulingCard key={e.id} e={e} onKeep={onKeep} onReverse={onReverse} />)}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+    </Fold>
+  );
+}
+
+function RulingCard({ e, onKeep, onReverse }: {
+  e: StewardEntry; onKeep: (id: number) => Promise<void>; onReverse: (id: number, because: string) => Promise<void>;
+}) {
+  const [reversing, setReversing] = useState(false);
+  const [because, setBecause] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const isNew = unseenRuling(e);
+  const gone = !!e.reversedAt;
+
+  const act = async (fn: () => Promise<void>) => {
+    setBusy(true); setFailed(null);
+    try { await fn(); setReversing(false); }
+    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <Panel tone={isNew ? 'var(--w-accent)' : undefined} style={{ opacity: gone ? 0.6 : 1 }}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <div style={label(isNew ? 'var(--w-accent-text)' : undefined)}>
+            {isNew ? 'New' : gone ? 'Reversed' : 'Kept'}
+            {e.ticketId != null ? <> - from #{e.ticketId}{e.ticketTitle ? ` ${e.ticketTitle}` : ''}</> : null}
+            {' - '}{ago(e.at)}
+          </div>
+          <div style={{ font: `500 13px/1.5 ${BODY}`, color: 'var(--w-t100)', marginTop: 4, textDecoration: gone ? 'line-through' : undefined }}>
+            {e.text}
+          </div>
+          {e.basis && (
+            <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 4 }}>
+              <span style={{ color: 'var(--w-t500)' }}>Rests on: </span>{e.basis}
+            </div>
+          )}
+          {gone && e.reversedBecause && (
+            <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t300)', marginTop: 6 }}>
+              <span style={{ color: 'var(--w-t500)' }}>You said instead ({ago(e.reversedAt)}): </span>{e.reversedBecause}
+            </div>
+          )}
+        </div>
+        {!gone && !reversing && (
+          <div className="flex flex-none items-center gap-2">
+            {isNew && <GhostButton tone="go" disabled={busy} onClick={() => act(() => onKeep(e.id))} title="Let it stand. It stops counting as new.">Keep</GhostButton>}
+            <GhostButton disabled={busy} onClick={() => { setReversing(true); setFailed(null); }} title="Stop it applying, and say what holds instead">Reverse</GhostButton>
+          </div>
+        )}
+      </div>
+
+      {reversing && (
+        <div key="reverse" className="orbit-swap" style={{ marginTop: 10 }}>
+          <textarea
+            autoFocus value={because} onChange={ev => setBecause(ev.target.value)} rows={3}
+            placeholder="What should hold instead? The steward reads this as a decision you made."
+            className="w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none"
+          />
+          <div className="flex items-center justify-end gap-2" style={{ marginTop: 6 }}>
+            <GhostButton disabled={busy} onClick={() => setReversing(false)}>Cancel</GhostButton>
+            <GhostButton tone="go" disabled={busy || !because.trim()} onClick={() => act(() => onReverse(e.id, because.trim()))}>
+              {busy ? 'Reversing' : 'Reverse it'}
+            </GhostButton>
+          </div>
+        </div>
+      )}
+      {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 6 }}>{failed}</div>}
+    </Panel>
   );
 }

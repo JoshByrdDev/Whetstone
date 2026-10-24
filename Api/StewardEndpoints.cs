@@ -11,6 +11,7 @@ public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released);
+public record StewardReverse(string? Because);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
 public record StewardNewPlan(string? Key, string? Name, string? Folder);
 /// <summary>A ticket's place in a plan. <c>Unit</c> null takes it out; <c>Plan</c> null is the one being worked.</summary>
@@ -101,6 +102,10 @@ public static class StewardEndpoints
                     e.HandledAt,
                     e.Text,
                     e.At,
+                    // A ruling's: what it rests on, and the owner's reversal of it.
+                    e.Basis,
+                    e.ReversedAt,
+                    e.ReversedBecause,
                 };
             }));
         });
@@ -112,6 +117,20 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerMarksEntryAsync(project ?? "", id, mark.Handled, mark.Release, ct);
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The owner keeps or reverses one of the steward's rulings. No tool behind either.
+        app.MapPost("/api/steward/rulings/{id:int}/keep", async (int id, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerKeepsRulingAsync(project ?? "", id, ct);
+            return r.Answer == "kept" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        app.MapPost("/api/steward/rulings/{id:int}/reverse", async (int id, string? project, StewardReverse body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerReversesRulingAsync(project ?? "", id, body.Because ?? "", ct);
+            return r.Answer == "reversed" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // Sort many release notes at once, { "<id>": "<kind>" }: for a record older than the kinds.
