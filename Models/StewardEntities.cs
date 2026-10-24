@@ -123,6 +123,14 @@ public enum StewardEntryKind
     /// A ruling is still only a reading of decisions already made: it decides nothing the owner has not.
     /// </summary>
     Ruling,
+    /// <summary>
+    /// A fact about the repo the steward learned: where a screen lives, how a check behaves, what a
+    /// seed holds. Queued the moment it is said, so a run that dies keeps it, and placed in the
+    /// project's notes store after the run by the launcher (<see cref="StewardEntry.HandledAt"/>,
+    /// with where it went in <see cref="StewardEntry.Placed"/>). From there every reader of the
+    /// store has it - the steward, the workers and the owner's own sessions.
+    /// </summary>
+    Learned,
 }
 
 /// <summary>
@@ -183,6 +191,12 @@ public class StewardEntry
     /// </summary>
     public DateTime? ReversedAt { get; set; }
     public string? ReversedBecause { get; set; }
+
+    /// <summary>
+    /// For a <see cref="StewardEntryKind.Learned"/> fact: its suggested note key while queued, and
+    /// once placed, where it went ("new note x", "folded into x", "filed for review").
+    /// </summary>
+    public string? Placed { get; set; }
 }
 
 /// <summary>

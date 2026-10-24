@@ -714,6 +714,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Placed")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)

@@ -440,6 +440,7 @@ public class StewardService
         var rulings = await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt == null)
             .OrderBy(e => e.At).ToListAsync(ct);
+        var learned = await UnplacedAsync(projectKey, ct);
 
         return new StewardReply("status", null, new
         {
@@ -476,6 +477,9 @@ public class StewardService
             // Your standing rulings, in force until the owner reverses one. Apply them as you would
             // a decision already made - they are readings of decisions, never new ones.
             rulings = rulings.Select(e => new { e.Id, ruling = e.Text, restsOn = e.Basis, ticket = e.TicketId, keptByOwner = e.HandledAt != null }),
+            // Facts you said with steward_learned that are not in the notes store yet: they go in
+            // after this run. Until then the store's index does not list them, so they are here.
+            learnedPending = learned.Select(e => e.Text),
             memo,
             memoLength = $"{memo.Length}/{cfg.Steward.MemoMaxChars}",
             memoTooLong = memo.Length > cfg.Steward.MemoMaxChars
@@ -1150,6 +1154,63 @@ public class StewardService
     private Task<StewardEntry?> RulingAsync(string projectKey, int id, CancellationToken ct) =>
         _db.StewardEntries.FirstOrDefaultAsync(x => x.Id == id && x.ProjectKey == projectKey && x.Kind == StewardEntryKind.Ruling, ct);
 
+    /// <summary>The longest a learned fact may be.</summary>
+    public const int LearnedMaxChars = 1200;
+
+    /// <summary>
+    /// Queue a fact about the repo for the project's notes store. Saved at once; placed by the
+    /// launcher after the run, beside the notes already there.
+    /// </summary>
+    public async Task<StewardReply> LearnedAsync(string projectKey, string fact, string? key = null, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        fact = System.Text.RegularExpressions.Regex.Replace(fact ?? "", @"\s+", " ").Trim();
+        if (fact.Length == 0) return Refuse("bad-request", "Say the fact.");
+        if (fact.Length > LearnedMaxChars)
+            return Refuse("bad-request", $"A fact is at most {LearnedMaxChars} characters. Two facts are two calls.");
+        key = NoteKey(key);
+        if ((await UnplacedAsync(projectKey, ct)).Any(e => string.Equals(e.Text, fact, StringComparison.OrdinalIgnoreCase)))
+            return new StewardReply("already-queued");
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"learn: {Head(fact, 200)}");
+
+        _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.Learned, Text = fact, Placed = key });
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("queued", cfg.ResolvedMemoryDir.Length == 0
+            ? "This project keeps no notes store, so it waits on the board for its owner."
+            : "It goes into the notes store after this run.");
+    }
+
+    /// <summary>A note key as the store spells them: lowercase words and hyphens, at most 60 characters. Null when there is none.</summary>
+    public static string? NoteKey(string? key)
+    {
+        var k = System.Text.RegularExpressions.Regex.Replace((key ?? "").ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+        if (k.Length > 60) k = k[..60].TrimEnd('-');
+        return k.Length == 0 ? null : k;
+    }
+
+    /// <summary>The facts not yet placed in the notes store, oldest first.</summary>
+    public Task<List<StewardEntry>> UnplacedAsync(string projectKey, CancellationToken ct = default) =>
+        _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Learned && e.HandledAt == null)
+            .OrderBy(e => e.At).ThenBy(e => e.Id).ToListAsync(ct);
+
+    /// <summary>
+    /// The launcher placed a learned fact: say where it went. Called by <c>steward.ps1</c> after a
+    /// run, never by the steward. A fact placed already keeps its first answer.
+    /// </summary>
+    public async Task<StewardReply> PlacedAsync(string projectKey, int id, string where, CancellationToken ct = default)
+    {
+        var e = await _db.StewardEntries.FirstOrDefaultAsync(
+            x => x.Id == id && x.ProjectKey == projectKey && x.Kind == StewardEntryKind.Learned, ct);
+        if (e is null) return Refuse("not-found", $"There is no learned fact {id} here.");
+        if (e.HandledAt is not null) return new StewardReply("already-placed");
+        e.HandledAt = DateTime.UtcNow;
+        e.Placed = string.IsNullOrWhiteSpace(where) ? "placed" : where.Trim();
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("placed");
+    }
+
     /// <summary>The open ticket notes, oldest first; one ticket's with <paramref name="ticketId"/>.</summary>
     private async Task<List<StewardEntry>> OpenNotesAsync(string projectKey, int? ticketId, CancellationToken ct)
     {
@@ -1366,6 +1427,7 @@ public class StewardService
         if (e is null) return Refuse("no-entry", $"No line {id} in this project's record.");
         if (e.Kind == StewardEntryKind.TicketNote) return Refuse("bad-request", "A ticket note is the steward's own, and it closes it.");
         if (e.Kind == StewardEntryKind.Ruling) return Refuse("bad-request", "A ruling is kept or reversed, not ticked off.");
+        if (e.Kind == StewardEntryKind.Learned) return Refuse("bad-request", "A learned fact is placed in the notes store, not ticked off.");
         if (release is not null)
         {
             if (e.Kind != StewardEntryKind.BeforeRelease) return Refuse("bad-request", "Only a note for a release has a kind.");

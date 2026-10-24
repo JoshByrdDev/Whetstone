@@ -240,6 +240,18 @@ public class StewardTools
         [Description("The ticket that raised it, when one did.")] int? ticketId = null) =>
         s.RuleAsync(project, ruling, restsOn, ticketId);
 
+    [McpServerTool(Name = "steward_learned"), Description(
+        "Put a fact about the repo into the project's notes store: where a screen or a function lives, how a check or the " +
+        "stack behaves, what the seed holds, a port that is taken. Something a worker or the owner would be just as wrong " +
+        "without - first-hand, not a guess. It is saved the moment you call this, and placed in the store after the run, " +
+        "beside or folded into the note that already covers it; until then status lists it under learnedPending. One fact " +
+        "per call, stated so it stands on its own. Not a ruling (steward_rule), not something to do (steward_note_ticket).")]
+    public static Task<StewardReply> Learned(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The fact, in one or two sentences, with the paths and names that make it useful.")] string fact,
+        [Description("Optional short name for its note, lowercase with hyphens, like visit-day-read.")] string? key = null) =>
+        s.LearnedAsync(project, fact, key);
+
     [McpServerTool(Name = "steward_note_for_release"), Description(
         "After merging a ticket that leaves the owner something to read before the base branch is released: a migration and " +
         "what it adds, a line a worker wrote for the owner's own documents (copy it as written, with the file and section it " +

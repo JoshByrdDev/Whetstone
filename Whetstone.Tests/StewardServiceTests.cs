@@ -1233,6 +1233,55 @@ public class StewardServiceTests : IDisposable
         Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", note, true, null))).Answer);
     }
 
+    // ---- what it learned about the repo --------------------------------------------------
+
+    [Fact]
+    public async Task A_learned_fact_is_queued_at_once_and_survives_a_run_that_dies()
+    {
+        Assert.Equal("no-run", (await In(s => s.LearnedAsync("alpha", "The day read is loadDay in core/day.ts."))).Answer);
+        await Begin();
+        Assert.Equal("queued", (await In(s => s.LearnedAsync("alpha", "The day read is  loadDay in core/day.ts.", "Day Read!"))).Answer);
+        Assert.Equal("already-queued", (await In(s => s.LearnedAsync("alpha", "the day read is loadDay in core/day.ts."))).Answer);
+        Assert.Contains("loadDay", Json(await In(s => s.StatusAsync("alpha"))));
+
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "killed");
+        await using (var c = NewCtx())
+        {
+            var q = await Steward(c).UnplacedAsync("alpha");
+            Assert.Equal("The day read is loadDay in core/day.ts.", Assert.Single(q).Text);
+            Assert.Equal("day-read", q[0].Placed);   // its suggested key, as the store spells keys
+        }
+    }
+
+    [Fact]
+    public async Task A_placed_fact_leaves_the_queue_and_says_where_it_went()
+    {
+        await Begin();
+        await In(s => s.LearnedAsync("alpha", "Port 52547 is free for the emulator."));
+        int id;
+        await using (var c = NewCtx()) id = (await Steward(c).UnplacedAsync("alpha")).Single().Id;
+
+        Assert.Equal("placed", (await In(s => s.PlacedAsync("alpha", id, "new note emulator-port"))).Answer);
+        Assert.Equal("already-placed", (await In(s => s.PlacedAsync("alpha", id, "folded into x"))).Answer);
+        Assert.Equal("not-found", (await In(s => s.PlacedAsync("alpha", id + 99, "x"))).Answer);
+        var e = Entries().Single(x => x.Kind == StewardEntryKind.Learned);
+        Assert.Equal("new note emulator-port", e.Placed);
+        Assert.NotNull(e.HandledAt);
+        Assert.DoesNotContain("52547", Json(await In(s => s.StatusAsync("alpha"))));
+        Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", id, false, null))).Answer);
+    }
+
+    [Fact]
+    public async Task A_learned_fact_is_one_fact_and_propose_only_says_so()
+    {
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.LearnedAsync("alpha", "  "))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.LearnedAsync("alpha", new string('x', StewardService.LearnedMaxChars + 1)))).Answer);
+        Configure("propose");
+        Assert.Equal("proposed", (await In(s => s.LearnedAsync("alpha", "The seed has two businesses."))).Answer);
+        Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.Learned);
+    }
+
     // ---- the owner's link from a ticket to the plan --------------------------------
 
     private async Task<int> Loose(string? description = null)

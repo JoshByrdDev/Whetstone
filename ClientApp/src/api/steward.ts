@@ -64,7 +64,7 @@ export interface StewardPage {
 export interface StewardEntry {
   id: number;
   /** TicketNote: something the steward means to do about the ticket, open until it closes it. */
-  kind: 'Call' | 'BeforeRelease' | 'OwnerSaid' | 'TicketNote' | 'Ruling';
+  kind: 'Call' | 'BeforeRelease' | 'OwnerSaid' | 'TicketNote' | 'Ruling' | 'Learned';
   ticketId?: number | null;
   ticketTitle?: string | null;
   /** The unit of the plan it belongs to, by way of its ticket. */
@@ -80,6 +80,8 @@ export interface StewardEntry {
   /** A ruling's: when the owner reversed it, and what they said should hold instead. */
   reversedAt?: string | null;
   reversedBecause?: string | null;
+  /** A learned fact's: where it went in the notes store once placed (its suggested key before). */
+  placed?: string | null;
 }
 
 /** A ruling in force that the owner has not yet kept or reversed. */

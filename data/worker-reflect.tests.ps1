@@ -127,6 +127,43 @@ Check 'no reply at all: the log says what stderr said' ($r.last -like 'Reflectio
 $r = Invoke-Case -Name 'silent' -Reply $null
 Check 'no reply and no warning: no output' $r.last 'Reflection produced no output'
 
+# --- A fact a steward said it learned (Add-LearnedFact, called by steward.ps1 after a run) ---
+$learnCmd = [pscustomobject]@{ Exe = $fakeCli; Args = @() }
+$lmem = Join-Path $root 'learned\memory'
+New-Item -ItemType Directory -Path $lmem -Force | Out-Null
+Set-Content -Path (Join-Path $lmem 'MEMORY.md') -Value '# Notes' -Encoding ascii
+$env:FAKE_WARN = '0'
+$env:FAKE_REPLY = Join-Path $root 'learned\none.txt'
+
+$r = Add-LearnedFact -MemoryDir $lmem -Key 'day-read' -Text 'The day read is loadDay in core/day.ts.' -Stamp '2026-10-23 10:00' -ReflectCmd $learnCmd -RepoDir $root
+Check 'learned: a new fact is a new note' "$($r.Outcome) $($r.Key)" 'new day-read'
+Check 'learned: the note says it came from the steward' `
+    ([bool](Select-String -Path (Join-Path $lmem 'day-read.md') -Pattern 'source: steward' -SimpleMatch -Quiet)) $true
+Check 'learned: the index lists it' ([bool](Select-String -Path (Join-Path $lmem 'MEMORY.md') -Pattern 'day-read' -SimpleMatch -Quiet)) $true
+
+$r = Add-LearnedFact -MemoryDir $lmem -Key 'day-read' -Text 'Port 52547 is free on this machine for the emulator.' -Stamp '2026-10-23 10:01' -ReflectCmd $learnCmd -RepoDir $root
+Check 'learned: a taken key gets a number, never overwrites' "$($r.Outcome) $($r.Key)" 'new day-read-2'
+
+# A fact about the same thing as a note already there is folded into that note.
+$seed = "---`nname: check-timeouts`ndescription: `"How long the merge checks take`"`nmetadata:`n  type: project`n---`n`nThe database merge check takes about fifteen to twenty minutes and its timeout is forty five minutes per merge check run.`n"
+[IO.File]::WriteAllText((Join-Path $lmem 'check-timeouts.md'), $seed)
+$merged = "TARGET: check-timeouts`n---`nname: check-timeouts`ndescription: `"How long the merge checks take, and their timeout`"`nmetadata:`n  type: project`n  last-confirmed: 2026-10-23 10:02`n---`n`nThe database merge check takes about fifteen to twenty minutes, sometimes twenty five, and its timeout is forty five minutes per merge check run.`n"
+$env:FAKE_REPLY = Join-Path $root 'learned\merge.txt'
+[IO.File]::WriteAllText($env:FAKE_REPLY, $merged)
+$r = Add-LearnedFact -MemoryDir $lmem -Key '' -Text 'The database merge check sometimes takes twenty five minutes; its timeout is forty five minutes per merge check run.' -Stamp '2026-10-23 10:02' -ReflectCmd $learnCmd -RepoDir $root
+Check 'learned: a fact about a noted thing is folded into that note' "$($r.Outcome) $($r.Key)" 'merged check-timeouts'
+Check 'learned: the folded note says the new part' `
+    ([bool](Select-String -Path (Join-Path $lmem 'check-timeouts.md') -Pattern 'sometimes twenty five' -SimpleMatch -Quiet)) $true
+
+# The placement call answering NEW leaves it a note of its own.
+$env:FAKE_REPLY = Join-Path $root 'learned\new.txt'
+[IO.File]::WriteAllText($env:FAKE_REPLY, "TARGET: NEW")
+$r = Add-LearnedFact -MemoryDir $lmem -Key 'check-retry' -Text 'A database merge check that times out at forty five minutes is retried once before asking the owner.' -Stamp '2026-10-23 10:03' -ReflectCmd $learnCmd -RepoDir $root
+Check 'learned: NEW from the placement call is a note of its own' "$($r.Outcome) $($r.Key)" 'new check-retry'
+
+$r = Add-LearnedFact -MemoryDir $lmem -Key 'x' -Text '   ' -Stamp '2026-10-23 10:04' -ReflectCmd $learnCmd -RepoDir $root
+Check 'learned: nothing said, nothing placed' $r.Outcome 'none'
+
 Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item Env:FAKE_REPLY, Env:FAKE_WARN -ErrorAction SilentlyContinue
 

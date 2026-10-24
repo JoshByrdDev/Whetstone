@@ -39,8 +39,10 @@ export function StewardOnTicket({ project, ticketId }: { project: string; ticket
             <div className="text-[10px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-gray-500 mb-1">
               {e.kind === 'Call' ? 'A call it made for you'
                 : e.kind === 'TicketNote' ? (e.handledAt ? 'It meant to do - done' : 'It means to do')
+                : e.kind === 'Ruling' ? (e.reversedAt ? 'A ruling it made - you reversed it' : 'A ruling it made')
+                : e.kind !== 'BeforeRelease' ? 'From the steward'
                 : RELEASE_WORD[e.release ?? 'Note']}
-              {e.handledAt && e.kind !== 'TicketNote' ? ' - ticked off' : ''}
+              {e.handledAt && e.kind === 'BeforeRelease' ? ' - ticked off' : ''}
             </div>
             <Markdown text={e.text} />
           </div>

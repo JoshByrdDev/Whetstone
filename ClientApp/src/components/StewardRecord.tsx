@@ -36,6 +36,7 @@ export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, un
   const calls = useMemo(() => entries.filter(e => e.kind === 'Call'), [entries]);
   const said = useMemo(() => entries.filter(e => e.kind === 'OwnerSaid'), [entries]);
   const rulings = useMemo(() => entries.filter(e => e.kind === 'Ruling'), [entries]);
+  const learned = useMemo(() => entries.filter(e => e.kind === 'Learned'), [entries]);
 
   return (
     <>
@@ -48,6 +49,8 @@ export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, un
           ? <Quiet>No calls recorded yet.</Quiet>
           : <EntryList id="calls" rows={calls} onMark={onMark} tickTitle="Read" empty="Every call has been read." />}
       </Fold>
+
+      <Learned rows={learned} />
 
       <Fold id="OwnerSaid" title="What you told it" colour="var(--w-accent)" count={said.length}>
         {said.length === 0
@@ -365,5 +368,33 @@ function RulingCard({ e, onKeep, onReverse }: {
       )}
       {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 6 }}>{failed}</div>}
     </Panel>
+  );
+}
+
+/**
+ * The facts about the repo the steward handed to the notes store. Each is placed after the run that
+ * said it, so this is mostly a log of where each went; one still waiting is one the last run's
+ * launcher could not place, or a project with no notes store to place it in.
+ */
+function Learned({ rows }: { rows: StewardEntry[] }) {
+  const waiting = rows.filter(e => !e.handledAt);
+  return (
+    <Fold id="Learned" title="What it learned" colour={TIER.queue.c} count={waiting.length}
+      meta={rows.length > 0 ? `${rows.length - waiting.length} in the notes store` : undefined}>
+      {rows.length === 0
+        ? <Quiet>Nothing yet. A fact about the repo the steward learns goes into the project's notes store, and is listed here.</Quiet>
+        : (
+          <Panel pad={false} className="mb-8">
+            {rows.map(e => (
+              <div key={e.id} style={{ padding: '9px 16px', borderBottom: '1px solid rgb(var(--w-line-rgb) / .06)' }}>
+                <div style={label(e.handledAt ? undefined : TIER.queue.c)}>
+                  {e.handledAt ? e.placed ?? 'placed' : 'waiting to be placed'} - {ago(e.at)}
+                </div>
+                <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: 'var(--w-t200)', marginTop: 3 }}>{e.text}</div>
+              </div>
+            ))}
+          </Panel>
+        )}
+    </Fold>
   );
 }

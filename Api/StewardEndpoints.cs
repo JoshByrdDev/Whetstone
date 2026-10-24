@@ -12,6 +12,7 @@ public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released);
 public record StewardReverse(string? Because);
+public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
 public record StewardNewPlan(string? Key, string? Name, string? Folder);
 /// <summary>A ticket's place in a plan. <c>Unit</c> null takes it out; <c>Plan</c> null is the one being worked.</summary>
@@ -106,6 +107,8 @@ public static class StewardEndpoints
                     e.Basis,
                     e.ReversedAt,
                     e.ReversedBecause,
+                    // A learned fact's: where it went in the notes store, once placed.
+                    e.Placed,
                 };
             }));
         });
@@ -131,6 +134,18 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerReversesRulingAsync(project ?? "", id, body.Because ?? "", ct);
             return r.Answer == "reversed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The facts a steward learned that are not in the notes store yet, and the launcher saying
+        // where it put one. Both for steward.ps1 after a run; no tool behind either.
+        app.MapGet("/api/steward/learned", async (string? project, StewardService steward, CancellationToken ct) =>
+            Results.Ok((await steward.UnplacedAsync(project ?? "", ct)).Select(e => new { e.Id, e.Text, key = e.Placed })));
+
+        app.MapPost("/api/steward/learned/{id:int}/placed", async (int id, string? project, StewardPlaced body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.PlacedAsync(project ?? "", id, body.Where ?? "", ct);
+            return r.Answer is "placed" or "already-placed" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // Sort many release notes at once, { "<id>": "<kind>" }: for a record older than the kinds.
@@ -329,6 +344,8 @@ public static class StewardEndpoints
                 skillFile = skill,
                 skillExists = File.Exists(skill),
                 memoryIndex = cfg.ResolvedMemoryIndex,
+                // Where the facts it learns are placed after the run.
+                memoryDir = cfg.ResolvedMemoryDir,
                 planUnits = cfg.Steward.Plan.UnitsDir,
             });
         });
