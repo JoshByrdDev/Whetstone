@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
-import { Chip, GhostButton, PageHead, Panel } from './ui';
-import { BODY, MONO, TIER } from './orbit';
+import { Chip, GhostButton, PageHead, Panel, SectionRule } from './ui';
+import { BODY, DISPLAY, MONO, TIER, chamfer } from './orbit';
+import { AgentMascot } from './AgentMascot';
+import type { Mood } from '../theme';
 import { ActivityFeed } from './ActivityFeed';
 import { StewardPlan } from './StewardPlan';
 import { StewardRecord } from './StewardRecord';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { DecisionSheet } from './DecisionSheet';
-import { Fold, OptionRow, Quiet, ago, label, remember, remembered } from './stewardParts';
+import { Fold, OptionRow, ago, label, remember, remembered } from './stewardParts';
 import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
   answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan,
-  getStewardStatus, markStewardEntry, setStewardMode, tellSteward,
+  getStewardStatus, markStewardEntry, setStewardMode,
 } from '../api/steward';
 import type {
   StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardStatus,
@@ -179,32 +181,29 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
 
           {view === 'now' && (
             <div key="now" className="orbit-swap">
-              <Fold id="waiting" open title="Waiting on you" colour={TIER.blocked.c} count={waitingCount}>
-                {waitingCount === 0 && !hearing && <Quiet>Nothing is waiting on you.</Quiet>}
-                {/* Mounted whatever the count, since reading their flags is what makes the count. */}
-                <div className="flex flex-col gap-3" style={{ marginBottom: waitingCount > 0 ? 32 : 0 }}>
-                  {page.waiting.map(q => (
-                    <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
-                      onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
-                  ))}
-                  {inReview.map(t => (
-                    <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
-                  ))}
-                </div>
-              </Fold>
+              {/* The steward itself on the left, what it needs from you on the right. One column
+                  on a phone, the steward first: it says why the right side is what it is. */}
+              <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-6 items-start" style={{ marginBottom: 32 }}>
+                <StewardCard
+                  running={runningNow || page.running} due={page.due ? page.dueReason ?? 'something changed' : null}
+                  resting={page.resting} lastRunEndedAt={page.lastRunEndedAt} live={live}
+                />
 
-              <Fold
-                id="live" open title="Live" colour={TIER.queue.c}
-                meta={runningNow ? 'a run is in progress'
-                  : live.length > 0 ? `last heard ${ago(live[live.length - 1].timestamp)}` : 'no run going'}
-              >
-                <div className="mb-8">
-                  <ActivityFeed
-                    events={live} solo
-                    empty="Nothing from this steward in the recent feed. When a run starts, what it thinks, says and does shows here as it happens."
-                  />
+                <div className="min-w-0">
+                  <SectionRule title="Waiting on you" colour={TIER.blocked.c} count={waitingCount} />
+                  {/* Mounted whatever the count, since reading their flags is what makes the count. */}
+                  <div className="flex flex-col gap-3">
+                    {page.waiting.map(q => (
+                      <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
+                        onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
+                    ))}
+                    {inReview.map(t => (
+                      <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
+                    ))}
+                  </div>
+                  {waitingCount === 0 && <NothingWaiting checking={hearing} />}
                 </div>
-              </Fold>
+              </div>
 
               <Fold id="last-run" open title="Last run" colour={TIER.queue.c} meta={page.lastRunEndedAt ? ago(page.lastRunEndedAt) : undefined}>
                 <Panel className="mb-8">
@@ -223,10 +222,6 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                     </details>
                   )}
                 </Panel>
-              </Fold>
-
-              <Fold id="tell" open title="Tell your steward" colour="var(--w-accent)" meta="a standing instruction, read by every run">
-                <Tell onSend={async text => { await tellSteward(page.project, text); await load(); }} />
               </Fold>
             </div>
           )}
@@ -352,22 +347,63 @@ function OptionsCard({ project, q, onAnswer }: {
   );
 }
 
-function Tell({ onSend }: { onSend: (text: string) => Promise<void> }) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const send = async () => {
-    setBusy(true);
-    try { await onSend(text.trim()); setText(''); } finally { setBusy(false); }
-  };
+/**
+ * The steward as a presence: the theme's mascot in the mood of what it is doing, and under it
+ * its own strand of the live feed. The mascot animates itself by mood, so a working steward
+ * bobs, one with a run due stands by, and one with nothing to find sleeps.
+ */
+function StewardCard({ running, due, resting, lastRunEndedAt, live }: {
+  running: boolean; due: string | null; resting: boolean; lastRunEndedAt?: string | null; live: HeartbeatEvent[];
+}) {
+  const mood: Mood = running ? 'running' : due ? 'idle' : 'sleeping';
+  const word = running ? 'Working' : due ? 'A run is due' : resting ? 'Resting' : 'Standing by';
+  const line = running ? 'A run is in progress. What it thinks, says and does shows below as it happens.'
+    : due ? `Starts shortly: ${due}.`
+    : resting ? 'Nothing to find until a ticket comes back, you answer something, or the base branch moves.'
+    : `Waiting for something to change.`;
+  const heard = live.length > 0 ? `last heard ${ago(live[live.length - 1].timestamp)}` : null;
+
   return (
-    <div className="mb-8">
-      <textarea
-        value={text} onChange={e => setText(e.target.value)} rows={2}
-        placeholder="Something it should hold to from now on. It reads this as a decision you have made."
-        className="w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none"
+    <Panel tone={running ? TIER.active.c : undefined} className="min-w-0">
+      <div className="flex items-center gap-4" style={{ marginBottom: 14 }}>
+        <div style={{ padding: 6 }}><AgentMascot mood={mood} size={64} /></div>
+        <div className="min-w-0">
+          <div style={{ font: `700 17px ${DISPLAY}`, color: 'var(--w-t100)', letterSpacing: '.02em' }}>Steward</div>
+          <div style={{ ...label(running ? TIER.active.c : 'var(--w-t400)'), marginTop: 3 }}>
+            {word}{!running && lastRunEndedAt ? ` - last run ${ago(lastRunEndedAt)}` : ''}
+          </div>
+          <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 5 }}>{line}</div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between" style={{ ...label(), marginBottom: 6 }}>
+        <span>Live</span>
+        {heard && <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>{heard}</span>}
+      </div>
+      <ActivityFeed
+        events={live} solo
+        empty="Nothing from this steward in the recent feed. When a run starts, it shows here as it happens."
       />
-      <div className="flex justify-end" style={{ marginTop: 6 }}>
-        <GhostButton onClick={send} disabled={busy || !text.trim()}>{busy ? 'Recording' : 'Leave instruction'}</GhostButton>
+    </Panel>
+  );
+}
+
+/** The right column with nothing in it: the space stays, and says why it is empty. */
+function NothingWaiting({ checking }: { checking: boolean }) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center text-center"
+      style={{
+        minHeight: 260, padding: '32px 24px', clipPath: chamfer(13),
+        border: '1px dashed rgb(var(--w-line-rgb) / .22)', background: 'rgb(var(--w-line-rgb) / .04)',
+      }}
+    >
+      <div style={{ font: `600 14px ${BODY}`, color: 'var(--w-t200)' }}>
+        {checking ? 'Checking finished tickets' : 'Nothing is waiting on you'}
+      </div>
+      <div style={{ font: `400 12px/1.55 ${BODY}`, color: 'var(--w-t500)', marginTop: 6, maxWidth: 340 }}>
+        {checking
+          ? 'Reading the flags on tickets in review. A flag only you can clear will show here.'
+          : 'When the steward needs a decision, or a finished ticket has a flag only you can clear, it shows up here.'}
       </div>
     </div>
   );

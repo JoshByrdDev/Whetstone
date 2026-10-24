@@ -127,10 +127,6 @@ export const answerStewardQuestion = (project: string, key: string, answer: stri
     method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answer }),
   }).then(json<{ answer: string }>);
 
-export const tellSteward = (project: string, text: string) =>
-  fetch(`/api/steward/said?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ text }) })
-    .then(json<{ answer: string }>);
-
 export interface StewardPlanTicket { id: number; phase: string; title: string }
 
 export interface StewardPlanOutcome {
