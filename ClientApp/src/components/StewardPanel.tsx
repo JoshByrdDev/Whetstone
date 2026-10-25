@@ -219,8 +219,10 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
             <div key="plan" className="orbit-swap">
               <StewardPlan
                 project={page.project} view={plan} status={status} onChanged={load}
+                waiting={page.waiting} register={register} mode={page.mode}
                 onPlan={key => { setPlan(null); setPlanKey(key); }}
                 onNotes={unit => { setNotesUnit(unit); show('record'); }}
+                onNow={() => show('now')} onDecisions={() => show('decisions')}
               />
             </div>
           )}
