@@ -7,6 +7,7 @@ import type { Mood } from '../theme';
 import { ActivityFeed } from './ActivityFeed';
 import { Markdown } from './Markdown';
 import { StewardPlan } from './StewardPlan';
+import { NewPlan } from './StewardNewPlan';
 import { StewardRecord } from './StewardRecord';
 import { StewardDecisions } from './StewardDecisions';
 import { StewardTicketFlags } from './StewardTicketFlags';
@@ -33,7 +34,7 @@ import type {
  */
 
 /** The page's views, in the order of how often each is the reason somebody came. */
-type View = 'now' | 'plan' | 'decisions' | 'record';
+type View = 'now' | 'plan' | 'decisions' | 'record' | 'new';
 
 const MODES: { id: StewardMode; label: string; says: string }[] = [
   { id: 'off', label: 'Off', says: 'No steward. Nothing runs.' },
@@ -57,7 +58,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   useEffect(() => { setPlanKey(null); setNotesUnit(null); }, [project]);
   const [view, setView] = useState<View>(() => {
     const v = remembered('view');
-    return v === 'plan' || v === 'decisions' || v === 'record' ? v : 'now';
+    return v === 'plan' || v === 'decisions' || v === 'record' || v === 'new' ? v : 'now';
   });
   const show = (v: View) => { setView(v); remember('view', v); };
   const [error, setError] = useState<string | null>(null);
@@ -187,6 +188,9 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 : ''}`}>
               The record{recordCount > 0 ? ` ${recordCount}` : ''}
             </Chip>
+            <Chip on={view === 'new'} onClick={() => show('new')} title="Start the project's next plan, once this one is finished">
+              New plan
+            </Chip>
           </div>
 
           {view === 'now' && (
@@ -222,7 +226,16 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 waiting={page.waiting} register={register} mode={page.mode}
                 onPlan={key => { setPlan(null); setPlanKey(key); }}
                 onNotes={unit => { setNotesUnit(unit); show('record'); }}
-                onNow={() => show('now')} onDecisions={() => show('decisions')}
+                onNow={() => show('now')} onDecisions={() => show('decisions')} onNew={() => show('new')}
+              />
+            </div>
+          )}
+
+          {view === 'new' && (
+            <div key="new" className="orbit-swap">
+              <NewPlan
+                project={page.project} onStarted={async () => { setPlanKey(null); await load(); }}
+                has={(plan?.plan?.units?.length ?? 0) > 0 || (plan?.plan?.plans?.length ?? 0) > 0 || !!plan?.master || !!plan?.charter}
               />
             </div>
           )}
