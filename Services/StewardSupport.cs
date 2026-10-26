@@ -27,7 +27,12 @@ public interface IStewardGit
     Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default);
 }
 
-public partial class TicketGitService : IStewardGit { }
+public partial class TicketGitService : IStewardGit
+{
+    // A steward works a project of one repo only (docs/multi-repo-plan.md), so it never names one.
+    Task<RebaseResult> IStewardGit.RebaseAsync(string projectKey, string branch, CancellationToken ct) =>
+        RebaseAsync(projectKey, branch, ct);
+}
 
 /// <summary>
 /// Something about a finished ticket that the steward's merge has to weigh.

@@ -34,6 +34,11 @@ namespace Whetstone.Services;
 /// ticket id, which is a row number in a local database and not ours to publish on someone else's
 /// repo. The issue reference is the one identifier that travels, so it is the one thing in the footer.
 /// </para>
+/// <para>
+/// One exception, for a project of several repos: when the same change is also in other repos, the
+/// footer names them and the branch they share. A reviewer of one PR has no other way to learn the
+/// others exist, and the repo names and the branch are already on the host.
+/// </para>
 /// </summary>
 public static class PrDescription
 {
@@ -54,8 +59,12 @@ public static class PrDescription
     /// Azure DevOps, where that exact form is what makes the pull request link back to the work
     /// item. Null falls back to the raw key.
     /// </param>
+    /// <param name="alsoIn">
+    /// The other repos this ticket's change is in, on a project of several. Null or empty for a
+    /// change in one repo, which reads exactly as it always has.
+    /// </param>
     public static string Compose(Ticket t, string? commitBody = null, string? description = null,
-        string? issueRef = null)
+        string? issueRef = null, IReadOnlyList<string>? alsoIn = null)
     {
         var lead = Normalize(commitBody)
                    ?? Normalize(t.ImplementationSummary)
@@ -64,9 +73,18 @@ public static class PrDescription
         var sb = new StringBuilder();
         if (lead is not null) sb.Append(lead).Append("\n\n");
 
-        var footer = Footer(t, issueRef);
-        if (footer is not null) sb.Append("---\n\n").Append(footer).Append('\n');
+        var parts = new[] { Siblings(t, alsoIn), Footer(t, issueRef) }.Where(p => p is not null).ToList();
+        if (parts.Count > 0) sb.Append("---\n\n").Append(string.Join("\n\n", parts)).Append('\n');
         return sb.ToString();
+    }
+
+    /// <summary>The other repos the same change is in, and the branch they share; null when there are none.</summary>
+    private static string? Siblings(Ticket t, IReadOnlyList<string>? alsoIn)
+    {
+        if (alsoIn is not { Count: > 0 }) return null;
+        var branch = t.Branch?.Trim();
+        var on = string.IsNullOrEmpty(branch) ? "" : $", on branch `{branch}` in each";
+        return $"Part of one change across several repos{on}. Also in: {string.Join(", ", alsoIn)}.";
     }
 
     /// <summary>

@@ -308,11 +308,14 @@ public partial class TicketGitService
     /// underneath the user while they sit on it.
     /// </para>
     /// </summary>
-    public async Task<CheckoutResult> CheckoutAsync(string projectKey, string branch, CancellationToken ct = default)
+    public async Task<CheckoutResult> CheckoutAsync(string projectKey, string branch, CancellationToken ct = default,
+        string? member = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
         var none = Array.Empty<GitChange>();
+        if (WriteTargetOf(cfg, member, out var notHere) is not { } target)
+            return new CheckoutResult(false, notHere, branch ?? "", cfg.ProjectPath ?? "", false, null, false, none);
+        var repo = target.Path;
 
         if (string.IsNullOrWhiteSpace(branch))
             return new CheckoutResult(false, "This ticket has no branch yet.", "", repo, false, null, false, none);
@@ -395,8 +398,9 @@ public partial class TicketGitService
     /// should ask here rather than stitching the halves back together itself.
     /// </para>
     /// </summary>
-    public Task<PrPreflight> PreflightAsync(string projectKey, string branch, CancellationToken ct = default)
-        => PreflightCoreAsync(projectKey, branch, fetch: true, ct);
+    public Task<PrPreflight> PreflightAsync(string projectKey, string branch, CancellationToken ct = default,
+        string? member = null)
+        => PreflightCoreAsync(projectKey, branch, fetch: true, ct, member);
 
     /// <summary>
     /// The half of the preflight that never leaves this machine: the commits, the ranked diff, and
@@ -417,20 +421,24 @@ public partial class TicketGitService
     /// A caller that sees it drop must read this again rather than trust the diff it has.
     /// </para>
     /// </summary>
-    public Task<PrPreflight> LocalPreflightAsync(string projectKey, string branch, CancellationToken ct = default)
-        => PreflightCoreAsync(projectKey, branch, fetch: false, ct);
+    public Task<PrPreflight> LocalPreflightAsync(string projectKey, string branch, CancellationToken ct = default,
+        string? member = null)
+        => PreflightCoreAsync(projectKey, branch, fetch: false, ct, member);
 
-    private async Task<PrPreflight> PreflightCoreAsync(string projectKey, string branch, bool fetch, CancellationToken ct)
+    private async Task<PrPreflight> PreflightCoreAsync(string projectKey, string branch, bool fetch, CancellationToken ct,
+        string? member)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
-        var baseBranch = ResolveBaseBranch(cfg);
+        var target = TargetOf(cfg, member, out var notHere);
+        var repo = target?.Path ?? cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
+        var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
 
         PrPreflight Fail(string error) => new(
             false, error, branch, baseBranch, repo, cfg.ResolvedIdeUrl, "none", null, fetch, false, null, baseBranch,
             0, 0, false, false, 0, 0, null,
             Array.Empty<PrCommit>(), null, Array.Empty<PrFile>(), false);
 
+        if (notHere is not null) return Fail(notHere);
         if (Guard(repo, cfg, branch, baseBranch) is { } refusal) return Fail(refusal);
 
         var exists = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
@@ -481,14 +489,17 @@ public partial class TicketGitService
     /// not answering at all.
     /// </para>
     /// </summary>
-    public async Task<PrBaseCheck> BaseCheckAsync(string projectKey, string branch, CancellationToken ct = default)
+    public async Task<PrBaseCheck> BaseCheckAsync(string projectKey, string branch, CancellationToken ct = default,
+        string? member = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
-        var baseBranch = ResolveBaseBranch(cfg);
+        var target = TargetOf(cfg, member, out var notHere);
+        var repo = target?.Path ?? "";
+        var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
 
         PrBaseCheck Fail(string error) => new(false, error, false, null, baseBranch, 0, 0, false, false, 0);
 
+        if (notHere is not null) return Fail(notHere);
         if (Guard(repo, cfg, branch, baseBranch) is { } refusal) return Fail(refusal);
 
         var exists = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
@@ -850,11 +861,13 @@ public partial class TicketGitService
     /// the ref would leave the other tree's HEAD pointing at a history its files no longer match.
     /// </para>
     /// </summary>
-    public async Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default)
+    public async Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default,
+        string? member = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
-        var baseBranch = ResolveBaseBranch(cfg);
+        var target = WriteTargetOf(cfg, member, out var notHere);
+        var repo = target?.Path ?? "";
+        var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
         var baseRef = baseBranch;
         var dir = repo;
         var output = new List<string>();
@@ -863,6 +876,7 @@ public partial class TicketGitService
         RebaseResult Fail(string error) =>
             new(false, error, false, noFiles, branch, baseRef, null, null, dir, output);
 
+        if (notHere is not null) return Fail(notHere);
         if (string.IsNullOrWhiteSpace(branch)) return Fail("This ticket has no branch yet.");
         if (!IsGitRepo(repo)) return Fail($"{cfg.DisplayName} has no git repo at '{repo}'.");
         if (branch == baseBranch) return Fail($"'{branch}' is the base branch — there is nothing to rebase.");
@@ -1025,16 +1039,19 @@ public partial class TicketGitService
     /// </para>
     /// </summary>
     public async Task<PrCreateResult> CreateAsync(
-        string projectKey, string branch, string title, string? description, CancellationToken ct = default)
+        string projectKey, string branch, string title, string? description, CancellationToken ct = default,
+        string? member = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
-        var baseBranch = ResolveBaseBranch(cfg);
+        var target = WriteTargetOf(cfg, member, out var notHere);
+        var repo = target?.Path ?? "";
+        var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
         var output = new List<string>();
 
         PrCreateResult Fail(string error, bool pushed = false) =>
             new(false, error, pushed, null, "none", output);
 
+        if (notHere is not null) return Fail(notHere);
         if (string.IsNullOrWhiteSpace(branch)) return Fail("This ticket has no branch yet.");
         if (!IsGitRepo(repo)) return Fail($"{cfg.DisplayName} has no git repo at '{repo}'.");
         if (branch == baseBranch) return Fail($"'{branch}' is the base branch.");
@@ -1099,16 +1116,19 @@ public partial class TicketGitService
     /// meant to avoid.
     /// </para>
     /// </summary>
-    public async Task<ForcePushResult> ForcePushAsync(string projectKey, string branch, CancellationToken ct = default)
+    public async Task<ForcePushResult> ForcePushAsync(string projectKey, string branch, CancellationToken ct = default,
+        string? member = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
-        var baseBranch = ResolveBaseBranch(cfg);
+        var target = WriteTargetOf(cfg, member, out var notHere);
+        var repo = target?.Path ?? "";
+        var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
         var output = new List<string>();
 
         ForcePushResult Fail(string error, bool stale = false) =>
             new(false, error, stale, branch, null, output);
 
+        if (notHere is not null) return Fail(notHere);
         if (string.IsNullOrWhiteSpace(branch)) return Fail("This ticket has no branch yet.");
         if (!IsGitRepo(repo)) return Fail($"{cfg.DisplayName} has no git repo at '{repo}'.");
         // The base branch is the one ref where a force push is never a local matter.
@@ -1535,15 +1555,17 @@ public partial class TicketGitService
         FileDiff Fail(string error) => new(path, "", 0, 0, false, error);
 
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
+        // The path is model-written. `--` already stops git reading it as an option, and git will not
+        // resolve outside the repo anyway; this refuses the shapes that would only ever be a mistake.
+        // On a project of several repos its first segment says which one (see TicketGitService.Repos).
+        if (CleanRepoPath(path) is not { } named) return Fail($"'{path}' is not a path inside the repo.");
+        if (SplitRepoPath(cfg, named, out var notHere) is not { } split) return Fail(notHere!);
+        var (target, clean) = split;
+        var repo = target.Path;
         if (!IsGitRepo(repo)) return Fail($"{cfg.DisplayName} has no git repo at '{repo}'.");
         if (string.IsNullOrWhiteSpace(headRef)) return Fail("This analysis is not pinned to a commit.");
 
-        // The path is model-written. `--` already stops git reading it as an option, and git will not
-        // resolve outside the repo anyway; this refuses the shapes that would only ever be a mistake.
-        if (CleanRepoPath(path) is not { } clean) return Fail($"'{path}' is not a path inside the repo.");
-
-        var range = fromRef is null ? $"{ResolveBaseBranch(cfg)}...{headRef}" : $"{fromRef}..{headRef}";
+        var range = fromRef is null ? $"{target.BaseBranch}...{headRef}" : $"{fromRef}..{headRef}";
 
         var numstat = await GitAsync(repo, ct, "diff", "--numstat", "-M", range, "--", clean);
         if (!numstat.Ok) return Fail(Explain(numstat, $"Could not read the diff for {clean}"));
@@ -1565,7 +1587,7 @@ public partial class TicketGitService
         var truncated = patch.Length > MaxFileDiffBytes;
         if (truncated) patch = patch[..MaxFileDiffBytes];
 
-        return new FileDiff(clean, patch, added, removed, truncated, null);
+        return new FileDiff(Prefixed(target, clean), patch, added, removed, truncated, null);
     }
 
     /// <summary>
@@ -1591,9 +1613,11 @@ public partial class TicketGitService
         CancellationToken ct = default)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
+        if (CleanRepoPath(path) is not { } named) return (null, $"'{path}' is not a path inside the repo.");
+        if (SplitRepoPath(cfg, named, out var notHere) is not { } split) return (null, notHere);
+        var (target, clean) = split;
+        var repo = target.Path;
         if (!IsGitRepo(repo)) return (null, $"{cfg.DisplayName} has no git repo at '{repo}'.");
-        if (CleanRepoPath(path) is not { } clean) return (null, $"'{path}' is not a path inside the repo.");
 
         var r = await GitAsync(repo, ct, "show", $"{commit}:{clean}");
         return r.Ok ? (r.Stdout, null) : (null, Explain(r, $"Could not read {clean} at {commit[..Math.Min(7, commit.Length)]}"));
@@ -1602,27 +1626,57 @@ public partial class TicketGitService
     /// <summary>
     /// Every file the branch changed against its base, with line counts - what a script may cite. With
     /// <paramref name="fromRef"/>, every file changed from that commit to <paramref name="headRef"/>.
+    /// <para>
+    /// On a project of several repos, the files of every repo <paramref name="headRef"/> (and
+    /// <paramref name="fromRef"/>) can be read in, each named with its repo first. A branch name is
+    /// in every writable repo; a commit is in the one that made it.
+    /// </para>
     /// </summary>
     public async Task<(IReadOnlyList<(string Path, int Added, int Removed)> Files, string? Error)> ChangedFilesAsync(
         string projectKey, string headRef, CancellationToken ct = default, string? fromRef = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
-        var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
-        if (!IsGitRepo(repo)) return (Array.Empty<(string, int, int)>(), $"{cfg.DisplayName} has no git repo at '{repo}'.");
-
-        var r = await GitAsync(repo, ct, "diff", "--numstat", "--no-renames",
-            fromRef is null ? $"{ResolveBaseBranch(cfg)}...{headRef}" : $"{fromRef}..{headRef}");
-        if (!r.Ok) return (Array.Empty<(string, int, int)>(), Explain(r, "Could not list the branch's changes"));
-
+        var none = Array.Empty<(string, int, int)>();
         var files = new List<(string, int, int)>();
+
+        if (!cfg.IsMultiRepo)
+        {
+            var only = TargetOf(cfg, null, out _)!;
+            if (!IsGitRepo(only.Path)) return (none, $"{cfg.DisplayName} has no git repo at '{only.Path}'.");
+            var error = await ChangedFilesInAsync(only, headRef, fromRef, files, ct);
+            return error is null ? (files, null) : (none, error);
+        }
+
+        var read = 0;
+        foreach (var target in TargetsOf(cfg))
+        {
+            if (!IsGitRepo(target.Path)) continue;
+            if (!await ResolvesAsync(target.Path, headRef, ct) || (fromRef is not null && !await ResolvesAsync(target.Path, fromRef, ct)))
+                continue;
+            if (await ChangedFilesInAsync(target, headRef, fromRef, files, ct) is { } error) return (none, $"{target.Dir}: {error}");
+            read++;
+        }
+        return read > 0 ? (files, null) : (none, $"'{headRef}' is in none of {cfg.DisplayName}'s repos.");
+    }
+
+    private async Task<string?> ChangedFilesInAsync(RepoTarget target, string headRef, string? fromRef,
+        List<(string, int, int)> into, CancellationToken ct)
+    {
+        var r = await GitAsync(target.Path, ct, "diff", "--numstat", "--no-renames",
+            fromRef is null ? $"{target.BaseBranch}...{headRef}" : $"{fromRef}..{headRef}");
+        if (!r.Ok) return Explain(r, "Could not list the branch's changes");
+
         foreach (var line in r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var parts = line.TrimEnd('\r').Split('\t');
             if (parts.Length < 3) continue;
-            files.Add((parts[2], int.TryParse(parts[0], out var a) ? a : 0, int.TryParse(parts[1], out var d) ? d : 0));
+            into.Add((Prefixed(target, parts[2]), int.TryParse(parts[0], out var a) ? a : 0, int.TryParse(parts[1], out var d) ? d : 0));
         }
-        return (files, null);
+        return null;
     }
+
+    private async Task<bool> ResolvesAsync(string repo, string rev, CancellationToken ct) =>
+        (await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"{rev}^{{commit}}")).Ok;
 
     private record RunResult(bool Ok, int ExitCode, string Stdout, string Stderr);
 

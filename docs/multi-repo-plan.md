@@ -260,7 +260,8 @@ prefixed diff and file reads, rebase and push choosing the right member, the 400
 - **`PrModal`** draws one section per member, touched first, with untouched members collapsed under
   "not changed" and read-only members named under it as "read-only". Each touched section has its own base check, rebase, force-push and Create PR,
   and a "Create all" button runs them in config order.
-- **`DiffReviewList`** groups files under a member heading, taken from the first path segment.
+- **`DiffReviewList`** is drawn once per touched member, inside that member's section, from that
+  member's own preflight. Its paths are relative to the member, as built in step 3.
 - **`TicketGitActions` and `ProjectGitBar`** show each member's ahead/behind count on a multi-repo
   ticket, and today's single line on a single-repo one.
 - Every new surface uses the motion layer's classes (`orbit-pick` for a member row, `orbit-swap`
@@ -301,7 +302,16 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    the information stream, because anything written to output inside `Invoke-SetupCommand` would
    land in the result it returns. `worker.ps1` does not dot-source `worker-repos.ps1` yet; step 4
    wires it in.
-3. Board side: claim, per-member routes, prefixed paths + tests (piece 4)
+3. Board side: claim, per-member routes, prefixed paths + tests (piece 4) - done. *As built:*
+   which repo a call means is `TicketGitService.TargetOf` (`TicketGitService.Repos.cs`), and the
+   service methods take it as a trailing `member`. A path is prefixed with its repo only where it
+   stands on its own (`ChangedFilesAsync`, `FileDiffAsync`, `FileAtAsync`). Inside one repo's
+   preflight it stays relative to that repo, so the dialog's open-in-editor root keeps working as
+   it is. `GET /git/pr` keeps its top-level `preflight` and `suggestedDescription` (the first
+   touched repo's) beside the new `repos` list, so today's dialog reads it unchanged. The touched
+   rule is `TouchedAsync`, and `MultiRepoGitTests` repeats `worker-repos.tests.ps1`'s cases
+   against it. Still open for piece 6: an analysis pins one commit, which is in one repo only,
+   so an analysis of a ticket across several will need a commit per repo.
 4. Worker wiring (piece 3)
 5. Reaper, analysis, QaIsolation, the QA copy's placeholder project (piece 6)
 6. UI (piece 7), proven on the QA copy against the placeholder project

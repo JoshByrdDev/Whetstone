@@ -310,6 +310,21 @@ public static class TicketEndpoints
                         worktreeRoot = cfg.ResolvedWorktreeRoot,
                         worktreeSetup = cfg.WorktreeSetup,
                         worktreeCopyFiles = cfg.WorktreeCopyFiles,
+                        // A project of several repos: each one's folder, hub, base and setup, in
+                        // order (Get-RepoMembers in data/worker-repos.ps1). Empty for a project that
+                        // is one repo, which the worker reads as the set of one built from the keys
+                        // above - so a claim without it means exactly what a claim always meant.
+                        repos = cfg.IsMultiRepo
+                            ? cfg.Repos.Select(m => new
+                            {
+                                dir = m.Dir,
+                                path = m.HubPath(cfg.ProjectPath),
+                                baseBranch = m.BaseBranch,
+                                worktreeSetup = m.WorktreeSetup,
+                                worktreeCopyFiles = m.WorktreeCopyFiles,
+                                readOnly = m.ReadOnly,
+                            }).ToArray<object>()
+                            : Array.Empty<object>(),
                         skillsDir = paths.SkillsDir(key),
                         dataDir = paths.ProjectDir(key),
                         skillFile = Path.Combine(paths.SkillsDir(key), result.Skill, "skill.md"),

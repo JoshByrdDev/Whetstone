@@ -31,10 +31,11 @@ public static class GitEndpoints
         // 409 on refusal, because the only refusal that matters — a dirty working tree — is a
         // conflict with the user's own uncommitted work, and the UI has to say exactly that.
         app.MapPost("/api/tickets/{id:int}/git/checkout", async (
-            int id, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
+            int id, string? repo, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
+            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
 
             // On a TFVC project the hub IS the workspace, so putting it on a ticket branch shows TFVC
             // the whole branch as pending edits. The board hides the button there; this is the rule.
@@ -45,7 +46,7 @@ public static class GitEndpoints
                     "TFVC would see the whole branch as pending edits. Read the diff in the check-in dialog, or open the agent's worktree.",
                     BranchOf(t), cfg.ProjectPath, false, null, false, Array.Empty<GitChange>()), statusCode: 409);
 
-            var result = await git.CheckoutAsync(t.ProjectKey, BranchOf(t), ct);
+            var result = await git.CheckoutAsync(t.ProjectKey, BranchOf(t), ct, repo);
             return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 409);
         });
 
@@ -53,6 +54,12 @@ public static class GitEndpoints
         // is still talking to origin. The two are separate GETs rather than one streamed response
         // because they answer separate questions — this one is "what is on this branch", and it is
         // the same answer whether or not the remote can be reached.
+        //
+        // It answers for the whole ticket, which on a project of several repos is one entry per repo
+        // in `repos` (docs/multi-repo-plan.md, piece 4): whether the ticket touched it, and the
+        // preflight and draft description of each one it did. A project of one repo gets a list of
+        // one. `preflight` and `suggestedDescription` at the top are the first touched repo's, so a
+        // dialog that reads only those still draws something true.
         app.MapGet("/api/tickets/{id:int}/git/pr", async (
             int id, TicketService tickets, TicketGitService git, LinkedIssueResolver resolver,
             IssueTrackerFactory trackers, ProjectRegistry registry, CancellationToken ct) =>
@@ -61,69 +68,119 @@ public static class GitEndpoints
             if (t is null) return Results.NotFound();
 
             var r = await resolver.ResolveAsync(t);
-            var pre = await git.LocalPreflightAsync(t.ProjectKey, BranchOf(t), ct);
             var issueRef = IssueRefFor(trackers, t);
             var cfg = registry.GetProjectConfig(t.ProjectKey);
+            var branch = BranchOf(t);
+
+            // On a project of one the preflight is wanted whatever the touch says, so the two reads
+            // start together rather than one after the other on the path the dialog waits for.
+            var touchRead = git.TouchedAsync(t.ProjectKey, branch, ct);
+            var soloRead = cfg.IsMultiRepo ? null : git.LocalPreflightAsync(t.ProjectKey, branch, ct);
+            var touches = await touchRead;
+            var touched = touches.Where(x => x.Touched).Select(x => x.Dir).ToList();
+            var repos = new List<object>();
+            PrPreflight? lead = null;
+            string? leadDescription = null;
+            var leadTouched = false;
+            foreach (var touch in touches)
+            {
+                PrPreflight? pre = null;
+                string? description = null;
+                // A read-only repo has no branch to preflight; an untouched one of several is listed
+                // so the dialog can say it was left alone, without paying for a diff that is empty.
+                if (!touch.ReadOnly && (touch.Touched || !cfg.IsMultiRepo))
+                {
+                    pre = soloRead is not null ? await soloRead : await git.LocalPreflightAsync(t.ProjectKey, branch, ct, touch.Dir);
+                    var alsoIn = touched.Where(d => d != touch.Dir).ToList();
+                    description = PrDescription.Compose(t, pre.CommitBody, r.Description, issueRef, alsoIn);
+                    if (lead is null || (!leadTouched && touch.Touched))
+                    {
+                        lead = pre;
+                        leadDescription = description;
+                        leadTouched = touch.Touched;
+                    }
+                }
+                repos.Add(new
+                {
+                    dir = touch.Dir,
+                    readOnly = touch.ReadOnly,
+                    touched = touch.Touched,
+                    ahead = touch.Ahead,
+                    dirty = touch.Dirty,
+                    preflight = pre,
+                    suggestedDescription = description,
+                });
+            }
+
             return Results.Ok(new
             {
                 // Which dialog this diff belongs in - "git" raises a PR, "tfvc" checks in.
                 repoType = cfg.RepoType,
                 // A git project that delivers by merging into its base: the dialog's last button merges.
                 mergeInsteadOfPr = cfg.MergeInsteadOfPr && !cfg.IsTfvc,
-                preflight = pre,
+                multiRepo = cfg.IsMultiRepo,
+                preflight = lead,
                 suggestedTitle = SuggestTitle(t, r, issueRef),
-                suggestedDescription = PrDescription.Compose(t, pre.CommitBody, r.Description, issueRef),
+                suggestedDescription = leadDescription ?? PrDescription.Compose(t, null, r.Description, issueRef),
+                repos,
             });
         });
 
         // The other half, and the slow one: it fetches from origin, so it is seconds rather than
         // milliseconds. Every gate on raising the PR reads these numbers, so the dialog must wait
-        // for this before it lets the button through — it just no longer waits to draw.
+        // for this before it lets the button through — it just no longer waits to draw. One repo per
+        // call: `?repo=` on a project of several.
         app.MapGet("/api/tickets/{id:int}/git/pr/base", async (
-            int id, TicketService tickets, TicketGitService git, CancellationToken ct) =>
+            int id, string? repo, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
+            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
 
-            return Results.Ok(await git.BaseCheckAsync(t.ProjectKey, BranchOf(t), ct));
+            return Results.Ok(await git.BaseCheckAsync(t.ProjectKey, BranchOf(t), ct, repo));
         });
 
         // 409 again on refusal, and a conflicted rebase is a refusal: the body carries the files that
         // clashed, and that list is the answer the user came for. Nothing moved either way.
         app.MapPost("/api/tickets/{id:int}/git/rebase", async (
-            int id, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
+            int id, string? repo, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
+            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
 
             if ((RefuseWriteOnReview(t, "rebase it") ?? RefuseOnTfvc(registry, t, "rebase it against a remote")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
 
-            var result = await git.RebaseAsync(t.ProjectKey, BranchOf(t), ct);
+            var result = await git.RebaseAsync(t.ProjectKey, BranchOf(t), ct, repo);
             return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 409);
         });
 
         // Separate from creating the PR on purpose — see TicketGitService.ForcePushAsync. The PR
         // endpoint must never reach for this when its own push is rejected.
         app.MapPost("/api/tickets/{id:int}/git/force-push", async (
-            int id, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
+            int id, string? repo, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
+            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
 
             if ((RefuseWriteOnReview(t, "force push it") ?? RefuseOnTfvc(registry, t, "force push it")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
 
-            var result = await git.ForcePushAsync(t.ProjectKey, BranchOf(t), ct);
+            var result = await git.ForcePushAsync(t.ProjectKey, BranchOf(t), ct, repo);
             return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 409);
         });
 
+        // One PR per call, in the repo `?repo=` names on a project of several. The dialog raises one
+        // for each repo the ticket touched; each description already names the others.
         app.MapPost("/api/tickets/{id:int}/git/pr", async (
-            int id, CreatePrRequest? req, TicketService tickets, TicketGitService git,
+            int id, string? repo, CreatePrRequest? req, TicketService tickets, TicketGitService git,
             LinkedIssueResolver resolver, IssueTrackerFactory trackers, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
+            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
 
             if ((RefuseWriteOnReview(t, "push it or raise a pull request for it")
                  ?? RefuseOnTfvc(registry, t, "push it or raise a pull request for it")) is { } no)
@@ -133,7 +190,7 @@ public static class GitEndpoints
                 ? SuggestTitle(t, await resolver.ResolveAsync(t), IssueRefFor(trackers, t))
                 : req!.Title!.Trim();
 
-            var result = await git.CreateAsync(t.ProjectKey, BranchOf(t), title, req?.Description, ct);
+            var result = await git.CreateAsync(t.ProjectKey, BranchOf(t), title, req?.Description, ct, repo);
             return result.Ok ? Results.Ok(result) : Results.BadRequest(result);
         });
 
@@ -147,7 +204,8 @@ public static class GitEndpoints
             if (t is null) return Results.NotFound();
 
             if ((RefuseWriteOnReview(t, "merge it")
-                 ?? RefuseOnTfvc(registry, t, "merge it into its base")) is { } no)
+                 ?? RefuseOnTfvc(registry, t, "merge it into its base")
+                 ?? RefuseOnMultiRepo(registry, t.ProjectKey, "merge it into its base")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
 
             var cfg = registry.GetProjectConfig(t.ProjectKey);
@@ -191,19 +249,22 @@ public static class GitEndpoints
         // TicketGitService.Checkin. Stage, abort and record answer 409 on refusal like the rest.
 
         app.MapGet("/api/tickets/{id:int}/git/checkin", async (
-            int id, TicketService tickets, TicketGitService git, CancellationToken ct) =>
+            int id, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
+            if (RefuseOnMultiRepo(registry, t.ProjectKey, "check it in to TFVC") is { } no)
+                return Results.Json(new { ok = false, error = no }, statusCode: 409);
             return Results.Ok(await git.CheckinStatusAsync(t.ProjectKey, BranchOf(t), ct));
         });
 
         app.MapPost("/api/tickets/{id:int}/git/checkin/stage", async (
-            int id, TicketService tickets, TicketGitService git, CancellationToken ct) =>
+            int id, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
-            if (RefuseWriteOnReview(t, "merge it for a check-in") is { } no)
+            if ((RefuseWriteOnReview(t, "merge it for a check-in")
+                 ?? RefuseOnMultiRepo(registry, t.ProjectKey, "merge it for a check-in")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
 
             var result = await git.StageCheckinAsync(t.ProjectKey, BranchOf(t), ct);
@@ -211,11 +272,12 @@ public static class GitEndpoints
         });
 
         app.MapPost("/api/tickets/{id:int}/git/checkin/abort", async (
-            int id, TicketService tickets, TicketGitService git, CancellationToken ct) =>
+            int id, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
-            if (RefuseWriteOnReview(t, "abort a merge for it") is { } no)
+            if ((RefuseWriteOnReview(t, "abort a merge for it")
+                 ?? RefuseOnMultiRepo(registry, t.ProjectKey, "abort a check-in merge for it")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
 
             var result = await git.AbortCheckinAsync(t.ProjectKey, BranchOf(t), ct);
@@ -224,11 +286,12 @@ public static class GitEndpoints
 
         app.MapPost("/api/tickets/{id:int}/git/checkin/record", async (
             int id, RecordCheckinRequest? req, TicketService tickets, TicketGitService git,
-            LinkedIssueResolver resolver, IssueTrackerFactory trackers, CancellationToken ct) =>
+            LinkedIssueResolver resolver, IssueTrackerFactory trackers, ProjectRegistry registry, CancellationToken ct) =>
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
-            if (RefuseWriteOnReview(t, "record a check-in for it") is { } no)
+            if ((RefuseWriteOnReview(t, "record a check-in for it")
+                 ?? RefuseOnMultiRepo(registry, t.ProjectKey, "record a check-in for it")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
             if (req?.Changeset is not > 0)
                 return Results.Json(new { ok = false, error = "Enter the changeset number Team Explorer reported." }, statusCode: 400);
@@ -271,6 +334,8 @@ public static class GitEndpoints
             string key, ProjectRegistry registry, TicketGitService git, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(key)) return Results.NotFound(new { error = $"Unknown project '{key}'." });
+            if (RefuseOnMultiRepo(registry, key, "sync it with TFVC") is { } no)
+                return Results.Json(new { ok = false, error = no }, statusCode: 409);
             return Results.Ok(await git.TfvcSyncPreviewAsync(key, ct));
         });
 
@@ -278,6 +343,8 @@ public static class GitEndpoints
             string key, TfvcSyncRequest? req, ProjectRegistry registry, TicketGitService git, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(key)) return Results.NotFound(new { error = $"Unknown project '{key}'." });
+            if (RefuseOnMultiRepo(registry, key, "sync it with TFVC") is { } no)
+                return Results.Json(new { ok = false, error = no }, statusCode: 409);
             var result = await git.TfvcSyncAsync(key, req?.Paths ?? Array.Empty<string>(), req?.Message, ct);
             return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 409);
         });
@@ -295,6 +362,28 @@ public static class GitEndpoints
             ? $"{cfg.DisplayName} delivers by TFVC check-in, so this dashboard will not {action}. Use the check-in dialog."
             : null;
     }
+
+    /// <summary>
+    /// Why a delivery mode that a project of several repos does not have must not run on this one,
+    /// or null when it may. The config already refuses <c>mergeInsteadOfPr</c> and TFVC on such a
+    /// project (RepoLayout), so reaching one of these routes for it is a bug, said as a refusal.
+    /// </summary>
+    public static string? RefuseOnMultiRepo(ProjectRegistry registry, string projectKey, string action)
+    {
+        var cfg = registry.GetProjectConfig(projectKey);
+        return cfg.IsMultiRepo
+            ? $"{cfg.DisplayName} is several repos and delivers by a pull request in each, so this dashboard will not {action}."
+            : null;
+    }
+
+    /// <summary>
+    /// A 400 when <paramref name="repo"/> does not name one of this ticket's repos: missing on a
+    /// project of several, unknown, or given at all on a project that is one repo. Null when it is fine.
+    /// </summary>
+    public static IResult? UnnamedRepo(TicketGitService git, ProjectRegistry registry, Models.Ticket t, string? repo) =>
+        git.TargetOf(registry.GetProjectConfig(t.ProjectKey), repo, out var error) is null
+            ? Results.BadRequest(new { ok = false, error })
+            : null;
 
     /// <summary>
     /// The branch this ticket's git actions operate on: its own on the Delivery track, and the
