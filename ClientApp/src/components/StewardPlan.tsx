@@ -136,12 +136,12 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
               <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 10 }}>
                 {view.readable && (
                   <Chip on={selected === 'plan'} onClick={() => setPicked('plan')} title={view.charter ? 'The charter, decisions and slices, generated' : 'The decisions and slices, generated'}>
-                    The plan as read
+                    Whole plan
                   </Chip>
                 )}
                 {view.master && (
                   <Chip on={selected === 'master'} onClick={() => setPicked('master')} title={view.master.file}>
-                    {view.charter ? 'The older plan document' : 'The plan document'}
+                    {view.charter ? 'Original plan (retired)' : 'Plan document'}
                   </Chip>
                 )}
               </div>
