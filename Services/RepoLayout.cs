@@ -135,28 +135,12 @@ public static class RepoLayout
     }
 
     /// <summary>
-    /// Why the worker cannot run this project yet, even with nothing wrong in it. The worker learns
-    /// several repos in step 4 of docs/multi-repo-plan.md; until then a claim for one would run in
-    /// <c>projectPath</c>, which is not a repo, so it is passed over. Removed with that step.
-    /// </summary>
-    public static string? NotYetRunnable(ProjectConfig cfg) => cfg.IsMultiRepo
-        ? "Its config is read, but the worker does not run a project of several repos yet (docs/multi-repo-plan.md, step 4), so its tickets are passed over."
-        : null;
-
-    /// <summary>
     /// The projects a claim may take tickets from: <paramref name="candidates"/> less every one with
-    /// a <see cref="Problems"/> or that is <see cref="NotYetRunnable"/>. Their tickets are passed
-    /// over, never blocked - the fault is the project's config, not the ticket, and it clears the
-    /// moment the config is fixed.
+    /// a <see cref="Problems"/>. Their tickets are passed over, never blocked - the fault is the
+    /// project's config, not the ticket, and it clears the moment the config is fixed.
     /// </summary>
     public static string[] Claimable(IEnumerable<string> candidates, Func<string, ProjectConfig> configFor, Probe probe) =>
-        candidates
-            .Where(key =>
-            {
-                var cfg = configFor(key);
-                return NotYetRunnable(cfg) is null && Problems(cfg, probe).Count == 0;
-            })
-            .ToArray();
+        candidates.Where(key => Problems(configFor(key), probe).Count == 0).ToArray();
 
     /// <summary>One folder name: not empty, not rooted, no separator, not a dot segment.</summary>
     private static bool IsPlainFolderName(string dir) =>

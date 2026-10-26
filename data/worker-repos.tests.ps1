@@ -16,11 +16,25 @@ $script:log = New-Object System.Collections.Generic.List[string]
 function Write-Log { param([string]$Message) [void]$script:log.Add($Message) }
 function Invoke-WithMutex { param([string]$Name, [scriptblock]$Body, [int]$TimeoutMs) return & $Body }
 
-$tree = [System.Management.Automation.Language.Parser]::ParseFile($worker, [ref]$null, [ref]$null)
+# The ticket API, as heartbeat-common.ps1 would reach it, recorded instead of sent.
+$script:comments = New-Object System.Collections.Generic.List[string]
+$script:phase = 'NeedsReview'
+function Send-TicketComment { param($TicketId, $Body) [void]$script:comments.Add($Body) }
+function Send-DashboardEvent { param($Type, $TicketId, $Project, [Alias('Error')]$Err) }
+function Get-TicketPhase { param($TicketId) return $script:phase }
+function Set-TicketPhase { param($TicketId, $Phase, $Reason) $script:phase = $Phase; return $true }
+
+$parseErrors = $null
+$tree = [System.Management.Automation.Language.Parser]::ParseFile($worker, [ref]$null, [ref]$parseErrors)
 foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($fn.Extent.Text))
 }
 . (Join-Path $PSScriptRoot 'worker-repos.ps1')
+# The one function of providers.ps1 these tests ask, which decides the prompt's conventions file.
+$providers = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'providers.ps1'), [ref]$null, [ref]$null)
+foreach ($fn in $providers.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Get-ConventionsFile' }, $false)) {
+    . ([scriptblock]::Create($fn.Extent.Text))
+}
 
 $env:GIT_TERMINAL_PROMPT = '0'
 $root = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-repos-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -271,6 +285,96 @@ try {
     $retry = Open-Workspace -Members $fixed -Branch 'jb/PROJ-3' -Skill 'implement'
     Check 'the next run sets up what failed' $retry.ok $true
     Check '... in both' ((Test-Path (Join-Path (Find $retry 'alpha-web').path 'setup-count.txt')) -and (Test-Path (Join-Path (Find $retry 'alpha-api').path 'setup-count.txt'))) $true
+
+    # ---- The prompt -------------------------------------------------------------------
+    Write-Host "== the prompt"
+    Check 'worker.ps1 still parses' (@($tree.FindAll({ $true }, $false)).Count -gt 0 -and $parseErrors.Count -eq 0) $true
+    $template = Get-Content -Path (Join-Path $PSScriptRoot 'heartbeat-prompt.md') -Raw
+    Check 'the base-ref line takes its backticks from the worker' ($template -match '- \*\*Base ref:\*\* \{\{BASE_REF\}\} - the ref') $true
+    Check '... and ends in the repos note, so an empty one adds nothing' ($template -match 'after you finish\.\{\{REPOS_NOTE\}\}\r?\n') $true
+    Check 'a project of one has no repos note' "[$(Format-ReposNote -Members @((Member '' $soloHub)) -Branch 'jb/solo-1')]" '[]'
+    $note = Format-ReposNote -Members $retry.members -Branch 'jb/PROJ-3'
+    Check 'several: the note opens a bullet of its own' ($note -match "^`n- \*\*Repos:\*\*") $true
+    Check "... naming each repo's own base ref" (($note -match '`alpha-web` - base ref `origin/main`') -and ($note -match '`alpha-api` - base ref `origin/develop`')) $true
+    Check '... and the read-only one as read-only' ($note -match '`alpha-infra` - \*\*read-only\*\*') $true
+    Check '... and the branch they share' ($note -match 'on branch `jb/PROJ-3`') $true
+
+    # ---- Workspace files ----------------------------------------------------------------
+    Write-Host "== workspace files"
+    $kit = Join-Path $root 'kit'
+    New-Item -ItemType Directory -Path (Join-Path $kit 'docs') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $kit 'alpha-web') -Force | Out-Null
+    Set-Content -Path (Join-Path $kit 'CLAUDE.md') -Value '# the workspace' -Encoding ascii
+    Set-Content -Path (Join-Path $kit 'docs\map.md') -Value 'map' -Encoding ascii
+    Set-Content -Path (Join-Path $kit 'alpha-web\stray.txt') -Value 'x' -Encoding ascii
+    $script:log.Clear()
+    $n = Copy-WorkspaceFiles -From $kit -To $retry.path -Skip @('alpha-web', 'alpha-api', 'alpha-infra')
+    Check 'the root files are copied, nested ones too' "$n $(Test-Path (Join-Path $retry.path 'CLAUDE.md')) $(Test-Path (Join-Path $retry.path 'docs\map.md'))" '2 True True'
+    Check '... never into a repo' (Test-Path (Join-Path (Find $retry 'alpha-web').path 'stray.txt')) $false
+    Check '... and the skip is logged' (@($script:log | Where-Object { $_ -match "stray.txt' is inside the repo 'alpha-web'" }).Count) 1
+    Check 'a conventions file at the root is found there' (Get-ConventionsFile -Provider @{ ConventionsFile = 'CLAUDE.md' } -WorkDir $retry.path) 'CLAUDE.md'
+    Check 'no kit, nothing copied' (Copy-WorkspaceFiles -From (Join-Path $root 'no-kit') -To $retry.path) 0
+
+    # ---- The hand-off, per repo ------------------------------------------------------------
+    # Invoke-HandOffNets as worker.ps1 calls it, with the script variables it reads.
+    Write-Host "== the hand-off, per repo"
+    $ticketId = '7'; $title = 'The feature'; $skill = 'refine'; $mergeLocally = $false; $onHost = $false
+    $Claim = [pscustomobject]@{ issueCommitRef = 'AB#1'; ticket = [pscustomobject]@{ implementationSummary = 'Adds the feature.' } }
+    $handoff = @(
+        (Member 'alpha-web' $web),
+        (Member 'alpha-api' $api -Base 'develop'),
+        (Member 'alpha-infra' $infra -ReadOnly))
+    $h = Open-Workspace -Members $handoff -Branch 'jb/PROJ-4'
+    $hWeb = (Find $h 'alpha-web').path; $hApi = (Find $h 'alpha-api').path
+    Add-Commit -Dir $hWeb -File 'one.txt' -Subject 'web: part one'
+    Add-Commit -Dir $hWeb -File 'two.txt' -Subject 'web: part two'
+    Set-Content -Path (Join-Path $hWeb 'left.txt') -Value 'forgotten' -Encoding ascii
+    Push-Upstream -Hub $web -Subject 'web: landed meanwhile'
+    git -C $web fetch -q origin *> $null
+    $apiBefore = Get-Sha $hApi HEAD
+    $script:comments.Clear(); $script:phase = 'NeedsReview'; $script:handOffSentBack = $false
+    foreach ($m in @($h.members | Where-Object { -not $_.readOnly })) {
+        Invoke-HandOffNets -WorkDir $m.path -RepoDir $m.hub -EffectiveBase $m.baseBranch -Label $m.dir -Member $m
+    }
+    Check 'the leftover file is committed' "$(git -C $hWeb status --porcelain)" ''
+    Check '... and squashed with the rest into one commit' "$(git -C $hWeb rev-list --count origin/main..HEAD)" 1
+    Check '... rebased onto the base that moved' "$(git -C $hWeb merge-base --is-ancestor origin/main HEAD; $LASTEXITCODE)" 0
+    Check "every comment names the repo it is about" (@($script:comments | Where-Object { $_ -notmatch '^`alpha-web`: ' }).Count) 0
+    Check '... and there are three: leftovers, squash, rebase' $script:comments.Count 3
+    Check 'the untouched repo is left alone' (Get-Sha $hApi HEAD) $apiBefore
+
+    # Both writable repos conflict with their bases: the first sends the ticket back, the second says so.
+    $c = Open-Workspace -Members $handoff -Branch 'jb/PROJ-5'
+    foreach ($pair in @(@($web, 'main', (Find $c 'alpha-web').path), @($api, 'develop', (Find $c 'alpha-api').path))) {
+        Add-Commit -Dir $pair[2] -File 'README.md' -Subject 'the ticket edits the readme'
+        $other = Join-Path $root ("clash-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+        git clone -q -b $pair[1] (git -C $pair[0] remote get-url origin) $other *> $null
+        Set-Identity $other
+        Add-Commit -Dir $other -File 'README.md' -Subject 'so did someone else'
+        git -C $other push -q origin $pair[1] *> $null
+        git -C $pair[0] fetch -q origin *> $null
+    }
+    $script:comments.Clear(); $script:phase = 'NeedsReview'; $script:handOffSentBack = $false
+    foreach ($m in @($c.members | Where-Object { -not $_.readOnly })) {
+        Invoke-HandOffNets -WorkDir $m.path -RepoDir $m.hub -EffectiveBase $m.baseBranch -Label $m.dir -Member $m
+    }
+    Check 'a conflict sends the ticket back' $script:phase 'NeedsImplementation'
+    Check '... named for the repo that conflicted first' (@($script:comments | Where-Object { $_ -match '^`alpha-web`: .*going back for another implementation pass' }).Count) 1
+    Check "the second repo's conflict does not blame refinement" (@($script:comments | Where-Object { $_ -match '^`alpha-api`: .*Another repo of this ticket already sent it back' }).Count) 1
+
+    # A project of one: no label, and every comment reads exactly as it always has.
+    $soloWs = Open-Workspace -Members @((Member '' $soloHub)) -Branch 'jb/solo-1' -Skill 'refine'
+    Add-Commit -Dir $soloWs.path -File 'a.txt' -Subject 'solo: one'
+    Add-Commit -Dir $soloWs.path -File 'b.txt' -Subject 'solo: two'
+    $script:comments.Clear()
+    Invoke-HandOffNets -WorkDir $soloWs.path -RepoDir $soloHub -EffectiveBase 'main'
+    Check 'a project of one: squashed' "$(git -C $soloWs.path rev-list --count origin/main..HEAD)" 1
+    Check '... with the comment it always had' (@($script:comments)[0] -match '^Refinement finished without tidying the branch history') $true
+}
+catch {
+    # A check that throws skips every check after it, which would otherwise read as a pass.
+    $script:fail++
+    Write-Host "FAIL  the tests stopped early: $($_.Exception.Message)" -ForegroundColor Red
 }
 finally {
     Get-Job | Remove-Job -Force -ErrorAction SilentlyContinue

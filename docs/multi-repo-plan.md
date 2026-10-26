@@ -293,7 +293,7 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    the Review track, the steward and worker hosts landed here too, since each is one line on the
    config. So did a temporary one: a well-formed project of several repos is passed over by every
    claim (`RepoLayout.NotYetRunnable`) until step 4 teaches the worker to run it, because until
-   then a claim would run in its `projectPath`. Step 4 removes it.
+   then a claim would run in its `projectPath`. Step 4 removed it.
 2. Member loop + `worker-repos.tests.ps1`, and the two-member cases in `worker-base.tests.ps1`
    (piece 2) - done. *As built:* `Resolve-Worktree` gained `-WorktreeName` and `-MayCreate` as
    well as `-NoSetup`, and its branch naming moved into `Get-TicketBranchName` so the workspace
@@ -312,7 +312,20 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    rule is `TouchedAsync`, and `MultiRepoGitTests` repeats `worker-repos.tests.ps1`'s cases
    against it. Still open for piece 6: an analysis pins one commit, which is in one repo only,
    so an analysis of a ticket across several will need a commit per repo.
-4. Worker wiring (piece 3)
+4. Worker wiring (piece 3) - done. *As built:* a project of one still calls `Resolve-Worktree`
+   directly, exactly as before. The hand-off steps moved into `Invoke-HandOffNets`, whose
+   parameters take the names of the script variables they read, so a project of one runs them
+   on the very same values. A project of several runs them once per writable repo, each comment
+   starting with the repo's name. The second repo whose rebase conflicts says another repo already
+   sent the ticket back, rather than blaming refinement. A read-only repo with changes is reported
+   on the run that made them. The prompt's base-ref line now takes its backticks from the worker,
+   and `{{REPOS_NOTE}}` (`Format-ReposNote`) is appended to the end of that line, so on a project
+   of one the prompt is unchanged. The workspace files of piece 6 landed here too
+   (`Copy-WorkspaceFiles`), since the conventions file at the workspace root comes from them.
+   **From this step on, a project of several repos is claimed.** That includes the live fleet once
+   the app is restarted onto it, ahead of the reaper (step 5) and the skills (step 7). Until
+   step 5, a multi-repo ticket's worktrees are not reaped when it reaches Done: the reaper asks the
+   parent folder, which is not a repo, and keeps the workspace.
 5. Reaper, analysis, QaIsolation, the QA copy's placeholder project (piece 6)
 6. UI (piece 7), proven on the QA copy against the placeholder project
 7. Prompt, skill templates, every project's skill copies, `CLAUDE.md` (pieces 5 and 8)

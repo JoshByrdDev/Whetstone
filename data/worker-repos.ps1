@@ -332,6 +332,55 @@ function Resolve-Workspace {
     return @{ ok = $true; path = $workspace; branch = $branch; members = $out.ToArray(); created = $anyCreated }
 }
 
+# Copy what a project keeps for its workspace's root (data/projects/<key>/workspace/) into the
+# workspace: a conventions file mapping the repos, typically. Anything under a folder named like one
+# of the repos is skipped and logged - a copy there would land in that repo's worktree and dirty it.
+# Returns how many files were copied; 0 when the project keeps none.
+function Copy-WorkspaceFiles {
+    param([string]$From, [string]$To, [string[]]$Skip = @())
+
+    if (-not $From -or -not (Test-Path $From -PathType Container)) { return 0 }
+    $root = (Resolve-Path -LiteralPath $From).Path.TrimEnd('\', '/')
+    $copied = 0
+    foreach ($f in @(Get-ChildItem -LiteralPath $root -Recurse -File -Force)) {
+        $rel = $f.FullName.Substring($root.Length).TrimStart('\', '/')
+        $first = ($rel -split '[\\/]')[0]
+        if (@($Skip | Where-Object { $_ -and $_ -eq $first }).Count -gt 0) {
+            Write-Log "    (skip) workspace file '$rel' is inside the repo '$first'"
+            continue
+        }
+        $dest = Join-Path $To $rel
+        $parent = Split-Path $dest -Parent
+        if ($parent -and -not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        try { Copy-Item -LiteralPath $f.FullName -Destination $dest -Force -ErrorAction Stop; $copied++ }
+        catch { Write-Log "    could not copy workspace file '$rel': $($_.Exception.Message)" }
+    }
+    return $copied
+}
+
+# What the prompt says about the repos of a project of several, appended to its base-ref line so a
+# project of one - for which this is empty - reads exactly as it always did. Each repo's own base
+# ref is named here, because "the base ref" is per repo and the skills say <base-ref>.
+function Format-ReposNote {
+    param([object[]]$Members, [string]$Branch, [bool]$MergeLocally)
+
+    if (-not (Test-MultiRepo $Members)) { return '' }
+    $lines = New-Object System.Collections.Generic.List[string]
+    [void]$lines.Add('')
+    [void]$lines.Add("- **Repos:** this working directory is a workspace of several git repos, each its own repo. Every repo listed with a base ref is on branch ``$Branch``:")
+    foreach ($m in @($Members)) {
+        if ($m.readOnly) {
+            [void]$lines.Add("  - ``$($m.dir)`` - **read-only**: here to be read, never changed. It has no branch, and nothing in it is ever delivered.")
+            continue
+        }
+        $ref = if ($m.path) { Resolve-BaseRef -RepoDir $m.path -BaseBranch $m.baseBranch -MergeLocally $MergeLocally } else { $null }
+        if (-not $ref) { $ref = $m.baseBranch }
+        [void]$lines.Add("  - ``$($m.dir)`` - base ref ``$ref``")
+    }
+    [void]$lines.Add("  The workspace root is not a repo: run git inside one (``git -C <repo> ...``), never at the root. Commit in every repo you change, on its branch. A repo you did not change is delivered as nothing - do not commit to it to keep it in step. Wherever a skill says ``<base-ref>``, use that repo's base ref from this list. Each repo keeps its own conventions file inside it, and they apply to the code in that repo.")
+    return ($lines -join "`n")
+}
+
 # The writable members this ticket has touched, in config order: commits ahead of their base ref, or
 # uncommitted changes. A member whose base cannot be found counts as touched, so the delivery steps
 # that follow fail loudly on it rather than skip work nobody else has. Members need a path.

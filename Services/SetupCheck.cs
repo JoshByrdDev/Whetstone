@@ -75,7 +75,7 @@ public class SetupCheckService
             .Select(k => (Key: k, Repo: ProjectRepo.Read(_paths.ProjectDir(k))))
             .ToList();
         var layouts = configs
-            .Select(p => (p.Key, Problems: RepoLayout.Problems(p.Config!, RepoLayout.Disk), Pending: RepoLayout.NotYetRunnable(p.Config!)))
+            .Select(p => (p.Key, Problems: RepoLayout.Problems(p.Config!, RepoLayout.Disk)))
             .ToList();
         return Evaluate(_probe, roles, projects, folders, layouts);
     }
@@ -84,7 +84,7 @@ public class SetupCheckService
     public static IReadOnlyList<SetupItem> Evaluate(Probe probe,
         IReadOnlyList<(string Role, string Provider)> roles, IReadOnlyList<(string Key, string Path)> projects,
         IReadOnlyList<(string Key, ProjectRepo.State Repo)>? folders = null,
-        IReadOnlyList<(string Key, IReadOnlyList<string> Problems, string? Pending)>? layouts = null)
+        IReadOnlyList<(string Key, IReadOnlyList<string> Problems)>? layouts = null)
     {
         var items = new List<SetupItem>();
 
@@ -150,7 +150,7 @@ public class SetupCheckService
     /// project with a problem here has its tickets passed over by every claim until it is fixed,
     /// and a passed-over ticket says nothing on the board.
     /// </summary>
-    private static SetupItem Layouts(IReadOnlyList<(string Key, IReadOnlyList<string> Problems, string? Pending)> layouts)
+    private static SetupItem Layouts(IReadOnlyList<(string Key, IReadOnlyList<string> Problems)> layouts)
     {
         const string label = "Project repos";
         var broken = layouts.Where(l => l.Problems.Count > 0).ToList();
@@ -159,11 +159,6 @@ public class SetupCheckService
                 string.Join(" ", broken.SelectMany(b => b.Problems.Select(p => $"{b.Key}: {p}"))) +
                 " Until then no ticket of theirs is claimed.",
                 $"Fix projectPath or repos in data/projects/{broken[0].Key}/project.json.");
-
-        var pending = layouts.Where(l => l.Pending is not null).ToList();
-        if (pending.Count > 0)
-            return new SetupItem("project-repos", label, "warn", false,
-                string.Join(" ", pending.Select(p => $"{p.Key}: {p.Pending}")), null);
 
         return new SetupItem("project-repos", label, "ok", true,
             "Every project points at a git repo, or a set of them.", null);

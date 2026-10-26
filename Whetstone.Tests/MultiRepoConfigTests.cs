@@ -285,20 +285,19 @@ public class MultiRepoConfigTests : IDisposable
     // ---- what a claim may take --------------------------------------------------------------
 
     [Fact]
-    public void A_claim_passes_over_a_broken_project_and_one_the_worker_cannot_run_yet()
+    public void A_claim_passes_over_a_broken_project_and_takes_a_well_formed_one_of_several()
     {
         var bravoRoot = Norm(Path.Combine(Path.GetTempPath(), "Bravo"));
         var configs = new Dictionary<string, ProjectConfig>
         {
-            ["alpha"] = Multi(Member("alpha-web")),                                         // well formed, not runnable yet
+            ["alpha"] = Multi(Member("alpha-web")),                                         // several, well formed
             ["bravo"] = new() { Name = "bravo", ProjectPath = bravoRoot },                   // a repo
             ["charlie"] = new() { Name = "charlie", ProjectPath = Root },                     // not a repo
         };
         var disk = Disk(new[] { Root, Under("alpha-web"), bravoRoot }, new[] { Under("alpha-web"), bravoRoot });
 
-        Assert.Equal(new[] { "bravo" }, RepoLayout.Claimable(configs.Keys, k => configs[k], disk));
-        Assert.NotNull(RepoLayout.NotYetRunnable(configs["alpha"]));
-        Assert.Null(RepoLayout.NotYetRunnable(configs["bravo"]));
+        // charlie is the same folder as alpha without "repos": a folder of repos, refused.
+        Assert.Equal(new[] { "alpha", "bravo" }, RepoLayout.Claimable(configs.Keys, k => configs[k], disk));
     }
 
     // ---- the Setup check row ----------------------------------------------------------------
@@ -309,14 +308,14 @@ public class MultiRepoConfigTests : IDisposable
 
     private static readonly (string, string)[] Roles = { ("implement", "claude") };
 
-    private static SetupItem Row(params (string, IReadOnlyList<string>, string?)[] layouts) =>
+    private static SetupItem Row(params (string, IReadOnlyList<string>)[] layouts) =>
         Assert.Single(SetupCheckService.Evaluate(Machine(), Roles, Array.Empty<(string, string)>(), null, layouts),
             i => i.Key == "project-repos");
 
     [Fact]
     public void The_setup_check_names_each_projects_problem_as_required()
     {
-        var row = Row(("alpha", Array.Empty<string>(), null), ("bravo", new[] { "'C:/x' is not a git repo." }, null));
+        var row = Row(("alpha", Array.Empty<string>()), ("bravo", new[] { "'C:/x' is not a git repo." }));
         Assert.Equal("missing", row.State);
         Assert.True(row.Required);
         Assert.Contains("bravo: 'C:/x' is not a git repo.", row.Detail);
@@ -325,16 +324,8 @@ public class MultiRepoConfigTests : IDisposable
     }
 
     [Fact]
-    public void The_setup_check_says_a_well_formed_project_of_several_repos_is_not_run_yet()
-    {
-        var row = Row(("alpha", Array.Empty<string>(), "not yet"));
-        Assert.Equal("warn", row.State);
-        Assert.Contains("alpha: not yet", row.Detail);
-    }
-
-    [Fact]
     public void The_setup_check_is_ok_when_every_project_is_on_a_repo()
     {
-        Assert.Equal("ok", Row(("alpha", Array.Empty<string>(), null)).State);
+        Assert.Equal("ok", Row(("alpha", Array.Empty<string>())).State);
     }
 }

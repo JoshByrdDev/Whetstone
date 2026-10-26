@@ -35,6 +35,9 @@ $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 # The branch round trip for a run on a worker host. Functions only; nothing in it runs unless the
 # claim says this run is on one - see $onHost below.
 . (Join-Path $DataRoot "worker-board.ps1")
+# A ticket's workspace on a project whose code is several repos (docs/multi-repo-plan.md). Functions
+# only; a project of one repo takes its set-of-one path, which is Resolve-Worktree as it always was.
+. (Join-Path $DataRoot "worker-repos.ps1")
 
 # A worker is its own top-level session, never a child of one. When the app was started from inside
 # Claude Code (`dotnet run` in a session's shell), every process under it inherits that session's
@@ -1430,6 +1433,18 @@ function Stop-CycleEarly {
     exit 0
 }
 
+# The repos this project's code is in, in config order: the set of one for a project that is one
+# repo, built from the same keys as $effectiveBase above. See Get-RepoMembers.
+$repoMembers = @(Get-RepoMembers -Project $Claim.project -DefaultBase $BaseBranch)
+$multiRepo   = Test-MultiRepo $repoMembers
+# The members with their worktrees' paths, once the workspace exists. Empty for a project of one.
+$workMembers = @()
+# The claim never sends one here (the board's claim filter), and the round trip below is one repo's.
+if ($multiRepo -and $onHost) {
+    Stop-CycleEarly -Reason "a project of several repos cannot run on a worker host yet" `
+        -Comment "This run was sent to worker host ``$runHost``, but $projectName is several repos and a worker host can only work a project of one so far (docs/multi-repo-plan.md). Nothing was done; the ticket is left for the board host."
+}
+
 # On a worker host the clone is brought up to the board host's refs before the worktree is
 # resolved: its base, its view of origin, and this ticket's branch as the board host last had it.
 # That commit is also what the hand-back at the end says it expects to replace. A board host it
@@ -1472,11 +1487,21 @@ if ($onHost) {
 # Give the ticket its own checkout before anything else: the MCP config below points Augment at
 # the working directory, so the working directory has to be settled first.
 if ($repoDir) {
-    $wt = Resolve-Worktree -RepoDir $repoDir -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
-        -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
-        -IssueBranchToken "$($Claim.issueBranchToken)" -BaseBranch $effectiveBase -BranchPrefix $effectivePrefix `
-        -CopyFiles @($Claim.project.worktreeCopyFiles) -Setup @($Claim.project.worktreeSetup) `
-        -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally
+    # A project of several repos gets a workspace: one worktree per repo, inside a folder that is
+    # not itself a repo. Its members, each with its worktree's path, are what every per-repo step
+    # below loops over. A project of one takes exactly the call it always did.
+    $wt = if ($multiRepo) {
+        Resolve-Workspace -Members $repoMembers -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
+            -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
+            -IssueBranchToken "$($Claim.issueBranchToken)" -BranchPrefix $effectivePrefix `
+            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally
+    } else {
+        Resolve-Worktree -RepoDir $repoDir -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
+            -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
+            -IssueBranchToken "$($Claim.issueBranchToken)" -BaseBranch $effectiveBase -BranchPrefix $effectivePrefix `
+            -CopyFiles @($Claim.project.worktreeCopyFiles) -Setup @($Claim.project.worktreeSetup) `
+            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally
+    }
 
     if (-not $wt.ok) {
         $reason = "Workspace setup failed ($skill): $($wt.reason)"
@@ -1511,7 +1536,17 @@ if ($repoDir) {
             # feature that reads that field, the PR dialog included.
         }
         else {
-            Write-Log "  Worktree: $workDir (branch '$($wt.branch)')"
+            if ($multiRepo) {
+                $workMembers = @($wt.members)
+                Write-Log "  Workspace: $workDir (branch '$($wt.branch)'; repos: $((@($workMembers | ForEach-Object { if ($_.readOnly) { "$($_.dir) (read-only)" } else { $_.dir } })) -join ', '))"
+                # What the project keeps for its workspace's root - a conventions file that maps
+                # its repos, say. Copied every phase, so an edit in the project folder is the one
+                # the next run reads; it sits outside every repo, so nothing ever commits it.
+                $copied = Copy-WorkspaceFiles -From (Join-Path "$($Claim.project.dataDir)" 'workspace') -To $workDir `
+                    -Skip @($workMembers | ForEach-Object { $_.dir })
+                if ($copied -gt 0) { Write-Log "  Copied $copied workspace file(s) from the project folder" }
+            }
+            else { Write-Log "  Worktree: $workDir (branch '$($wt.branch)')" }
             # Record both together: a branch whose worktree the dashboard cannot name is a branch
             # nobody can find later. Except on a worker host, whose worktree is on another machine:
             # the board host reads a ticket's worktree path as one of its own (analysis, the
@@ -1634,9 +1669,22 @@ Write-Log "  Conventions file: $conventionsFile"
 # The ref the skills measure this branch against, named for them rather than left to each skill to
 # work out: it is the same one the squash and the rebase below will use, and a worker that picked a
 # different one would be counting other people's commits as its own.
-$baseRefNow = if ($repoDir) { Resolve-BaseRef -RepoDir $workDir -BaseBranch $effectiveBase -MergeLocally $mergeLocally } else { $null }
-if (-not $baseRefNow) { $baseRefNow = $effectiveBase }
-Write-Log "  Base ref: $baseRefNow"
+#
+# On a project of several repos there is one per repo, and the prompt's base-ref line points at the
+# list {{REPOS_NOTE}} appends to it. On a project of one, that note is empty and the line reads as
+# it always has.
+if ($multiRepo -and $workMembers) {
+    $reposNote = Format-ReposNote -Members $workMembers -Branch $wt.branch -MergeLocally $mergeLocally
+    $baseRefLine = "one per repo, listed under **Repos** just below"
+    Write-Log "  Base refs: $((@($workMembers | Where-Object { -not $_.readOnly } | ForEach-Object { "$($_.dir)=$(Resolve-BaseRef -RepoDir $_.path -BaseBranch $_.baseBranch -MergeLocally $mergeLocally)" })) -join ', ')"
+}
+else {
+    $baseRefNow = if ($repoDir) { Resolve-BaseRef -RepoDir $workDir -BaseBranch $effectiveBase -MergeLocally $mergeLocally } else { $null }
+    if (-not $baseRefNow) { $baseRefNow = $effectiveBase }
+    Write-Log "  Base ref: $baseRefNow"
+    $reposNote = ''
+    $baseRefLine = "``$baseRefNow``"
+}
 
 # Which machine this is, for the paths the ticket tools hand out (see HostDataMirror).
 $hostNote = if ($onHost) {
@@ -1654,7 +1702,8 @@ $stackNote = if ($stackSlot -gt 0) {
 
 $prompt = (Get-Content -Path $PromptFile -Raw).
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
-    Replace('{{BASE_REF}}',    $baseRefNow).
+    Replace('{{BASE_REF}}',    $baseRefLine).
+    Replace('{{REPOS_NOTE}}',  $reposNote).
     Replace('{{TICKET_ID}}',   $ticketId).
     Replace('{{TITLE}}',       $title).
     Replace('{{PROJECT_KEY}}', $projectKey).
@@ -1963,38 +2012,45 @@ if ($repoDir -and $isReview) {
         Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Review run left $($dirty.Count) modified file(s) in its worktree"
     }
 }
-# Every cycle must leave its worktree clean - the next phase refuses to start on a dirty tree.
-# Commit anything the worker forgot, loudly, so the ticket keeps moving and the miss is visible
-# on the ticket rather than showing up as a confusing workspace failure one phase later.
-if ($repoDir -and -not $isReview) {
+# The safety nets every cycle runs on what it leaves behind, for one repo: the leftover commit, and
+# on refine the squash and the hand-off rebase. A project of one runs them once, on its worktree,
+# and reads exactly as it always has; a project of several runs them for each writable repo, each
+# comment and log line naming the repo it is about, and squashes and rebases only the repos the
+# ticket touched (Get-TouchedMembers). The parameters take the names of the script variables the
+# steps were written against, so on a project of one they are those very values.
+function Invoke-HandOffNets {
+    param([string]$WorkDir, [string]$RepoDir, [string]$EffectiveBase, [string]$Label = '', $Member = $null)
+    $in = if ($Label) { "``$Label``: " } else { '' }
+
     $leftovers = Save-WorkerLeftovers -WorkDir $workDir -TicketId $ticketId -Title $title `
         -IssueRef "$($Claim.issueCommitRef)" -Skill $skill
     if ($leftovers -and $leftovers.ok) {
-        Write-Log "  WARNING: $skill left $($leftovers.files) file(s) uncommitted - committed as $($leftovers.sha) on '$($leftovers.branch)'."
-        Send-TicketComment -TicketId $ticketId -Body "The $skill phase finished without committing its work. The heartbeat committed the $($leftovers.files) leftover file(s) to '$($leftovers.branch)' as $($leftovers.sha) so the next phase can run. Worth a look: this is one catch-all commit, not the atomic per-work-item commits the skill asks for."
+        Write-Log "  ${in}WARNING: $skill left $($leftovers.files) file(s) uncommitted - committed as $($leftovers.sha) on '$($leftovers.branch)'."
+        Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase finished without committing its work. The heartbeat committed the $($leftovers.files) leftover file(s) to '$($leftovers.branch)' as $($leftovers.sha) so the next phase can run. Worth a look: this is one catch-all commit, not the atomic per-work-item commits the skill asks for."
     }
     elseif ($leftovers) {
-        Write-Log "  WARNING: $skill left $($leftovers.files) file(s) uncommitted and the safety-net commit FAILED."
-        Send-TicketComment -TicketId $ticketId -Body "The $skill phase left $($leftovers.files) file(s) uncommitted on '$($leftovers.branch)' and the heartbeat could not commit them automatically. The next phase will block on branch setup until this is sorted out by hand."
+        Write-Log "  ${in}WARNING: $skill left $($leftovers.files) file(s) uncommitted and the safety-net commit FAILED."
+        Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase left $($leftovers.files) file(s) uncommitted on '$($leftovers.branch)' and the heartbeat could not commit them automatically. The next phase will block on branch setup until this is sorted out by hand."
     }
 
     # One ticket, one commit. Refinement owns tidying the history and writing a good message;
     # this only fires when it did not, and says so on the ticket because a machine-written
-    # message is exactly the thing a human should look at.
-    if ($skill -eq 'refine') {
+    # message is exactly the thing a human should look at. On a project of several repos, one
+    # commit per repo the ticket touched - a repo it left alone has nothing to squash or rebase.
+    if ($skill -eq 'refine' -and (-not $Member -or @(Get-TouchedMembers -Members @($Member) -MergeLocally $mergeLocally).Count -gt 0)) {
         $squash = Compress-TicketCommits -WorkDir $workDir -TicketId $ticketId -Title $title `
             -IssueRef "$($Claim.issueCommitRef)" -BaseBranch $effectiveBase `
             -Summary "$($Claim.ticket.implementationSummary)" -MergeLocally $mergeLocally
         if ($squash -and $squash.ok) {
-            Write-Log "  WARNING: refine left $($squash.from) commits - squashed into $($squash.sha) on '$($squash.branch)'."
-            Send-TicketComment -TicketId $ticketId -Body "Refinement finished without tidying the branch history, so the heartbeat squashed its $($squash.from) commits into one ($($squash.sha)), using this ticket's implementation summary as the commit body. Worth reading before this is merged - a summary written for the ticket is not always the right description for the repo's history."
+            Write-Log "  ${in}WARNING: refine left $($squash.from) commits - squashed into $($squash.sha) on '$($squash.branch)'."
+            Send-TicketComment -TicketId $ticketId -Body "${in}Refinement finished without tidying the branch history, so the heartbeat squashed its $($squash.from) commits into one ($($squash.sha)), using this ticket's implementation summary as the commit body. Worth reading before this is merged - a summary written for the ticket is not always the right description for the repo's history."
         }
         elseif ($squash) {
             # Reaching here means the branch has more than one commit AND the net could not
             # collapse them - the invariant is broken and nobody downstream knows. A log line is
             # not where that belongs; the last time this went quiet it went quiet for weeks.
-            Write-Log "  WARNING: refine left more than one commit and the heartbeat could not squash: $($squash.reason)."
-            Send-TicketComment -TicketId $ticketId -Body "This branch still has more than one commit after refinement, and the heartbeat could not collapse them automatically: $($squash.reason). Squash it by hand before merging - this pipeline's rule is one ticket, one commit."
+            Write-Log "  ${in}WARNING: refine left more than one commit and the heartbeat could not squash: $($squash.reason)."
+            Send-TicketComment -TicketId $ticketId -Body "${in}This branch still has more than one commit after refinement, and the heartbeat could not collapse them automatically: $($squash.reason). Squash it by hand before merging - this pipeline's rule is one ticket, one commit."
         }
 
         # Last thing before the ticket goes to a human: make sure what they are about to merge
@@ -2004,7 +2060,7 @@ if ($repoDir -and -not $isReview) {
         # base is refreshed first, so the rebase sees what was merged on the board host meanwhile.
         if ($onHost) {
             $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
-            if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the rebase: $($resync.reason) - rebasing onto the base as of the start of the run." }
+            if (-not $resync.ok) { Write-Log "  ${in}Could not refresh the board host's base before the rebase: $($resync.reason) - rebasing onto the base as of the start of the run." }
         }
         $rebase = Update-BranchFromBase -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir `
             -MergeLocally $mergeLocally
@@ -2012,11 +2068,11 @@ if ($repoDir -and -not $isReview) {
             # The ref it measured against, when it got far enough to pick one.
             $baseName = if ($rebase.base) { $rebase.base } else { $effectiveBase }
             if ($rebase.ok -and $rebase.rebased) {
-                Write-Log "  Rebased '$($rebase.branch)' onto $baseName ($($rebase.behind) commit(s) behind) -> $($rebase.sha)."
-                Send-TicketComment -TicketId $ticketId -Body "This branch was $($rebase.behind) commit(s) behind $baseName, so the heartbeat rebased it before hand-off. It replayed cleanly and the branch is now $($rebase.sha), sitting directly on top of the current base. What you review is what would merge."
+                Write-Log "  ${in}Rebased '$($rebase.branch)' onto $baseName ($($rebase.behind) commit(s) behind) -> $($rebase.sha)."
+                Send-TicketComment -TicketId $ticketId -Body "${in}This branch was $($rebase.behind) commit(s) behind $baseName, so the heartbeat rebased it before hand-off. It replayed cleanly and the branch is now $($rebase.sha), sitting directly on top of the current base. What you review is what would merge."
             }
             elseif ($rebase.ok) {
-                Write-Log "  Branch is already up to date with $baseName."
+                Write-Log "  ${in}Branch is already up to date with $baseName."
             }
             elseif ($rebase.conflicts) {
                 # The branch cannot merge. Finding this now is the entire point: there is still a
@@ -2032,22 +2088,52 @@ if ($repoDir -and -not $isReview) {
                 # anywhere but NeedsReview the move is not even legal.
                 $current = Get-TicketPhase -TicketId $ticketId
                 if ($current -eq 'NeedsReview') {
-                    Write-Log "  Branch conflicts with $baseName ($($rebase.conflicts.Count) file(s)) - sending back to implementation."
-                    Send-TicketComment -TicketId $ticketId -Body "This branch is $($rebase.behind) commit(s) behind $baseName and no longer merges cleanly, so it is going back for another implementation pass rather than to review. $undone Conflicting files:`n`n$files`n`nResolve these against the current base; the ticket returns through QA and refinement automatically."
+                    Write-Log "  ${in}Branch conflicts with $baseName ($($rebase.conflicts.Count) file(s)) - sending back to implementation."
+                    Send-TicketComment -TicketId $ticketId -Body "${in}This branch is $($rebase.behind) commit(s) behind $baseName and no longer merges cleanly, so it is going back for another implementation pass rather than to review. $undone Conflicting files:`n`n$files`n`nResolve these against the current base; the ticket returns through QA and refinement automatically."
                     Set-TicketPhase -TicketId $ticketId -Phase "NeedsImplementation" `
                         -Reason "Branch conflicts with $baseName and cannot be merged as it stands." | Out-Null
+                    $script:handOffSentBack = $true
+                }
+                elseif ($script:handOffSentBack) {
+                    # Another repo of this ticket conflicted first and already sent it back, this
+                    # run - not refinement, which the message below would otherwise blame.
+                    Write-Log "  ${in}Branch conflicts with $baseName ($($rebase.conflicts.Count) file(s)) as well."
+                    Send-TicketComment -TicketId $ticketId -Body "${in}This branch is $($rebase.behind) commit(s) behind $baseName and no longer merges cleanly either. Another repo of this ticket already sent it back for implementation, so this is one more thing to resolve on that pass. $undone Conflicting files:`n`n$files"
                 }
                 else {
-                    Write-Log "  Branch conflicts with $baseName ($($rebase.conflicts.Count) file(s)); ticket is already in $current - leaving it there."
-                    Send-TicketComment -TicketId $ticketId -Body "This branch is $($rebase.behind) commit(s) behind $baseName and no longer merges cleanly. Refinement had already sent this ticket on to $current, so it stays there - the next pass through refinement will rebase it again. $undone Conflicting files:`n`n$files"
+                    Write-Log "  ${in}Branch conflicts with $baseName ($($rebase.conflicts.Count) file(s)); ticket is already in $current - leaving it there."
+                    Send-TicketComment -TicketId $ticketId -Body "${in}This branch is $($rebase.behind) commit(s) behind $baseName and no longer merges cleanly. Refinement had already sent this ticket on to $current, so it stays there - the next pass through refinement will rebase it again. $undone Conflicting files:`n`n$files"
                 }
             }
             else {
-                Write-Log "  Staleness check skipped: $($rebase.reason)."
-                Send-TicketComment -TicketId $ticketId -Body "The heartbeat could not check this branch against ${baseName}: $($rebase.reason). Rebase it by hand before merging, or expect to resolve whatever has landed on the base since."
+                Write-Log "  ${in}Staleness check skipped: $($rebase.reason)."
+                Send-TicketComment -TicketId $ticketId -Body "${in}The heartbeat could not check this branch against ${baseName}: $($rebase.reason). Rebase it by hand before merging, or expect to resolve whatever has landed on the base since."
             }
         }
     }
+}
+
+# Every cycle must leave its worktree clean - the next phase refuses to start on a dirty tree.
+# Commit anything the worker forgot, loudly, so the ticket keeps moving and the miss is visible
+# on the ticket rather than showing up as a confusing workspace failure one phase later.
+$script:handOffSentBack = $false
+if ($repoDir -and -not $isReview) {
+    if ($multiRepo) {
+        foreach ($m in @($workMembers | Where-Object { -not $_.readOnly })) {
+            Invoke-HandOffNets -WorkDir $m.path -RepoDir $m.hub -EffectiveBase $m.baseBranch -Label $m.dir -Member $m
+        }
+        # A read-only repo with changes in it is never committed - there is no branch of the
+        # ticket's there to commit onto - and the next phase refuses to start on it. Said now, on
+        # the run that made them, rather than a phase later as a workspace failure.
+        foreach ($m in @(Get-ReadOnlyFaults -Members $workMembers)) {
+            $dirty = @(git -C $m.path status --porcelain 2>$null | Where-Object { $_ })
+            $names = ($dirty | Select-Object -First 10 | ForEach-Object { "- $($_.Trim())" }) -join "`n"
+            Write-Log "  WARNING: $skill left $($dirty.Count) changed file(s) in the read-only repo $($m.dir)."
+            Send-TicketComment -TicketId $ticketId -Body "This $skill run changed $($dirty.Count) file(s) in ``$($m.dir)``, which this project keeps read-only: it is in the workspace to be read, and nothing in it is ever delivered. Nothing was committed. The changes are still in ``$($m.path)`` for you to look at and discard; the next phase will not start until that repo is clean.`n`n$names"
+            Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Run changed the read-only repo $($m.dir)"
+        }
+    }
+    else { Invoke-HandOffNets -WorkDir $workDir -RepoDir $repoDir -EffectiveBase $effectiveBase }
 }
 
 # The run is over: the capture mirror makes one last pass and stops.
