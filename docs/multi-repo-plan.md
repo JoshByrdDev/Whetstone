@@ -62,8 +62,9 @@ agent can read it.
 
 ### 1. Config (`Services/ProjectRegistry.cs`)
 
-`repos` in `project.defaults.json` (shared) or `project.json` (machine-local), the latter winning
-per member as usual:
+`repos` in `project.defaults.json` (shared) or `project.json` (machine-local). *As built:* the
+merge is top level, as for every key, so a `repos` in `project.json` replaces the committed list
+whole. An entry can be a bare folder name when it needs nothing else:
 
 ```json
 "repos": [
@@ -287,7 +288,11 @@ Each refusal names itself where it fires, so nothing is silently skipped.
 
 Each step is its own commit, and steps 1 to 4 change nothing for an existing project:
 
-1. Config, refusals and Setup check rows + tests (piece 1)
+1. Config, refusals and Setup check rows + tests (piece 1) - done. *As built:* the refusals of
+   the Review track, the steward and worker hosts landed here too, since each is one line on the
+   config. So did a temporary one: a well-formed project of several repos is passed over by every
+   claim (`RepoLayout.NotYetRunnable`) until step 4 teaches the worker to run it, because until
+   then a claim would run in its `projectPath`. Step 4 removes it.
 2. Member loop + `worker-repos.tests.ps1`, and the two-member cases in `worker-base.tests.ps1`
    (piece 2)
 3. Board side: claim, per-member routes, prefixed paths + tests (piece 4)

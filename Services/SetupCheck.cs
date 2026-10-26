@@ -61,20 +61,30 @@ public class SetupCheckService
         var roles = AgentRoles.All
             .Select(r => (Role: r, Provider: AgentRoles.Resolve(cfg, r).Provider))
             .ToList();
-        var projects = _registry.Projects
-            .Select(k => (Key: k, Path: SafeProjectPath(k)))
+        var configs = _registry.Projects
+            .Select(k => (Key: k, Config: SafeConfig(k)))
+            .Where(p => p.Config is not null)
+            .ToList();
+        // Every repo a worker commits in, so a project of several is asked about each of them.
+        var projects = configs
+            .SelectMany(p => p.Config!.Repos.Select(m =>
+                (Key: m.Dir.Length == 0 ? p.Key : $"{p.Key}/{m.Dir}", Path: m.HubPath(p.Config.ProjectPath))))
             .Where(p => !string.IsNullOrEmpty(p.Path))
             .ToList();
         var folders = _registry.Projects
             .Select(k => (Key: k, Repo: ProjectRepo.Read(_paths.ProjectDir(k))))
             .ToList();
-        return Evaluate(_probe, roles, projects!, folders);
+        var layouts = configs
+            .Select(p => (p.Key, Problems: RepoLayout.Problems(p.Config!, RepoLayout.Disk), Pending: RepoLayout.NotYetRunnable(p.Config!)))
+            .ToList();
+        return Evaluate(_probe, roles, projects, folders, layouts);
     }
 
     /// <summary>The check itself, over whatever the probe reports. Public for tests.</summary>
     public static IReadOnlyList<SetupItem> Evaluate(Probe probe,
         IReadOnlyList<(string Role, string Provider)> roles, IReadOnlyList<(string Key, string Path)> projects,
-        IReadOnlyList<(string Key, ProjectRepo.State Repo)>? folders = null)
+        IReadOnlyList<(string Key, ProjectRepo.State Repo)>? folders = null,
+        IReadOnlyList<(string Key, IReadOnlyList<string> Problems, string? Pending)>? layouts = null)
     {
         var items = new List<SetupItem>();
 
@@ -129,7 +139,34 @@ public class SetupCheckService
         // ---- each project folder's own repo: its skills and config exist nowhere else ----
         if (folders is { Count: > 0 }) items.Add(Folders(folders));
 
+        // ---- where each project's code is: a repo, or a set of them ----
+        if (layouts is { Count: > 0 }) items.Add(Layouts(layouts));
+
         return items;
+    }
+
+    /// <summary>
+    /// Whether each project's code is somewhere a worktree can be made of it. Required, because a
+    /// project with a problem here has its tickets passed over by every claim until it is fixed,
+    /// and a passed-over ticket says nothing on the board.
+    /// </summary>
+    private static SetupItem Layouts(IReadOnlyList<(string Key, IReadOnlyList<string> Problems, string? Pending)> layouts)
+    {
+        const string label = "Project repos";
+        var broken = layouts.Where(l => l.Problems.Count > 0).ToList();
+        if (broken.Count > 0)
+            return new SetupItem("project-repos", label, "missing", true,
+                string.Join(" ", broken.SelectMany(b => b.Problems.Select(p => $"{b.Key}: {p}"))) +
+                " Until then no ticket of theirs is claimed.",
+                $"Fix projectPath or repos in data/projects/{broken[0].Key}/project.json.");
+
+        var pending = layouts.Where(l => l.Pending is not null).ToList();
+        if (pending.Count > 0)
+            return new SetupItem("project-repos", label, "warn", false,
+                string.Join(" ", pending.Select(p => $"{p.Key}: {p.Pending}")), null);
+
+        return new SetupItem("project-repos", label, "ok", true,
+            "Every project points at a git repo, or a set of them.", null);
     }
 
     private static SetupItem Folders(IReadOnlyList<(string Key, ProjectRepo.State Repo)> folders)
@@ -193,10 +230,10 @@ public class SetupCheckService
             $"No user.name / user.email in {string.Join(", ", lacking)}. Worker commits there will fail with \"tell me who you are\".", fix);
     }
 
-    private string SafeProjectPath(string key)
+    private ProjectConfig? SafeConfig(string key)
     {
-        try { return _registry.GetProjectConfig(key).ProjectPath; }
-        catch { return ""; }
+        try { return _registry.GetProjectConfig(key); }
+        catch { return null; }
     }
 
     // ---- the real machine ----

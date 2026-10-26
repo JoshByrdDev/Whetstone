@@ -218,11 +218,27 @@ public static class TicketEndpoints
                 skillFilter = skillFilter is null ? host.Skills : skillFilter.Intersect(host.Skills).ToArray();
                 resourceHost = host.Name;
                 var allowed = filter is { Length: > 0 } ? filter : registry.Projects.ToArray();
-                filter = allowed.Where(p => host.Projects.Contains(p, StringComparer.OrdinalIgnoreCase)).ToArray();
+                // A project of several repos never goes to a worker host in phase 1: the branch round
+                // trip and the project kit are one repo each (docs/multi-repo-plan.md).
+                filter = allowed
+                    .Where(p => host.Projects.Contains(p, StringComparer.OrdinalIgnoreCase))
+                    .Where(p => !registry.GetProjectConfig(p).IsMultiRepo)
+                    .ToArray();
                 // Nothing in common is "nothing to claim", not "everything": an empty filter means
                 // every project to ClaimNextAsync, and an empty skill list every skill.
                 if (filter.Length == 0 || skillFilter.Length == 0)
                     return Results.Ok(new { claimed = (object?)null });
+            }
+
+            // A project whose code is not where a worktree can be made of it is passed over, not
+            // blocked: the fault is its config, and the Setup check names it (RepoLayout).
+            var candidates = filter is { Length: > 0 } ? filter : registry.Projects.ToArray();
+            var claimable = RepoLayout.Claimable(candidates, registry.GetProjectConfig, RepoLayout.Disk);
+            if (claimable.Length < candidates.Length)
+            {
+                // The same care as the worker host's filter: an empty list means every project.
+                if (claimable.Length == 0) return Results.Ok(new { claimed = (object?)null });
+                filter = claimable;
             }
 
             var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter, skillFilter);
@@ -523,6 +539,10 @@ public static class TicketEndpoints
             var title = req.Title;
             if (track == TicketTrack.Review)
             {
+                // A review target would have to name which of the repos its branch is in, and the
+                // workspace would have to hold that one at their branch - phase 2 of the plan.
+                if (registry.GetProjectConfig(projectKey).IsMultiRepo)
+                    return Results.BadRequest(new { error = "A project of several repos cannot take peer review tickets yet (docs/multi-repo-plan.md)." });
                 if (string.IsNullOrWhiteSpace(req.SourceBranch))
                     return Results.BadRequest(new { error = "A peer review ticket needs the branch it is reviewing." });
 

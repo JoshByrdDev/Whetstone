@@ -81,6 +81,32 @@ public class ProjectConfig
     public string[] WorktreeCopyFiles { get; init; } = Array.Empty<string>();
 
     /// <summary>
+    /// The <c>repos</c> list as written, for a project whose code is several repos side by side in
+    /// <see cref="ProjectPath"/>, which is then a folder and not a repo. Empty for every other
+    /// project. Read <see cref="Repos"/>, not this: see docs/multi-repo-plan.md.
+    /// <para>
+    /// Merged like every other key, top level only, so a <c>repos</c> in <c>project.json</c>
+    /// replaces the committed list whole rather than member by member.
+    /// </para>
+    /// </summary>
+    public RepoMember[] ConfiguredRepos { get; init; } = Array.Empty<RepoMember>();
+
+    /// <summary>True when this project's code is several repos, as <see cref="ConfiguredRepos"/> lists them.</summary>
+    public bool IsMultiRepo => ConfiguredRepos.Length > 0;
+
+    /// <summary>
+    /// Every repo of this project's code, in config order, each base already fallen back to
+    /// <see cref="BaseBranch"/>. A project without <c>repos</c> is a set of one: <see cref="ProjectPath"/>
+    /// itself, with the project-level base, setup and copy keys. Anything that loops over a project's
+    /// repos loops over this, so a single-repo project is the same code run once.
+    /// </summary>
+    public IReadOnlyList<RepoMember> Repos => IsMultiRepo
+        ? ConfiguredRepos
+            .Select(m => m.BaseBranch.Length > 0 ? m : m with { BaseBranch = BaseBranch.Trim() })
+            .ToArray()
+        : new[] { new RepoMember("", BaseBranch.Trim(), WorktreeSetup, WorktreeCopyFiles, ReadOnly: false) };
+
+    /// <summary>
     /// Extra globs whose files are ranked as generated in the PR diff — the review-noise list.
     /// <para>
     /// Almost always unnecessary: <see cref="DiffSignificance"/> already recognises lockfiles, build
@@ -267,9 +293,14 @@ public class ProjectConfig
     /// check-in the one writer is the human. On both the steward stops at
     /// <see cref="Models.StewardMode.Manage"/> however it is set.
     /// </para>
+    /// <para>
+    /// A project of several repos has no steward yet, whatever it is set to: its checks read one
+    /// worktree against one base (docs/multi-repo-plan.md, "Refused in phase 1").
+    /// </para>
     /// </summary>
     public StewardMode StewardMode =>
-        StewardModeSetting == Models.StewardMode.Full && (!MergeInsteadOfPr || IsTfvc)
+        IsMultiRepo ? Models.StewardMode.Off
+        : StewardModeSetting == Models.StewardMode.Full && (!MergeInsteadOfPr || IsTfvc)
             ? Models.StewardMode.Manage
             : StewardModeSetting;
 
@@ -509,6 +540,7 @@ public class ProjectRegistry
             WorktreeRoot = cfg.TryGetValue("worktreeRoot", out var wr) ? wr.GetString() ?? "" : "",
             WorktreeSetup = GetStrArray(cfg, "worktreeSetup"),
             WorktreeCopyFiles = GetStrArray(cfg, "worktreeCopyFiles"),
+            ConfiguredRepos = RepoLayout.Read(cfg),
             DiffNoisePaths = GetStrArray(cfg, "diffNoisePaths"),
             MemoryDir = cfg.TryGetValue("memoryDir", out var md) ? md.GetString() ?? "" : "",
             LearningLabel = cfg.TryGetValue("learningLabel", out var ll) ? ll.GetString() ?? "" : "",

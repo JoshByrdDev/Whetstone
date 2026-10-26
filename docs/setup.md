@@ -55,6 +55,9 @@ Then:
 
 1. **Settings → Projects → Add**: a name and the path to a git repo. This creates
    `data/projects/<key>/` with its config and skills copied from `data/skill-templates/`.
+   A project whose code is several repos side by side takes the folder they are in as its path,
+   and lists them under `repos` in `project.defaults.json` (see `docs/multi-repo-plan.md`). A path
+   that is not a git repo and has no `repos` is refused: none of its tickets are claimed.
 2. Give that folder a private remote and push it. Adding the project already made the folder a git
    repo, so this is the one step left. See [§4](#4-each-project-folder-is-its-own-repo).
 3. Hand-edit `project.defaults.json` for what the form does not cover: `stack`, `phaseResources`,
@@ -131,7 +134,7 @@ whole. Worker hosts have their own guide: [`worker-host-setup.md`](worker-host-s
 | Check | Where |
 |---|---|
 | The app bar's usage meter shows numbers, not "no credentials" or "expired" | The Claude login is good |
-| System → **Setup check** shows nothing missing | Agent CLIs, git identity, Node, the narrator, project folders backed up |
+| System → **Setup check** shows nothing missing | Agent CLIs, git identity, Node, the narrator, project folders backed up, each project's path a git repo or a set of them |
 | The heartbeat stays **Running** after you start it | If it flips back to Stopped, the reason is shown beside the Start button on the Heartbeat page and at the top of the Setup check. Usually it is an agent CLI missing from `PATH` |
 | Settings → Notifications → **Send test** | Notifications |
 | A first small ticket gets through QA, not Blocked | Node and Playwright |

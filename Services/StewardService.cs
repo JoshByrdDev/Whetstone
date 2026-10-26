@@ -122,6 +122,7 @@ public class StewardService
     /// <summary>Why this project's steward may not act at all, or null when it may.</summary>
     private static StewardReply? Off(ProjectConfig? cfg, string projectKey) =>
         cfg is null ? Refuse("no-project", $"There is no enabled project '{projectKey}'.")
+        : cfg.IsMultiRepo ? Refuse("off", $"{cfg.DisplayName} has no steward: a project of several repos cannot have one yet (docs/multi-repo-plan.md).")
         : cfg.StewardMode == StewardMode.Off ? Refuse("off", $"{cfg.DisplayName} has no steward: its mode is off, and only its owner changes that.")
         : null;
 
