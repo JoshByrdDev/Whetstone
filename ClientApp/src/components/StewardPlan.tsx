@@ -182,13 +182,16 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
 
 type Unit = StewardPlanUnitView;
 
-/** The plan's stages as lanes, so its shape reads at once: what has gone out, what is yours, what is moving, what is still an idea. */
+/**
+ * The plan's stages as lanes, so its shape reads at once: what is still an idea, what is waiting,
+ * what is moving, what is yours, what has gone out. Left to right, the way a ticket crosses the board.
+ */
 const LANES: { title: string; stages: UnitStage[]; c: string; empty: string }[] = [
-  { title: 'Released', stages: ['released'], c: TIER.done.c, empty: 'Nothing released yet.' },
-  { title: 'Yours', stages: ['draft', 'built', 'notAgreed'], c: TIER.gate.c, empty: 'Nothing to agree or release.' },
-  { title: 'Building', stages: ['building'], c: TIER.active.c, empty: 'Nothing being built.' },
-  { title: 'Agreed', stages: ['agreed'], c: TIER.queue.c, empty: 'Nothing agreed and waiting.' },
   { title: 'Ideas', stages: ['idea'], c: 'var(--w-t400)', empty: 'No ideas left.' },
+  { title: 'Agreed', stages: ['agreed'], c: TIER.queue.c, empty: 'Nothing agreed and waiting.' },
+  { title: 'Building', stages: ['building'], c: TIER.active.c, empty: 'Nothing being built.' },
+  { title: 'Yours', stages: ['draft', 'built', 'notAgreed'], c: TIER.gate.c, empty: 'Nothing to agree or release.' },
+  { title: 'Released', stages: ['released'], c: TIER.done.c, empty: 'Nothing released yet.' },
 ];
 
 function Lanes({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
