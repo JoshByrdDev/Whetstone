@@ -303,9 +303,10 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
     const was = remembered('plan.show');
     return was === 'spec' || (was === 'report' && reportable) ? was : 'outcomes';
   });
-  const [leftOnly, setLeftOnly] = useState(() => remembered('plan.left') === '1');
   const pick = (v: Show) => { setShow(v); remember('plan.show', v); };
-  const left = (v: boolean) => { setLeftOnly(v); remember('plan.left', v ? '1' : '0'); };
+  // A group of outcomes opens while any of it is left and folds once all of it is done; a press
+  // overrides either way, until the slice changes.
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
 
   // One outcome the slice is narrowed to, from a citation, a cell or a line of what is left.
   const [focus, setFocus] = useState<string | null>(null);
@@ -355,9 +356,6 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
         <div className="flex items-center gap-x-4 gap-y-2 flex-wrap" style={{ marginTop: 12 }}>
           <span className="truncate min-w-0" style={{ font: `400 11px ${MONO}`, color: 'var(--w-t600)' }}>{unit.file}</span>
           <span className="flex items-center gap-2 flex-wrap" style={{ marginLeft: 'auto' }}>
-            {show === 'outcomes' && unit.agreed && unit.progress.done > 0 && unit.progress.done < unit.progress.outcomes && (
-              <Chip on={leftOnly} onClick={() => left(!leftOnly)} title="Hide the outcomes that are done">What is left</Chip>
-            )}
             <Chip on={show === 'outcomes'} onClick={() => pick('outcomes')} title="Its story, its outcomes and the decisions it is held to">The slice</Chip>
             <Chip on={show === 'spec'} onClick={() => pick('spec')} title="The unit's spec, as committed">The spec</Chip>
             {reportable && (
@@ -393,28 +391,34 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
                   <StoryView steps={steps} standing={standing} focus={focus} onPick={toggle} agreed={unit.agreed} render={render} />
                 </div>
               )}
-              {unit.groups.map(g => {
-                const shown = leftOnly ? g.outcomes.filter(o => o.state !== 'Done') : g.outcomes;
-                if (shown.length === 0) return null;
+              {sortGroups(unit).map(g => {
+                if (g.outcomes.length === 0) return null;
                 const done = g.outcomes.filter(o => o.state === 'Done').length;
+                const complete = unit.agreed && done === g.outcomes.length;
+                // An outcome pointed at from elsewhere on the page is never left folded away.
+                const open = g.outcomes.some(o => o.outcome === focus) || !(folded[g.heading] ?? complete);
                 return (
                   <div key={g.heading}>
-                    <div
-                      className="flex items-baseline gap-3"
-                      style={{ padding: '12px 16px 6px', background: 'rgb(var(--w-line-rgb) / .03)', borderTop: '1px solid rgb(var(--w-line-rgb) / .08)', borderBottom: '1px solid rgb(var(--w-line-rgb) / .08)' }}
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setFolded(f => ({ ...f, [g.heading]: open }))}
+                      className="orbit-tap flex items-baseline gap-3 w-full text-left"
+                      style={{ padding: '12px 16px 6px', background: 'rgb(var(--w-line-rgb) / .03)', borderTop: '1px solid rgb(var(--w-line-rgb) / .08)', borderBottom: open ? '1px solid rgb(var(--w-line-rgb) / .08)' : undefined }}
                     >
-                      <span className="min-w-0" style={{ font: `700 12px ${BODY}`, color: 'var(--w-t100)' }}>{g.heading || 'Outcomes'}</span>
+                      <span aria-hidden style={{ font: `700 10px ${MONO}`, color: 'var(--w-t500)', width: 10, flex: 'none' }}>{open ? '-' : '+'}</span>
+                      <span className="min-w-0" style={{ font: `700 12px ${BODY}`, color: complete ? 'var(--w-t400)' : 'var(--w-t100)' }}>{g.heading || 'Outcomes'}</span>
                       {unit.agreed && (
-                        <span style={{ ...label(done === g.outcomes.length ? TIER.done.c : 'var(--w-t500)'), marginLeft: 'auto', flex: 'none' }}>
+                        <span style={{ ...label(complete ? TIER.done.c : 'var(--w-t500)'), marginLeft: 'auto', flex: 'none' }}>
                           {done} of {g.outcomes.length} done
                         </span>
                       )}
-                    </div>
-                    {shown.map(o => (
+                    </button>
+                    {open && <div key="open" className="orbit-swap">{g.outcomes.map(o => (
                       <OutcomeRow key={o.outcome} o={o} agreed={unit.agreed} standing={standing.get(o.outcome)}
                         serves={serves.get(o.outcome)} hasStory={!!steps} render={render}
                         spot={focus ? (focus === o.outcome ? 'lit' : 'dim') : undefined} onFocus={() => toggle(o.outcome)} />
-                    ))}
+                    ))}</div>}
                   </div>
                 );
               })}
@@ -428,6 +432,13 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
         )}
     </Panel>
   );
+}
+
+/** A slice's outcome groups with what is left first, then by heading: A, B, ... Z. */
+function sortGroups(unit: StewardPlanUnitView) {
+  const complete = (g: StewardPlanUnitView['groups'][number]) => unit.agreed && g.outcomes.every(o => o.state === 'Done');
+  return [...unit.groups].sort((a, b) => Number(complete(a)) - Number(complete(b))
+    || a.heading.localeCompare(b.heading, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
 /**

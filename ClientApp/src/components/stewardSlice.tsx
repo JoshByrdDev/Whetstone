@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { BODY, MONO, TIER, fade } from './orbit';
-import { ago, label, remember, remembered } from './stewardParts';
+import { ago, label } from './stewardParts';
 import { PHASE_LABEL } from '../types/tickets';
 import type { Phase } from '../types/tickets';
 import type {
@@ -249,8 +249,6 @@ function stepLook(s: Step, standing: Map<string, Standing>): Look {
   return ls.includes('done') ? 'moving' : 'todo';
 }
 
-type StoryShow = 'steps' | 'paragraph';
-
 export function StoryView({ steps, standing, focus, onPick, agreed, render }: {
   steps: Step[]; standing: Map<string, Standing>; focus: string | null; onPick: (id: string) => void;
   /** A draft's steps have no standing yet: no look is shown for them. */
@@ -258,43 +256,13 @@ export function StoryView({ steps, standing, focus, onPick, agreed, render }: {
   /** The sentence's own emphasis and code. */
   render: (text: string) => ReactNode;
 }) {
-  const [show, setShow] = useState<StoryShow>(() => (remembered('plan.story') === 'paragraph' ? 'paragraph' : 'steps'));
-  const pick = (s: StoryShow) => { setShow(s); remember('plan.story', s); };
   const spot = (s: Step) => (focus ? (s.cites.includes(focus) ? 'lit' : 'dim') : undefined);
   const bare = (t: string) => t.replace(CITATION, (m, inside: string) => (citedIn(inside).length > 0 ? '' : m)).replace(/\s+([.,;:!?])/g, '$1').replace(/\s{2,}/g, ' ').trim();
 
   return (
     <div>
-      <div className="flex items-center gap-3 flex-wrap" style={{ marginBottom: 8 }}>
-        <span style={label()}>The walk-through this slice makes possible</span>
-        <span className="flex" style={{ marginLeft: 'auto', gap: 0, border: '1px solid rgb(var(--w-line-rgb) / .18)' }} role="group" aria-label="How to show the story">
-          {(['steps', 'paragraph'] as StoryShow[]).map(s => (
-            <button key={s} type="button" onClick={() => pick(s)} aria-pressed={show === s} className="orbit-tap"
-              style={{
-                ...label(show === s ? 'var(--w-accent-text-lit)' : 'var(--w-t400)'), padding: '5px 10px',
-                background: show === s ? 'rgb(var(--w-accent-rgb) / .14)' : 'transparent',
-              }}>
-              {s === 'steps' ? 'Step by step' : 'Paragraph'}
-            </button>
-          ))}
-        </span>
-      </div>
-
-      {show === 'paragraph'
-        ? (
-          <div key="paragraph" className="orbit-swap" style={{ font: `400 14px/1.75 ${BODY}`, color: 'var(--w-t200)', maxWidth: '74ch' }}>
-            {steps.map((s, i) => (
-              <span key={i} className="orbit-spot spot-flat" data-spot={spot(s)}>
-                {splitCites(s.text).map((p, j) => typeof p === 'string'
-                  ? <span key={j}>{render(p)}</span>
-                  : <span key={j}>({p.map((id, k) => <Cite key={k} id={id} standing={standing} focus={focus} onPick={onPick} />)})</span>)}
-                {' '}
-              </span>
-            ))}
-          </div>
-        )
-        : (
-          <ol key="steps" className="orbit-swap" style={{ margin: 0, padding: 0, listStyle: 'none' }}>
+      <div style={{ ...label(), marginBottom: 8 }}>The walk-through this slice makes possible</div>
+          <ol style={{ margin: 0, padding: 0, listStyle: 'none' }}>
             {steps.map((s, i) => {
               const l = stepLook(s, standing);
               return (
@@ -311,24 +279,8 @@ export function StoryView({ steps, standing, focus, onPick, agreed, render }: {
               );
             })}
           </ol>
-        )}
     </div>
   );
-}
-
-/** A sentence cut at its citations: text, then the ids a parenthesis cites, then text. */
-function splitCites(text: string): (string | string[])[] {
-  const out: (string | string[])[] = [];
-  let last = 0;
-  for (const m of text.matchAll(CITATION)) {
-    const ids = citedIn(m[1]);
-    if (ids.length === 0) continue;
-    out.push(text.slice(last, m.index));
-    out.push(ids);
-    last = m.index! + m[0].length;
-  }
-  out.push(text.slice(last));
-  return out.filter(p => p !== '');
 }
 
 // ---- between the slice and built ---------------------------------------------------------------
