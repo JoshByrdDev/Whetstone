@@ -367,6 +367,17 @@ function Get-SetupFailedMarker {
     return Join-Path $gitDir 'whetstone-setup-failed'
 }
 
+# The name of the branch a ticket owns: the one it already has, else one from its linked issue, else
+# one from its own id. Every repo of a project of several gets the same one.
+function Get-TicketBranchName {
+    param([string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix, [string]$TicketId)
+    $recorded = if ($RecordedBranch) { $RecordedBranch.Trim() } else { "" }
+    $issue    = if ($IssueBranchToken) { $IssueBranchToken.Trim() } else { "" }
+    if ($recorded) { return $recorded }
+    if ($issue)    { return "$BranchPrefix$issue" }
+    return "${BranchPrefix}ticket-$TicketId"
+}
+
 # Give this ticket its own checkout BEFORE the worker runs.
 #
 # This is the whole point of the worktree model: the worker never touches $RepoDir, which is the
@@ -379,11 +390,21 @@ function Get-SetupFailedMarker {
 #   ok=$true  + deferred     -> not a git repo; run in $RepoDir as before
 #   ok=$false + reason       -> caller must block the ticket and skip the worker
 # Speculate creates the branch and its worktree; the later phases attach to what already exists.
+#
+# Three switches exist for a project of several repos, which calls this once per repo from
+# Resolve-Workspace (data/worker-repos.ps1), and none of them is passed for a single repo:
+#   -WorktreeName  the folder under $WorktreeRoot, instead of one named after the branch - the
+#                  repo's own folder name, inside the ticket's workspace
+#   -MayCreate     create the branch from the base outside speculate too: a repo the ticket has
+#                  not touched has nothing on its branch to lose
+#   -NoSetup       hand the worktree back unprepared, with needsSetup = $true where setup would
+#                  have run, so the workspace can set every repo up at once
 function Resolve-Worktree {
     param(
         [string]$RepoDir, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
         [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BaseBranch, [string]$BranchPrefix,
-        [string[]]$CopyFiles, [string[]]$Setup, [string]$ReviewBranch, [bool]$MergeLocally
+        [string[]]$CopyFiles, [string[]]$Setup, [string]$ReviewBranch, [bool]$MergeLocally,
+        [string]$WorktreeName, [switch]$MayCreate, [switch]$NoSetup
     )
 
     # git writes normal progress to stderr; keep that from turning into a terminating error if the
@@ -473,11 +494,9 @@ function Resolve-Worktree {
         return $res
     }
 
-    $recorded = if ($RecordedBranch) { $RecordedBranch.Trim() } else { "" }
-    $issue    = if ($IssueBranchToken) { $IssueBranchToken.Trim() } else { "" }
-    $branchName = if ($recorded)  { $recorded }
-                  elseif ($issue) { "$BranchPrefix$issue" }
-                  else            { "${BranchPrefix}ticket-$TicketId" }
+    $branchName = Get-TicketBranchName -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken `
+        -BranchPrefix $BranchPrefix -TicketId $TicketId
+    $dirName = if ($WorktreeName) { $WorktreeName } else { Get-WorktreeDirName $branchName }
 
     # Everything from here to the HEAD check touches the HUB repo, which every agent working this
     # project shares. `git worktree prune` and `git worktree add` racing each other on one repo can
@@ -503,7 +522,7 @@ function Resolve-Worktree {
             return @{ ok = $true; path = $existing; branch = $branchName; created = $false }
         }
 
-        $wtPath = Join-Path $WorktreeRoot (Get-WorktreeDirName $branchName)
+        $wtPath = Join-Path $WorktreeRoot $dirName
         if (Test-Path $wtPath) {
             # A directory is sitting where the worktree belongs but git does not know it as one.
             # Never delete it - it could be anything, including work someone cared about.
@@ -528,7 +547,7 @@ function Resolve-Worktree {
                 return @{ ok = $false; reason = "could not create a worktree for existing branch '$branchName' at '$wtPath'" }
             }
         }
-        elseif ($Skill -eq 'speculate') {
+        elseif ($Skill -eq 'speculate' -or $MayCreate) {
             # Nothing exists yet - this phase owns creating both. Fork from the freshest base we can
             # see, and which ref that is depends on how this project delivers: see Resolve-BaseRef.
             if ($hasOrigin) { git -C $RepoDir fetch origin --prune *> $null }
@@ -578,6 +597,7 @@ function Resolve-Worktree {
         Write-Log "  Worktree at $($res.path) never finished setup - running it again"
     }
     else { Write-Log "  Prepared a new worktree at $($res.path)" }
+    if ($NoSetup) { $res.needsSetup = $true; return $res }
     $prepError = Initialize-Worktree -Path $res.path -RepoDir $RepoDir -CopyFiles $CopyFiles -Setup $Setup
     if ($prepError) { return @{ ok = $false; reason = $prepError } }
     return $res

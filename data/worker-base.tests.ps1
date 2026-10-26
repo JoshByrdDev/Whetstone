@@ -20,6 +20,7 @@ $tree = [System.Management.Automation.Language.Parser]::ParseFile($worker, [ref]
 foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($fn.Extent.Text))
 }
+. (Join-Path $PSScriptRoot 'worker-repos.ps1')
 
 $env:GIT_TERMINAL_PROMPT = '0'
 $root = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-base-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -196,6 +197,54 @@ try {
     $rebase = Update-BranchFromBase -WorkDir $wt.path -BaseBranch 'main' -RepoDir $conflict.hub -MergeLocally $true
     Check 'conflict with local main is reported' "$($rebase.ok) $($rebase.conflicts -join ',')" 'False README.md'
     Check 'conflict: branch left as it was' (Get-Sha $wt.path HEAD) $before
+
+    # ---- Two repos, two bases (docs/multi-repo-plan.md) -------------------------
+    # A project of several repos asks Resolve-BaseRef once per repo, and each answer is that repo's
+    # alone. A works off main and has a human's unpushed commit on it; B works off develop. A also
+    # has a develop of its own holding something else, so an answer that leaked from one repo to the
+    # other would fork from the wrong commit. Both have an origin: a project of several delivers by
+    # pull request, and a pull request needs one.
+    Write-Host "== two repos, two bases"
+    $a = New-Hub 'pair-a'
+    git -C $a.hub branch develop *> $null
+    git -C $a.hub checkout -q develop *> $null
+    Add-Commit -Dir $a.hub -File 'a-develop.txt' -Subject "A's develop, which is not A's base"
+    git -C $a.hub checkout -q main *> $null
+    Add-Commit -Dir $a.hub -File 'unpushed.txt' -Subject 'the human, unpushed'
+    $b = New-Hub 'pair-b'
+    git -C $b.hub checkout -q -b develop *> $null
+    Add-Commit -Dir $b.hub -File 'b-develop.txt' -Subject "B's develop, which is B's base"
+    git -C $b.hub push -q -u origin develop *> $null
+    git -C $b.hub checkout -q main *> $null
+
+    $memberA = @{ dir = 'a'; hub = $a.hub; baseBranch = 'main'; setup = @(); copy = @(); readOnly = $false }
+    $memberB = @{ dir = 'b'; hub = $b.hub; baseBranch = 'develop'; setup = @(); copy = @(); readOnly = $false }
+    foreach ($order in @(@($memberA, $memberB), @($memberB, $memberA))) {
+        $label = (($order | ForEach-Object { $_.dir }) -join ',')
+        $ws = Resolve-Workspace -Members $order -WorktreeRoot (Join-Path $root 'pair-wt') -Skill 'speculate' -TicketId '9' `
+            -RecordedBranch "t-pair-$($label -replace ',', '')" -IssueBranchToken '' -BranchPrefix '' -ReviewBranch '' -MergeLocally $false
+        Check "[$label] workspace: ok" $ws.ok $true
+        $wa = (@($ws.members | Where-Object { $_.dir -eq 'a' })[0]).path
+        $wb = (@($ws.members | Where-Object { $_.dir -eq 'b' })[0]).path
+        Check "[$label] A's base is origin/main" (Resolve-BaseRef -RepoDir $wa -BaseBranch 'main' -MergeLocally $false) 'origin/main'
+        Check "[$label] B's base is origin/develop" (Resolve-BaseRef -RepoDir $wb -BaseBranch 'develop' -MergeLocally $false) 'origin/develop'
+        Check "[$label] A forked from origin/main, not its unpushed main" (Get-Sha $wa HEAD) (Get-Sha $a.hub origin/main)
+        Check "[$label] B forked from its own develop" (Get-Sha $wb HEAD) (Get-Sha $b.hub origin/develop)
+        Check "[$label] neither has the other's develop" ((Test-Path (Join-Path $wa 'b-develop.txt')) -or (Test-Path (Join-Path $wa 'a-develop.txt')) -or (Test-Path (Join-Path $wb 'a-develop.txt'))) $false
+    }
+
+    # The hand-off rebase is per repo too: each is measured against its own base.
+    Add-Commit -Dir $wa -File 'mine.txt' -Subject 'A: work'
+    Add-Commit -Dir $wb -File 'mine.txt' -Subject 'B: work'
+    git -C $b.hub checkout -q develop *> $null
+    Add-Commit -Dir $b.hub -File 'b-landed.txt' -Subject "landed on B's develop meanwhile"
+    git -C $b.hub push -q origin develop *> $null
+    git -C $b.hub checkout -q main *> $null
+    $ra = Update-BranchFromBase -WorkDir $wa -BaseBranch 'main' -RepoDir $a.hub -MergeLocally $false
+    $rb = Update-BranchFromBase -WorkDir $wb -BaseBranch 'develop' -RepoDir $b.hub -MergeLocally $false
+    Check "A's rebase: against origin/main, nothing to do" "$($ra.ok) $($ra.rebased) $($ra.base)" 'True False origin/main'
+    Check "B's rebase: against origin/develop, replayed" "$($rb.ok) $($rb.rebased) $($rb.base) $($rb.behind)" 'True True origin/develop 1'
+    Check "B's rebase brought only B's base" ((Test-Path (Join-Path $wb 'b-landed.txt')) -and -not (Test-Path (Join-Path $wa 'b-landed.txt'))) $true
 
     # ---- A setup command that fails says why ----------------------------------
     # Its output was only ever in the log of whichever machine ran it; on a worker host that is

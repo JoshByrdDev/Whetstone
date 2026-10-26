@@ -294,7 +294,13 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    claim (`RepoLayout.NotYetRunnable`) until step 4 teaches the worker to run it, because until
    then a claim would run in its `projectPath`. Step 4 removes it.
 2. Member loop + `worker-repos.tests.ps1`, and the two-member cases in `worker-base.tests.ps1`
-   (piece 2)
+   (piece 2) - done. *As built:* `Resolve-Worktree` gained `-WorktreeName` and `-MayCreate` as
+   well as `-NoSetup`, and its branch naming moved into `Get-TicketBranchName` so the workspace
+   names the branch the same way. Every repo's origin is fetched at the start of each phase,
+   so "brought up to its base" means the base as it is now. Each parallel setup job logs through
+   the information stream, because anything written to output inside `Invoke-SetupCommand` would
+   land in the result it returns. `worker.ps1` does not dot-source `worker-repos.ps1` yet; step 4
+   wires it in.
 3. Board side: claim, per-member routes, prefixed paths + tests (piece 4)
 4. Worker wiring (piece 3)
 5. Reaper, analysis, QaIsolation, the QA copy's placeholder project (piece 6)
