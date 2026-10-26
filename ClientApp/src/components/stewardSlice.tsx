@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { BODY, MONO, TIER, fade } from './orbit';
-import { label, remember, remembered } from './stewardParts';
+import { ago, label, remember, remembered } from './stewardParts';
 import { PHASE_LABEL } from '../types/tickets';
 import type { Phase } from '../types/tickets';
 import type {
@@ -340,10 +340,17 @@ const WHO: { who: Who; title: string; c: string }[] = [
   { who: 'fleet', title: 'The fleet and the board', c: TIER.active.c },
 ];
 
-export function Between({ unit, standing, onPick, onNow }: {
+/** Whose move it is, said of one outcome, for a card that has only one. */
+const HAS: Record<Who, string> = {
+  you: 'it waits on you', blocked: 'it is blocked', steward: 'the steward has it', fleet: 'the fleet and the board have it',
+};
+
+export function Between({ unit, standing, onPick, onNow, render }: {
   unit: StewardPlanUnitView; standing: Map<string, Standing>; onPick: (id: string) => void;
   /** Go to Now, where a question is answered. */
   onNow?: () => void;
+  /** The sentence's own emphasis and code. */
+  render: (text: string) => ReactNode;
 }) {
   // A column longer than a few lines pushes the story off the screen: the rest is a press away.
   const [all, setAll] = useState(false);
@@ -353,10 +360,45 @@ export function Between({ unit, standing, onPick, onNow }: {
   const by = (w: Who) => left.filter(o => standing.get(o.outcome)?.who === w);
   const yours = by('you').length, blocked = by('blocked').length;
   const cols = WHO.filter(w => by(w.who).length > 0);
+
+  const item = (o: StewardPlanOutcome) => {
+    const s = standing.get(o.outcome)!;
+    return (
+      <div key={o.outcome} className="flex gap-2 min-w-0" style={{ font: `400 12px/1.45 ${BODY}`, color: 'var(--w-t300)' }}>
+        <button type="button" onClick={() => onPick(o.outcome)} className="orbit-tap flex-none"
+          style={{ font: `700 10.5px/1.6 ${MONO}`, color: LOOK[s.look].c, alignSelf: 'flex-start' }} title="Show this outcome">{o.outcome}</button>
+        <div className="min-w-0 flex flex-col" style={{ gap: 2 }}>
+          <div className="line-clamp-2" style={{ color: 'var(--w-t200)' }}>{render(o.text)}</div>
+          {s.why && <div style={{ color: 'var(--w-t400)' }}><Why text={s.why} /></div>}
+          <div className="flex items-center flex-wrap" style={{ gap: 10 }}>
+            {o.updatedAt && <span style={label('var(--w-t500)')} title={new Date(o.updatedAt).toLocaleString()}>since {ago(o.updatedAt)}</span>}
+            {s.question && onNow && (
+              <button type="button" onClick={onNow} className="orbit-tap" style={label('var(--w-accent-text)')}>Answer on Now</button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // One outcome left is one line and the outcome itself: a column of one under a count of one says nothing twice.
+  if (left.length === 1) {
+    const w = WHO.find(x => x.who === standing.get(left[0].outcome)?.who);
+    return (
+      <div className="flex flex-col" style={{ marginTop: 14, gap: 8, padding: '9px 12px', border: '1px solid rgb(var(--w-line-rgb) / .1)', background: 'rgb(var(--w-line-rgb) / .025)' }}>
+        <div style={{ font: `400 13px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>
+          <b style={{ fontWeight: 600, color: 'var(--w-t100)' }}>1 outcome</b> between this slice and built
+          {w && <>: <b style={{ fontWeight: 600, color: w.c }}>{HAS[w.who]}</b></>}.
+        </div>
+        {item(left[0])}
+      </div>
+    );
+  }
+
   return (
     <div style={{ marginTop: 14, border: '1px solid rgb(var(--w-line-rgb) / .1)', background: 'rgb(var(--w-line-rgb) / .025)' }}>
       <div style={{ padding: '9px 12px', font: `400 13px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>
-        <b style={{ fontWeight: 600, color: 'var(--w-t100)' }}>{left.length} outcome{left.length === 1 ? '' : 's'}</b> between this slice and built
+        <b style={{ fontWeight: 600, color: 'var(--w-t100)' }}>{left.length} outcomes</b> between this slice and built
         {yours + blocked > 0 && <>: {[
           yours > 0 && <b key="y" style={{ fontWeight: 600, color: TIER.gate.c }}>{yours} wait{yours === 1 ? 's' : ''} on you</b>,
           blocked > 0 && <b key="b" style={{ fontWeight: 600, color: TIER.blocked.c }}>{blocked} {blocked === 1 ? 'is' : 'are'} blocked</b>,
@@ -364,26 +406,12 @@ export function Between({ unit, standing, onPick, onNow }: {
       </div>
       <div className="grid" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(220px, 1fr))`, borderTop: '1px solid rgb(var(--w-line-rgb) / .08)' }}>
         {cols.map(w => (
-          <div key={w.who} className="min-w-0 flex flex-col" style={{ padding: '10px 12px', gap: 8, borderLeft: '1px solid rgb(var(--w-line-rgb) / .06)' }}>
+          <div key={w.who} className="min-w-0 flex flex-col" style={{ padding: '10px 12px', gap: 10, borderLeft: '1px solid rgb(var(--w-line-rgb) / .06)' }}>
             <div className="flex items-baseline gap-2">
               <span style={{ font: `700 16px ${MONO}`, color: w.c }}>{by(w.who).length}</span>
               <span style={label(w.c)}>{w.title}</span>
             </div>
-            {by(w.who).filter((_, i) => all || i < FEW).map(o => {
-              const s = standing.get(o.outcome)!;
-              return (
-                <div key={o.outcome} className="flex gap-2 min-w-0" style={{ font: `400 12px/1.45 ${BODY}`, color: 'var(--w-t300)' }}>
-                  <button type="button" onClick={() => onPick(o.outcome)} className="orbit-tap flex-none"
-                    style={{ font: `700 10.5px/1.6 ${MONO}`, color: LOOK[s.look].c, alignSelf: 'flex-start' }} title="Show this outcome">{o.outcome}</button>
-                  <div className="min-w-0">
-                    <Why text={s.why ?? ''} />
-                    {s.question && onNow && (
-                      <button type="button" onClick={onNow} className="orbit-tap" style={{ ...label('var(--w-accent-text)'), marginTop: 3 }}>Answer on Now</button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {by(w.who).filter((_, i) => all || i < FEW).map(item)}
             {by(w.who).length > FEW && (
               <button type="button" onClick={() => setAll(a => !a)} className="orbit-tap text-left" style={label('var(--w-t300)')}>
                 {all ? 'Fewer' : `${by(w.who).length - FEW} more`}

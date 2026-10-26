@@ -349,7 +349,7 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
           <StillOpen project={project} unit={unit} onChanged={onChanged} />
         )}
         {working && unit.agreed && unit.stage !== 'built' && unit.stage !== 'released' && (
-          <Between unit={unit} standing={standing} onPick={id => { toggle(id); pick('outcomes'); }} onNow={onNow} />
+          <Between unit={unit} standing={standing} onPick={id => { toggle(id); pick('outcomes'); }} onNow={onNow} render={render} />
         )}
 
         <div className="flex items-center gap-x-4 gap-y-2 flex-wrap" style={{ marginTop: 12 }}>

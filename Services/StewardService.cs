@@ -1985,6 +1985,8 @@ public partial class StewardService
                                 state = (st?.State ?? StewardOutcomeState.NotStarted).ToString(),
                                 moreToFile = st?.MoreToFile ?? false,
                                 note = st?.Note,
+                                // When the steward last said where it stands: how long a held outcome has sat.
+                                updatedAt = st is null ? (DateTime?)null : DateTime.SpecifyKind(st.UpdatedAt, DateTimeKind.Utc),
                                 tickets = its.Where(t => StewardProgress.OutcomesOf(t).Contains(o.Outcome)).OrderBy(t => t.Id)
                                     .Select(t => new { t.Id, phase = t.Phase.ToString(), t.Title }),
                             };

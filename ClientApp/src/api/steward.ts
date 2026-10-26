@@ -167,6 +167,8 @@ export interface StewardPlanOutcome {
   state: StewardOutcomeRow['state'];
   moreToFile: boolean;
   note?: string | null;
+  /** When the steward last set where it stands. Absent from a server before it was sent. */
+  updatedAt?: string | null;
   tickets: StewardPlanTicket[];
 }
 
