@@ -94,7 +94,7 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
   useEffect(() => { setPicked(null); }, [plan?.key]);
 
   // Until somebody picks, the page is on the slice being worked - the latest one being built - and
-  // then on one that wants something of you. A release waits in its own band, so it no longer
+  // then on one that wants something of you. A release waits in its own lane, so it no longer
   // decides where the page opens.
   const building = [...units].reverse().find(u => u.stage === 'building');
   const asking = units.find(u => u.stage === 'draft' && !u.cannotAgree) ?? units.find(u => u.stage === 'built');
@@ -105,7 +105,6 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
   if (!view) return <Quiet>Reading the plan.</Quiet>;
 
   const working = !plan || plan.working;
-  const built = working ? units.filter(u => u.stage === 'built') : [];
   return (
     <div className="mb-8">
       {plans.length > 1 && (
@@ -150,8 +149,6 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
             {narrow
               ? <SliceStrip units={units} selected={selected} onPick={setPicked} />
               : <Lanes units={units} selected={selected} onPick={setPicked} />}
-
-            {built.length > 0 && <ReleaseBand units={built} selected={selected} onPick={setPicked} onNotes={onNotes} />}
 
             {selected === 'plan' && view.readable && (
               <Panel key="plan" className="orbit-swap">
@@ -242,7 +239,7 @@ function SliceCard({ u, on, onClick }: { u: Unit; on: boolean; onClick: () => vo
   const p = u.progress;
   const sub = u.stage === 'idea' ? 'idea'
     : u.stage === 'draft' ? `draft${(u.openDecisions?.length ?? 0) > 0 ? ` - ${u.openDecisions!.length} to settle` : ''}`
-    : u.stage === 'built' ? 'built - yours to release'
+    : u.stage === 'built' ? (u.release && u.release.outstanding > 0 ? `${u.release.outstanding} to tick off first` : 'ready to release')
     : u.stage === 'released' ? `released${u.releasedAt ? ` ${u.releasedAt.slice(0, 10)}` : ''}`
     : u.agreed ? `${p.done} of ${p.outcomes} done` : s.word;
   return (
@@ -270,36 +267,6 @@ function SliceCard({ u, on, onClick }: { u: Unit; on: boolean; onClick: () => vo
 
 /** "Slice 5: the desk's day" reads as its words once the number is beside it. */
 const shortTitle = (u: Unit) => u.title.replace(new RegExp(`^(?:slice|unit)\\s+0*${u.unit}\\s*[:.-]\\s*`, 'i'), '');
-
-/** Built slices waiting to go out, in a band of their own: releasing is its own kind of work. */
-function ReleaseBand({ units, selected, onPick, onNotes }: {
-  units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void; onNotes: (unit: number) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-1.5 mb-4" style={{ padding: '9px 12px', border: `1px solid ${fade(TIER.gate.c, 30)}`, background: fade(TIER.gate.c, 5) }}>
-      <span style={label(TIER.gate.c)}>To release - {units.length}</span>
-      {units.map(u => {
-        const r = u.release;
-        return (
-          <div key={u.unit} className="flex items-baseline gap-x-3 gap-y-1 flex-wrap" style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t300)' }}>
-            <button type="button" onClick={() => onPick(u.unit)} aria-current={selected === u.unit ? 'true' : undefined} className="orbit-pick text-left min-w-0"
-              style={{ font: `600 12.5px ${BODY}`, color: 'var(--w-t100)' }}>
-              {String(u.unit).padStart(2, '0')} {shortTitle(u)}
-            </button>
-            <span className="min-w-0">
-              {r && r.outstanding > 0
-                ? <><b style={{ fontWeight: 600, color: TIER.gate.c }}>{r.outstanding}</b> to tick off before it goes out{r.toKnow > 0 ? `, ${r.toKnow} to know` : ''}</>
-                : <>nothing outstanding{r && r.toKnow > 0 ? `, ${r.toKnow} to know` : ''}</>}
-            </span>
-            {r && r.outstanding + r.toKnow > 0 && (
-              <button type="button" onClick={() => onNotes(u.unit)} className="orbit-tap" style={label('var(--w-t300)')}>Its notes</button>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 /** How far along its one way a unit is: every step named, the ones behind it lit. */
 function Steps({ stage }: { stage: UnitStage }) {
