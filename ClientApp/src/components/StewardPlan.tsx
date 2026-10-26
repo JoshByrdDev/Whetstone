@@ -183,21 +183,23 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
 type Unit = StewardPlanUnitView;
 
 /**
- * The plan's stages as lanes, so its shape reads at once: what is still an idea, what is waiting,
- * what is moving, what is yours, what has gone out. Left to right, the way a ticket crosses the board.
+ * The plan's stages as lanes, so its shape reads at once: what is still an idea, what is yours to
+ * agree, what is waiting, what is moving, what is yours to release, what has gone out. Left to right,
+ * the way a ticket crosses the board - so each of the owner's two steps sits where it falls.
  */
 const LANES: { title: string; stages: UnitStage[]; c: string; empty: string }[] = [
   { title: 'Ideas', stages: ['idea'], c: 'var(--w-t400)', empty: 'No ideas left.' },
+  { title: 'To agree', stages: ['draft', 'notAgreed'], c: TIER.gate.c, empty: 'No draft to agree.' },
   { title: 'Agreed', stages: ['agreed'], c: TIER.queue.c, empty: 'Nothing agreed and waiting.' },
   { title: 'Building', stages: ['building'], c: TIER.active.c, empty: 'Nothing being built.' },
-  { title: 'Yours', stages: ['draft', 'built', 'notAgreed'], c: TIER.gate.c, empty: 'Nothing to agree or release.' },
+  { title: 'To release', stages: ['built'], c: TIER.gate.c, empty: 'Nothing to release.' },
   { title: 'Released', stages: ['released'], c: TIER.done.c, empty: 'Nothing released yet.' },
 ];
 
 function Lanes({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
   return (
     <Panel pad={false} className="mb-3">
-      <div className="grid" style={{ gridTemplateColumns: 'repeat(5, minmax(0, 1fr))' }}>
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${LANES.length}, minmax(0, 1fr))` }}>
         {LANES.map((l, i) => {
           const here = units.filter(u => l.stages.includes(u.stage));
           return (
