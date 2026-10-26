@@ -62,6 +62,15 @@ Say what you found in an `add_comment` either way. A finding you fixed silently 
 
 Rule of thumb: if you are writing a SQL query, waiting on a container, or three files deep in a call chain, you have drifted into QA's job. Stop, pick the row above that matches what you found, and hand it over. Refinement is minutes of work.
 
+## Several repos - only when your prompt lists **Repos**
+
+Most projects are one repo, and this section does not apply to them. When your prompt has a **Repos** line, the working directory is a workspace of several git repos side by side, and every rule in this skill about "the branch" or "the base ref" holds once per repo:
+
+- **Run git inside a repo, never at the workspace root**, which is not one: `git -C <repo> ...`. Each repo with a base ref in the list is on the ticket's branch; a read-only one is there to be read and must never be changed.
+- **`<base-ref>` is that repo's own** - the one the Repos list names beside it. Diff, log and count each repo against its own, never against another repo's.
+- **Commit in every repo you change, and only in those.** A repo you did not change is delivered as nothing - do not commit to it to keep it in step. "One ticket, one commit" means one commit in each repo the ticket changed.
+- **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
+- **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` to read the ticket: its `description`, `workItems` (should be `done`), `qaItems` (should be `Passed`, with notes), `qaShots` (the captioned screenshots QA attached), `implementationSummary`, and any linked `issueKey`.
@@ -84,7 +93,7 @@ Do **not** run `git checkout`, `git switch`, or create a branch. Other checkouts
 
 ### 2. Tidy the commit history - THE MAIN JOB (local only, never push)
 
-**Do this first, every time.** It is not optional and it is not conditional on the history "looking messy". A branch reaches this phase as the implementation commit plus a trail of fix-ups from QA bounces - each one a fix to the commit before it, none of them meaningful to anyone reading the history later. Those belong folded into the work they fix. The rule for this pipeline is **one ticket, one commit**.
+**Do this first, every time.** It is not optional and it is not conditional on the history "looking messy". A branch reaches this phase as the implementation commit plus a trail of fix-ups from QA bounces - each one a fix to the commit before it, none of them meaningful to anyone reading the history later. Those belong folded into the work they fix. The rule for this pipeline is **one ticket, one commit** - on a workspace of several repos, one commit in each repo the ticket changed, with every step below run once per repo against that repo's own `<base-ref>`.
 
 It goes first because it is the one thing no other phase does. If the run is cut short after this step, the branch is still in good shape.
 
@@ -168,7 +177,7 @@ Step 2 ran near the start of this phase, and everything since then could have un
 git log --oneline <base-ref>..HEAD
 ```
 
-**Exactly one commit, with a message you wrote, or you are not finished.** If there is more than one, collapse it now with the step 2 recipe (or `git reset --soft HEAD~1 && git commit --amend` for the common two-commit case) before doing anything else. If there is one commit but its message is machine-written - a bare subject with no body, or a subject truncated with a trailing `...` - the heartbeat wrote it as a safety net for a phase that forgot to commit, and replacing it is your job: `git commit --amend`.
+**Exactly one commit, with a message you wrote, or you are not finished** - in each repo the ticket changed, on a workspace of several. If there is more than one, collapse it now with the step 2 recipe (or `git reset --soft HEAD~1 && git commit --amend` for the common two-commit case) before doing anything else. If there is one commit but its message is machine-written - a bare subject with no body, or a subject truncated with a trailing `...` - the heartbeat wrote it as a safety net for a phase that forgot to commit, and replacing it is your job: `git commit --amend`.
 
 Do not `set_phase` until this check passes.
 

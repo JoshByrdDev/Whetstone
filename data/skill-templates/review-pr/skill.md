@@ -32,6 +32,15 @@ Nothing you write leaves this machine. `add_review_comment` and `set_review_verd
 
 Write for **the author**, not for the ticket. They will read your words with their name on the change.
 
+## Several repos - only when your prompt lists **Repos**
+
+Most projects are one repo, and this section does not apply to them. When your prompt has a **Repos** line, the working directory is a workspace of several git repos side by side, and every rule in this skill about "the branch" or "the base ref" holds once per repo:
+
+- **Run git inside a repo, never at the workspace root**, which is not one: `git -C <repo> ...`. Each repo with a base ref in the list is on the ticket's branch; a read-only one is there to be read and must never be changed.
+- **`<base-ref>` is that repo's own** - the one the Repos list names beside it. Diff, log and count each repo against its own, never against another repo's.
+- **Commit in every repo you change, and only in those.** A repo you did not change is delivered as nothing - do not commit to it to keep it in step. "One ticket, one commit" means one commit in each repo the ticket changed.
+- **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
+- **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` for the ticket: `description`, `qaItems`, `skipQaTesting`, `review` (the branch, the PR, and what a previous pass already read), and `reviewComments` (what a previous pass already said).

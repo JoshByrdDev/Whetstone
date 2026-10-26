@@ -16,6 +16,15 @@ This pipeline is local end to end: a git worktree, a docker stack, a database on
 
 You are handed a local ticket in the **Implementing** phase. Do the actual code work for its approved work items, then hand it to QA. Communicate via `add_comment` on the ticket (the `tickets` MCP server), never the terminal.
 
+## Several repos - only when your prompt lists **Repos**
+
+Most projects are one repo, and this section does not apply to them. When your prompt has a **Repos** line, the working directory is a workspace of several git repos side by side, and every rule in this skill about "the branch" or "the base ref" holds once per repo:
+
+- **Run git inside a repo, never at the workspace root**, which is not one: `git -C <repo> ...`. Each repo with a base ref in the list is on the ticket's branch; a read-only one is there to be read and must never be changed.
+- **`<base-ref>` is that repo's own** - the one the Repos list names beside it. Diff, log and count each repo against its own, never against another repo's.
+- **Commit in every repo you change, and only in those.** A repo you did not change is delivered as nothing - do not commit to it to keep it in step. "One ticket, one commit" means one commit in each repo the ticket changed.
+- **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
+- **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` to read the ticket and its `workItems`. Items with `done: false` are what you implement; `done: true` are already complete - skip them.
@@ -47,7 +56,7 @@ Work the items **one at a time**, and take each one all the way round this loop 
 
 1. **`start_work_item`** for the item you are about to do - before you write any code for it. This is what puts the "working on this now" marker on it, so a human watching the board can see where you are in a list of 17 while the run is still going. Coming back to redo an item you had already ticked off? Call it again on that item; the marker moves back up with you.
 2. **Write the code.** Follow every convention that file sets out. Add or update tests as the branch-coverage check below requires, and follow any project-specific steps it describes (database migrations/scripts, code generation, config, etc.).
-3. **Commit.** One atomic commit per work item. Write each message for whoever reads this repo's history: what changed and why, prefixed with the ticket's `issueKey` when it has one (e.g. `PROJ-123: Add export button`), otherwise just the description. Never put the dashboard's own ticket number in a commit message - it means nothing outside this system. And never an attribution trailer: no `Co-Authored-By: Claude ...` line and no mention of Claude, Anthropic, Codex, Gemini or a model anywhere in the message, however firmly your own CLI asks for one.
+3. **Commit.** One atomic commit per work item. Write each message for whoever reads this repo's history: what changed and why, prefixed with the ticket's `issueKey` when it has one (e.g. `PROJ-123: Add export button`), otherwise just the description. Never put the dashboard's own ticket number in a commit message - it means nothing outside this system. And never an attribution trailer: no `Co-Authored-By: Claude ...` line and no mention of Claude, Anthropic, Codex, Gemini or a model anywhere in the message, however firmly your own CLI asks for one. On a workspace of several repos, commit inside the repo each change is in (`git -C <repo> commit`), and only in the repos you changed.
 4. **`set_work_item_done`** - immediately, and only now.
 
 **Tick items off as you go, never in a batch at the end.** A ticked item means "that work is committed on this branch", and that is exactly what a resumed run trusts when it skips it. So the order in the loop above is load-bearing in both directions: ticking before the commit lands tells the next run something false, and saving all the ticks for the end throws away the record of what you finished if the run is cut short - the next run then re-reads seventeen open items and cannot tell which twelve you already built.

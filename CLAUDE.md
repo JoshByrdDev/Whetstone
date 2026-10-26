@@ -142,6 +142,37 @@ or bare `<base>` in a git command has reintroduced the bug for one kind of proje
 powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
 ```
 
+## A project can be several repos
+
+A project's `projectPath` is either a git repo or, with `repos`, a folder of repos side by side that
+is not one itself (`docs/multi-repo-plan.md`). Anything that does git for a project loops over
+`ProjectConfig.Repos`, which is a set of one for a project without `repos` - so the single repo is
+the same code run once, never a second path. A path that is not a repo and has no `repos` is
+refused, not run in.
+
+A ticket's branch has the same name in every writable repo, and its worktree is a workspace folder
+laid out like `projectPath`, one worktree per repo. A repo is in the ticket only once it is
+**touched**: commits ahead of its own base ref, or uncommitted changes. That rule is written twice,
+and the two must agree, the same way the base ref is: `Get-TouchedMembers` in
+`data/worker-repos.ps1` (what is squashed, rebased and delivered) and `TouchedAsync` in
+`Services/TicketGitService.Repos.cs` (what a person is shown). A `readOnly` repo is never touched.
+
+A path that stands on its own - one a model wrote, or one listed across the ticket - starts with
+its repo's folder on a project of several (`alpha-api/src/Foo.cs`). A path inside one repo's own
+answer, like its preflight, is relative to that repo.
+
+The prompt says which repos a run has through `{{REPOS_NOTE}}`, which is empty on a project of one.
+The skills' "Several repos" section is conditional on it, and it is a pipeline rule: it goes into
+every template and every project's copy, word for word.
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-repos.tests.ps1
+```
+
+```bash
+dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~MultiRepo"
+```
+
 ## The look is a system, not a per-page decision
 
 Nothing in the client picks its own colours, corners, faces or timings. Three files hold all of it,

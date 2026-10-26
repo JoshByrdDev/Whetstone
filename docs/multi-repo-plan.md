@@ -349,7 +349,14 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    section. A refusal body that carried no transcript first crashed the board; the copy found it
    and the dialog no longer assumes one. At 390px the page and the dialog have no sideways
    scroll, and the git bar wraps repo by repo.
-7. Prompt, skill templates, every project's skill copies, `CLAUDE.md` (pieces 5 and 8)
+7. Prompt, skill templates, every project's skill copies, `CLAUDE.md` (pieces 5 and 8) - done.
+   *As built:* the "Several repos" section sits just above "Ticket state" in the five worker-phase
+   templates and in every project's copy of them, word for word. The steward's template does not
+   get it: the steward is off for a project of several. Implement's commit step, refine's "one
+   ticket, one commit" and its final check, and the prompt's "Leave the worktree clean" rule
+   each say how the rule works on several repos. Each project's template baseline is moved to
+   the new templates as `ported`, so the Skills page does not report as drift a change every
+   copy already has.
 8. First live run: a ticket that touches one member, then one that touches two. Its PRs are
    created by hand from the dialog, and the untouched member is checked to have nothing pushed.
 
