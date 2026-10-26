@@ -241,8 +241,8 @@ prefixed diff and file reads, rebase and push choosing the right member, the 400
 - **`data/qa-copy.ps1`** gains a third placeholder project, `charlie`, with two members and one
   read-only member, so the PR dialog and the diff can be exercised on the QA copy. It delivers by
   pull request, because `alpha` and `bravo` merge locally, which a multi-repo project refuses.
-  Each member gets a bare repo inside the data root as its `origin`, so a push goes somewhere real
-  and is deleted at the next start.
+  Each member gets a bare repo inside the data root as its `origin`, so "the base" is origin's as
+  on a real pull-request project. The copy still refuses every push.
 - **The workspace file.** `data/projects/<key>/workspace/` is copied into the root of every new
   workspace: a `CLAUDE.md` (or `AGENTS.md`) that maps the members for the agent. It lives in the
   project's folder because what the members are, and how they talk to each other, is the
@@ -326,7 +326,17 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    the app is restarted onto it, ahead of the reaper (step 5) and the skills (step 7). Until
    step 5, a multi-repo ticket's worktrees are not reaped when it reaches Done: the reaper asks the
    parent folder, which is not a repo, and keeps the workspace.
-5. Reaper, analysis, QaIsolation, the QA copy's placeholder project (piece 6)
+5. Reaper, analysis, QaIsolation, the QA copy's placeholder project (piece 6) - done. *As built:*
+   the reaper asks every repo for changes before it removes any, so one dirty repo keeps the
+   whole workspace instead of whatever came after it in the list. Files left at the workspace
+   root, outside every repo, go with the folder and are named in the log. The analysis is told
+   it reads a workspace, with each repo's base, `git -C <repo>` for its reading, and files named
+   with their repo first. On a project of one its prompt is the same text as before. The
+   analysis's commit pin degrades rather than breaks: `HeadSha` of a workspace is null, so the
+   refinement gate goes ahead with a note, and the analysis diff route falls back to the
+   ticket's branch, which every writable repo has. Pinning an analysis per repo is still open.
+   `charlie` seeds a `qa/two-repos` branch with a commit in two of its repos. A QA copy refuses
+   every push, so its origins only make "the base" origin's.
 6. UI (piece 7), proven on the QA copy against the placeholder project
 7. Prompt, skill templates, every project's skill copies, `CLAUDE.md` (pieces 5 and 8)
 8. First live run: a ticket that touches one member, then one that touches two. Its PRs are

@@ -4,8 +4,8 @@
 # Proving a change to the dashboard means running the dashboard, and the one already running
 # on 5338 is the live board with the fleet hanging off it: restarting it kills every worker
 # mid-run. So a change is proven against a copy instead - this checkout's own Release build,
-# on ports of its own, over a throwaway data folder seeded with two placeholder projects
-# (alpha, bravo) whose repos live inside that folder too.
+# on ports of its own, over a throwaway data folder seeded with three placeholder projects
+# (alpha, bravo, and charlie - a project of several repos) whose repos live inside that folder too.
 #
 # The copy is started with WHETSTONE_QA_ISOLATION=1, which makes it refuse everything that
 # would reach beyond its folder: the heartbeat and the steward, every agent run, the tracker,
@@ -177,6 +177,48 @@ foreach ($key in 'alpha', 'bravo') {
         tracker      = @{ kind = 'none' }
     })
 }
+
+# A third placeholder, a project of several repos (docs/multi-repo-plan.md): a folder holding three
+# repos, one read-only, each with a bare origin inside the data root so "the base" is origin/main as
+# on a real pull-request project. It delivers by pull request, which alpha and bravo do not - they
+# merge locally, and a project of several refuses that. The copy refuses every push anyway. Branch
+# qa/two-repos has a commit in two of the repos, so a ticket pointed at it shows the PR dialog a
+# change across several.
+$charlie = Join-Path $DataRoot 'repos\charlie'
+foreach ($name in 'charlie-web', 'charlie-api', 'charlie-infra') {
+    $r = Join-Path $charlie $name
+    $origin = Join-Path $DataRoot "origins\$name.git"
+    New-Item -ItemType Directory -Path $r -Force | Out-Null
+    & git init -q --bare -b main $origin
+    & git -C $r init -q -b main
+    & git -C $r config user.name 'QA copy'
+    & git -C $r config user.email 'qa-copy@localhost'
+    Set-Content -Path (Join-Path $r 'README.md') -Value "# $name`n`nOne of charlie's placeholder repositories for an isolated QA copy." -Encoding ASCII
+    & git -C $r -c core.autocrlf=false add -A
+    & git -C $r commit -q -m "A placeholder repository"
+    & git -C $r remote add origin $origin
+    & git -C $r push -q -u origin main
+    if ($name -ne 'charlie-infra') {
+        & git -C $r checkout -q -b qa/two-repos
+        Set-Content -Path (Join-Path $r 'CHANGE.md') -Value "A change in $name, one half of qa/two-repos." -Encoding ASCII
+        & git -C $r -c core.autocrlf=false add -A
+        & git -C $r commit -q -m "Half of a change across two repos"
+        & git -C $r checkout -q main
+    }
+}
+$pd = Join-Path $DataRoot 'projects\charlie'
+New-Item -ItemType Directory -Path $pd -Force | Out-Null
+Copy-Item (Join-Path $DataRoot 'skill-templates') (Join-Path $pd 'skills') -Recurse
+Write-Json (Join-Path $pd 'project.defaults.json') ([ordered]@{
+    displayName = 'Charlie'
+    baseBranch  = 'main'
+    repos       = @('charlie-web', 'charlie-api', [ordered]@{ dir = 'charlie-infra'; readOnly = $true })
+})
+Write-Json (Join-Path $pd 'project.json') ([ordered]@{
+    projectPath  = $charlie
+    worktreeRoot = (Join-Path $DataRoot 'worktrees\charlie')
+    tracker      = @{ kind = 'none' }
+})
 
 # ---- Start ------------------------------------------------------------------
 

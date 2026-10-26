@@ -148,6 +148,11 @@ public sealed class QaIsolation
 
         if (string.IsNullOrWhiteSpace(cfg.ProjectPath)) return null;
         return Check("projectPath", cfg.ProjectPath)
+            // Each repo of a project of several, as a worker and the board will resolve it - not
+            // trusting RepoLayout to have refused a "dir" that climbs out or names a drive.
+            ?? (cfg.IsMultiRepo
+                ? cfg.Repos.Select(m => Check($"repo '{m.Dir}'", m.HubPath(cfg.ProjectPath))).FirstOrDefault(why => why is not null)
+                : null)
             ?? Check("worktree root", cfg.ResolvedWorktreeRoot)
             ?? Check("notes store", cfg.ResolvedMemoryDir)
             ?? (cfg.Stack.IsConfigured ? Check("stack working directory", cfg.Stack.ResolvedWorkingDir(cfg.ProjectPath)) : null);

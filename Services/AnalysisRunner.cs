@@ -587,6 +587,25 @@ public class AnalysisRunner : IAnalysisExecutor
         var display = string.IsNullOrWhiteSpace(cfg.DisplayName) ? t.ProjectKey : cfg.DisplayName;
         var baseBranch = string.IsNullOrWhiteSpace(cfg.BaseBranch) ? "main" : cfg.BaseBranch;
 
+        // A project of several repos is read from its workspace, which is a folder of repos rather
+        // than a repo: each has its own base, git runs inside one, and a file is named with its
+        // repo's folder first, which is how the reader's diff of it is fetched again
+        // (TicketGitService.Repos). For a project of one every piece below is the text it always was.
+        var several = cfg.IsMultiRepo;
+        var rootNote = several ? " - a folder of several repos, not itself a repo" : "";
+        var baseText = several ? "each repo's own, below" : baseBranch;
+        var reposList = several
+            ? "\n- Repos, each its own git repo:\n" + string.Join("\n", cfg.Repos.Select(m => m.ReadOnly
+                  ? $"  - `{m.Dir}` - read-only for the pipeline: here for context, never changed by a ticket"
+                  : $"  - `{m.Dir}` - base `{(m.BaseBranch.Length > 0 ? m.BaseBranch : "main")}`"))
+              + "\n- Name every file by its path from the workspace, its repo's folder first (`" +
+              cfg.Repos[0].Dir + "/src/...`), in prose and in every block that cites one."
+            : "";
+        var logStep = several
+            ? "In each repo the ticket changed, `git -C <repo> log --oneline <its base>..HEAD` and `git -C <repo> diff <its base>...HEAD --stat`"
+            : $"`git log --oneline {baseBranch}..HEAD` and `git diff {baseBranch}...HEAD --stat`";
+        var conventions = several ? "Each repo's own `CLAUDE.md`, the workspace's at its root if there is one," : "This repo's `CLAUDE.md`";
+
         // A raw literal takes its line breaks from the source file, and core.autocrlf checks this one
         // out as CRLF - which, mixed with the "\n" joins above, made the prompt depend on the checkout.
         return ($$"""
@@ -608,8 +627,8 @@ public class AnalysisRunner : IAnalysisExecutor
         ## Where things are
 
         - Reading here (already your working directory): {{P(readDir)}}
-        - Repo root:        {{P(cfg.ProjectPath)}}
-        - Branch:           {{t.Branch}}      Base: {{baseBranch}}
+        - Repo root:        {{P(cfg.ProjectPath)}}{{rootNote}}
+        - Branch:           {{t.Branch}}      Base: {{baseText}}{{reposList}}
         - This repo's notes store: {{P(cfg.ResolvedMemoryDir)}}  (one file per durable fact + MEMORY.md index)
 
         ## The ticket's record
@@ -623,12 +642,12 @@ public class AnalysisRunner : IAnalysisExecutor
         {{requirements}}
         ## What to read before writing
 
-        1. `git log --oneline {{baseBranch}}..HEAD` and `git diff {{baseBranch}}...HEAD --stat`, then the
+        1. {{logStep}}, then the
            diff itself for the files that carry the actual decision (not the ones that carry the same
            line pasted into four places).
         2. The source AROUND the change - the callers, the type it belongs to, the rule it sits inside.
            This is what separates an analysis from a diff summary. Budget most of your reading here.
-        3. This repo's `CLAUDE.md` and its notes store (`MEMORY.md` first, then whichever notes cover
+        3. {{conventions}} and its notes store (`MEMORY.md` first, then whichever notes cover
            this area). Where a note already explains the area, cite it as `[[note-name]]` in your prose
            and write only the delta - do not re-explain a subsystem the reader already has a note on.
 
