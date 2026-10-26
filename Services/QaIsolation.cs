@@ -62,6 +62,7 @@ public sealed class QaIsolation
         R("POST", @"^/api/heartbeat/(start|stop|stop-after-cycle|cancel-stop|wake)/?$",
             "starting, stopping or signalling the heartbeat"),
         R("*", @"^/api/steward/(due|launching|abandon)/?$", "the steward's run loop"),
+        R("POST", @"^/api/steward/run/?$", "starting a steward run"),
         R("*", @"^/mcp/steward(/|$)", "a steward session"),
         R("POST", @"^/api/notifications/test/?$", "sending a notification"),
         R("POST", @"^/api/improvements/apply/?$", "launching an agent to apply improvements"),

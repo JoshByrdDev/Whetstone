@@ -42,7 +42,7 @@ public static class StewardEndpoints
     {
         // Everything the Steward page draws for one project.
         app.MapGet("/api/steward", async (string? project, ProjectRegistry registry, DashboardDbContext db,
-            StewardService steward, CancellationToken ct) =>
+            StewardService steward, StewardRunner runner, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
             var cfg = registry.GetProjectConfig(project!);
@@ -64,7 +64,9 @@ public static class StewardEndpoints
                 // Why full is not on offer, when it is not: said here so the page does not have to know the rule.
                 fullUnavailable = cfg.MergeInsteadOfPr && !cfg.IsTfvc ? null
                     : "This project does not deliver by a local merge, so its steward never merges.",
-                running = await steward.RunOpenAsync(project!),
+                // Open, or started from this page and not yet opened: its lock is taken only once the
+                // agent is up, and the page must not offer a second run in the seconds before that.
+                running = await steward.RunOpenAsync(project!) || runner.RunningProject == project,
                 due,
                 dueReason,
                 lastRunStartedAt = s?.LastRunStartedAt,
@@ -213,6 +215,14 @@ public static class StewardEndpoints
             var r = await steward.OwnerDecidesAsync(project ?? "", unit, body.Decisions ?? Array.Empty<UnitDecisionChoice>(),
                 body.Agree ?? false, body.Answering, ct);
             return r.Answer is "agreed" or "decided" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Run the steward now, rather than when the heartbeat finds it due. The owner's: there is
+        // no tool for it. Wakes a running heartbeat, or starts the run itself while it is stopped.
+        app.MapPost("/api/steward/run", async (string? project, StewardService steward, StewardRunner runner, CancellationToken ct) =>
+        {
+            var r = await runner.StartAsync(project ?? "", steward, ct);
+            return r.Answer is "started" or "queued" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // Say a unit's work has been released, or take that back.

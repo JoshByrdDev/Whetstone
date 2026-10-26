@@ -140,6 +140,14 @@ export const getStewardStatus = (project: string) =>
     .then(json<{ answer: string; data?: StewardStatus }>)
     .then(r => (r.answer === 'status' ? r.data ?? null : null));
 
+/**
+ * Run the steward now. `started` when the board launched it (the heartbeat is stopped), `queued`
+ * when the running heartbeat was woken to launch it; anything else is refused with `why`.
+ */
+export const runStewardNow = (project: string) =>
+  fetch(`/api/steward/run?${q(project)}`, { method: 'POST' })
+    .then(json<{ answer: 'started' | 'queued'; why?: string | null }>);
+
 export const setStewardMode = (project: string, mode: StewardMode) =>
   fetch(`/api/steward/mode?${q(project)}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ mode }) })
     .then(json<{ mode: StewardMode; modeSetting: StewardMode }>);

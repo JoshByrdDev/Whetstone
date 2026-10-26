@@ -311,7 +311,10 @@ is not authentication - nothing on this machine is - so do not describe it as a 
 **It runs in a berth of its own.** The orchestrator asks `GET /api/steward/due` each pass and
 starts `data/steward.ps1` in slot 99, beside the worker slots and never counted against them.
 A run is started by something happening (a ticket reached review or blocked, the owner answered,
-the base moved), not by a clock, and at most once per project in five minutes.
+the base moved), not by a clock, and at most once per project in five minutes. The owner can
+also ask for one from the Steward page (`POST /api/steward/run`, `StewardRunner`): it wakes a
+running heartbeat so the heartbeat stays the one launcher, and only while the heartbeat is stopped
+does the board start `steward.ps1` itself, in the same slot - a heartbeat started later adopts it.
 
 **A steward changes no file.** On claude that is a fact: the run is launched with no shell and no
 editor (`--tools Read,Grep,Glob`) and does everything through its MCP tools. On codex and gemini it

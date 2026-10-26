@@ -17,7 +17,7 @@ import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
   answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan, getStewardRegister,
-  getStewardStatus, keepStewardRuling, markStewardEntry, reverseStewardRuling, setStewardMode, unseenRuling,
+  getStewardStatus, keepStewardRuling, markStewardEntry, reverseStewardRuling, runStewardNow, setStewardMode, unseenRuling,
 } from '../api/steward';
 import type {
   StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus,
@@ -197,7 +197,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
               {/* The steward itself on the left, what it needs from you on the right. One column
                   on a phone, the steward first: it says why the right side is what it is. */}
               <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-6 items-start" style={{ marginBottom: 32 }}>
-                <StewardCard page={page} running={runningNow || page.running} fleet={state.status} live={live} />
+                <StewardCard page={page} running={runningNow || page.running} fleet={state.status} live={live} onRan={load} />
 
                 <div className="min-w-0">
                   <SectionRule title="Waiting on you" colour={TIER.blocked.c} count={waitingCount} />
@@ -423,10 +423,27 @@ function OptionsCard({ project, q, onAnswer }: {
  * The mascot animates itself by mood, so a working steward bobs, one with a run due stands by,
  * and one with nothing to find sleeps.
  */
-function StewardCard({ page, running, fleet, live }: {
-  page: StewardPage; running: boolean; fleet: DashboardState['status']; live: HeartbeatEvent[];
+function StewardCard({ page, running, fleet, live, onRan }: {
+  page: StewardPage; running: boolean; fleet: DashboardState['status']; live: HeartbeatEvent[]; onRan: () => void;
 }) {
-  // Only the heartbeat starts a run, so a run that is due is due "shortly" only while it is going.
+  // Asking for a run: held while the request is out, then what the board said, until the next ask.
+  const [asking, setAsking] = useState(false);
+  const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => { setSaid(null); }, [page.project]);
+  const runNow = async () => {
+    setAsking(true); setSaid(null);
+    try {
+      const r = await runStewardNow(page.project);
+      setSaid({ ok: true, text: r.answer === 'queued' ? (r.why ?? 'The heartbeat will start it.') : 'Started. It shows below as it works.' });
+      onRan();
+    } catch (err) {
+      setSaid({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    } finally { setAsking(false); }
+  };
+  const cannotRun = running ? 'A run is already going.' : page.mode === 'off' ? 'The steward is off for this project.' : null;
+
+  // The heartbeat starts a due run, so a run that is due is due "shortly" only while it is going;
+  // otherwise only Run now below starts one.
   const held = page.due && !running && (fleet === 'stopped' || fleet === 'off-hours');
   const mood: Mood = running ? 'running' : held ? 'stopped' : page.due ? 'idle' : 'sleeping';
   const word = running ? 'Working' : page.due ? 'A run is due' : page.resting ? 'Resting' : 'Standing by';
@@ -436,7 +453,7 @@ function StewardCard({ page, running, fleet, live }: {
   const line = running ? 'A run is in progress. What it thinks, says and does shows below as it happens.'
     : held ? fleet === 'off-hours'
       ? 'Waiting for working hours: the heartbeat starts no run until then.'
-      : 'Waiting for the heartbeat. Nothing starts a run while it is stopped.'
+      : 'Waiting for the heartbeat, which is stopped. Run now starts one without it.'
     : page.due ? "Starts on the heartbeat's next pass."
     : page.resting ? 'Nothing to do until a ticket comes back, you answer something, or the base branch moves.'
     : 'Waiting for something to change.';
@@ -455,6 +472,23 @@ function StewardCard({ page, running, fleet, live }: {
           </div>
           <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 5 }}>{line}</div>
         </div>
+      </div>
+
+      {/* Run it now rather than when the heartbeat next finds it due. Disabled while a run is
+          going, so a second press can never start a second agent in the steward's one berth. */}
+      <div className="flex flex-wrap items-center gap-3" style={{ marginBottom: 14 }}>
+        <GhostButton tone="go" onClick={runNow} disabled={asking || !!cannotRun}
+          title={cannotRun ?? (fleet === 'stopped' || fleet === 'off-hours'
+            ? 'Start one run of the steward now. The heartbeat stays stopped.'
+            : 'Wake the heartbeat to start a run of the steward now.')}>
+          {asking ? 'Starting' : 'Run now'}
+        </GhostButton>
+        {said && (
+          <span key={said.text} className="orbit-swap min-w-0"
+            style={{ font: `400 12px/1.5 ${BODY}`, color: said.ok ? 'var(--w-t400)' : TIER.blocked.c }}>
+            {said.text}
+          </span>
+        )}
       </div>
 
       <LastRun summary={page.lastRunSummary} />
