@@ -78,6 +78,7 @@ per member as usual:
 | `dir` | required, a folder directly under `projectPath` | - |
 | `baseBranch` | yes | the project's `baseBranch`, then the global one |
 | `worktreeSetup`, `worktreeCopyFiles` | yes | nothing (the project-level keys belong to the set-of-one case) |
+| `readOnly` | yes: in the workspace for reading, never changed (piece 2) | `false` |
 | `branchPrefix`, `mergeInsteadOfPr`, `repoType` | **no**: one branch name, one way of delivering | - |
 
 `ProjectConfig` gains `Repos` (`IReadOnlyList<RepoMember>`), always at least one entry, and
@@ -85,13 +86,15 @@ per member as usual:
 setup and copy keys. Order is config order, and everything below that lists members uses it.
 
 **Config errors are refusals, not warnings.** A multi-repo project with `repoType: tfvc` or
-`mergeInsteadOfPr: true`, a `dir` that is not a git repo, or two members naming one folder is
-reported as misconfigured by the Setup check, and nothing is claimed for it.
+`mergeInsteadOfPr: true`, a `dir` that is not a git repo, two members naming one folder, or every
+member `readOnly` is reported as misconfigured by the Setup check, and nothing is claimed for it.
 
-**The silent fallback is closed for every project.** A `projectPath` that is not a repo, has no
-`repos` key and has git repos directly beneath it is reported by the Setup check as "this looks
-like a multi-repo project", and claims for it are refused. A path with no repo at all and nothing
-beneath it keeps today's behaviour (open question 6).
+**The silent fallback is closed for every project.** A `projectPath` that exists but is not a git
+repo, with no `repos` key, is refused: the Setup check reports it, and no claim is made for it.
+When it has git repos directly beneath it, the report says "this looks like a multi-repo project"
+and names them. Either way the worker no longer runs in a folder it could not make a worktree
+for (open question 6). This is the one change in phase 1 that reaches a single-repo project, and
+it only reaches one that was misconfigured.
 
 `ResolvedWorktreeRoot` is unchanged: a sibling of `projectPath`, which is now the parent folder.
 `Stack.WorkingDir` already resolves against `projectPath`, so a stack in one member is
@@ -118,6 +121,12 @@ Built and tested first, against temporary repos and with no fleet involved:
   rather than failing as a single-repo project does. That happens when a member is added to `repos`
   mid-ticket, and an untouched member's branch is the base anyway. At least one member must have
   the branch outside speculate, or it is still the upstream error it is today.
+- **A `readOnly` member gets no branch.** Its worktree is detached at its base ref, as the Review
+  track's is at somebody else's branch, and moved to the current base at the start of every phase
+  while it is clean. It is never touched, by definition: the agent cannot commit to a detached
+  worktree it does not own, and the prompt tells it not to try. A read-only member with changes in
+  it is a fault, reported on the ticket the way a review run that edited code is. Nothing in it is
+  committed or delivered, and the next phase refuses to start until a person cleans it.
 - **Untouched members are brought up to their base at the start of every phase**, with
   `Update-MergedBranch`. A member with nothing of its own has nothing to lose, and the agent should
   read the API as it is now, not as it was when the ticket was speculated.
@@ -127,8 +136,15 @@ Built and tested first, against temporary repos and with no fleet involved:
 - A member whose setup fails blocks the ticket, naming the member. The worktrees already made stay,
   and the next run re-enters them, as `Resolve-Worktree` already does for one.
 
-Setup runs member by member, in config order, in the same `Initialize-Worktree` as today. Running
-it in parallel, or only for members that get touched, is open question 1.
+**Setup runs for every member at once** (open question 1). The worktrees are made one by one,
+under each hub's mutex, because that is the part that races. `Resolve-Worktree` gains a
+`-NoSetup` switch so it hands back a worktree without preparing it. Then each new or unfinished member's
+`Initialize-Worktree` runs in a background job of its own, so a ticket waits for its slowest
+member's install rather than for the sum. That is safe because each member's setup already runs
+in its own folder, in its own processes. Each job's log lines carry its member's name. The worker
+waits for every job, even after one fails, so no install is left running behind a blocked ticket.
+The block reason names every member that failed, with each one's output tail.
+`WorktreeSetupTimeoutMinutes` applies to each member separately.
 
 `worker-base.tests.ps1` gains cases with two members on different bases, to prove `Resolve-BaseRef`
 is asked per member and that no member's answer leaks into another's.
@@ -145,7 +161,8 @@ is asked per member and that no member's answer leaks into another's.
 - Every comment these steps write names the member: "`alpha-api` was 3 commits behind
   origin/main ...". A comment that says "the branch" on a multi-repo ticket is a bug.
 - A touched member with uncommitted changes at the start of a phase blocks, as today. A dirty
-  untouched member cannot exist: dirty is one of the two ways to be touched.
+  untouched member cannot exist, because dirty is one of the two ways to be touched. The one
+  exception is a dirty read-only member, which is the fault described in piece 2.
 - `Get-ConventionsFile` is asked against the workspace root, where the copied workspace file
   (piece 6) sits. Each member's own `CLAUDE.md` / `AGENTS.md` stays in its member, where the
   providers already find it when the agent works in that folder.
@@ -197,7 +214,8 @@ prefixed diff and file reads, rebase and push choosing the right member, the 400
 
 - `data/heartbeat-prompt.md` gains `{{REPOS_NOTE}}`. On a single-repo run it says nothing. On a
   multi-repo run it says: this workspace holds these repos, each its own git repo, all on branch
-  `<branch>`. Run git inside a member (`git -C alpha-api ...`), never at the root, which is not a
+  `<branch>` except the ones it lists as read-only, which are there to be read and must not be
+  changed. Run git inside a member (`git -C alpha-api ...`), never at the root, which is not a
   repo. Commit in every member you change. A member you did not change is delivered as nothing,
   so do not commit to it to "keep it in step".
 - The rule "commit at the end, one ticket one commit" says "per repo you changed" where it appears.
@@ -219,8 +237,11 @@ prefixed diff and file reads, rebase and push choosing the right member, the 400
 - **`AnalysisRunner`**: the "Repo root" line becomes "Workspace root" with the member list, and
   the run's directory is the workspace, which it already is through `WorktreePath`.
 - **`QaIsolation`** checks every member's path against the data root, not only `projectPath`.
-- **`data/qa-copy.ps1`** gains a multi-repo placeholder project (`bravo`, two members), so the PR
-  dialog and the diff can be exercised on the QA copy.
+- **`data/qa-copy.ps1`** gains a third placeholder project, `charlie`, with two members and one
+  read-only member, so the PR dialog and the diff can be exercised on the QA copy. It delivers by
+  pull request, because `alpha` and `bravo` merge locally, which a multi-repo project refuses.
+  Each member gets a bare repo inside the data root as its `origin`, so a push goes somewhere real
+  and is deleted at the next start.
 - **The workspace file.** `data/projects/<key>/workspace/` is copied into the root of every new
   workspace: a `CLAUDE.md` (or `AGENTS.md`) that maps the members for the agent. It lives in the
   project's folder because what the members are, and how they talk to each other, is the
@@ -236,7 +257,7 @@ prefixed diff and file reads, rebase and push choosing the right member, the 400
 ### 7. UI
 
 - **`PrModal`** draws one section per member, touched first, with untouched members collapsed under
-  "not changed". Each touched section has its own base check, rebase, force-push and Create PR,
+  "not changed" and read-only members named under it as "read-only". Each touched section has its own base check, rebase, force-push and Create PR,
   and a "Create all" button runs them in config order.
 - **`DiffReviewList`** groups files under a member heading, taken from the first path segment.
 - **`TicketGitActions` and `ProjectGitBar`** show each member's ahead/behind count on a multi-repo
@@ -281,27 +302,27 @@ Step 8 is the only step that cannot be proven on the QA copy, which refuses agen
 
 ## Open questions (the owner's)
 
-Phase 1 will be built on the planned answer to each of these unless the owner says otherwise.
+All seven were answered by the owner on 2026-10-26, before anything was built. Each can still be
+changed.
 
-1. **When each member's setup runs.** Planned: every member, in order, when its worktree is made.
-   That is simple and always ready, but a ticket that only changes the API still waits for the web
-   client's package install. The alternatives are running members' setup in parallel (each is its
-   own process in its own folder already), or setting a member up only once it is touched. The
-   second needs the agent to be able to ask for it mid-run.
-2. **Should a member be able to sit out a project?** Planned: every member is in every workspace.
-   An infrastructure repo that no ticket should change could instead be marked `readOnly`, made as
-   a detached worktree with no branch, so it cannot be touched at all.
-3. **Real PRs on Azure DevOps.** Planned: the prefilled web form, one per member, as today. `az repos
-   pr create` would make real PRs that link to each other and the work item, but it is a new CLI
-   to install and sign in (a `docs/setup.md` row and a Setup check row).
-4. **Merge order between members.** Planned: the board lists members in config order and says
+1. **When each member's setup runs.** Answered: every member, **in parallel**, when its worktree is
+   made (piece 2). Setting up one member one after another made a ticket that only changes the API
+   wait for the web client's package install as well. Setting a member up only once it is touched
+   would need the agent to be able to ask for setup mid-run, and was not chosen.
+2. **Should a member be able to sit out a project?** Answered: yes, with `readOnly` (pieces 1 and
+   2). A read-only member is in every workspace for reading, as a detached worktree with no
+   branch, and cannot be delivered.
+3. **Real PRs on Azure DevOps.** Answered: the prefilled web form, one per member, as today.
+   `az repos pr create`, which would make real PRs linked to each other and to the work item, is
+   left for phase 2. It is a new CLI to install and sign in, so it brings a `docs/setup.md` row and
+   a Setup check row with it.
+4. **Merge order between members.** Answered: the board lists members in config order and says
    nothing about order. The project's skills tell the agent, and the PR description tells the
-   reviewer. Should the board know an order, and warn when a later member's PR is merged first?
-5. **A ticket that touches no member.** Planned: the same as a single-repo branch with no commits
-   today, with the same refinement rule. Confirm that "nothing to deliver" reads correctly when
-   there are three repos it could have been in.
-6. **A `projectPath` that is not a repo and has none beneath it.** Planned: today's behaviour (run
-   in the folder, with a warning in the log). Should that refuse too, now that the multi-repo
-   case is caught separately?
-7. **Phase 2 order.** Planned: the Review track first, because reviewing colleagues' PRs in one
+   reviewer.
+5. **A ticket that touches no member.** Answered: the same as a single-repo branch with no commits
+   today, with the same refinement rule. Its comment says that no repo was changed, rather than
+   "the branch has no commits".
+6. **A `projectPath` that is not a repo.** Answered: refused, whether or not it has repos beneath
+   it (piece 1). Running the worker in the folder itself is gone for every project.
+7. **Phase 2 order.** Answered: the Review track first, because reviewing colleagues' PRs in one
    member is everyday work on a project like this, then the steward, then worker hosts.
