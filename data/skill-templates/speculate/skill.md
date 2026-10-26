@@ -27,6 +27,7 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **Commit in every repo you change, and only in those.** A repo you did not change is delivered as nothing - do not commit to it to keep it in step. "One ticket, one commit" means one commit in each repo the ticket changed.
 - **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
 - **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
+
 ## Ticket state - use the `tickets` MCP tools
 
 - Read the ticket with `get_ticket`. Note its `description`, existing `workItems`, and `issueKey`.
