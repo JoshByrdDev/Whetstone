@@ -124,8 +124,33 @@ public partial class TicketGitService
         var (_, repo, baseBranch) = HubOf(projectKey);
         if (!plan.Configured || !IsGitRepo(repo)) return Array.Empty<PlanUnit>();
 
-        var ls = await GitAsync(repo, ct, "ls-tree", "--name-only", $"refs/heads/{baseBranch}", $"{plan.UnitsDir}/");
-        if (!ls.Ok) return Array.Empty<PlanUnit>();
+        // A plan is read as committed, so the base's commit names its whole text: read once per
+        // commit, not once per caller. The Steward page alone asks for it a dozen times on opening,
+        // and each read is a git process per slice.
+        var head = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{baseBranch}");
+        if (!head.Ok) return Array.Empty<PlanUnit>();
+        var sha = head.Stdout.Trim();
+        var key = string.Join('\n', repo, sha, plan.UnitsDir, plan.UnitFile, plan.Agreed, plan.Draft, plan.Outcome, plan.Idea);
+        if (PlanCache.TryGetValue(key, out var known)) return known;
+
+        var (units, whole) = await ReadPlanAtAsync(repo, sha, plan, ct);
+        // A read that missed a file is answered as it stands but not kept: the next one tries again.
+        if (whole)
+        {
+            if (PlanCache.Count > 64) PlanCache.Clear();
+            PlanCache[key] = units;
+        }
+        return units;
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<PlanUnit>> PlanCache = new();
+
+    /// <summary>The plan's units at one commit, and whether every file in it could be read.</summary>
+    private async Task<(IReadOnlyList<PlanUnit> Units, bool Whole)> ReadPlanAtAsync(string repo, string sha, StewardPlan plan, CancellationToken ct)
+    {
+        var ls = await GitAsync(repo, ct, "ls-tree", "--name-only", sha, $"{plan.UnitsDir}/");
+        if (!ls.Ok) return (Array.Empty<PlanUnit>(), false);
+        var whole = true;
 
         var unitFile = new Regex(plan.UnitFile, RegexOptions.IgnoreCase);
         var units = new List<PlanUnit>();
@@ -133,11 +158,11 @@ public partial class TicketGitService
         {
             var m = unitFile.Match(path[(path.LastIndexOf('/') + 1)..]);
             if (!m.Success || m.Groups.Count < 2 || !int.TryParse(m.Groups[1].Value, out var number)) continue;
-            var show = await GitAsync(repo, ct, "show", $"refs/heads/{baseBranch}:{path}");
-            if (!show.Ok) continue;
+            var show = await GitAsync(repo, ct, "show", $"{sha}:{path}");
+            if (!show.Ok) { whole = false; continue; }
             units.Add(ReadUnit(plan, number, path, show.Stdout));
         }
-        return units.OrderBy(u => u.Number).ToList();
+        return (units.OrderBy(u => u.Number).ToList(), whole);
     }
 
     /// <summary>One spec's text as a unit. Agreed wins over draft: a spec cannot be both, and a
