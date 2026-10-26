@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePop, useHeld } from '../hooks/usePop';
-import { checkoutTicket } from '../api/git';
-import type { CheckoutResult } from '../api/git';
+import { checkoutTicket, getTicketRepos } from '../api/git';
+import type { CheckoutResult, RepoTouch } from '../api/git';
+import type { ProjectRepo } from '../types/tickets';
 import { PrModal } from './PrModal';
+import { MultiRepoPrModal } from './MultiRepoPrModal';
 import { CheckinModal } from './CheckinModal';
 import { deepen } from './orbit';
 
@@ -19,7 +21,7 @@ import { deepen } from './orbit';
  * the way the agent also holds this branch" and "no, you have uncommitted work" — both are a
  * sentence, and neither is worth a modal.
  */
-export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Delivery', repoType = 'git', merge = false }: {
+export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Delivery', repoType = 'git', merge = false, repos }: {
   ticketId: number;
   branch?: string | null;
   /** "row" is the compact in-flight row; "card" is the expanded waiting-on-you card. */
@@ -43,12 +45,29 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
   repoType?: 'git' | 'tfvc';
   /** The project merges into its base rather than raising PRs; the same dialog then ends in a merge. */
   merge?: boolean;
+  /**
+   * A project of several repos (docs/multi-repo-plan.md). Checkout puts each writable repo's own
+   * checkout on the branch, the PR button opens one section per repo, and a badge says how many of
+   * them the ticket has changed. Absent for a project of one, which is everything above unchanged.
+   */
+  repos?: ProjectRepo[] | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CheckoutResult | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const [each, setEach] = useState<RepoCheckout[] | null>(null);
   const [prOpen, setPrOpen] = useState(false);
+  const [touch, setTouch] = useState<RepoTouch[] | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
+  const several = !!repos && repos.length > 0;
+
+  // Local reads, once per ticket and again when its dialog closes - not on every board poll, which
+  // would be every repo's git, for every ticket of the project, every few seconds.
+  const readTouch = useCallback(() => {
+    if (!several || !branch) return;
+    getTicketRepos(ticketId).then(setTouch).catch(() => setTouch(null));
+  }, [several, branch, ticketId]);
+  useEffect(() => { readTouch(); }, [readTouch]);
 
   if (!branch) return null;
 
@@ -57,9 +76,18 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
 
   async function checkout(e: React.MouseEvent) {
     e.stopPropagation();
-    setBusy(true); setResult(null); setFailure(null);
+    setBusy(true); setResult(null); setFailure(null); setEach(null);
     try {
-      setResult(await checkoutTicket(ticketId));
+      if (several) {
+        // One repo after another, each its own refusal: uncommitted work in one stops only that one.
+        const out: RepoCheckout[] = [];
+        for (const r of repos!.filter(x => !x.readOnly)) {
+          try { out.push({ dir: r.dir, result: await checkoutTicket(ticketId, r.dir) }); }
+          catch (err) { out.push({ dir: r.dir, failure: err instanceof Error ? err.message : 'Checkout failed.' }); }
+        }
+        setEach(out);
+      }
+      else setResult(await checkoutTicket(ticketId));
     } catch (err) {
       setFailure(err instanceof Error ? err.message : 'Checkout failed.');
     } finally {
@@ -68,9 +96,19 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
   }
 
   const tfvc = repoType === 'tfvc';
+  const changed = touch?.filter(t => t.touched) ?? [];
 
   return (
     <div ref={anchor} className="flex items-center gap-0.5 relative">
+      {several && touch && (
+        <span
+          className="px-1 text-[10px] font-mono text-gray-500 whitespace-nowrap"
+          title={touch.map(t => t.readOnly ? `${t.dir}: read-only`
+            : `${t.dir}: ${t.touched ? `+${t.ahead} / -${t.behind}${t.dirty ? `, ${t.dirty} uncommitted` : ''}` : 'not changed'}`).join('\n')}
+        >
+          {changed.length}/{touch.filter(t => !t.readOnly).length} repos
+        </span>
+      )}
       {!tfvc && (
         <button
           onClick={checkout}
@@ -94,18 +132,28 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
       {/* Always rendered, so that the note leaving is something you can watch: it is `open` that
           goes false, and the note itself holds the last few frames. */}
       <CheckoutNote
-        open={!!(result || failure)}
+        open={!!(result || failure || each)}
         anchor={anchor}
         result={result}
         failure={failure}
-        onClose={() => { setResult(null); setFailure(null); }}
+        each={each}
+        onClose={() => { setResult(null); setFailure(null); setEach(null); }}
       />
 
       {prOpen && (tfvc
         ? <CheckinModal ticketId={ticketId} onClose={() => setPrOpen(false)} />
-        : <PrModal ticketId={ticketId} onClose={() => setPrOpen(false)} />)}
+        : several
+          ? <MultiRepoPrModal ticketId={ticketId} onClose={() => { setPrOpen(false); readTouch(); }} />
+          : <PrModal ticketId={ticketId} onClose={() => setPrOpen(false)} />)}
     </div>
   );
+}
+
+/** One repo's checkout, on a project of several. */
+interface RepoCheckout {
+  dir: string;
+  result?: CheckoutResult;
+  failure?: string;
 }
 
 const NOTE_W = 320;
@@ -115,17 +163,18 @@ const NOTE_W = 320;
  * same reason the phase menu is: every card clips itself for its rounded corners, and the board
  * body scrolls horizontally, so an in-flow popover gets cut off at the card's edge.
  */
-function CheckoutNote({ anchor, open, result: live, failure: liveFailure, onClose }: {
+function CheckoutNote({ anchor, open, result: live, failure: liveFailure, each: liveEach, onClose }: {
   anchor: React.RefObject<HTMLDivElement>;
   open: boolean;
   result: CheckoutResult | null;
   failure: string | null;
+  each: RepoCheckout[] | null;
   onClose: () => void;
 }) {
   const { show, fx } = usePop(open);
   // Held while it leaves, so the note fades out still saying what it said rather than emptying
   // itself first. The parent clears both the moment it is dismissed.
-  const { result, failure } = useHeld({ result: live, failure: liveFailure }, open);
+  const { result, failure, each } = useHeld({ result: live, failure: liveFailure, each: liveEach }, open);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
 
   useEffect(() => {
@@ -148,7 +197,7 @@ function CheckoutNote({ anchor, open, result: live, failure: liveFailure, onClos
   }, [anchor, show]);
 
   // A success is a confirmation nobody needs to dismiss; a refusal has a list to read, so it stays.
-  const bad = !!failure || result?.ok === false;
+  const bad = !!failure || result?.ok === false || !!each?.some(e => e.failure || e.result?.ok === false);
   useEffect(() => {
     if (!open || bad) return;
     const id = setTimeout(onClose, 6000);
@@ -177,6 +226,24 @@ function CheckoutNote({ anchor, open, result: live, failure: liveFailure, onClos
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0 space-y-1.5">
           {failure && <div className="text-red-300">{failure}</div>}
+
+          {each?.map(e => (
+            <div key={e.dir} className="min-w-0">
+              <span className="font-mono text-gray-300">{e.dir}</span>{' '}
+              {e.failure ? <span className="text-red-300">{e.failure}</span>
+                : e.result?.ok ? (
+                  <span className="text-emerald-300">
+                    on <span className="font-mono">{e.result.branch}</span>
+                    {e.result.createdFromRemote && ' (created from origin)'}
+                    {e.result.forced && <span className="text-amber-400"> - an agent's worktree holds it too</span>}
+                  </span>
+                )
+                : <span className="text-red-300">{e.result?.error}</span>}
+              {e.result && !e.result.ok && e.result.pending.length > 0 && (
+                <div className="font-mono text-[10px] text-gray-500">{e.result.pending.length} uncommitted file(s) in it</div>
+              )}
+            </div>
+          ))}
 
           {result?.ok === false && (
             <>

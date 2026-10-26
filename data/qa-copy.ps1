@@ -300,5 +300,5 @@ Write-Host "qa-copy: isolated QA copy running" -ForegroundColor Green
 Write-Host "  API       http://localhost:$Port   (PID $($state.apiPid))"
 if ($state.vitePid) { Write-Host "  Client    http://localhost:$VitePort   (dev server, proxies to $Port)" }
 Write-Host "  Data      $DataRoot"
-Write-Host "  Projects  alpha, bravo (placeholders)"
+Write-Host "  Projects  alpha, bravo, charlie (placeholders; charlie is several repos)"
 Write-Host "  Stop      powershell -NoProfile -ExecutionPolicy Bypass -File data/qa-copy.ps1 -Stop"

@@ -106,6 +106,7 @@ public static class GitEndpoints
                     readOnly = touch.ReadOnly,
                     touched = touch.Touched,
                     ahead = touch.Ahead,
+                    behind = touch.Behind,
                     dirty = touch.Dirty,
                     preflight = pre,
                     suggestedDescription = description,
@@ -124,6 +125,17 @@ public static class GitEndpoints
                 suggestedDescription = leadDescription ?? PrDescription.Compose(t, null, r.Description, issueRef),
                 repos,
             });
+        });
+
+        // Where the ticket stands in each of its repos - touched or not, ahead and behind, uncommitted
+        // files - from local reads only, as of the last fetch. Small enough for a card to ask on its
+        // own; the PR dialog, which needs the diffs too, reads the same through /git/pr.
+        app.MapGet("/api/tickets/{id:int}/git/repos", async (
+            int id, TicketService tickets, TicketGitService git, CancellationToken ct) =>
+        {
+            var t = await tickets.GetAsync(id);
+            if (t is null) return Results.NotFound();
+            return Results.Ok(await git.TouchedAsync(t.ProjectKey, BranchOf(t), ct));
         });
 
         // The other half, and the slow one: it fetches from origin, so it is seconds rather than

@@ -5,7 +5,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { useTickets } from '../hooks/useTickets';
 import { useNarrow } from '../hooks/useNarrow';
 import { PHASE_LABEL, DEFAULT_PRIORITY, PRIORITY_COLOR, PRIORITY_HINT, PRIORITY_LEVEL, PRIORITY_MARK } from '../types/tickets';
-import type { LabelRef, Phase, PhaseInfo, PhaseKind, TicketSummary, Track } from '../types/tickets';
+import type { LabelRef, Phase, PhaseInfo, PhaseKind, ProjectRepo, TicketSummary, Track } from '../types/tickets';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import { transitionTicket } from '../api/tickets';
 import { TicketDetail } from './TicketDetail';
@@ -405,6 +405,9 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
       // Pull request or TFVC check-in: decides which git buttons the row offers.
       repoType: projects.find(p => p.key === t.projectKey)?.repoType,
       mergeInsteadOfPr: projects.find(p => p.key === t.projectKey)?.mergeInsteadOfPr,
+      // A project of several repos: the git buttons name one repo at a time. The project list's own
+      // array, so the row's props stay reference-stable between polls.
+      repos: projects.find(p => p.key === t.projectKey)?.repos ?? null,
       // Your own filing, from its own request — see useTickets. Rows wearing nothing get the shared
       // empty array rather than a fresh one, so an unlabelled row's props stay reference-stable.
       labels: labels[String(t.id)] ?? NO_LABELS,
@@ -1055,7 +1058,7 @@ function SectionRule({ colour, title, count, meta }: {
  */
 function OrbitRow({
   t, labels, kind, nextPhases, showProjectBadge, variant, workedBy, menuOpen, selected, spotlit, dimmed, fx,
-  onToggleMenu, onOpen, onMove, delay, repoType, mergeInsteadOfPr,
+  onToggleMenu, onOpen, onMove, delay, repoType, mergeInsteadOfPr, repos,
 }: {
   t: TicketSummary;
   /** Your filing tags for this ticket. Never on `t` itself — see useTickets. */
@@ -1081,6 +1084,8 @@ function OrbitRow({
   /** The ticket's project's delivery: a PR ("git", the default) or a TFVC check-in. */
   repoType?: 'git' | 'tfvc';
   mergeInsteadOfPr?: boolean;
+  /** A project of several repos - see ProjectInfo.repos. */
+  repos?: ProjectRepo[] | null;
 }) {
   const tier = tierToken(t.phase, kind);
   const blocked = t.phase === 'Blocked';
@@ -1267,7 +1272,7 @@ function OrbitRow({
                   edge they land left on one card and right on the next, by how long the line was. */}
               {!narrow && <span className="flex-1" />}
               <span className="flex items-center gap-1 flex-none" onClick={e => e.stopPropagation()}>
-                <TicketGitActions ticketId={t.id} branch={t.branch ?? t.reviewBranch} size="row" track={t.track} repoType={repoType} merge={mergeInsteadOfPr} />
+                <TicketGitActions ticketId={t.id} branch={t.branch ?? t.reviewBranch} size="row" track={t.track} repoType={repoType} merge={mergeInsteadOfPr} repos={repos} />
                 {revealMenu && (
                   <span className="relative">
                     <button

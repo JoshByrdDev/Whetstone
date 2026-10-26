@@ -99,6 +99,38 @@ export interface PrPreflightResponse {
   preflight: PrPreflight;
   suggestedTitle: string;
   suggestedDescription: string;
+  /** A project of several repos: the dialog draws one section per repo. Absent from an older server. */
+  multiRepo?: boolean;
+  /** One entry per repo, in config order; a list of one on a project that is one repo. */
+  repos?: RepoPreflight[];
+}
+
+/** One repo of a ticket, as the PR dialog opens on it. */
+export interface RepoPreflight {
+  /** The repo's folder in the project; empty on a project that is one repo. */
+  dir: string;
+  readOnly: boolean;
+  /** The ticket changed it: commits ahead of its base, or uncommitted work. Only these are delivered. */
+  touched: boolean;
+  ahead: number;
+  behind: number;
+  dirty: number;
+  /** Null for a read-only repo, and for one of several the ticket did not touch. */
+  preflight: PrPreflight | null;
+  /** This repo's own draft, which names the other repos the change is in. */
+  suggestedDescription: string | null;
+}
+
+/** Where a ticket stands in each of its repos, from local reads - see /git/repos. */
+export interface RepoTouch {
+  dir: string;
+  readOnly: boolean;
+  touched: boolean;
+  ahead: number;
+  behind: number;
+  dirty: number;
+  baseRef?: string | null;
+  worktree?: string | null;
 }
 
 /**
@@ -181,8 +213,8 @@ export interface ForcePushResult {
  * A refusal here is a structured answer, not an exception: the 409 body carries the list of
  * uncommitted files that caused it, and that list is the whole message the user needs.
  */
-export async function checkoutTicket(id: number): Promise<CheckoutResult> {
-  const res = await fetch(`/api/tickets/${id}/git/checkout`, { method: 'POST' });
+export async function checkoutTicket(id: number, repo?: string): Promise<CheckoutResult> {
+  const res = await fetch(`/api/tickets/${id}/git/checkout${repoQuery(repo)}`, { method: 'POST' });
   if (res.status === 404) throw new Error('Ticket not found.');
   const body = await res.json().catch(() => null);
   if (!body) throw new Error(`${res.status} ${res.statusText}`);
@@ -200,8 +232,8 @@ export async function getPrPreflight(id: number): Promise<PrPreflightResponse> {
 }
 
 /** The base comparison, which fetches from origin. Slow, and asked for alongside the above. */
-export async function getPrBaseCheck(id: number): Promise<PrBaseCheck> {
-  const res = await fetch(`/api/tickets/${id}/git/pr/base`);
+export async function getPrBaseCheck(id: number, repo?: string): Promise<PrBaseCheck> {
+  const res = await fetch(`/api/tickets/${id}/git/pr/base${repoQuery(repo)}`);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
@@ -210,12 +242,24 @@ export async function getPrBaseCheck(id: number): Promise<PrBaseCheck> {
  * Both of these answer 409 on refusal with a body worth reading — a conflicted rebase names the
  * files, a refused force push says origin moved — so the status is never the message.
  */
-export async function rebaseTicket(id: number): Promise<RebaseResult> {
-  return post<RebaseResult>(`/api/tickets/${id}/git/rebase`);
+export async function rebaseTicket(id: number, repo?: string): Promise<RebaseResult> {
+  return post<RebaseResult>(`/api/tickets/${id}/git/rebase${repoQuery(repo)}`);
 }
 
-export async function forcePushTicket(id: number): Promise<ForcePushResult> {
-  return post<ForcePushResult>(`/api/tickets/${id}/git/force-push`);
+export async function forcePushTicket(id: number, repo?: string): Promise<ForcePushResult> {
+  return post<ForcePushResult>(`/api/tickets/${id}/git/force-push${repoQuery(repo)}`);
+}
+
+/** Where a ticket stands in each of its repos. Local reads only, so cheap enough for one card. */
+export async function getTicketRepos(id: number): Promise<RepoTouch[]> {
+  const res = await fetch(`/api/tickets/${id}/git/repos`);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+/** `?repo=<dir>` for a call about one repo of several; nothing for a project that is one repo. */
+function repoQuery(repo?: string): string {
+  return repo ? `?repo=${encodeURIComponent(repo)}` : '';
 }
 
 async function post<T>(url: string): Promise<T> {
@@ -393,8 +437,8 @@ export async function runTfvcSync(project: string, paths: string[], message: str
   return body as TfvcSyncResult;
 }
 
-export async function createPr(id: number, title: string, description: string): Promise<PrCreateResult> {
-  const res = await fetch(`/api/tickets/${id}/git/pr`, {
+export async function createPr(id: number, title: string, description: string, repo?: string): Promise<PrCreateResult> {
+  const res = await fetch(`/api/tickets/${id}/git/pr${repoQuery(repo)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title, description }),

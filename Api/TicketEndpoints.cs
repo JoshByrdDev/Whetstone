@@ -382,6 +382,11 @@ public static class TicketEndpoints
                     skipClassroomAnalysisByDefault = cfg.SkipClassroomAnalysisByDefault,
                     // A git project that delivers by merging to its base rather than by PR.
                     mergeInsteadOfPr = cfg.MergeInsteadOfPr && !cfg.IsTfvc,
+                    // A project of several repos: their folders, in order, which the board's git
+                    // buttons name one at a time (docs/multi-repo-plan.md). Null for a project of one.
+                    repos = cfg.IsMultiRepo
+                        ? cfg.Repos.Select(m => new { dir = m.Dir, readOnly = m.ReadOnly }).ToArray()
+                        : null,
                 };
             });
             return Results.Ok(new { projects });

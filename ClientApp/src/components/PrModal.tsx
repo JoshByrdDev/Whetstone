@@ -562,7 +562,7 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
  * The base check landing on the branch read that arrived first. Every field it owns replaces the
  * provisional one of the same name, and `baseChecked` is what turns the dialog's judgements on.
  */
-function withBase(pre: PrPreflight, b: PrBaseCheck): PrPreflight {
+export function withBase(pre: PrPreflight, b: PrBaseCheck): PrPreflight {
   return {
     ...pre,
     baseChecked: true,
@@ -578,11 +578,11 @@ function withBase(pre: PrPreflight, b: PrBaseCheck): PrPreflight {
   };
 }
 
-function providerLabel(p: PrPreflight['provider']) {
+export function providerLabel(p: PrPreflight['provider']) {
   return p === 'github' ? 'GitHub' : p === 'azure-devops' ? 'Azure DevOps' : p === 'other' ? 'origin' : 'no remote';
 }
 
-function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+export function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
       onClick={onClick}
@@ -605,7 +605,7 @@ const TONES = {
   wait: 'border-hair bg-gray-900/40 text-gray-400',
 };
 
-function Banner({ tone, children }: { tone: keyof typeof TONES; children: React.ReactNode }) {
+export function Banner({ tone, children }: { tone: keyof typeof TONES; children: React.ReactNode }) {
   return <div className={`text-xs leading-relaxed rounded border px-3 py-2 ${TONES[tone]}`}>{children}</div>;
 }
 
@@ -616,7 +616,7 @@ const ACTION_TONES = {
 };
 
 /** The button that fixes what the banner is complaining about, wearing the banner's own colour. */
-function Action({
+export function Action({
   tone, onClick, disabled, children,
 }: {
   tone: keyof typeof ACTION_TONES;
@@ -635,7 +635,7 @@ function Action({
   );
 }
 
-function Cmd({ children }: { children: string }) {
+export function Cmd({ children }: { children: string }) {
   return (
     <div className="mt-1.5 font-mono text-[10px] text-gray-400 bg-black/50 rounded px-2 py-1 select-all break-all">
       {children}

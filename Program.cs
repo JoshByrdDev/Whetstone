@@ -925,9 +925,24 @@ app.MapGet("/api/projects/git", () =>
         var displayName = string.IsNullOrEmpty(cfg.DisplayName) ? key : cfg.DisplayName;
         // repoType so the bar can offer Sync with TFVC beside a TFVC hub's change count.
         if (string.IsNullOrEmpty(projectRoot) || !Directory.Exists(projectRoot))
-            return new { key, displayName, branch = "—", changedFiles = 0, projectPath = projectRoot ?? "", repoType = cfg.RepoType };
-        var g = ReadGitInfo(projectRoot);
-        return new { key, displayName, branch = g.branch, changedFiles = g.changedFiles, projectPath = projectRoot, repoType = cfg.RepoType };
+            return new { key, displayName, branch = "—", changedFiles = 0, projectPath = projectRoot ?? "", repoType = cfg.RepoType, repos = (object[]?)null };
+        // A project of several repos: its path is the folder they sit in, which is not a repo, so
+        // each one's own checkout is read. The totals at the top are for a bar that reads only those.
+        if (cfg.IsMultiRepo)
+        {
+            var each = cfg.Repos.Select(m =>
+            {
+                var g = ReadGitInfo(m.HubPath(projectRoot));
+                return new { dir = m.Dir, branch = g.branch, changedFiles = g.changedFiles, readOnly = m.ReadOnly };
+            }).ToArray();
+            return new
+            {
+                key, displayName, branch = $"{each.Length} repos", changedFiles = each.Sum(r => r.changedFiles),
+                projectPath = projectRoot, repoType = cfg.RepoType, repos = (object[]?)each.Cast<object>().ToArray(),
+            };
+        }
+        var git = ReadGitInfo(projectRoot);
+        return new { key, displayName, branch = git.branch, changedFiles = git.changedFiles, projectPath = projectRoot, repoType = cfg.RepoType, repos = (object[]?)null };
     }).ToList();
     return Results.Ok(list);
 });

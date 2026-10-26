@@ -15,7 +15,9 @@ public sealed record RepoTarget(string Dir, string Path, string BaseBranch, bool
 /// <param name="Ahead">Commits on the ticket's branch that the base does not have.</param>
 /// <param name="Dirty">Uncommitted files in the worktree holding the branch, untracked included.</param>
 /// <param name="BaseRef">The ref it was measured against, or null when the base exists nowhere.</param>
-public sealed record RepoTouch(string Dir, bool ReadOnly, bool Touched, int Ahead, int Dirty, string? BaseRef, string? Worktree);
+/// <param name="Behind">Commits on the base the branch does not have, as of the last fetch - shown, never judged by.</param>
+public sealed record RepoTouch(string Dir, bool ReadOnly, bool Touched, int Ahead, int Dirty, string? BaseRef, string? Worktree,
+    int Behind = 0);
 
 /// <summary>
 /// The repos of a project, for every git action on it. See docs/multi-repo-plan.md, piece 4.
@@ -127,8 +129,8 @@ public partial class TicketGitService
         var baseRef = await BaseRefAsync(target.Path, cfg, target.BaseBranch, ct);
         if (baseRef is null) return new RepoTouch(target.Dir, false, true, 0, dirty, null, worktree);
 
-        var (_, ahead) = await CountAsync(target.Path, baseRef, branch, ct);
-        return new RepoTouch(target.Dir, false, dirty > 0 || ahead > 0, ahead, dirty, baseRef, worktree);
+        var (behind, ahead) = await CountAsync(target.Path, baseRef, branch, ct);
+        return new RepoTouch(target.Dir, false, dirty > 0 || ahead > 0, ahead, dirty, baseRef, worktree, behind);
     }
 
     /// <summary>

@@ -337,7 +337,18 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    ticket's branch, which every writable repo has. Pinning an analysis per repo is still open.
    `charlie` seeds a `qa/two-repos` branch with a commit in two of its repos. A QA copy refuses
    every push, so its origins only make "the base" origin's.
-6. UI (piece 7), proven on the QA copy against the placeholder project
+6. UI (piece 7), proven on the QA copy against the placeholder project - done. *As built:* the
+   multi-repo dialog is its own component, `MultiRepoPrModal`, and `PrModal` is unchanged apart
+   from exporting its small parts. A project of one opens exactly the dialog it always did. The
+   board learns a project's repos from `/api/projects` (`repos`). A row's badge (`2/2 repos`,
+   with each repo's ahead and behind in its title) comes from a new local-reads route,
+   `GET /git/repos`, read once per multi-repo ticket and again when its dialog closes, not on
+   every poll. Checkout runs per writable repo. `ProjectGitBar` reads each repo's own checkout.
+   On the QA copy, `charlie`'s ticket on `qa/two-repos` opened with both repos ready and the
+   read-only one listed as not changed. "Create all" showed the copy's refusal in each repo's
+   section. A refusal body that carried no transcript first crashed the board; the copy found it
+   and the dialog no longer assumes one. At 390px the page and the dialog have no sideways
+   scroll, and the git bar wraps repo by repo.
 7. Prompt, skill templates, every project's skill copies, `CLAUDE.md` (pieces 5 and 8)
 8. First live run: a ticket that touches one member, then one that touches two. Its PRs are
    created by hand from the dialog, and the untouched member is checked to have nothing pushed.

@@ -10,6 +10,11 @@ interface ProjectGit {
   projectPath: string;
   /** "tfvc" hubs take a Get Latest, whose landings the change count is mostly made of. */
   repoType?: 'git' | 'tfvc';
+  /**
+   * A project of several repos: each one's own checkout, since projectPath is the folder they sit
+   * in. branch and changedFiles above are then a summary. Absent for a project of one.
+   */
+  repos?: { dir: string; branch: string; changedFiles: number; readOnly: boolean }[] | null;
 }
 
 /**
@@ -64,15 +69,29 @@ export function ProjectGitBar({ projectFilter }: { projectFilter: string | null 
   return (
     <div className="flex flex-wrap items-center gap-x-5 gap-y-1">
       {shown.map(p => (
-        <div key={p.key} className="flex items-center gap-2 text-xs" title={p.projectPath}>
+        // Several repos wrap chip by chip rather than squeezing every name to its first letters.
+        <div key={p.key} className={`flex items-center gap-2 text-xs${p.repos ? ' flex-wrap gap-y-0.5' : ''}`} title={p.projectPath}>
           <span className="text-gray-300 font-medium">{p.displayName}</span>
-          <span className="flex items-center gap-1 font-mono text-gray-400">
-            <svg className="h-3 w-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            {p.branch}
-          </span>
-          {p.changedFiles > 0 && (
+          {p.repos ? (
+            // One chip per repo: its folder, the branch its own checkout is on, and its own count.
+            p.repos.map(r => (
+              <span key={r.dir} className="flex items-center gap-1 font-mono text-gray-400 whitespace-nowrap" title={r.readOnly ? `${r.dir} (read-only)` : r.dir}>
+                <span className="text-gray-500">{r.dir}</span>
+                <span className="truncate max-w-[140px]">{r.branch}</span>
+                {r.changedFiles > 0 && (
+                  <span className="px-1 rounded bg-amber-500/20 text-amber-400 text-[10px] font-semibold">{r.changedFiles}</span>
+                )}
+              </span>
+            ))
+          ) : (
+            <span className="flex items-center gap-1 font-mono text-gray-400">
+              <svg className="h-3 w-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              {p.branch}
+            </span>
+          )}
+          {!p.repos && p.changedFiles > 0 && (
             <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 text-[10px] font-semibold">
               {p.changedFiles} changed
             </span>

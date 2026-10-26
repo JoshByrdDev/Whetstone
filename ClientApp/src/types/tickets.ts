@@ -117,6 +117,18 @@ export interface ProjectInfo {
    * request. The PR button's dialog then ends in a merge. Absent from an older server: PRs.
    */
   mergeInsteadOfPr?: boolean;
+  /**
+   * A project of several repos: each one's folder, in order. Its tickets' git buttons name one repo
+   * at a time and its PR dialog has a section per repo. Null or absent for a project that is one repo.
+   */
+  repos?: ProjectRepo[] | null;
+}
+
+/** One repo of a project of several. See {@link ProjectInfo.repos}. */
+export interface ProjectRepo {
+  dir: string;
+  /** In every workspace for reading, never changed or delivered. */
+  readOnly: boolean;
 }
 
 /** See {@link ProjectInfo.repoType}. */
