@@ -112,7 +112,6 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   }, [runningNow, load]);
 
   const off = page?.mode === 'off';
-  const progress = status?.progress;
   // A ticket in review whose merge waits on a flag only its owner can clear. Answering the
   // question that asked about it lifts nothing, so the ticket stays here until the flag is
   // cleared or the ticket leaves review; one an open question names is already shown under it.
@@ -176,7 +175,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
               Now{waitingCount > 0 ? ` ${waitingCount}` : ''}
             </Chip>
             <Chip on={view === 'plan'} onClick={() => show('plan')} title="The plan it works from, and how far each part is">
-              The plan{progress ? ` ${progress.percent}%` : ''}
+              The plan
             </Chip>
             <Chip on={view === 'decisions'} onClick={() => show('decisions')}
               title={`The register: what is decided and whether it still is${pairs > 0 ? ` - ${pairs} pair${pairs === 1 ? '' : 's'} that may disagree` : ''}`}>
