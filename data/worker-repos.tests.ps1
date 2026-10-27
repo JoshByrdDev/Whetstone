@@ -286,6 +286,20 @@ try {
     Check 'the next run sets up what failed' $retry.ok $true
     Check '... in both' ((Test-Path (Join-Path (Find $retry 'alpha-web').path 'setup-count.txt')) -and (Test-Path (Join-Path (Find $retry 'alpha-api').path 'setup-count.txt'))) $true
 
+    # ---- What setup can see --------------------------------------------------------------
+    # worker.ps1 sets WHETSTONE_PROJECT_DIR before the workspace is prepared, so a setup command
+    # can use what the project folder keeps. One repo's setup runs inline and several run as jobs,
+    # which are processes of their own: both have to see it.
+    Write-Host "== what setup can see"
+    $env:WHETSTONE_PROJECT_DIR = Join-Path $root 'the-project-folder'
+    $seeIt = 'echo %WHETSTONE_PROJECT_DIR%> setup-dir.txt'
+    $seen = Open-Workspace -Members @((Member 'alpha-web' $web -Setup @($seeIt)), (Member 'alpha-api' $api -Base 'develop' -Setup @($seeIt))) -Branch 'jb/PROJ-6'
+    Check 'parallel setup jobs see the project folder' ((Get-Content (Join-Path (Find $seen 'alpha-web').path 'setup-dir.txt')).Trim()) $env:WHETSTONE_PROJECT_DIR
+    Check '... every one of them' ((Get-Content (Join-Path (Find $seen 'alpha-api').path 'setup-dir.txt')).Trim()) $env:WHETSTONE_PROJECT_DIR
+    $one = Open-Workspace -Members @((Member '' $soloHub -Setup @($seeIt))) -Branch 'jb/solo-7'
+    Check 'inline setup sees it too' ((Get-Content (Join-Path $one.path 'setup-dir.txt')).Trim()) $env:WHETSTONE_PROJECT_DIR
+    Remove-Item Env:WHETSTONE_PROJECT_DIR
+
     # ---- The prompt -------------------------------------------------------------------
     Write-Host "== the prompt"
     Check 'worker.ps1 still parses' (@($tree.FindAll({ $true }, $false)).Count -gt 0 -and $parseErrors.Count -eq 0) $true

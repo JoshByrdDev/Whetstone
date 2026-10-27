@@ -70,6 +70,12 @@ public class ProjectConfig
     /// Commands run once inside a freshly created worktree, in order, before any worker starts.
     /// A new worktree has none of the repo's gitignored build state (node_modules, restored
     /// packages), and a worker that discovers that fact halfway through fails confusingly.
+    /// <para>
+    /// Each runs with <c>WHETSTONE_PROJECT_DIR</c> set to the project's folder
+    /// (<c>data/projects/&lt;key&gt;</c>), so a command can use what that folder keeps and the repo does
+    /// not - a script, or a compose file that moves the stack's ports - by path, rather than copying
+    /// it into the worktree where it would be one more untracked file to commit.
+    /// </para>
     /// </summary>
     public string[] WorktreeSetup { get; init; } = Array.Empty<string>();
 

@@ -1484,6 +1484,13 @@ if ($onHost) {
     else { Write-Log "  WARNING: could not fetch the ticket's files from the board host: $($ticketData.reason)" }
 }
 
+# The project's own folder (data/projects/<key>), for the worktree's setup commands and everything
+# after them. It is the one place a project keeps what its repos do not: a compose file that moves
+# its stack's host ports off another project's, say, which a setup command names by this path
+# rather than copying into the worktree, where it would be an untracked file to commit. Set before
+# the worktree is prepared, unlike the run's other variables below, because setup runs then.
+if ($projectDataDir) { $env:WHETSTONE_PROJECT_DIR = "$projectDataDir" }
+
 # Give the ticket its own checkout before anything else: the MCP config below points Augment at
 # the working directory, so the working directory has to be settled first.
 if ($repoDir) {
