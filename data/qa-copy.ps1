@@ -183,7 +183,7 @@ foreach ($key in 'alpha', 'bravo') {
 # on a real pull-request project. It delivers by pull request, which alpha and bravo do not - they
 # merge locally, and a project of several refuses that. The copy refuses every push anyway. Branch
 # qa/two-repos has a commit in two of the repos, so a ticket pointed at it shows the PR dialog a
-# change across several.
+# change across several; qa/their-change is on charlie-api's origin alone, for a peer review.
 $charlie = Join-Path $DataRoot 'repos\charlie'
 foreach ($name in 'charlie-web', 'charlie-api', 'charlie-infra') {
     $r = Join-Path $charlie $name
@@ -205,6 +205,16 @@ foreach ($name in 'charlie-web', 'charlie-api', 'charlie-infra') {
         & git -C $r commit -q -m "Half of a change across two repos"
         & git -C $r checkout -q main
     }
+    # Somebody else's branch, on charlie-api's origin only - what a peer review of one repo reads.
+    if ($name -eq 'charlie-api') {
+        & git -C $r checkout -q -b qa/their-change
+        Set-Content -Path (Join-Path $r 'THEIRS.md') -Value "A colleague's change to charlie-api, waiting for review." -Encoding ASCII
+        & git -C $r -c core.autocrlf=false add -A
+        & git -C $r commit -q -m "A colleague's change"
+        & git -C $r push -q origin qa/their-change
+        & git -C $r checkout -q main
+        & git -C $r branch -q -D qa/their-change
+    }
 }
 $pd = Join-Path $DataRoot 'projects\charlie'
 New-Item -ItemType Directory -Path $pd -Force | Out-Null
@@ -213,6 +223,8 @@ Write-Json (Join-Path $pd 'project.defaults.json') ([ordered]@{
     displayName = 'Charlie'
     baseBranch  = 'main'
     repos       = @('charlie-web', 'charlie-api', [ordered]@{ dir = 'charlie-infra'; readOnly = $true })
+    # Both tracks, so a peer review of one repo's branch can be filed and read here too.
+    tracks      = @('Delivery', 'Review')
 })
 Write-Json (Join-Path $pd 'project.json') ([ordered]@{
     projectPath  = $charlie

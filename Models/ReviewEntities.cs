@@ -37,6 +37,13 @@ public class ReviewTarget
     /// <summary>Their branch — the one we check out, and never write to.</summary>
     public string SourceBranch { get; set; } = "";
 
+    /// <summary>
+    /// On a project of several repos, the folder name of the one their branch is in - a pull request
+    /// lives in one repo, so a review does too. The workspace holds that repo detached at their
+    /// branch and every other one detached at its base, there to be read. Null on a project of one.
+    /// </summary>
+    public string? Repo { get; set; }
+
     /// <summary>What they are merging into. Falls back to the project's base branch when unset.</summary>
     public string? TargetBranch { get; set; }
 

@@ -56,6 +56,17 @@ export function CreateTicketModal({
   const [prAuthor, setPrAuthor] = useState('');
   const reviewing = track === 'Review';
 
+  // On a project of several repos a pull request is in one of them, so the review names it. Only
+  // the writable ones are offered: nothing is delivered from a read-only repo, so no PR is in one.
+  const reviewRepos = useMemo(
+    () => (projects.find(p => p.key === projectKey)?.repos ?? []).filter(r => !r.readOnly).map(r => r.dir),
+    [projects, projectKey]);
+  const [reviewRepo, setReviewRepo] = useState('');
+  useEffect(() => {
+    if (!reviewRepos.includes(reviewRepo)) setReviewRepo(reviewRepos.length === 1 ? reviewRepos[0] : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewRepos]);
+
   // The board unmounts this the moment onClose fires, so leaving is something the panel does to
   // itself. Every way out goes through it, a successful create included - a panel that fades when
   // you cancel and blinks out when you submit reads as two different panels.
@@ -175,6 +186,7 @@ export function CreateTicketModal({
 
   async function submit() {
     if (reviewing && !sourceBranch.trim()) { setError('Which branch are you reviewing?'); return; }
+    if (reviewing && reviewRepos.length > 0 && !reviewRepo) { setError('Which repo is their branch in?'); return; }
     // A review ticket names itself after the branch when nothing better is given, so the title is
     // only ever required on a standalone delivery ticket.
     if (!linked && !reviewing && !title.trim()) { setError('Title is required (or link an issue key).'); return; }
@@ -198,6 +210,7 @@ export function CreateTicketModal({
           targetBranch: targetBranch.trim() || undefined,
           prUrl: prUrl.trim() || undefined,
           prAuthor: prAuthor.trim() || undefined,
+          repo: reviewRepos.length > 0 ? reviewRepo : undefined,
         } : {}),
       };
       const t = await createTicket(linked
@@ -257,6 +270,14 @@ export function CreateTicketModal({
             longer than the delivery form it is meant to be a shorter version of. */}
         {reviewing && (
           <div className="space-y-3 rounded-lg border border-hair bg-black/20 p-3">
+            {reviewRepos.length > 0 && (
+              <Labeled label="In repo">
+                <select value={reviewRepo} onChange={e => setReviewRepo(e.target.value)} className={inputCls}>
+                  {reviewRepos.length > 1 && <option value="">the repo their pull request is in…</option>}
+                  {reviewRepos.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </Labeled>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <Labeled label="Their branch">
                 <input

@@ -515,7 +515,7 @@ public class TicketTools
         [Description("The local ticket id.")] int ticketId,
         [Description("The comment, as markdown. Say what is wrong and what happens because of it. Address the author, not the ticket - this text is going to be read by the person who wrote the code.")] string body,
         [Description("How much this is claiming. 'Blocking' = this is wrong and must change before merge. 'Question' = the author should answer; may or may not be a defect. 'Nit' = worth saying, not worth blocking on. 'Praise' = worth saying because it is good. Be honest with this: a review that marks everything Blocking is one the human has to re-triage by hand, which is most of the work you are here to save.")] string severity = "Question",
-        [Description("Repo-relative path of the file this is about, e.g. 'backend/Core/Services/PlanService.cs'. Omit for a comment about the whole change.")] string? filePath = null,
+        [Description("Repo-relative path of the file this is about, e.g. 'backend/Core/Services/PlanService.cs' - relative to the repo under review, where the pull request is, even when your workspace holds several. Omit for a comment about the whole change.")] string? filePath = null,
         [Description("1-based line number in that file. Omit for a comment about the file as a whole.")] int? line = null,
         [Description("Which side of the diff: 'Head' (the branch as proposed - nearly always this) or 'Base' for a comment about something the change removed.")] string side = "Head",
         [Description("The id of the QA item this came out of, when a drive-test found it. A failing check plus its screenshot is the most useful comment you can leave.")] int? qaItemId = null,

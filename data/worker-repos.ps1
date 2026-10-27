@@ -229,6 +229,8 @@ function Invoke-WorkspaceSetup {
 #      should read the API as it is now, not as it was when the ticket was speculated.
 #   5. Every repo that needs it is set up, all at once (Invoke-WorkspaceSetup).
 #
+# A peer review takes its own shape after step 1: see Resolve-ReviewWorkspace.
+#
 # Stops at the first repo that fails, naming it; the worktrees already made stay, and the next run
 # re-enters them as Resolve-Worktree already does for one.
 # Returns @{ ok; path; branch; members; created } or @{ ok = $false; reason }. Each member carries
@@ -237,7 +239,7 @@ function Resolve-Workspace {
     param(
         [object[]]$Members, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
         [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix,
-        [string]$ReviewBranch, [bool]$MergeLocally, [bool]$OnBase,
+        [string]$ReviewBranch, [string]$ReviewRepo, [bool]$MergeLocally, [bool]$OnBase,
         [double]$SetupTimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 })
     )
 
@@ -260,7 +262,6 @@ function Resolve-Workspace {
 
     # Refused upstream as well (RepoLayout, the claim, ticket creation); here so this can never be
     # the code that finds out.
-    if ($ReviewBranch) { return @{ ok = $false; reason = "a project of several repos cannot run the Review track yet (docs/multi-repo-plan.md)" } }
     if ($OnBase) { return @{ ok = $false; reason = "a project of several repos cannot run a slice's walk-through yet (docs/multi-repo-plan.md)" } }
     if ($MergeLocally) { return @{ ok = $false; reason = "a project of several repos delivers by pull request; mergeInsteadOfPr is refused for it" } }
     if (-not $WorktreeRoot) { return @{ ok = $false; reason = "no worktree root configured for this project and none could be derived from its path" } }
@@ -275,6 +276,11 @@ function Resolve-Workspace {
         $null = Invoke-WithMutex -Name "hub-$hub" -TimeoutMs 900000 -Body {
             if (@(git -C $hub remote 2>$null) -contains 'origin') { git -C $hub fetch origin --prune *> $null }
         }
+    }
+
+    if ($ReviewBranch) {
+        return Resolve-ReviewWorkspace -Members $all -WorktreeRoot $WorktreeRoot -ReviewBranch $ReviewBranch `
+            -ReviewRepo $ReviewRepo -SetupTimeoutMinutes $SetupTimeoutMinutes
     }
 
     $writable = @($all | Where-Object { -not $_.readOnly })
@@ -333,6 +339,78 @@ function Resolve-Workspace {
     return @{ ok = $true; path = $workspace; branch = $branch; members = $out.ToArray(); created = $anyCreated }
 }
 
+# A peer review's workspace on a project of several repos. A pull request lives in one repo, so the
+# review names it ($ReviewRepo): that repo is checked out DETACHED at their branch, exactly as the
+# one repo of a project of one is (Resolve-Worktree's review track), and every other repo detached
+# at its base, there to be read as the code their change has to work against. Nothing in the
+# workspace is on a branch, so there is nothing in it to commit onto.
+#
+# The folder is named after the repo and the branch, not the ticket, and is reused across passes -
+# setting a workspace up is what costs, and a branch reviewed three times should pay for it once.
+# Every repo is checked out again each pass: theirs to what origin has now, the rest to their base.
+# Returns what Resolve-Workspace does; the member under review carries underReview = $true.
+function Resolve-ReviewWorkspace {
+    param(
+        [object[]]$Members, [string]$WorktreeRoot, [string]$ReviewBranch, [string]$ReviewRepo,
+        [double]$SetupTimeoutMinutes = 20
+    )
+
+    $all = @($Members)
+    $writable = (@($all | Where-Object { -not $_.readOnly } | ForEach-Object { $_.dir })) -join ', '
+    if (-not $ReviewRepo) {
+        return @{ ok = $false; reason = "this review does not say which repo '$ReviewBranch' is in, and on a project of several it has to ($writable)" }
+    }
+    $under = @($all | Where-Object { $_.dir -eq $ReviewRepo }) | Select-Object -First 1
+    if (-not $under) { return @{ ok = $false; reason = "this review names the repo '$ReviewRepo', which is not one of this project's ($writable)" } }
+    if ($under.readOnly) { return @{ ok = $false; reason = "this review names '$ReviewRepo', which this project keeps read-only: there is no pull request in it to review" } }
+
+    $workspace = Join-Path $WorktreeRoot (Get-WorktreeDirName "review-$($under.dir)-$ReviewBranch")
+    if (Test-Path $workspace -PathType Leaf) { return @{ ok = $false; reason = "'$workspace' is a file where this review's workspace belongs; move or remove it by hand" } }
+    if (-not (Test-Path $workspace)) { New-Item -ItemType Directory -Path $workspace -Force | Out-Null }
+
+    $out = New-Object System.Collections.Generic.List[object]
+    $pending = New-Object System.Collections.Generic.List[object]
+    $anyCreated = $false
+    $sha = $null
+    foreach ($m in $all) {
+        $expected = Join-Path $workspace $m.dir
+        $isUnder = $m.dir -eq $under.dir
+        if ($isUnder) {
+            $r = Resolve-Worktree -RepoDir $m.hub -WorktreeRoot $workspace -WorktreeName $m.dir -Skill '' -TicketId '' `
+                -BaseBranch $m.baseBranch -CopyFiles @($m.copy) -Setup @($m.setup) -ReviewBranch $ReviewBranch `
+                -MergeLocally $false -NoSetup
+            if ($r.ok -and $r.deferred) { $r = @{ ok = $false; reason = "'$($m.hub)' is not a git repo" } }
+            if ($r.ok) { $sha = $r.sha }
+        }
+        else {
+            $r = Resolve-ReadOnlyWorktree -RepoDir $m.hub -Path $expected -BaseBranch $m.baseBranch
+        }
+        if ($r.ok -and (Get-FullPathKey $r.path) -ne (Get-FullPathKey $expected)) {
+            $r = @{ ok = $false; reason = "its worktree is at '$($r.path)', outside this review's workspace - remove that worktree, or move it to '$expected'" }
+        }
+        if (-not $r.ok) { return @{ ok = $false; reason = "$($m.dir): $($r.reason)"; fault = [bool]$r.fault } }
+
+        $entry = $m.Clone()
+        $entry.path = $r.path
+        $entry.created = [bool]$r.created
+        $entry.underReview = $isUnder
+        if ($r.created) { $anyCreated = $true }
+        [void]$out.Add($entry)
+        if ($r.needsSetup) { [void]$pending.Add(@{ dir = $m.dir; path = $r.path; hub = $m.hub; copy = @($m.copy); setup = @($m.setup) }) }
+    }
+
+    if ($pending.Count -gt 0) {
+        $setup = Invoke-WorkspaceSetup -Items $pending.ToArray() -TimeoutMinutes $SetupTimeoutMinutes
+        if (-not $setup.ok) {
+            $names = ($setup.failed | ForEach-Object { $_.dir }) -join ', '
+            $each = ($setup.failed | ForEach-Object { "$($_.dir): $($_.reason)" }) -join "`n`n"
+            return @{ ok = $false; reason = "worktree setup failed in $names`n`n$each" }
+        }
+    }
+
+    return @{ ok = $true; path = $workspace; branch = $ReviewBranch; sha = $sha; members = $out.ToArray(); created = $anyCreated }
+}
+
 # Copy what a project keeps for its workspace's root (data/projects/<key>/workspace/) into the
 # workspace: a conventions file mapping the repos, typically. Anything under a folder named like one
 # of the repos is skipped and logged - a copy there would land in that repo's worktree and dirty it.
@@ -368,6 +446,22 @@ function Format-ReposNote {
     if (-not (Test-MultiRepo $Members)) { return '' }
     $lines = New-Object System.Collections.Generic.List[string]
     [void]$lines.Add('')
+
+    # A peer review's workspace (Resolve-ReviewWorkspace): one repo at their branch, the rest at
+    # their bases, and nothing on a branch of ours to commit to.
+    $under = @(@($Members) | Where-Object { $_.underReview }) | Select-Object -First 1
+    if ($under) {
+        [void]$lines.Add("- **Repos:** this working directory is a workspace of several git repos, each its own repo, and every one of them is checked out detached:")
+        foreach ($m in @($Members)) {
+            $ref = if ($m.path) { Resolve-BaseRef -RepoDir $m.path -BaseBranch $m.baseBranch -MergeLocally $MergeLocally } else { $null }
+            if (-not $ref) { $ref = $m.baseBranch }
+            if ($m.underReview) { [void]$lines.Add("  - ``$($m.dir)`` - **under review**: their branch ``$Branch``, base ref ``$ref``. This is the repo the pull request is in.") }
+            else { [void]$lines.Add("  - ``$($m.dir)`` - at its base ``$ref``, here to be read as the code their change has to work with.") }
+        }
+        [void]$lines.Add("  The workspace root is not a repo: run git inside one (``git -C <repo> ...``), never at the root. Only ``$($under.dir)`` is under review - wherever a skill says ``<base-ref>``, it means that repo's base ref from this list. Change nothing in any of them. Every file path you give ``add_review_comment`` is relative to ``$($under.dir)``, where the pull request is.")
+        return ($lines -join "`n")
+    }
+
     [void]$lines.Add("- **Repos:** this working directory is a workspace of several git repos, each its own repo. Every repo listed with a base ref is on branch ``$Branch``:")
     foreach ($m in @($Members)) {
         if ($m.readOnly) {

@@ -159,7 +159,8 @@ and the two must agree, the same way the base ref is: `Get-TouchedMembers` in
 
 A path that stands on its own - one a model wrote, or one listed across the ticket - starts with
 its repo's folder on a project of several (`alpha-api/src/Foo.cs`). A path inside one repo's own
-answer, like its preflight, is relative to that repo.
+answer, like its preflight, is relative to that repo - and so is a review comment's, because a
+review is of one repo (`ReviewTarget.Repo`) and its comments are read in that repo's pull request.
 
 The prompt says which repos a run has through `{{REPOS_NOTE}}`, which is empty on a project of one.
 The skills' "Several repos" section is conditional on it, and it is a pipeline rule: it goes into

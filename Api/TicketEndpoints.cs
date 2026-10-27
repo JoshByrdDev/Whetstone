@@ -19,6 +19,8 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     // does not have and every rule reading the pair would have to cope.
     string? Track = null, string? SourceBranch = null, string? TargetBranch = null,
     string? PrUrl = null, string? PrId = null, string? PrAuthor = null,
+    // The repo their branch is in: required on a project of several repos, refused on a project of one.
+    string? Repo = null,
     // Absent = the project's default (ProjectConfig.SkipClassroomAnalysisByDefault), so every way a
     // ticket gets created honours it, not only the form that knows to ask.
     bool? SkipClassroomAnalysis = null);
@@ -73,6 +75,31 @@ public record CycleReportRequest(
 
 public static class TicketEndpoints
 {
+    /// <summary>
+    /// Why a review ticket cannot name <paramref name="named"/> as the repo its branch is in, or null
+    /// with <paramref name="repo"/> set to the repo's folder name as configured - null on a project
+    /// of one, which names none. A read-only repo is refused: nobody's pull request is delivered into
+    /// a repo this project never delivers from.
+    /// </summary>
+    public static string? ReviewRepoError(ProjectConfig cfg, string? named, out string? repo)
+    {
+        repo = null;
+        var name = named?.Trim() ?? "";
+        if (!cfg.IsMultiRepo)
+            return name.Length == 0 ? null : $"{cfg.DisplayName} is one repo, with no repo named '{name}' in it.";
+
+        var dirs = string.Join(", ", cfg.Repos.Where(m => !m.ReadOnly).Select(m => m.Dir));
+        if (name.Length == 0)
+            return $"{cfg.DisplayName} is several repos: say which one the branch is in ({dirs}).";
+        var member = cfg.Repos.FirstOrDefault(m => string.Equals(m.Dir, name, StringComparison.OrdinalIgnoreCase));
+        if (member is null)
+            return $"{cfg.DisplayName} has no repo named '{name}'. The branch can be in {dirs}.";
+        if (member.ReadOnly)
+            return $"'{member.Dir}' is read-only in {cfg.DisplayName}: nothing is delivered from it, so there is no pull request in it to review. The branch can be in {dirs}.";
+        repo = member.Dir;
+        return null;
+    }
+
     /// <summary>
     /// Parse a priority name off a request body. Returns false only for a value that was supplied
     /// and is not one of the five — a missing one is legal and yields null (create: Normal;
@@ -559,16 +586,17 @@ public static class TicketEndpoints
             var title = req.Title;
             if (track == TicketTrack.Review)
             {
-                // A review target would have to name which of the repos its branch is in, and the
-                // workspace would have to hold that one at their branch - phase 2 of the plan.
-                if (registry.GetProjectConfig(projectKey).IsMultiRepo)
-                    return Results.BadRequest(new { error = "A project of several repos cannot take peer review tickets yet (docs/multi-repo-plan.md)." });
                 if (string.IsNullOrWhiteSpace(req.SourceBranch))
                     return Results.BadRequest(new { error = "A peer review ticket needs the branch it is reviewing." });
+                // A pull request lives in one repo, so on a project of several the review names it:
+                // the workspace holds that one at their branch and the others at their bases.
+                if (ReviewRepoError(registry.GetProjectConfig(projectKey), req.Repo, out var reviewRepo) is { } repoError)
+                    return Results.BadRequest(new { error = repoError });
 
                 reviewTarget = new ReviewTarget
                 {
                     SourceBranch = req.SourceBranch.Trim(),
+                    Repo = reviewRepo,
                     TargetBranch = string.IsNullOrWhiteSpace(req.TargetBranch) ? null : req.TargetBranch.Trim(),
                     PrUrl = string.IsNullOrWhiteSpace(req.PrUrl) ? null : req.PrUrl.Trim(),
                     PrId = string.IsNullOrWhiteSpace(req.PrId) ? null : req.PrId.Trim(),

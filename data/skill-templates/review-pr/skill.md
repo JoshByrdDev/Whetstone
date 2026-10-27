@@ -42,6 +42,15 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
 - **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
 
+## A review in a workspace of several repos - only when your prompt lists **Repos**
+
+When it does, one repo in the list is marked **under review**: the pull request is in it, and it is checked out detached at their branch. Every other repo is detached at its own base, there so you can read - and, in Part B, run - the code their change has to work with.
+
+- **The section above is written for building, and only half of it holds here.** Run git inside a repo, never at the root; use that repo's own base ref; name the repo. Nothing about committing applies: this phase changes nothing, in any repo.
+- **Part A is about the repo under review.** `git rev-parse HEAD` for `set_reviewed_commit`, and every `git log` and `git diff` against `<target>`, run in that repo (`git -C <repo> ...`), with that repo's base ref from the Repos list standing in for "this repo's base branch".
+- **The other repos are evidence, not the subject.** A caller in another repo that the change breaks is a finding: stage it against the line in the repo under review that breaks it, and name the caller in the body (`alpha-web/src/api.ts:40 still sends the old field`).
+- **`filePath` in `add_review_comment` is relative to the repo under review**, with no repo folder in front: the comment is read in that repo's pull request.
+
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` for the ticket: `description`, `qaItems`, `skipQaTesting`, `review` (the branch, the PR, and what a previous pass already read), and `reviewComments` (what a previous pass already said).

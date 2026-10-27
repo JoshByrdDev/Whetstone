@@ -1371,6 +1371,21 @@ public class TicketService
         return r;
     }
 
+    /// <summary>
+    /// A review comment's file, relative to the repo under review: the comment is pasted into that
+    /// repo's pull request, where a path that starts with the repo's folder names nothing. A workspace
+    /// of several repos names files that way everywhere else, so a run will often write it - the
+    /// folder is dropped here rather than refused, as the one meaning it can have.
+    /// </summary>
+    public static string? ReviewFilePath(string? filePath, string? repo)
+    {
+        if (string.IsNullOrWhiteSpace(filePath)) return null;
+        var path = filePath.Trim().Replace('\\', '/');
+        if (!string.IsNullOrWhiteSpace(repo) && path.StartsWith(repo.Trim() + "/", StringComparison.OrdinalIgnoreCase))
+            path = path[(repo.Trim().Length + 1)..];
+        return path;
+    }
+
     public async Task<ReviewComment?> AddReviewCommentAsync(int ticketId, string body,
         ReviewSeverity severity, AuthorKind author, string? filePath = null, int? line = null,
         DiffSide side = DiffSide.Head, int? qaItemId = null, int? qaShotOrder = null, string? anchorSha = null)
@@ -1393,7 +1408,7 @@ public class TicketService
             Body = body.Trim(),
             Severity = severity,
             Author = author,
-            FilePath = string.IsNullOrWhiteSpace(filePath) ? null : filePath.Trim().Replace('\\', '/'),
+            FilePath = ReviewFilePath(filePath, target?.Repo),
             Line = line,
             Side = side,
             QaItemId = qaItemId,

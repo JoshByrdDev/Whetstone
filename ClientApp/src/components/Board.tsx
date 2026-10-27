@@ -1272,7 +1272,7 @@ function OrbitRow({
                   edge they land left on one card and right on the next, by how long the line was. */}
               {!narrow && <span className="flex-1" />}
               <span className="flex items-center gap-1 flex-none" onClick={e => e.stopPropagation()}>
-                <TicketGitActions ticketId={t.id} branch={t.branch ?? t.reviewBranch} size="row" track={t.track} repoType={repoType} merge={mergeInsteadOfPr} repos={repos} />
+                <TicketGitActions ticketId={t.id} branch={t.branch ?? t.reviewBranch} size="row" track={t.track} repoType={repoType} merge={mergeInsteadOfPr} repos={repos} reviewRepo={t.reviewRepo} />
                 {revealMenu && (
                   <span className="relative">
                     <button

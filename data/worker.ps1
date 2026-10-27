@@ -396,8 +396,8 @@ function Get-TicketBranchName {
 #
 # Three switches exist for a project of several repos, which calls this once per repo from
 # Resolve-Workspace (data/worker-repos.ps1), and none of them is passed for a single repo:
-#   -WorktreeName  the folder under $WorktreeRoot, instead of one named after the branch - the
-#                  repo's own folder name, inside the ticket's workspace
+#   -WorktreeName  the folder under $WorktreeRoot, instead of one named after the branch (or after
+#                  the branch under review) - the repo's own folder name, inside the workspace
 #   -MayCreate     create the branch from the base outside speculate too: a repo the ticket has
 #                  not touched has nothing on its branch to lose
 #   -NoSetup       hand the worktree back unprepared, with needsSetup = $true where setup would
@@ -447,7 +447,7 @@ function Resolve-Worktree {
             }
             $sha = $sha.Trim()
 
-            $wtPath = Join-Path $WorktreeRoot (Get-WorktreeDirName "review-$ReviewBranch")
+            $wtPath = Join-Path $WorktreeRoot $(if ($WorktreeName) { $WorktreeName } else { Get-WorktreeDirName "review-$ReviewBranch" })
 
             if (Test-Path $wtPath) {
                 $isKnown = $false
@@ -492,6 +492,7 @@ function Resolve-Worktree {
             Write-Log "  Review worktree at $($res.path) never finished setup - running it again"
         }
         else { Write-Log "  Prepared a detached review worktree at $($res.path)" }
+        if ($NoSetup) { $res.needsSetup = $true; return $res }
         $prepError = Initialize-Worktree -Path $res.path -RepoDir $RepoDir -CopyFiles $CopyFiles -Setup $Setup
         if ($prepError) { return @{ ok = $false; reason = $prepError } }
         return $res
@@ -1334,6 +1335,8 @@ $readsOnly   = $isReview -or $isWalkthrough
 # The branch under review lives on the review target, not on ticket.branch - a review ticket never
 # owns a branch. Empty for a delivery ticket.
 $reviewBranch = "$($Claim.ticket.review.sourceBranch)".Trim()
+# On a project of several repos, the one that branch is in. Empty on a project of one.
+$reviewRepo  = "$($Claim.ticket.review.repo)".Trim()
 # The provider, model and effort this phase runs on: its role in agentRoles, named by the skill. A
 # phase can run on a different CLI from the one before it, so everything below that builds, reads
 # or reaps the agent takes its provider from here rather than from one fleet-wide setting.
@@ -1386,7 +1389,7 @@ if ($isReview) {
     $trackRules = @"
 **This ticket is on the REVIEW track. The branch in your working directory belongs to ANOTHER DEVELOPER.**
 
-You are reading ``$reviewBranch`` to give its author feedback. You are not building anything.
+You are reading ``$reviewBranch``$(if ($reviewRepo) { " in ``$reviewRepo``" }) to give its author feedback. You are not building anything.
 
 - **Change nothing.** Not a file, not a line, not an obvious one-character fix. Everything you would
   have fixed becomes an ``add_review_comment`` instead, addressed to the person who wrote it.
@@ -1548,7 +1551,8 @@ if ($repoDir) {
         Resolve-Workspace -Members $repoMembers -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BranchPrefix $effectivePrefix `
-            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase $isWalkthrough
+            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -ReviewRepo $reviewRepo `
+            -MergeLocally $mergeLocally -OnBase $isWalkthrough
     } else {
         Resolve-Worktree -RepoDir $repoDir -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
@@ -1581,12 +1585,24 @@ if ($repoDir) {
     }
     if ($wt.path) {
         $workDir = $wt.path
+        if ($multiRepo) {
+            $workMembers = @($wt.members)
+            # What the project keeps for its workspace's root - a conventions file that maps its
+            # repos, say. Copied every phase, so an edit in the project folder is the one the next
+            # run reads; it sits outside every repo, so nothing ever commits it.
+            $copied = Copy-WorkspaceFiles -From (Join-Path "$($Claim.project.dataDir)" 'workspace') -To $workDir `
+                -Skip @($workMembers | ForEach-Object { $_.dir })
+            if ($copied -gt 0) { Write-Log "  Copied $copied workspace file(s) from the project folder" }
+        }
         if ($isWalkthrough) {
             Write-Log "  Walk-through worktree: $workDir (detached at $($wt.sha) on '$($wt.branch)')"
             # Not Set-TicketBranch: the base is not this ticket's branch, and a merge must never see it as one.
         }
         elseif ($isReview) {
-            Write-Log "  Review worktree: $workDir (detached at $($wt.sha) on '$($wt.branch)')"
+            if ($multiRepo) {
+                Write-Log "  Review workspace: $workDir ('$($wt.branch)' in $reviewRepo, detached at $($wt.sha); the rest at their bases: $((@($workMembers | Where-Object { -not $_.underReview } | ForEach-Object { $_.dir })) -join ', '))"
+            }
+            else { Write-Log "  Review worktree: $workDir (detached at $($wt.sha) on '$($wt.branch)')" }
             # Deliberately NOT Set-TicketBranch. ticket.branch means "the branch this ticket owns",
             # and a review ticket owns none - the branch it reads is recorded on its review target,
             # which was written when the ticket was created and is not ours to change. Writing it
@@ -1595,14 +1611,7 @@ if ($repoDir) {
         }
         else {
             if ($multiRepo) {
-                $workMembers = @($wt.members)
                 Write-Log "  Workspace: $workDir (branch '$($wt.branch)'; repos: $((@($workMembers | ForEach-Object { if ($_.readOnly) { "$($_.dir) (read-only)" } else { $_.dir } })) -join ', '))"
-                # What the project keeps for its workspace's root - a conventions file that maps
-                # its repos, say. Copied every phase, so an edit in the project folder is the one
-                # the next run reads; it sits outside every repo, so nothing ever commits it.
-                $copied = Copy-WorkspaceFiles -From (Join-Path "$($Claim.project.dataDir)" 'workspace') -To $workDir `
-                    -Skip @($workMembers | ForEach-Object { $_.dir })
-                if ($copied -gt 0) { Write-Log "  Copied $copied workspace file(s) from the project folder" }
             }
             else { Write-Log "  Worktree: $workDir (branch '$($wt.branch)')" }
             # Record both together: a branch whose worktree the dashboard cannot name is a branch
@@ -2061,13 +2070,20 @@ elseif (-not $resultReceived) {
 # detached head off their work, from an agent that was told in three places not to change anything.
 # So a dirty tree here is not a miss to paper over, it is the signal that the one rule of this phase
 # was broken - reported on the ticket and left exactly where it is for a person to look at.
+#
+# On a workspace of several repos the root is not one, so each repo is asked - the one under review
+# and every one beside it, which were there to be read just the same.
 if ($repoDir -and $readsOnly) {
-    $dirty = @(git -C $workDir status --porcelain 2>$null | Where-Object { $_ })
-    if ($dirty.Count -gt 0) {
+    $readPlaces = if ($multiRepo -and $workMembers) { @($workMembers | ForEach-Object { @{ dir = $_.dir; path = $_.path } }) }
+                  else { @(@{ dir = ''; path = $workDir }) }
+    foreach ($place in $readPlaces) {
+        $dirty = @(git -C $place.path status --porcelain 2>$null | Where-Object { $_ })
+        if ($dirty.Count -eq 0) { continue }
         $names = ($dirty | Select-Object -First 10 | ForEach-Object { "- $($_.Trim())" }) -join "`n"
-        Write-Log "  WARNING: review run left $($dirty.Count) modified file(s) in a worktree it was only supposed to read."
-        Send-TicketComment -TicketId $ticketId -Body "This peer review run modified $($dirty.Count) file(s) in its worktree. It should not have: the branch belongs to someone else and this phase reads only. Nothing was committed and nothing was pushed - the changes are still sitting in the worktree at ``$workDir`` for you to look at and discard.`n`n$names"
-        Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Review run left $($dirty.Count) modified file(s) in its worktree"
+        $inRepo = if ($place.dir) { " in ``$($place.dir)``" } else { "" }
+        Write-Log "  WARNING: review run left $($dirty.Count) modified file(s)$inRepo in a worktree it was only supposed to read."
+        Send-TicketComment -TicketId $ticketId -Body "This peer review run modified $($dirty.Count) file(s)$inRepo in its worktree. It should not have: the branch belongs to someone else and this phase reads only. Nothing was committed and nothing was pushed - the changes are still sitting in the worktree at ``$($place.path)`` for you to look at and discard.`n`n$names"
+        Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Review run left $($dirty.Count) modified file(s)$inRepo in its worktree"
     }
 }
 # The safety nets every cycle runs on what it leaves behind, for one repo: the leftover commit, and

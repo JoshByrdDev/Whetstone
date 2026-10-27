@@ -35,7 +35,7 @@ public static class GitEndpoints
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
-            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
+            if ((UnnamedRepo(git, registry, t, repo) ?? NotTheReviewedRepo(t, repo)) is { } which) return which;
 
             // On a TFVC project the hub IS the workspace, so putting it on a ticket branch shows TFVC
             // the whole branch as pending edits. The board hides the button there; this is the rule.
@@ -76,7 +76,7 @@ public static class GitEndpoints
             // start together rather than one after the other on the path the dialog waits for.
             var touchRead = git.TouchedAsync(t.ProjectKey, branch, ct);
             var soloRead = cfg.IsMultiRepo ? null : git.LocalPreflightAsync(t.ProjectKey, branch, ct);
-            var touches = await touchRead;
+            var touches = OnlyTheReviewedRepo(t, await touchRead);
             var touched = touches.Where(x => x.Touched).Select(x => x.Dir).ToList();
             var repos = new List<object>();
             PrPreflight? lead = null;
@@ -135,7 +135,7 @@ public static class GitEndpoints
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
-            return Results.Ok(await git.TouchedAsync(t.ProjectKey, BranchOf(t), ct));
+            return Results.Ok(OnlyTheReviewedRepo(t, await git.TouchedAsync(t.ProjectKey, BranchOf(t), ct)));
         });
 
         // The other half, and the slow one: it fetches from origin, so it is seconds rather than
@@ -147,7 +147,7 @@ public static class GitEndpoints
         {
             var t = await tickets.GetAsync(id);
             if (t is null) return Results.NotFound();
-            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
+            if ((UnnamedRepo(git, registry, t, repo) ?? NotTheReviewedRepo(t, repo)) is { } which) return which;
 
             return Results.Ok(await git.BaseCheckAsync(t.ProjectKey, BranchOf(t), ct, repo));
         });
@@ -396,6 +396,26 @@ public static class GitEndpoints
         git.TargetOf(registry.GetProjectConfig(t.ProjectKey), repo, out var error) is null
             ? Results.BadRequest(new { ok = false, error })
             : null;
+
+    /// <summary>
+    /// A review ticket on a project of several repos is about one of them - the one its branch, and
+    /// so its pull request, is in. A read or checkout naming another is refused with that said,
+    /// rather than left to fail as a branch that does not exist there. Null when it may go ahead.
+    /// </summary>
+    public static IResult? NotTheReviewedRepo(Models.Ticket t, string? repo) =>
+        t.Track == Models.TicketTrack.Review && t.ReviewTarget?.Repo is { Length: > 0 } reviewed
+            && !string.Equals(repo?.Trim(), reviewed, StringComparison.OrdinalIgnoreCase)
+            ? Results.BadRequest(new { ok = false, error = $"This review is of '{t.ReviewTarget.SourceBranch}' in {reviewed}, and no other repo has it." })
+            : null;
+
+    /// <summary>
+    /// What a review ticket is shown of its project's repos: the one under review, alone. The others
+    /// are in its workspace only to be read, and a review touches none of them.
+    /// </summary>
+    public static IReadOnlyList<RepoTouch> OnlyTheReviewedRepo(Models.Ticket t, IReadOnlyList<RepoTouch> touches) =>
+        t.Track == Models.TicketTrack.Review && t.ReviewTarget?.Repo is { Length: > 0 } reviewed
+            ? touches.Where(x => string.Equals(x.Dir, reviewed, StringComparison.OrdinalIgnoreCase)).ToList()
+            : touches;
 
     /// <summary>
     /// The branch this ticket's git actions operate on: its own on the Delivery track, and the

@@ -47,6 +47,8 @@ export const createTicket = (body: {
   // nothing to work on, and the server refuses it rather than failing later in the worker.
   track?: Track; sourceBranch?: string; targetBranch?: string;
   prUrl?: string; prId?: string; prAuthor?: string;
+  // The repo the branch is in: required on a project of several repos, refused on a project of one.
+  repo?: string;
 }) => fetch('/api/tickets', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);
 
 export const updateTicket = (id: number, body: Partial<{

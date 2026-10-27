@@ -6,8 +6,9 @@ repo. Each of those repos is a **member**. A ticket can change any of them. What
 one pull request per member it changed, all on the same branch name.
 
 Phase 1 covers the Delivery track on the board host, for projects that deliver by pull request.
-The Review track, the steward, worker hosts, `mergeInsteadOfPr` and TFVC are each refused for a
-multi-repo project until a later phase designs them (see "Refused in phase 1").
+Phase 2 began with the Review track (see "The Review track - phase 2, built"). The steward, worker
+hosts, `mergeInsteadOfPr`, TFVC and a slice's walk-through are each refused for a multi-repo
+project until a later phase designs them (see "Refused in phase 1").
 
 ## What it is for
 
@@ -293,13 +294,34 @@ On a workspace there was no HEAD to record, so the gate always went ahead with a
 - The runner, the gate and both analysis routes all ask `AnalysisPin.Of`, which replaced
   `AnalysisRunner.HeadSha` and `TreeSha`. Tests: `MultiRepoAnalysisPinTests`, against real repos.
 
+## The Review track - phase 2, built
+
+The first of phase 2 (open question 7). A pull request lives in one repo, so a review does too.
+
+- **`ReviewTarget.Repo`** names it: the folder name as configured, required on a project of several
+  and refused on a project of one, and never a read-only repo, which nothing is delivered from
+  (`TicketEndpoints.ReviewRepoError`). A change that spans repos is one review ticket per PR.
+- **The workspace** (`Resolve-ReviewWorkspace` in `data/worker-repos.ps1`) holds that repo detached
+  at `origin/<their branch>`, through the same review path a project of one takes, and every other
+  repo detached at its base through `Resolve-ReadOnlyWorktree`. It is named after the repo and the
+  branch (`review-<repo>-<branch>`) and reused across passes, set up once like any workspace. A
+  changed repo - theirs or a neighbour - stops the next pass, and the run that changed it is
+  reported per repo on the ticket.
+- **The prompt's Repos note** marks the repo under review and says the rest are context; the
+  review-pr skill has a section of its own after "Several repos", since that one is about building.
+- **Comment paths are relative to the repo under review**, because they are read in its pull
+  request: `TicketService.ReviewFilePath` drops a leading `<repo>/` a run writes out of habit.
+- **The board** shows a review its repo alone (`GitEndpoints.OnlyTheReviewedRepo`) and refuses a
+  checkout or base check naming another; the row's checkout takes that repo, and the new-ticket
+  form asks for it.
+
 ## Refused in phase 1
 
 Each refusal names itself where it fires, so nothing is silently skipped.
 
 | What | Why not yet | Where it is refused |
 |---|---|---|
-| Review track | A review target would need to name its member (`ReviewTarget.Repo`, a migration), and the workspace would need that member detached at their branch and the others at their bases | review ticket creation |
+| A slice's walk-through | It runs on the base with no branch; a workspace of bases is `Resolve-ReadOnlyWorktree` per repo plus setup, not designed yet | the worker's workspace (`Resolve-Workspace`) - nothing upstream, so such a ticket blocks with the reason |
 | Steward | Its checks read one worktree and one base (`StewardService`, `TicketGitService.Steward`) | the mode reads as `off` |
 | Worker hosts | The branch round trip and the project kit are one repo each | a `Host` claim skips the project |
 | `mergeInsteadOfPr` | A local merge across members is not atomic: one could land and another refuse | config (piece 1) |

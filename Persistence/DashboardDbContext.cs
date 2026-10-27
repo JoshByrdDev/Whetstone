@@ -251,6 +251,7 @@ public class DashboardDbContext : DbContext
             e.Property(r => r.PrId).HasMaxLength(64);
             e.Property(r => r.PrUrl).HasMaxLength(1024);
             e.Property(r => r.SourceBranch).HasMaxLength(256);
+            e.Property(r => r.Repo).HasMaxLength(128);
             e.Property(r => r.TargetBranch).HasMaxLength(256);
             e.Property(r => r.PrAuthor).HasMaxLength(128);
             e.Property(r => r.ReviewedAtSha).HasMaxLength(64);

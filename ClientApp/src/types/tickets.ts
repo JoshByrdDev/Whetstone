@@ -36,6 +36,8 @@ export interface ReviewTarget {
   prId?: string | null;
   prUrl?: string | null;
   sourceBranch: string;
+  // On a project of several repos, the one the branch (and so the pull request) is in.
+  repo?: string | null;
   targetBranch?: string | null;
   prAuthor?: string | null;
   reviewedAtSha?: string | null;
@@ -235,6 +237,8 @@ export interface TicketSummary {
   // review ticket owns none, and merging the two would have every reader of `branch` treat someone
   // else's work as ours.
   reviewBranch?: string | null;
+  // The repo that branch is in, on a project of several repos; null on a project of one.
+  reviewRepo?: string | null;
   // Expansion work items holding this ticket at NeedsApproval when its own setting would have
   // skipped the gate; 0 otherwise. Said on the row, or the stop reads as the skip having broken.
   heldForExpansion?: number;

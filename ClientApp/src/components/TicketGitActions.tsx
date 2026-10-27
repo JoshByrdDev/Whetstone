@@ -21,7 +21,7 @@ import { deepen } from './orbit';
  * the way the agent also holds this branch" and "no, you have uncommitted work" — both are a
  * sentence, and neither is worth a modal.
  */
-export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Delivery', repoType = 'git', merge = false, repos }: {
+export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Delivery', repoType = 'git', merge = false, repos, reviewRepo }: {
   ticketId: number;
   branch?: string | null;
   /** "row" is the compact in-flight row; "card" is the expanded waiting-on-you card. */
@@ -51,6 +51,12 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
    * them the ticket has changed. Absent for a project of one, which is everything above unchanged.
    */
   repos?: ProjectRepo[] | null;
+  /**
+   * On a review ticket of a project of several repos, the one their branch is in. Checkout puts
+   * that repo alone on it - the others do not have it - and there is no count of repos changed,
+   * because a review changes none.
+   */
+  reviewRepo?: string | null;
 }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<CheckoutResult | null>(null);
@@ -59,7 +65,7 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
   const [prOpen, setPrOpen] = useState(false);
   const [touch, setTouch] = useState<RepoTouch[] | null>(null);
   const anchor = useRef<HTMLDivElement>(null);
-  const several = !!repos && repos.length > 0;
+  const several = !!repos && repos.length > 0 && !reviewRepo;
 
   // Local reads, once per ticket and again when its dialog closes - not on every board poll, which
   // would be every repo's git, for every ticket of the project, every few seconds.
@@ -87,7 +93,7 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
         }
         setEach(out);
       }
-      else setResult(await checkoutTicket(ticketId));
+      else setResult(await checkoutTicket(ticketId, reviewRepo ?? undefined));
     } catch (err) {
       setFailure(err instanceof Error ? err.message : 'Checkout failed.');
     } finally {
@@ -113,7 +119,7 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
         <button
           onClick={checkout}
           disabled={busy}
-          title={`Check out ${branch} in your own repo`}
+          title={`Check out ${branch} in your own ${reviewRepo ? `${reviewRepo} ` : ''}repo`}
           className={`${pad} rounded text-gray-500 hover:text-sky-300 hover:bg-gray-700 disabled:opacity-40 transition-colors`}
         >
           <BranchIcon size={icon} spin={busy} />

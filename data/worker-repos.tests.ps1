@@ -103,10 +103,11 @@ function Member {
 }
 
 function Open-Workspace {
-    param([object[]]$Members, [string]$Branch, [string]$Skill = 'speculate', [string]$Review = '', [bool]$MergeLocally = $false)
+    param([object[]]$Members, [string]$Branch, [string]$Skill = 'speculate', [string]$Review = '', [string]$ReviewRepo = '',
+        [bool]$MergeLocally = $false)
     return Resolve-Workspace -Members $Members -WorktreeRoot (Join-Path $root 'wt') -Skill $Skill -TicketId '7' `
-        -RecordedBranch $Branch -IssueBranchToken '' -BranchPrefix '' -ReviewBranch $Review -MergeLocally $MergeLocally `
-        -SetupTimeoutMinutes 2
+        -RecordedBranch $Branch -IssueBranchToken '' -BranchPrefix '' -ReviewBranch $Review -ReviewRepo $ReviewRepo `
+        -MergeLocally $MergeLocally -SetupTimeoutMinutes 2
 }
 
 function Find { param($Ws, [string]$Dir) return @($Ws.members | Where-Object { $_.dir -eq $Dir })[0] }
@@ -258,7 +259,6 @@ try {
     Write-Host "== refusals"
     $none = Open-Workspace -Members $members -Branch 'jb/PROJ-2' -Skill 'implement'
     Check 'outside speculate, no member with the branch is an error' ($none.reason -match "no feature branch 'jb/PROJ-2' in any") $true
-    Check 'a review is refused' ((Open-Workspace -Members $members -Branch 'x' -Review 'someone/theirs').reason -match 'Review track') $true
     Check 'a local merge is refused' ((Open-Workspace -Members $members -Branch 'x' -MergeLocally $true).reason -match 'mergeInsteadOfPr') $true
 
     $elsewhere = Join-Path $root 'elsewhere-web'
@@ -266,6 +266,60 @@ try {
     $moved = Open-Workspace -Members $members -Branch 'jb/PROJ-1' -Skill 'implement'
     Check 'a member checked out outside the workspace is refused' ($moved.reason -match "^alpha-web: branch 'jb/PROJ-1' is checked out at .*outside this ticket's workspace") $true
     git -C $web worktree move $elsewhere $wWeb *> $null
+
+    # ---- A peer review ------------------------------------------------------------------
+    # Somebody else's branch in alpha-api, forked from its own base, as their pull request has it.
+    Write-Host "== a peer review"
+    $theirs = Join-Path $root 'their-api'
+    git clone -q -b develop (git -C $api remote get-url origin) $theirs *> $null
+    Set-Identity $theirs
+    git -C $theirs checkout -q -b someone/theirs *> $null
+    Add-Commit -Dir $theirs -File 'theirs.txt' -Subject 'their change'
+    git -C $theirs push -q -u origin someone/theirs *> $null
+
+    Check 'a review that names no repo is refused' ((Open-Workspace -Members $members -Branch '' -Review 'someone/theirs').reason -match 'does not say which repo') $true
+    Check '... and one that names no repo of the project' ((Open-Workspace -Members $members -Branch '' -Review 'someone/theirs' -ReviewRepo 'alpha-nope').reason -match "'alpha-nope', which is not one") $true
+    Check '... and one in a read-only repo' ((Open-Workspace -Members $members -Branch '' -Review 'someone/theirs' -ReviewRepo 'alpha-infra').reason -match 'keeps read-only') $true
+
+    $script:log.Clear()
+    $rv = Open-Workspace -Members $members -Branch '' -Skill 'review-pr' -Review 'someone/theirs' -ReviewRepo 'alpha-api'
+    Check 'a review in one repo: ok' $rv.ok $true
+    Check '... in a workspace named after the repo and their branch' $rv.path (Join-Path (Join-Path $root 'wt') 'review-alpha-api-someone-theirs')
+    Check '... holding every repo, in order' (Dirs $rv.members) 'alpha-web,alpha-api,alpha-infra'
+    Check '... the one under review marked, and only it' ((@($rv.members | Where-Object { $_.underReview } | ForEach-Object { $_.dir })) -join ',') 'alpha-api'
+    $rApi = (Find $rv 'alpha-api').path; $rWeb = (Find $rv 'alpha-web').path; $rInfra = (Find $rv 'alpha-infra').path
+    Check 'their repo is at their branch as origin has it' (Get-Sha $rApi HEAD) (Get-Sha $api origin/someone/theirs)
+    Check '... and the sha it hands back is that commit' $rv.sha (Get-Sha $api origin/someone/theirs)
+    Check '... detached' "$(git -C $rApi symbolic-ref --quiet HEAD 2>$null)" ''
+    Check '... with no local branch of theirs made' (Get-Sha $api 'refs/heads/someone/theirs') ''
+    Check 'the others are at their bases' "$(Get-Sha $rWeb HEAD)|$(Get-Sha $rInfra HEAD)" "$(Get-Sha $web origin/main)|$(Get-Sha $infra origin/main)"
+    Check '... detached too' "$(git -C $rWeb symbolic-ref --quiet HEAD 2>$null)" ''
+    Check 'web and api set up together' "$(Test-Path (Join-Path $rWeb 'setup-count.txt'))|$(Test-Path (Join-Path $rApi 'setup-count.txt'))" 'True|True'
+
+    $rnote = Format-ReposNote -Members $rv.members -Branch $rv.branch
+    Check 'its repos note names the repo under review, at their branch and its own base' ($rnote -match '`alpha-api` - \*\*under review\*\*: their branch `someone/theirs`, base ref `origin/develop`') $true
+    Check '... the others at their bases' (($rnote -match '`alpha-web` - at its base `origin/main`') -and ($rnote -match '`alpha-infra` - at its base `origin/main`')) $true
+    Check '... and says comment paths are relative to that repo' ($rnote -match 'relative to `alpha-api`') $true
+    Check '... and nothing about committing' ($rnote -match 'Commit in every repo') $false
+
+    # The author pushes again; the next pass reads what they pushed, in the workspace it already has.
+    Add-Commit -Dir $theirs -File 'theirs.txt' -Subject 'their second change'
+    git -C $theirs push -q origin someone/theirs *> $null
+    $rv2 = Open-Workspace -Members $members -Branch '' -Skill 'review-pr' -Review 'someone/theirs' -ReviewRepo 'alpha-api'
+    Check 'the next pass: ok' $rv2.ok $true
+    Check '... at their new commit' (Get-Sha $rApi HEAD) (Get-Sha $theirs HEAD)
+    Check '... in the same workspace, set up once' "$($rv2.path)|$((Get-Content (Join-Path $rApi 'setup-count.txt')).Count)" "$($rv.path)|1"
+
+    # A run that changed a repo it was only given to read: the next pass will not start on it.
+    Add-Content -Path (Join-Path $rWeb 'README.md') -Value 'edited by a review' -Encoding ascii
+    $dirtyRv = Open-Workspace -Members $members -Branch '' -Skill 'review-pr' -Review 'someone/theirs' -ReviewRepo 'alpha-api'
+    Check 'a changed context repo stops the next pass' ($dirtyRv.reason -match '^alpha-web: the read-only repo .* has 1 changed file') $true
+    Check '... as a fault' $dirtyRv.fault $true
+    git -C $rWeb checkout -- README.md *> $null
+    Add-Content -Path (Join-Path $rApi 'theirs.txt') -Value 'fixed it for them' -Encoding ascii
+    $dirtyApi = Open-Workspace -Members $members -Branch '' -Skill 'review-pr' -Review 'someone/theirs' -ReviewRepo 'alpha-api'
+    Check '... and so does a changed repo under review' ($dirtyApi.reason -match '^alpha-api: the review worktree .* has uncommitted changes') $true
+    git -C $rApi checkout -- theirs.txt *> $null
 
     # ---- Setup that fails -----------------------------------------------------------
     Write-Host "== setup that fails"

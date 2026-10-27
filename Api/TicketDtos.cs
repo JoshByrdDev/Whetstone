@@ -57,7 +57,10 @@ public record TicketSummaryDto(
     int HeldForExpansion = 0,
     // Sitting in NeedsRefinement while its independent analysis is written. On the row because the
     // claim passes such a ticket over, and without it that looks like the heartbeat ignoring it.
-    bool AwaitingAnalysis = false);
+    bool AwaitingAnalysis = false,
+    // The repo the branch under review is in, on a project of several: the one the row's checkout
+    // puts on their branch. Null on a project of one and on a delivery ticket.
+    string? ReviewRepo = null);
 
 /// <summary>One thing a ticket is waiting on, resolved as far as it can be.</summary>
 public record BlockerDto(
@@ -128,9 +131,11 @@ public record TicketAttachmentDto(string FileName, string LocalPath, long Bytes,
 /// <c>ReviewedAtSha</c> disagree — so every staged comment's line numbers describe a branch that has
 /// moved. Computed rather than stored: it is a comparison of two columns, and a third column saying
 /// the same thing is a third column that can be wrong.</param>
+/// <param name="Repo">The repo the branch is in, on a project of several; null on a project of one.</param>
 public record ReviewTargetDto(
     string? PrId, string? PrUrl, string SourceBranch, string? TargetBranch, string? PrAuthor,
-    string? ReviewedAtSha, string? HeadSha, string? Verdict, DateTime? SubmittedAt, bool Stale);
+    string? ReviewedAtSha, string? HeadSha, string? Verdict, DateTime? SubmittedAt, bool Stale,
+    string? Repo = null);
 
 /// <summary>
 /// One piece of staged feedback. <paramref name="Stale"/> means the file this points at changed
@@ -277,7 +282,8 @@ public static class TicketMapper
         t.ReviewTarget?.SubmittedAt is not null,
         t.ReviewTarget?.SourceBranch,
         HeldForExpansion(t),
-        awaitingAnalysis);
+        awaitingAnalysis,
+        t.ReviewTarget?.Repo);
 
     private static int HeldForExpansion(Ticket t) =>
         WorkItemScopes.HeldForExpansion(t) ? WorkItemScopes.OpenExpansionCount(t) : 0;
@@ -383,7 +389,7 @@ public static class TicketMapper
     private static ReviewTargetDto? ToReviewTarget(ReviewTarget? r) => r is null ? null : new(
         r.PrId, r.PrUrl, r.SourceBranch, r.TargetBranch, r.PrAuthor,
         r.ReviewedAtSha, r.HeadSha, r.Verdict?.ToString(), r.SubmittedAt,
-        HasMoved(r.ReviewedAtSha, r.HeadSha));
+        HasMoved(r.ReviewedAtSha, r.HeadSha), r.Repo);
 
     private static ReviewCommentDto ToReviewComment(ReviewComment c, ReviewTarget? target) => new(
         c.Id, c.FilePath, c.Line, c.Side.ToString(), c.Body, c.Severity.ToString(), c.Status.ToString(),

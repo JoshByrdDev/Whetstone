@@ -621,6 +621,10 @@ namespace Whetstone.Migrations
                         .HasMaxLength(1024)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Repo")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ReviewedAtSha")
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");

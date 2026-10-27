@@ -103,6 +103,9 @@ export function ReviewPanel({ t, onChanged }: {
         <div className="rounded-lg border border-hair bg-black/20 px-3 py-2.5 space-y-1.5">
           <div className="flex items-baseline gap-2 flex-wrap">
             <code className="text-[12px] text-sky-300">{review.sourceBranch}</code>
+            {review.repo && (
+              <span className="text-[11px] text-gray-500">in <code className="text-gray-400">{review.repo}</code></span>
+            )}
             {review.targetBranch && (
               <span className="text-[11px] text-gray-600">→ {review.targetBranch}</span>
             )}
