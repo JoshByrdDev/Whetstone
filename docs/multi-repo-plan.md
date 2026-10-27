@@ -273,6 +273,26 @@ A short section, "A project can be several repos", beside "The base is not alway
 says that the touched rule is written twice (`Get-TouchedMembers` and `TicketGitService`) and must
 agree, that a file path on a multi-repo ticket starts with its member, and which tests to run.
 
+## Analysis pins - built after the first live runs
+
+A Classroom analysis records which code it read, in `TicketAnalysis.HeadSha` and `TreeSha`, so
+the refinement gate can find an analysis of the code as it is and the board can call one stale.
+On a workspace there was no HEAD to record, so the gate always went ahead with a note.
+
+- **The pin is `AnalysisPin`.** A project of one is pinned exactly as before, to the HEAD and tree
+  of the directory the analysis reads. A project of several is pinned to each repo the ticket
+  changed (commits ahead of that repo's base): its commit and tree, stored as JSON in the new
+  `RepoHeadsJson`. A repo the ticket left alone is not in it, so bringing it up to its base each
+  phase does not make an analysis stale.
+- **`HeadSha` and `TreeSha` hold fingerprints of that list** - forty hex characters, a hash of
+  each repo's commit and of each repo's tree. Every existing comparison on those two fields (the
+  gate, `TicketAnalysisService.IsStale`, the tree match a squash keeps) works on them unchanged.
+- **A fingerprint is not a commit.** The analysis diff route and the walkthrough pass the
+  per-repo commits (`repoHeads`) to `FileDiffAsync`, `FileAtAsync` and `ChangedFilesAsync`, which
+  read each repo at its own pinned commit, found by the path's first segment.
+- The runner, the gate and both analysis routes all ask `AnalysisPin.Of`, which replaced
+  `AnalysisRunner.HeadSha` and `TreeSha`. Tests: `MultiRepoAnalysisPinTests`, against real repos.
+
 ## Refused in phase 1
 
 Each refusal names itself where it fires, so nothing is silently skipped.
@@ -310,8 +330,8 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    it is. `GET /git/pr` keeps its top-level `preflight` and `suggestedDescription` (the first
    touched repo's) beside the new `repos` list, so today's dialog reads it unchanged. The touched
    rule is `TouchedAsync`, and `MultiRepoGitTests` repeats `worker-repos.tests.ps1`'s cases
-   against it. Still open for piece 6: an analysis pins one commit, which is in one repo only,
-   so an analysis of a ticket across several will need a commit per repo.
+   against it. An analysis pins one commit, which is in one repo only, so an analysis across
+   several repos needs a commit per repo - built afterwards, see "Analysis pins" below.
 4. Worker wiring (piece 3) - done. *As built:* a project of one still calls `Resolve-Worktree`
    directly, exactly as before. The hand-off steps moved into `Invoke-HandOffNets`, whose
    parameters take the names of the script variables they read, so a project of one runs them
@@ -334,7 +354,7 @@ Each step is its own commit, and steps 1 to 4 change nothing for an existing pro
    with their repo first. On a project of one its prompt is the same text as before. The
    analysis's commit pin degrades rather than breaks: `HeadSha` of a workspace is null, so the
    refinement gate goes ahead with a note, and the analysis diff route falls back to the
-   ticket's branch, which every writable repo has. Pinning an analysis per repo is still open.
+   ticket's branch, which every writable repo has. Pinning an analysis per repo came after, below.
    `charlie` seeds a `qa/two-repos` branch with a commit in two of its repos. A QA copy refuses
    every push, so its origins only make "the base" origin's.
 6. UI (piece 7), proven on the QA copy against the placeholder project - done. *As built:* the

@@ -1131,6 +1131,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("RepoHeadsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("StepCount")
                         .HasColumnType("INTEGER");
 

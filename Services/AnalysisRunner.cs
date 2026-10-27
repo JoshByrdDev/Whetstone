@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Whetstone.Models;
@@ -99,8 +98,7 @@ public class AnalysisRunner : IAnalysisExecutor
         Ticket ticket;
         ProjectConfig cfg;
         string readDir;
-        string? headSha;
-        string? treeSha;
+        AnalysisPin pin;
         string prompt;
         Requirements reqs;
 
@@ -128,8 +126,9 @@ public class AnalysisRunner : IAnalysisExecutor
             // directory that has since gone — and would stamp the stored analysis with a commit it
             // never actually read.
             readDir = ReadDir(ticket, cfg);
-            headSha = HeadSha(readDir);
-            treeSha = TreeSha(readDir);
+            // Which code it reads: the HEAD and tree of readDir for a project of one, each changed
+            // repo's for a project of several, whose workspace has no HEAD of its own (AnalysisPin).
+            pin = AnalysisPin.Of(ticket, cfg);
 
             // A CLI handed a token that aged out overnight does not fail fast: it retries the 401 for
             // three minutes and then dies with an empty stderr. Renewing here turns the usual version
@@ -166,7 +165,7 @@ public class AnalysisRunner : IAnalysisExecutor
             return (null, ex.Message);
         }
 
-        var (analysisId, error) = await ExecuteAsync(ticket, lens, readDir, headSha, treeSha, prompt, reqs, progress, ct);
+        var (analysisId, error) = await ExecuteAsync(ticket, lens, readDir, pin, prompt, reqs, progress, ct);
 
         // Every analysis gets its walkthrough, in the same slot, before the slot is given back. The
         // analysis is already saved: GenerateAsync records its own failure on its own row and never
@@ -302,7 +301,7 @@ public class AnalysisRunner : IAnalysisExecutor
     }
 
     private async Task<(int? analysisId, string? error)> ExecuteAsync(
-        Ticket ticket, AnalysisLens lens, string readDir, string? headSha, string? treeSha, string prompt,
+        Ticket ticket, AnalysisLens lens, string readDir, AnalysisPin pin, string prompt,
         Requirements reqs, IRunProgress progress, CancellationToken ct)
     {
         // The Classroom is a role of its own, with its own provider and model - see
@@ -316,7 +315,7 @@ public class AnalysisRunner : IAnalysisExecutor
             var run = await AgentJsonRunner.RunAsync(provider, readDir, scratch, prompt,
                 AnalysisDocument.JsonSchema, progress, Timeout, "analysis", _log, ct);
             if (run.Outcome is not { } outcome) return (null, run.Error);
-            return await PersistAsync(ticket, lens, headSha, treeSha, outcome, reqs, run.DurationMs, run.Steps);
+            return await PersistAsync(ticket, lens, pin, outcome, reqs, run.DurationMs, run.Steps);
         }
         catch (OperationCanceledException)
         {
@@ -335,7 +334,7 @@ public class AnalysisRunner : IAnalysisExecutor
     /// reaches here is a validated object and its accounting, or an error explaining neither exists.
     /// </summary>
     private async Task<(int? analysisId, string? error)> PersistAsync(
-        Ticket ticket, AnalysisLens lens, string? headSha, string? treeSha, AgentOutcome outcome, Requirements reqs,
+        Ticket ticket, AnalysisLens lens, AnalysisPin pin, AgentOutcome outcome, Requirements reqs,
         int durationMs, int stepCount)
     {
         if (outcome.Error != null) return (null, outcome.Error);
@@ -351,8 +350,9 @@ public class AnalysisRunner : IAnalysisExecutor
             ProjectKey = ticket.ProjectKey,
             PhaseAtGeneration = ticket.Phase,
             Lens = lens,
-            HeadSha = headSha,
-            TreeSha = treeSha,
+            HeadSha = pin.HeadSha,
+            TreeSha = pin.TreeSha,
+            RepoHeadsJson = pin.ReposJson(),
             Branch = ticket.Branch,
             Headline = doc.Headline,
             BlocksJson = AnalysisDocument.Serialize(doc),
@@ -821,40 +821,13 @@ public class AnalysisRunner : IAnalysisExecutor
     /// usually sitting on the base branch — but the diff and the history are still reachable from
     /// there, so a pruned worktree degrades the analysis rather than blocking it.
     /// </para>
-    /// <para>Also the answer to "which HEAD is this analysis pinned to", so both callers agree.</para>
+    /// <para>
+    /// Which code an analysis read there - its pin - is <see cref="AnalysisPin.Of"/>, which every
+    /// caller asks, so the run, the gate and the staleness badge agree.
+    /// </para>
     /// </summary>
     public static string ReadDir(Ticket t, ProjectConfig cfg) =>
         !string.IsNullOrWhiteSpace(t.WorktreePath) && Directory.Exists(t.WorktreePath)
             ? t.WorktreePath!
             : cfg.ProjectPath;
-
-    public static string? HeadSha(string dir) => GitLine(dir, "rev-parse", "HEAD");
-
-    /// <summary>The tree HEAD points at - the code itself, whichever commit carries it.</summary>
-    public static string? TreeSha(string dir) => GitLine(dir, "rev-parse", "HEAD^{tree}");
-
-    /// <summary>One-line git read. Returns null on any failure — every caller has a sane "unknown".</summary>
-    private static string? GitLine(string dir, params string[] args)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo("git")
-            {
-                WorkingDirectory = dir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                StandardOutputEncoding = ProcessText.Utf8,
-                StandardErrorEncoding = ProcessText.Utf8,
-            };
-            foreach (var a in args) psi.ArgumentList.Add(a);
-            using var p = Process.Start(psi);
-            if (p == null) return null;
-            var outp = p.StandardOutput.ReadToEnd().Trim();
-            p.WaitForExit(10_000);
-            return p.ExitCode == 0 && outp.Length > 0 ? outp : null;
-        }
-        catch { return null; }
-    }
 }

@@ -1550,7 +1550,7 @@ public partial class TicketGitService
     /// </para>
     /// </summary>
     public async Task<FileDiff> FileDiffAsync(string projectKey, string headRef, string path,
-        CancellationToken ct = default, string? fromRef = null)
+        CancellationToken ct = default, string? fromRef = null, IReadOnlyDictionary<string, string>? repoHeads = null)
     {
         FileDiff Fail(string error) => new(path, "", 0, 0, false, error);
 
@@ -1565,7 +1565,8 @@ public partial class TicketGitService
         if (!IsGitRepo(repo)) return Fail($"{cfg.DisplayName} has no git repo at '{repo}'.");
         if (string.IsNullOrWhiteSpace(headRef)) return Fail("This analysis is not pinned to a commit.");
 
-        var range = fromRef is null ? $"{target.BaseBranch}...{headRef}" : $"{fromRef}..{headRef}";
+        var head = HeadFor(target, headRef, repoHeads);
+        var range = fromRef is null ? $"{target.BaseBranch}...{head}" : $"{fromRef}..{head}";
 
         var numstat = await GitAsync(repo, ct, "diff", "--numstat", "-M", range, "--", clean);
         if (!numstat.Ok) return Fail(Explain(numstat, $"Could not read the diff for {clean}"));
@@ -1610,7 +1611,7 @@ public partial class TicketGitService
     /// slide showing new code usually wants the <c>if</c> it sits inside too.
     /// </summary>
     public async Task<(string? Text, string? Error)> FileAtAsync(string projectKey, string commit, string path,
-        CancellationToken ct = default)
+        CancellationToken ct = default, IReadOnlyDictionary<string, string>? repoHeads = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         if (CleanRepoPath(path) is not { } named) return (null, $"'{path}' is not a path inside the repo.");
@@ -1619,6 +1620,7 @@ public partial class TicketGitService
         var repo = target.Path;
         if (!IsGitRepo(repo)) return (null, $"{cfg.DisplayName} has no git repo at '{repo}'.");
 
+        commit = HeadFor(target, commit, repoHeads);
         var r = await GitAsync(repo, ct, "show", $"{commit}:{clean}");
         return r.Ok ? (r.Stdout, null) : (null, Explain(r, $"Could not read {clean} at {commit[..Math.Min(7, commit.Length)]}"));
     }
@@ -1633,7 +1635,8 @@ public partial class TicketGitService
     /// </para>
     /// </summary>
     public async Task<(IReadOnlyList<(string Path, int Added, int Removed)> Files, string? Error)> ChangedFilesAsync(
-        string projectKey, string headRef, CancellationToken ct = default, string? fromRef = null)
+        string projectKey, string headRef, CancellationToken ct = default, string? fromRef = null,
+        IReadOnlyDictionary<string, string>? repoHeads = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var none = Array.Empty<(string, int, int)>();
@@ -1651,9 +1654,10 @@ public partial class TicketGitService
         foreach (var target in TargetsOf(cfg))
         {
             if (!IsGitRepo(target.Path)) continue;
-            if (!await ResolvesAsync(target.Path, headRef, ct) || (fromRef is not null && !await ResolvesAsync(target.Path, fromRef, ct)))
+            var head = HeadFor(target, headRef, repoHeads);
+            if (!await ResolvesAsync(target.Path, head, ct) || (fromRef is not null && !await ResolvesAsync(target.Path, fromRef, ct)))
                 continue;
-            if (await ChangedFilesInAsync(target, headRef, fromRef, files, ct) is { } error) return (none, $"{target.Dir}: {error}");
+            if (await ChangedFilesInAsync(target, head, fromRef, files, ct) is { } error) return (none, $"{target.Dir}: {error}");
             read++;
         }
         return read > 0 ? (files, null) : (none, $"'{headRef}' is in none of {cfg.DisplayName}'s repos.");

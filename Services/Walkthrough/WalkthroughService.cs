@@ -198,6 +198,9 @@ public class WalkthroughService
         var cfg = _registry.GetProjectConfig(t.ProjectKey);
         var commit = a.HeadSha ?? a.Branch ?? t.Branch;
         if (string.IsNullOrWhiteSpace(commit)) return (null, "the analysis is not pinned to a commit or branch, so there is no diff to show");
+        // On a project of several repos HeadSha is a fingerprint; each repo is read at its own pinned
+        // commit instead (AnalysisPin). Null for a project of one, which reads at `commit` as before.
+        var repoHeads = AnalysisPin.HeadsFrom(a.RepoHeadsJson);
 
         await CacheAttachmentsAsync(t);
         var resolved = await _resolver.ResolveAsync(t);
@@ -222,7 +225,7 @@ public class WalkthroughService
             .GroupBy(x => x.name, StringComparer.OrdinalIgnoreCase).Select(g => g.First())
             .ToList();
 
-        var (changed, changedError) = await _git.ChangedFilesAsync(t.ProjectKey, commit, ct);
+        var (changed, changedError) = await _git.ChangedFilesAsync(t.ProjectKey, commit, ct, repoHeads: repoHeads);
         if (changedError is not null) return (null, changedError);
 
         var prompt = WalkthroughPrompt.Build(t, a, doc, resolved.Title, description,
@@ -238,8 +241,8 @@ public class WalkthroughService
         {
             if (!patches.TryGetValue(path, out var p))
             {
-                var diff = await _git.FileDiffAsync(t.ProjectKey, commit, path, ct);
-                var (text, textError) = await _git.FileAtAsync(t.ProjectKey, commit, path, ct);
+                var diff = await _git.FileDiffAsync(t.ProjectKey, commit, path, ct, repoHeads: repoHeads);
+                var (text, textError) = await _git.FileAtAsync(t.ProjectKey, commit, path, ct, repoHeads);
                 p = (text, diff.Error is null ? diff.Patch : null, diff.Error ?? textError);
                 if (diff.Truncated) p = (text, null, "its diff is too large to show from");
                 patches[path] = p;

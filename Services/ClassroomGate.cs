@@ -71,15 +71,19 @@ public class ClassroomGate : IClassroomGate
         var dir = AnalysisRunner.ReadDir(t, cfg);
         if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir))
             return new GateReadiness(true, Note: "there is no checkout of this branch on disk for it to read");
-        var head = AnalysisRunner.HeadSha(dir);
+        // On a project of several repos, a fingerprint of each changed repo's commit and tree.
+        var pin = AnalysisPin.Of(t, cfg);
+        var head = pin.HeadSha;
         if (head is null)
-            return new GateReadiness(true, Note: "the branch head could not be read");
+            return new GateReadiness(true, Note: cfg.IsMultiRepo
+                ? "no repo of this ticket's workspace has a commit of its own yet"
+                : "the branch head could not be read");
 
         // Any lens counts. A person who already opened the Classroom on this exact code has paid for
         // the reading this gate wants; asking for a second one would be the same run twice. Matched
         // by tree as well as commit, so a ticket sent back to refinement after its squash does not
         // pay again for code that has not changed.
-        var tree = AnalysisRunner.TreeSha(dir);
+        var tree = pin.TreeSha;
         var existing = await _db.TicketAnalyses.AsNoTracking()
             .Where(a => a.TicketId == t.Id && (a.HeadSha == head || (tree != null && a.TreeSha == tree)))
             .OrderByDescending(a => a.GeneratedAt)

@@ -86,10 +86,11 @@ public static class AnalysisEndpoints
             // Only shell out to git when there is something to compare against. On an unstudied
             // ticket the answer would be thrown away.
             var analyses = await svc.ForTicketAsync(id);
-            var headSha = analyses.Count > 0 && Directory.Exists(AnalysisRunner.ReadDir(t, cfg))
-                ? AnalysisRunner.HeadSha(AnalysisRunner.ReadDir(t, cfg))
-                : null;
-            var treeSha = headSha is null ? null : AnalysisRunner.TreeSha(AnalysisRunner.ReadDir(t, cfg));
+            // Read the way the run pins it, so a project of several repos compares fingerprint to
+            // fingerprint (AnalysisPin).
+            var pin = analyses.Count > 0 ? AnalysisPin.Of(t, cfg) : AnalysisPin.None;
+            var headSha = pin.HeadSha;
+            var treeSha = pin.TreeSha;
 
             var resolved = await resolver.ResolveAsync(t);
             // One call, two answers, and the resolver's own 60-second cache is what keeps a board
@@ -125,9 +126,9 @@ public static class AnalysisEndpoints
             var t = await tickets.GetAsync(a.TicketId);
             if (t == null) return Results.Ok(new AnalysisDto(Meta(a, null, null), doc));
 
-            var dir = AnalysisRunner.ReadDir(t, registry.GetProjectConfig(t.ProjectKey));
-            var headSha = Directory.Exists(dir) ? AnalysisRunner.HeadSha(dir) : null;
-            var treeSha = headSha is null ? null : AnalysisRunner.TreeSha(dir);
+            var pin = AnalysisPin.Of(t, registry.GetProjectConfig(t.ProjectKey));
+            var headSha = pin.HeadSha;
+            var treeSha = pin.TreeSha;
 
             // The one view where re-wording actually matters: this is the response carrying the
             // coverage map, and a map is a set of rulings against words that may since have changed.
@@ -153,8 +154,11 @@ public static class AnalysisEndpoints
             var t = await tickets.GetAsync(a.TicketId);
             if (t == null) return Results.NotFound();
 
+            // On a project of several repos HeadSha is a fingerprint, and the file's own repo's pinned
+            // commit is looked up from its path instead (AnalysisPin).
             var head = a.HeadSha ?? a.Branch ?? t.Branch ?? "";
-            return Results.Ok(await git.FileDiffAsync(t.ProjectKey, head, path, ct));
+            return Results.Ok(await git.FileDiffAsync(t.ProjectKey, head, path, ct,
+                repoHeads: AnalysisPin.HeadsFrom(a.RepoHeadsJson)));
         });
 
         // Join the queue. Named "generate" still because that is what the button says and what the

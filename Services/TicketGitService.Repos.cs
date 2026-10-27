@@ -154,6 +154,15 @@ public partial class TicketGitService
         return (target, clean[(slash + 1)..]);
     }
 
+    /// <summary>
+    /// The commit to read <paramref name="target"/> at: its own entry in <paramref name="repoHeads"/>
+    /// (an analysis's pinned commit per repo - see <see cref="AnalysisPin"/>) when it has one, else
+    /// <paramref name="headRef"/>. A project of one repo, and a caller with no pins, always get
+    /// <paramref name="headRef"/>.
+    /// </summary>
+    private static string HeadFor(RepoTarget target, string headRef, IReadOnlyDictionary<string, string>? repoHeads) =>
+        target.Dir.Length > 0 && repoHeads is not null && repoHeads.TryGetValue(target.Dir, out var sha) ? sha : headRef;
+
     /// <summary>A path inside <paramref name="target"/>, named as it stands across the whole ticket.</summary>
     private static string Prefixed(RepoTarget target, string inner) =>
         target.Dir.Length == 0 ? inner : $"{target.Dir}/{inner}";

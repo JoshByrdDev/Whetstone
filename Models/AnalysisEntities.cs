@@ -63,6 +63,14 @@ public class TicketAnalysis
     /// </summary>
     public string? TreeSha { get; set; }
 
+    /// <summary>
+    /// On a project of several repos, each changed repo's commit and tree the analysis read, as JSON
+    /// (<see cref="Services.AnalysisPin"/>). <see cref="HeadSha"/> and <see cref="TreeSha"/> are then
+    /// fingerprints of this list rather than commits, so reading the code at the pin goes through
+    /// here. Null for a project of one repo, and for analyses written before this existed.
+    /// </summary>
+    public string? RepoHeadsJson { get; set; }
+
     /// <summary>Branch the analysis read, recorded so a later rename is visible rather than silent.</summary>
     public string? Branch { get; set; }
 
