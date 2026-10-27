@@ -6,7 +6,8 @@ namespace Whetstone.Services;
 /// <param name="Number">The leading number of its file name: units are worked in this order.</param>
 /// <param name="Agreed">A person has marked it agreed. Only an agreed unit may be worked.</param>
 /// <param name="Draft">It says it is a draft: written, and waiting for its owner.</param>
-public record PlanUnit(int Number, string File, bool Agreed, bool Draft, IReadOnlyList<string> Outcomes, string Text);
+/// <param name="Idea">Only an idea: a title and a paragraph, not yet drafted. Never agreed or a draft at once.</param>
+public record PlanUnit(int Number, string File, bool Agreed, bool Draft, IReadOnlyList<string> Outcomes, string Text, bool Idea = false);
 
 /// <summary>One outcome of a unit, with the sentence its spec gives it.</summary>
 public record PlanOutcomeText(string Outcome, string Text);
@@ -28,7 +29,42 @@ public record BranchChange(IReadOnlyList<string> Files, int Behind, int Ahead, s
 public record SyncFromResult(string Answer, int Commits, IReadOnlyList<string> Files, string? Why);
 
 /// <summary>Outcome of one command run on a ticket's worktree before it is merged.</summary>
-public record CheckRun(bool Ok, bool TimedOut, string Output);
+/// <param name="Output">The last lines of what the check printed.</param>
+/// <param name="Failures">
+/// The lines from the WHOLE output that name what failed - a failing test, an assertion, a compiler
+/// error - picked out because the tail alone often ends on a summary that names none of them.
+/// </param>
+public record CheckRun(bool Ok, bool TimedOut, string Output, IReadOnlyList<string>? Failures = null);
+
+/// <summary>Picks out of a check's whole output the lines that say what failed.</summary>
+public static class CheckFailures
+{
+    private static readonly System.Text.RegularExpressions.Regex Failing = new(
+        @"(^\s*(FAIL|FAILED|not ok)\b)|(^\s*[\u25CF\u2715\u2717\u00D7\u274C]\s)|AssertionError|Assertion failed|" +
+        @"\bExpected[: ]|\bReceived:|\berror (TS|CS)\d+|\b[1-9]\d* (failed|failing)\b|^\s*Error:|\bFailed [A-Za-z_.]+\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Each line that names a failure, with the line after it for context, in order, each cut to a
+    /// readable length and the whole held to <paramref name="max"/> lines.
+    /// </summary>
+    public static IReadOnlyList<string> Pick(IReadOnlyList<string> lines, int max = 60)
+    {
+        var picked = new List<string>();
+        var taken = new HashSet<int>();
+        for (var i = 0; i < lines.Count && picked.Count < max; i++)
+        {
+            if (!Failing.IsMatch(lines[i])) continue;
+            foreach (var j in new[] { i, i + 1 })
+            {
+                if (j >= lines.Count || !taken.Add(j) || picked.Count >= max) continue;
+                var l = lines[j].TrimEnd();
+                picked.Add(l.Length > 300 ? l[..300] + " ..." : l);
+            }
+        }
+        return picked;
+    }
+}
 
 /// <summary>
 /// The git a project's steward needs, and nothing else it could ask for.
@@ -88,8 +124,33 @@ public partial class TicketGitService
         var (_, repo, baseBranch) = HubOf(projectKey);
         if (!plan.Configured || !IsGitRepo(repo)) return Array.Empty<PlanUnit>();
 
-        var ls = await GitAsync(repo, ct, "ls-tree", "--name-only", $"refs/heads/{baseBranch}", $"{plan.UnitsDir}/");
-        if (!ls.Ok) return Array.Empty<PlanUnit>();
+        // A plan is read as committed, so the base's commit names its whole text: read once per
+        // commit, not once per caller. The Steward page alone asks for it a dozen times on opening,
+        // and each read is a git process per slice.
+        var head = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{baseBranch}");
+        if (!head.Ok) return Array.Empty<PlanUnit>();
+        var sha = head.Stdout.Trim();
+        var key = string.Join('\n', repo, sha, plan.UnitsDir, plan.UnitFile, plan.Agreed, plan.Draft, plan.Outcome, plan.Idea);
+        if (PlanCache.TryGetValue(key, out var known)) return known;
+
+        var (units, whole) = await ReadPlanAtAsync(repo, sha, plan, ct);
+        // A read that missed a file is answered as it stands but not kept: the next one tries again.
+        if (whole)
+        {
+            if (PlanCache.Count > 64) PlanCache.Clear();
+            PlanCache[key] = units;
+        }
+        return units;
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<PlanUnit>> PlanCache = new();
+
+    /// <summary>The plan's units at one commit, and whether every file in it could be read.</summary>
+    private async Task<(IReadOnlyList<PlanUnit> Units, bool Whole)> ReadPlanAtAsync(string repo, string sha, StewardPlan plan, CancellationToken ct)
+    {
+        var ls = await GitAsync(repo, ct, "ls-tree", "--name-only", sha, $"{plan.UnitsDir}/");
+        if (!ls.Ok) return (Array.Empty<PlanUnit>(), false);
+        var whole = true;
 
         var unitFile = new Regex(plan.UnitFile, RegexOptions.IgnoreCase);
         var units = new List<PlanUnit>();
@@ -97,11 +158,11 @@ public partial class TicketGitService
         {
             var m = unitFile.Match(path[(path.LastIndexOf('/') + 1)..]);
             if (!m.Success || m.Groups.Count < 2 || !int.TryParse(m.Groups[1].Value, out var number)) continue;
-            var show = await GitAsync(repo, ct, "show", $"refs/heads/{baseBranch}:{path}");
-            if (!show.Ok) continue;
+            var show = await GitAsync(repo, ct, "show", $"{sha}:{path}");
+            if (!show.Ok) { whole = false; continue; }
             units.Add(ReadUnit(plan, number, path, show.Stdout));
         }
-        return units.OrderBy(u => u.Number).ToList();
+        return (units.OrderBy(u => u.Number).ToList(), whole);
     }
 
     /// <summary>One spec's text as a unit. Agreed wins over draft: a spec cannot be both, and a
@@ -112,7 +173,8 @@ public partial class TicketGitService
         var agreed = Regex.IsMatch(text, plan.Agreed, o);
         var outcomes = Regex.Matches(text, plan.Outcome, RegexOptions.Multiline)
             .Select(m => m.Groups.Count > 1 ? m.Groups[1].Value : m.Value).Distinct().ToList();
-        return new PlanUnit(number, file, agreed, !agreed && Regex.IsMatch(text, plan.Draft, o), outcomes, text);
+        var draft = !agreed && Regex.IsMatch(text, plan.Draft, o);
+        return new PlanUnit(number, file, agreed, draft, outcomes, text, !agreed && !draft && Regex.IsMatch(text, plan.Idea, o));
     }
 
     /// <summary>
@@ -343,6 +405,7 @@ public partial class TicketGitService
         var r = await RunAsync("cmd.exe", dir, timeout, ct, "/d", "/c", command);
         var lines = $"{r.Stdout}\n{r.Stderr}".Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0).ToList();
         return new CheckRun(r.Ok, r.ExitCode == -1 && r.Stderr.Contains("did not finish"),
-            string.Join("\n", lines.Skip(Math.Max(0, lines.Count - 40))));
+            string.Join("\n", lines.Skip(Math.Max(0, lines.Count - 40))),
+            r.Ok ? null : CheckFailures.Pick(lines));
     }
 }

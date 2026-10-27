@@ -55,19 +55,32 @@ public static class UnitDecisions
     public static (string? Text, IReadOnlyList<string> Said, string? Refusal) Settle(string text,
         IReadOnlyList<UnitDecisionChoice> choices, DateTime day)
     {
+        var (t, said, _, no) = SettleEach(text, choices, day);
+        return (t, said, no);
+    }
+
+    /// <summary>
+    /// As <see cref="Settle"/>, and each decision as the register keeps it: its number, its title,
+    /// and what was decided - the same words written under "Decided".
+    /// </summary>
+    public static (string? Text, IReadOnlyList<string> Said, IReadOnlyList<(int Number, string Title, string Rule)> Each, string? Refusal)
+        SettleEach(string text, IReadOnlyList<UnitDecisionChoice> choices, DateTime day)
+    {
+        var none = Array.Empty<(int, string, string)>();
         var (lines, nl) = Lines(text);
         var items = Items(lines);
-        if (choices.Count == 0) return (null, Array.Empty<string>(), "There is nothing to settle.");
+        if (choices.Count == 0) return (null, Array.Empty<string>(), none, "There is nothing to settle.");
         if (choices.GroupBy(c => c.Number).FirstOrDefault(g => g.Count() > 1) is { } twice)
-            return (null, Array.Empty<string>(), $"#{twice.Key} is answered twice.");
+            return (null, Array.Empty<string>(), none, $"#{twice.Key} is answered twice.");
 
         var written = new List<string>();
+        var each = new List<(int, string, string)>();
         var said = new List<string>();
         var drop = new List<(int From, int To)>();
         foreach (var c in choices)
         {
             var it = items.FirstOrDefault(i => i.Decision.Number == c.Number);
-            if (it.Decision is null) return (null, Array.Empty<string>(), $"#{c.Number} is not an open decision in this spec.");
+            if (it.Decision is null) return (null, Array.Empty<string>(), none, $"#{c.Number} is not an open decision in this spec.");
             var d = it.Decision;
             var note = string.IsNullOrWhiteSpace(c.Note) ? null : Regex.Replace(c.Note.Trim(), @"\s+", " ");
             string answer, brief;
@@ -77,7 +90,7 @@ public static class UnitDecisions
                 foreach (var l in letters.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Distinct())
                 {
                     var o = d.Options.FirstOrDefault(x => string.Equals(x.Letter, l, StringComparison.OrdinalIgnoreCase));
-                    if (o is null) return (null, Array.Empty<string>(), $"#{d.Number} has no option ({l}).");
+                    if (o is null) return (null, Array.Empty<string>(), none, $"#{d.Number} has no option ({l}).");
                     picked.Add(o);
                 }
                 answer = Said(picked);
@@ -90,10 +103,11 @@ public static class UnitDecisions
             }
             else if (d.Pick is not null) { answer = d.Pick; brief = $"#{d.Number} as picked"; }
             else if (note is not null) { answer = ""; brief = $"#{d.Number}"; }
-            else return (null, Array.Empty<string>(), $"#{d.Number} has no pick to take: choose an option or say what you decide.");
+            else return (null, Array.Empty<string>(), none, $"#{d.Number} has no pick to take: choose an option or say what you decide.");
 
             var full = string.Join(". ", new[] { answer.TrimEnd('.', ' '), note }.Where(s => !string.IsNullOrEmpty(s)));
             written.Add($"- **(#{d.Number}) {d.Title}.** Decided by the owner {day:yyyy-MM-dd}: {full.TrimEnd('.')}.");
+            each.Add((d.Number, d.Title, $"{full.TrimEnd('.')}."));
             said.Add(note is null ? brief : $"{brief}: {note}");
             drop.Add((it.From, it.To));
         }
@@ -132,7 +146,37 @@ public static class UnitDecisions
             add.Add("");
             lines.InsertRange(at, add);
         }
-        return (string.Join(nl, lines), said, null);
+        return (string.Join(nl, lines), said, each, null);
+    }
+
+    /// <summary>
+    /// The spec with one line added at the end of its "Decided" section - which is made, before
+    /// "Done means" or at the end, when the spec has none. A note there that nothing is decided
+    /// yet stays: it is written once, like everything in that section.
+    /// </summary>
+    public static string AppendDecided(string text, string line)
+    {
+        var (lines, nl) = Lines(text);
+        var decided = lines.FindIndex(l => DecidedHeading.IsMatch(l));
+        if (decided < 0)
+        {
+            var at = lines.FindIndex(l => Regex.IsMatch(l, @"^##\s+Done means\b", RegexOptions.IgnoreCase));
+            var add = new List<string> { "## Decided", "", line, "" };
+            if (at < 0) { if (lines.Count > 0 && lines[^1].Trim().Length > 0) add.Insert(0, ""); lines.AddRange(add); }
+            else lines.InsertRange(at, add);
+            return string.Join(nl, lines);
+        }
+        var end = decided + 1;
+        while (end < lines.Count && !SectionEnd.IsMatch(lines[end])) end++;
+        var last = end;
+        while (last > decided + 1 && lines[last - 1].Trim().Length == 0) last--;
+        var block = new List<string>();
+        if (last > decided + 1) block.Add("");
+        block.Add(line);
+        if (end < lines.Count) block.Add("");
+        lines.RemoveRange(last, end - last);
+        lines.InsertRange(last, block);
+        return string.Join(nl, lines);
     }
 
     private static string Said(IEnumerable<UnitDecisionOption> options) =>

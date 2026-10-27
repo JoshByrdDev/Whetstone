@@ -8,6 +8,7 @@ import { ago } from './JourneyTrack';
 import { TicketOptions } from './TicketOptions';
 import { IndependentReview } from './IndependentReview';
 import { PriorityPicker } from './PriorityPicker';
+import { TicketPlanLink } from './TicketPlanLink';
 import { LabelEditor } from './LabelEditor';
 import { LearningBrief, Markdown } from './LearningBrief';
 import { StewardOnTicket } from './StewardOnTicket';
@@ -257,6 +258,16 @@ export function TicketDetail({
                 <span className="normal-case tracking-normal text-gray-600"> · yours only · no phase ever reads these</span>
               </SectionLabel>
               <LabelEditor ticketId={t.id} disabled={busy} onChanged={onChanged} />
+            </div>
+
+            {/* Plan — the unit this ticket is part of, which is what a unit's progress is counted
+                from. A steward sets it when it files the ticket; this is where it is set by hand. */}
+            <div>
+              <SectionLabel>
+                Plan
+                <span className="normal-case tracking-normal text-gray-600"> · the unit it counts toward</span>
+              </SectionLabel>
+              <TicketPlanLink ticket={t} disabled={busy} onChanged={() => { void run(() => Promise.resolve()); }} />
             </div>
 
             {/* Priority — kept above the pipeline options and separate from them. Those describe how

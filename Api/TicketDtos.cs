@@ -214,7 +214,16 @@ public record TicketDetailDto(
     bool SkipClassroomAnalysis = false,
     // The analysis this refinement pass was handed and what refinement has ruled on each of its
     // findings. Null when the ticket's current pass was handed none.
-    IndependentReviewDto? IndependentReview = null);
+    IndependentReviewDto? IndependentReview = null,
+    // The unit of a plan this ticket belongs to, and which of its outcomes it carries. Set by a
+    // steward when it files the ticket, or by the owner from the drawer. Null when it is in no plan.
+    TicketPlanDto? Plan = null,
+    // A slice's walk-through: QA on the base branch, driving the story, with no code of its own.
+    // Read by the worker off the claim (a detached checkout of the base) and by the QA skill.
+    bool Walkthrough = false);
+
+/// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
+public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
 
 /// <summary>One finding of the independent analysis, and refinement's ruling on it.</summary>
 public record GateFindingDto(int Id, string Kind, string Title, string Text,
@@ -330,8 +339,11 @@ public static class TicketMapper
                 files is null ? "" : files.PathFor(a).Replace('\\', '/'), a.Bytes, a.IsImage)).ToList(),
             c.AcknowledgedAt is not null, c.Acknowledgement, c.DeliveredAt, c.AcknowledgedAt)).ToList(),
         t.QaShots.OrderBy(s => s.Order).Select(s => QaShotDto.From(t.Id, s)).ToList(),
-        PhaseMachine.NextPhases(t.Phase, t.Track).Select(p => p.ToString()).ToList(),
-        PhaseMachine.NextPhases(t.Phase, t.Track).Select(p => new NextPhaseDto(p.ToString(), PhaseMachine.Meaning(t.Phase, p),
+        PhaseMachine.NextPhasesFor(t).Select(p => p.ToString()).ToList(),
+        PhaseMachine.NextPhasesFor(t).Select(p => new NextPhaseDto(p.ToString(),
+            t.Walkthrough && t.Phase == TicketPhase.QaTesting && p == TicketPhase.NeedsReview
+                ? "The walk-through passed: every step of the story driven and captured. The next steward run closes it and calls Z1 done."
+                : PhaseMachine.Meaning(t.Phase, p),
             HandoffRequirements.GuideSummary(t, t.Phase, p))).ToList(),
         blockers,
         t.LearningBrief, t.LearningBriefAt, learningLabel,
@@ -347,7 +359,11 @@ public static class TicketMapper
                 .Select(c => ToReviewComment(c, t.ReviewTarget)).ToList(),
         HeldForExpansion(t),
         t.SkipClassroomAnalysis,
-        ToIndependentReview(t));
+        ToIndependentReview(t),
+        t.PlanUnit is { } unit
+            ? new TicketPlanDto(t.PlanKey ?? "", unit, StewardProgress.OutcomesOf(t))
+            : null,
+        t.Walkthrough);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

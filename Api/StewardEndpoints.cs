@@ -6,13 +6,21 @@ using Whetstone.Services;
 
 namespace Whetstone.Api;
 
-public record StewardAnswerRequest(string? Answer);
+/// <summary>An answer, and which touched decisions it replaces; null Replaces takes the picked option's.</summary>
+public record StewardAnswerRequest(string? Answer, IReadOnlyList<int>? Replaces = null, string? Story = null);
 public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released);
+public record StewardReverse(string? Because);
+public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
-public record StewardNewPlan(string? Key, string? Name, string? Folder);
+public record StewardNewPlan(string? Key, string? Name, string? Folder, IReadOnlyList<StewardNewIdea>? Ideas = null);
+public record StewardSettlePair(bool? Replaces, string? Why);
+public record StewardInstructionRequest(string? Text, string? Until);
+public record StewardCloseRequest(string? Note);
+/// <summary>A ticket's place in a plan. <c>Unit</c> null takes it out; <c>Plan</c> null is the one being worked.</summary>
+public record TicketPlanLink(string? Plan, int? Unit, IReadOnlyList<string>? Outcomes);
 
 /// <summary>
 /// The owner's side of a project's steward, and the two calls whatever launches a run needs.
@@ -34,7 +42,7 @@ public static class StewardEndpoints
     {
         // Everything the Steward page draws for one project.
         app.MapGet("/api/steward", async (string? project, ProjectRegistry registry, DashboardDbContext db,
-            StewardService steward, CancellationToken ct) =>
+            StewardService steward, StewardRunner runner, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
             var cfg = registry.GetProjectConfig(project!);
@@ -42,6 +50,10 @@ public static class StewardEndpoints
             var questions = await db.StewardQuestions.AsNoTracking()
                 .Where(q => q.ProjectKey == project).OrderBy(q => q.AskedAt).ToListAsync(ct);
             var (due, dueReason) = await steward.DueAsync(project!, ct);
+            // The decisions a waiting question touches, as the owner reads them beside it.
+            var touched = questions.Where(q => q.Answer is null).SelectMany(q => StewardService.Numbers(q.Touches)).Distinct().ToList();
+            var rules = await db.StewardDecisions.AsNoTracking().Where(d => d.ProjectKey == project && touched.Contains(d.Number))
+                .ToDictionaryAsync(d => d.Number, d => d.Rule, ct);
 
             return Results.Ok(new
             {
@@ -52,16 +64,17 @@ public static class StewardEndpoints
                 // Why full is not on offer, when it is not: said here so the page does not have to know the rule.
                 fullUnavailable = cfg.MergeInsteadOfPr && !cfg.IsTfvc ? null
                     : "This project does not deliver by a local merge, so its steward never merges.",
-                running = await steward.RunOpenAsync(project!),
+                // Open, or started from this page and not yet opened: its lock is taken only once the
+                // agent is up, and the page must not offer a second run in the seconds before that.
+                running = await steward.RunOpenAsync(project!) || runner.RunningProject == project,
                 due,
                 dueReason,
                 lastRunStartedAt = s?.LastRunStartedAt,
                 lastRunEndedAt = s?.LastRunEndedAt,
                 lastRunSummary = s?.LastRunSummary,
                 resting = s?.RestingAtSha is not null,
-                memo = s?.Memo ?? "",
-                waiting = questions.Where(q => q.Answer is null).Select(Question),
-                answered = questions.Where(q => q.Answer is not null).OrderByDescending(q => q.AnsweredAt).Select(Question),
+                waiting = questions.Where(q => q.Answer is null).Select(q => Question(q, rules)),
+                answered = questions.Where(q => q.Answer is not null).OrderByDescending(q => q.AnsweredAt).Select(q => Question(q, null)),
             });
         });
 
@@ -79,6 +92,7 @@ public static class StewardEndpoints
             var tickets = await db.Tickets.AsNoTracking().Where(t => ids.Contains(t.Id))
                 .Select(t => new { t.Id, t.Title, t.PlanUnit, t.PlanKey }).ToDictionaryAsync(t => t.Id, ct);
             var goesOutWith = await steward.ReleaseUnitOfNotesAsync(project!, ct);
+            var flagged = await steward.RulingFlagsAsync(project!, ct);
             return Results.Ok(rows.Select(e =>
             {
                 var t = e.TicketId is { } id && tickets.TryGetValue(id, out var found) ? found : null;
@@ -99,6 +113,15 @@ public static class StewardEndpoints
                     e.HandledAt,
                     e.Text,
                     e.At,
+                    // A ruling's: what it rests on, and the owner's reversal of it.
+                    e.Basis,
+                    e.ReversedAt,
+                    e.ReversedBecause,
+                    // The decisions it reads, and whether one of them no longer holds.
+                    reads = StewardService.Numbers(e.Reads),
+                    flagged = flagged.TryGetValue(e.Id, out var flag) ? flag : null,
+                    // A learned fact's: where it went in the notes store, once placed.
+                    e.Placed,
                 };
             }));
         });
@@ -110,6 +133,32 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerMarksEntryAsync(project ?? "", id, mark.Handled, mark.Release, ct);
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The owner keeps or reverses one of the steward's rulings. No tool behind either.
+        app.MapPost("/api/steward/rulings/{id:int}/keep", async (int id, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerKeepsRulingAsync(project ?? "", id, ct);
+            return r.Answer == "kept" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        app.MapPost("/api/steward/rulings/{id:int}/reverse", async (int id, string? project, StewardReverse body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerReversesRulingAsync(project ?? "", id, body.Because ?? "", ct);
+            return r.Answer == "reversed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The facts a steward learned that are not in the notes store yet, and the launcher saying
+        // where it put one. Both for steward.ps1 after a run; no tool behind either.
+        app.MapGet("/api/steward/learned", async (string? project, StewardService steward, CancellationToken ct) =>
+            Results.Ok((await steward.UnplacedAsync(project ?? "", ct)).Select(e => new { e.Id, e.Text, key = e.Placed })));
+
+        app.MapPost("/api/steward/learned/{id:int}/placed", async (int id, string? project, StewardPlaced body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.PlacedAsync(project ?? "", id, body.Where ?? "", ct);
+            return r.Answer is "placed" or "already-placed" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // Sort many release notes at once, { "<id>": "<kind>" }: for a record older than the kinds.
@@ -129,9 +178,19 @@ public static class StewardEndpoints
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
             var r = await steward.PlanViewAsync(project!, plan, ct);
             var cfg = registry.GetProjectConfig(project!).Steward;
-            var file = (plan is null ? cfg.Plan : cfg.PlanByKey(plan))?.Master ?? "";
+            var which = plan is null ? cfg.Plan : cfg.PlanByKey(plan);
+            var file = which?.Master ?? "";
             var text = file.Length > 0 ? await git.FileAtBaseAsync(project!, file, ct) : null;
-            return Results.Ok(new { r.Answer, r.Why, plan = r.Data, master = text is null ? null : new { file, text } });
+            var charterFile = which?.Charter ?? "";
+            var charter = charterFile.Length > 0 ? await git.FileAtBaseAsync(project!, charterFile, ct) : null;
+            return Results.Ok(new
+            {
+                r.Answer, r.Why, plan = r.Data,
+                master = text is null ? null : new { file, text },
+                charter = charter is null ? null : new { file = charterFile, text = charter },
+                // The plan as read: charter, the project's decisions in force, every slice in order.
+                readable = r.Answer == "plan" ? await steward.PlanAsReadAsync(project!, plan, ct) : null,
+            });
         });
 
         // Agree a draft unit: the commit that has always been what agrees one, made from the board.
@@ -158,6 +217,14 @@ public static class StewardEndpoints
             return r.Answer is "agreed" or "decided" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
+        // Run the steward now, rather than when the heartbeat finds it due. The owner's: there is
+        // no tool for it. Wakes a running heartbeat, or starts the run itself while it is stopped.
+        app.MapPost("/api/steward/run", async (string? project, StewardService steward, StewardRunner runner, CancellationToken ct) =>
+        {
+            var r = await runner.StartAsync(project ?? "", steward, ct);
+            return r.Answer is "started" or "queued" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
         // Say a unit's work has been released, or take that back.
         app.MapPut("/api/steward/plan/units/{unit:int}/released", async (int unit, string? project, StewardUnitReleased body,
             StewardService steward, CancellationToken ct) =>
@@ -172,22 +239,86 @@ public static class StewardEndpoints
             StewardService steward, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
-            var planTemplate = Path.Combine(paths.DataRoot, "plan-templates", "plan.md");
-            var unitTemplate = Path.Combine(paths.DataRoot, "plan-templates", "unit.md");
-            if (!File.Exists(planTemplate) || !File.Exists(unitTemplate))
-                return Results.BadRequest(new { error = $"The plan templates are missing from {Path.GetDirectoryName(planTemplate)}." });
+            var charterTemplate = Path.Combine(paths.DataRoot, "plan-templates", "charter.md");
+            var ideaTemplate = Path.Combine(paths.DataRoot, "plan-templates", "idea.md");
+            if (!File.Exists(charterTemplate) || !File.Exists(ideaTemplate))
+                return Results.BadRequest(new { error = $"The plan templates are missing from {Path.GetDirectoryName(charterTemplate)}." });
 
             var r = await steward.OwnerStartsPlanAsync(project!, body.Key, body.Name, body.Folder,
-                await File.ReadAllTextAsync(planTemplate, ct), await File.ReadAllTextAsync(unitTemplate, ct), ct);
+                await File.ReadAllTextAsync(charterTemplate, ct), await File.ReadAllTextAsync(ideaTemplate, ct), body.Ideas, ct);
             if (r.Answer != "started") return Results.BadRequest(r);
 
             var made = JsonSerializer.SerializeToElement(r.Data, Json);
             var file = paths.ProjectConfigDefaults(project!);
             var failed = await StewardPlanFile.StartAsync(file, made.GetProperty("key").GetString()!, made.GetProperty("name").GetString()!,
-                made.GetProperty("units").GetString()!, made.GetProperty("master").GetString()!, ct);
+                made.GetProperty("units").GetString()!, made.GetProperty("charter").GetString()!, ct);
             return failed is null
                 ? Results.Ok(new { r.Answer, r.Data, settings = file })
                 : Results.BadRequest(new { answer = "documents-only", why = $"The plan's documents are in the repo, but the project's settings were not changed: {failed}" });
+        });
+
+        // The register of decisions: every decision with its status, and the pairs the import
+        // thinks may disagree. Everything that changes it is the owner's, with no tool behind it.
+        app.MapGet("/api/steward/decisions", async (string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.RegisterViewAsync(project ?? "", ct);
+            return r.Answer == "register" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Record a decision directly; with replaces, it is a change to the ones it names.
+        app.MapPost("/api/steward/decisions", async (string? project, StewardNewDecision body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerRecordsDecisionAsync(project ?? "", body, ct);
+            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        app.MapPost("/api/steward/decisions/{number:int}/withdraw", async (int number, string? project, StewardReverse body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerWithdrawsDecisionAsync(project ?? "", number, body.Because, ct);
+            return r.Answer == "withdrawn" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Take what the project already had into the register: run on its own the first time the
+        // register is read, and again from here to fold in what has arrived since.
+        app.MapPost("/api/steward/decisions/import", async (string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerBuildsRegisterAsync(project ?? "", ct);
+            return r.Answer == "built" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // A provisional decision whose point has come: confirmed, so it holds like any other.
+        app.MapPost("/api/steward/decisions/{number:int}/confirm", async (int number, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerConfirmsDecisionAsync(project ?? "", number, ct);
+            return r.Answer == "confirmed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Instructions: something to do until a condition holds. Not decisions, never in the register.
+        app.MapPost("/api/steward/instructions", async (string? project, StewardInstructionRequest body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerInstructsAsync(project ?? "", body.Text, body.Until, ct);
+            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+        app.MapPost("/api/steward/instructions/{id:int}/close", async (int id, string? project, StewardCloseRequest body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerClosesInstructionAsync(project ?? "", id, body.Note, ct);
+            return r.Answer == "closed" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // A follow-up the owner says is nothing to take up.
+        app.MapPost("/api/steward/followups/{id:int}/drop", async (int id, string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerDropsFollowUpAsync(project ?? "", id, ct);
+            return r.Answer == "dropped" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // A pair the import thought may disagree: the newer replaces the older, or both stand.
+        app.MapPost("/api/steward/decisions/pairs/{id:int}", async (int id, string? project, StewardSettlePair body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerSettlesConflictAsync(project ?? "", id, body.Replaces ?? false, body.Why, ct);
+            return r.Answer == "settled" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // The plan and how far it is, without a run: the same figures a run is shown.
@@ -197,7 +328,7 @@ public static class StewardEndpoints
         app.MapPost("/api/steward/questions/{key}/answer", async (string key, string? project, StewardAnswerRequest req,
             StewardService steward, CancellationToken ct) =>
         {
-            var r = await steward.OwnerAnswersAsync(project ?? "", key, req.Answer ?? "", ct);
+            var r = await steward.OwnerAnswersAsync(project ?? "", key, req.Answer ?? "", req.Replaces, req.Story, ct);
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
@@ -214,6 +345,15 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerClearsFlagAsync(project ?? "", id, flag, ct);
             return r.Answer == "cleared" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // The owner's link from a ticket to a unit of a plan: set it, change it, or (unit null)
+        // take the ticket out of the plan. No tool behind it, like everything else that is the owner's.
+        app.MapPut("/api/tickets/{id:int}/plan", async (int id, TicketPlanLink body, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.LinkTicketAsync(id, body.Plan, body.Unit, body.Outcomes, ct);
+            return r.Answer is "linked" or "unchanged" ? Results.Ok(r)
+                : r.Answer == "not-found" ? Results.NotFound(r) : Results.BadRequest(r);
         });
 
         app.MapPost("/api/steward/said", async (string? project, StewardSaidRequest req, StewardService steward, CancellationToken ct) =>
@@ -299,7 +439,14 @@ public static class StewardEndpoints
                 skillFile = skill,
                 skillExists = File.Exists(skill),
                 memoryIndex = cfg.ResolvedMemoryIndex,
+                // Where the facts it learns are placed after the run.
+                memoryDir = cfg.ResolvedMemoryDir,
                 planUnits = cfg.Steward.Plan.UnitsDir,
+                // Direction for every draft, deciding nothing; or, on a plan from before charters, its one document.
+                planCharter = cfg.Steward.Plan.Charter,
+                // A draft's shape, for a first draft with no agreed slice before it to follow.
+                draftTemplate = Path.Combine(paths.DataRoot, "plan-templates", "unit.md"),
+                planMaster = cfg.Steward.Plan.Master,
             });
         });
 
@@ -316,7 +463,7 @@ public static class StewardEndpoints
         });
     }
 
-    private static object Question(StewardQuestion q) => new
+    private static object Question(StewardQuestion q, IReadOnlyDictionary<int, string>? rules) => new
     {
         q.Key,
         q.Question,
@@ -328,6 +475,18 @@ public static class StewardEndpoints
         unit = q.PlanUnit,
         decisions = (q.Decisions ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
             .Select(n => int.TryParse(n, out var i) ? i : 0).Where(i => i > 0),
+        // What it bears on in the register, and which of those each option would change.
+        touches = StewardService.Numbers(q.Touches).Select(n => new { number = n, rule = rules is not null && rules.TryGetValue(n, out var r) ? r : null }),
+        changes = string.IsNullOrEmpty(q.OptionChangesJson) ? null
+            : JsonSerializer.Deserialize<Dictionary<string, List<int>>>(q.OptionChangesJson, Json),
+        // A proposed idea, committed as written on a yes.
+        idea = q.ProposedFile is null ? null : new { file = q.ProposedFile, text = q.ProposedText },
+        // The story sentence an answer changes, and its rewording under each option.
+        story = q.StorySentence is null ? null : new
+        {
+            sentence = q.StorySentence,
+            rewordings = string.IsNullOrEmpty(q.StoryRewordingsJson) ? null : JsonSerializer.Deserialize<Dictionary<string, string>>(q.StoryRewordingsJson, Json),
+        },
         q.AskedAt,
         q.Answer,
         q.AnsweredAt,

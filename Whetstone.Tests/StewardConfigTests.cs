@@ -101,7 +101,6 @@ public class StewardConfigTests : IDisposable
         Assert.Equal(100, s.CreatedPerDay);
         Assert.Equal(9, s.OpenAtOnce);
         Assert.Equal(3, s.SendBacksPerTicket);
-        Assert.Equal(5000, s.MemoMaxChars);
         Assert.Equal("main", s.SyncFrom);
         Assert.Equal("docs/plan/decisions.md", s.DecisionsFile);
         Assert.Equal("docs/plan/units", s.Plan.UnitsDir);

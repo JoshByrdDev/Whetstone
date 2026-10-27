@@ -38,7 +38,7 @@ public static class WalkthroughPrompt
             "if the ticket carried a mockup or screenshot",
             $"a range of the branch's code. \"file\" (repo-relative, from the changed-files list), \"from\"/\"to\" (NEW-side line numbers at commit {commit}, at most 40 lines)",
             $"`git show {commit}:<path>` with line numbers, or the worktree if its HEAD matches",
-            "title, ask, a result shot, flow, code, a proof shot, cards, question"));
+            "title, ask, a result shot, flow, code or a picture, a proof shot, cards, question"));
         Pointers(sb, doc, shots, attachments, changed, "Files the branch changed (+added -removed)",
             "The ticket's description (quote from this, verbatim)", description);
         return sb.ToString();
@@ -76,7 +76,7 @@ public static class WalkthroughPrompt
             "never - a unit has none, so leave \"attachments\" out",
             $"a range of the unit's code. \"file\" (repo-relative, from the changed-files list), \"from\"/\"to\" (line numbers at commit {toSha}, at most 40 lines)",
             $"`git show {toSha}:<path>` with line numbers",
-            "title, ask, a result shot, flow, a second shot or code, cards, question"));
+            "title, ask, a result shot, flow, a picture, a second shot or code, cards, question"));
         Pointers(sb, doc, shots, Array.Empty<AttachmentMaterial>(), changed, "Files the unit changed (+added -removed)",
             "The unit's spec (quote from this, verbatim)", spec);
         return sb.ToString();
@@ -124,6 +124,39 @@ public static class WalkthroughPrompt
           with "show": 1, 2, 3...
         - "question": the analysis's closing question, by "block" address. "show": 1 on the beat that
           asks it.
+        - "picture": a small animated diagram, for an idea that is easier to SEE than to hear and that
+          no screenshot, code range or flow above already shows. See "Pictures" below.
+
+        ## Pictures
+
+        A picture scene draws a few labelled things and moves them as the narration goes. You never
+        say how anything animates. Each beat may give a "picture": the WHOLE picture as it should look
+        from that beat on (a beat without one keeps the last). The player compares it with the
+        previous beat's picture BY ID and animates the difference:
+
+        - an id that was not there before enters - "we added this";
+        - an id that is gone leaves - "we took this out" (or keep it with "change": "removed" to show
+          it struck out);
+        - the same id with new "text" or a new "change" changes in place - "this became that";
+        - the same id in a new place slides there - "it moved", "it now sits between these two";
+        - an arrow that was not there before draws itself - "now this calls that".
+
+        So keep an id the same for the same thing on every beat, and change only what the narration
+        is about. One idea per scene, two to five beats, building up.
+
+        A picture is {"layout": "row" | "column", "items": [...], "arrows": [...]}:
+        - item: "id" (short, e.g. "cache"), "text" (a label of two to five words; for kind "text" a
+          short sentence), and optional "kind" ("box" by default; "group" frames the items whose "in"
+          names it, laid out by its own "layout"; "text" is a plain caption; "code" is a short
+          identifier or expression in monospace, copied exactly), "sub" (a second, smaller line),
+          "change" ("unchanged", "new", "changed", "removed" - the colours the flow diagram uses).
+        - arrow: "from" and "to" item ids, optional "label" (a word or two) and "change".
+        - Items are laid out in the order listed. At most 12 items and 10 arrows; fewer reads better.
+        Per beat, "lit": item ids to point at while the line is spoken; everything else dims.
+
+        Name things the way the analysis, the ticket and the changed files do - a label none of whose
+        words appear there is dropped. A picture arranges what is known; it never introduces a part
+        nobody built. Use one or two picture scenes where they earn it, not every scene.
 
         A "zoom" or "box" is [x, y, w, h] in the image's own pixels (sizes are listed below). Open an
         image with the Read tool before choosing a rectangle on it. Zoom to the part that proves the

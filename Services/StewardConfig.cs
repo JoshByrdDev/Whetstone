@@ -31,13 +31,34 @@ public record StewardPlan(string UnitsDir, string UnitFile, string Agreed, strin
     public const string DefaultAgreed = @"\*\*Status:\s*agreed\b";
     public const string DefaultDraft = @"\*\*Status:\s*draft\b";
     public const string DefaultOutcome = @"^- \*\*([A-Z]+\d+)\.\*\*";
+    public const string DefaultIdea = @"\*\*Status:\s*idea\b";
+
+    /// <summary>
+    /// What a slice's status says while it is only an idea: a title and a paragraph, not yet drafted.
+    /// Nothing is filed against one, and only the owner writes one (docs/plans-as-slices.md, section 1).
+    /// </summary>
+    public string Idea { get; init; } = DefaultIdea;
+
+    /// <summary>
+    /// The plan's charter: why it exists, its words, where things are. Direction, never a decision:
+    /// nothing is filed from it and no question is answered by it. Empty for a plan that has none.
+    /// </summary>
+    public string Charter { get; init; } = "";
+
+    /// <summary>
+    /// Where the plan as read - the charter, the project's decisions, every slice in order - is
+    /// written out for readers of the repo, or empty to write nothing. It is regenerated when a
+    /// slice changes stage, never edited.
+    /// </summary>
+    public string Readable { get; init; } = "";
 
     public bool Configured => !string.IsNullOrWhiteSpace(UnitsDir);
 
     /// <summary>
-    /// The document the units are cut from - the whole of what is to be built, of which each unit
-    /// is a part - or empty when the project keeps none. Nothing is decided from it: it is here so
-    /// the owner can read the plan beside its progress.
+    /// The document the units were cut from, on a plan written before charters - the whole of what
+    /// is to be built, of which each unit is a part - or empty. Until its rules have moved into the
+    /// register its plain statements still count as decided (hard rule 3); a plan with a charter
+    /// keeps it only as history.
     /// </summary>
     public string Master { get; init; } = "";
 
@@ -88,8 +109,6 @@ public class StewardConfig
     /// <summary>How many times the steward may send one ticket back. The next is the owner's.</summary>
     public int SendBacksPerTicket { get; init; } = 2;
 
-    /// <summary>How long the steward's memo to its next run may be, in characters.</summary>
-    public int MemoMaxChars { get; init; } = 32000;
 
     /// <summary>
     /// A branch merged INTO the base branch at the start of each run, or empty for none. For a
@@ -177,7 +196,6 @@ public class StewardConfig
             CreatedPerDay = Int(limits, "createdPerDay", d.CreatedPerDay, 0, 1000),
             OpenAtOnce = Int(limits, "openAtOnce", d.OpenAtOnce, 1, 1000),
             SendBacksPerTicket = Int(limits, "sendBacksPerTicket", d.SendBacksPerTicket, 0, 20),
-            MemoMaxChars = Int(s, "memoMaxChars", d.MemoMaxChars, 1000, 500000),
             SyncFrom = Str(s, "syncFrom"),
             DecisionsFile = Str(s, "decisionsFile").Replace('\\', '/').TrimStart('/'),
             Plan = PlanFrom(plan),
@@ -202,6 +220,9 @@ public class StewardConfig
             Pattern(plan, "outcome", StewardPlan.DefaultOutcome))
         {
             Master = Str(plan, "master").Replace('\\', '/').Trim('/'),
+            Charter = Str(plan, "charter").Replace('\\', '/').Trim('/'),
+            Readable = Str(plan, "readable").Replace('\\', '/').Trim('/'),
+            Idea = Pattern(plan, "idea", StewardPlan.DefaultIdea),
             // A key that is not one reads as none: it goes into every row filed against the plan.
             Key = StewardPlan.IsKey(key) ? key : "",
             Name = Str(plan, "name"),

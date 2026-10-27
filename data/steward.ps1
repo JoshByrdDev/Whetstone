@@ -64,6 +64,48 @@ function Release-StewardRun {
     catch { Write-Log "  Could not release the steward lock for ${Project}: $($_.Exception.Message)" }
 }
 
+# Put the facts a steward learned into the project's notes store. Run after every run, finished or
+# not: steward_learned saves each fact on the board the moment it is said, so a run that died still
+# left its facts behind, and anything a failed placement left is picked up the next time. A project
+# with no notes store keeps them on the board, where its owner sees them.
+function Invoke-StewardLearnedFold {
+    param([string]$MemoryDir, [string]$RepoDir)
+    try { $queue = @(Invoke-RestMethod -Uri "$DashboardUrl/api/steward/learned?project=$Project" -TimeoutSec 15) }
+    catch { Write-Log "  Could not read the learned facts: $($_.Exception.Message)"; return }
+    $queue = @($queue | Where-Object { $_ -and $_.text })
+    if ($queue.Count -eq 0) { return }
+    if (-not $MemoryDir) { Write-Log "  $($queue.Count) learned fact(s) wait on the board: this project keeps no notes store."; return }
+
+    Write-Log "--- Learned facts: $($queue.Count) ---"
+    $reflectRole = Get-AgentRole -Role 'reflection'
+    $reflectCmd  = Get-AgentReflectionCommand -Provider $reflectRole.Provider -Model $reflectRole.Model -ReasoningEffort $reflectRole.Effort
+    if (Test-Path $MemoryDir) { [void](Initialize-NoteStoreGit -MemoryDir $MemoryDir) }
+    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
+    $new = 0; $folded = 0
+    foreach ($f in $queue) {
+        $r = $null
+        try { $r = Add-LearnedFact -MemoryDir $MemoryDir -Key "$($f.key)" -Text "$($f.text)" -Stamp $stamp -ReflectCmd $reflectCmd -RepoDir $RepoDir }
+        catch { Write-Log "  Could not place fact $($f.id): $($_.Exception.Message)" }
+        $where = $null
+        if ($r) {
+            switch ($r.Outcome) {
+                'new'      { $where = "new note $($r.Key)"; $new++ }
+                'merged'   { $where = "folded into $($r.Key)"; $folded++ }
+                'appended' { $where = "added to $($r.Key)"; $folded++ }
+            }
+        }
+        if (-not $where) { Write-Log "  Fact $($f.id) not placed; it stays on the board for the next run."; continue }
+        Write-Log "  Fact $($f.id): $where"
+        try {
+            $body = @{ where = $where } | ConvertTo-Json -Compress
+            [void](Invoke-RestMethod -Uri "$DashboardUrl/api/steward/learned/$($f.id)/placed?project=$Project" -Method Post `
+                -ContentType 'application/json' -Body $body -TimeoutSec 15)
+        }
+        catch { Write-Log "  Placed fact $($f.id) but could not say so: $($_.Exception.Message)" }
+    }
+    if ($new -or $folded) { Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Steward run: $new new, $folded folded in" }
+}
+
 # --- What to run, from the dashboard ---
 # Stamps the attempt as it answers, so a run that dies before it can open itself is still counted
 # and the orchestrator does not launch another straight away.
@@ -114,11 +156,16 @@ $env:WHETSTONE_SKILL     = $StewardSkill
 $conventionsFile = Get-ConventionsFile -Provider $AgentProvider -WorkDir $workDir
 $memoryIndex = if ($launch.memoryIndex) { "$($launch.memoryIndex)" } else { "(this project keeps no notes store)" }
 $planDir = if ($launch.planUnits) { "$($launch.planUnits)" } else { "(no plan folder is configured for this project)" }
+$planCharter = if ($launch.planCharter) { "$($launch.planCharter)" }
+    elseif ($launch.planMaster) { "(none yet: the plan is still its older single document, $($launch.planMaster))" }
+    else { "(this plan has no charter)" }
 
 $prompt = (Get-Content -Path $PromptStewardFile -Raw -Encoding UTF8).
     Replace('{{PROJECT_KEY}}', $Project).
     Replace('{{PROJECT_NAME}}', $projectName).
     Replace('{{PLAN_DIR}}', $planDir).
+    Replace('{{PLAN_CHARTER}}', $planCharter).
+    Replace('{{DRAFT_TEMPLATE}}', "$($launch.draftTemplate)").
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
     Replace('{{MEMORY_INDEX}}', $memoryIndex).
     Replace('{{SKILL_FILE}}', $skillFile)
@@ -254,6 +301,7 @@ $why = if ($limitReset) { "the account's usage limit refused the run" }
        elseif (-not $resultReceived) { "the run did not finish" }
        else { "the run ended without closing itself" }
 Release-StewardRun -Reason $why
+Invoke-StewardLearnedFold -MemoryDir "$($launch.memoryDir)" -RepoDir $workDir
 
 if ($AgentProvider.Key -eq 'codex' -and $toolSetup.Cleanup) { Save-CodexUsage -CodexHome $toolSetup.Cleanup }   # before the home goes - see Save-CodexUsage
 if ($toolSetup.Cleanup) { Remove-Item -Path $toolSetup.Cleanup -Recurse -Force -ErrorAction SilentlyContinue }

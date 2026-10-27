@@ -694,6 +694,161 @@ namespace Whetstone.Migrations
                     b.ToTable("StewardClearances");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.StewardDecision", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("ChangedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DeliveredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ImportKey")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("MadeAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("OptionsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Outcomes")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PlanKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("PlanUnit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Provisional")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ProvisionalUnit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Question")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("QuestionKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Rule")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SourceRef")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("WithdrawnAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WithdrawnBecause")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "ImportKey");
+
+                    b.HasIndex("ProjectKey", "Number")
+                        .IsUnique();
+
+                    b.ToTable("StewardDecisions");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.StewardDecisionConflict", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("FoundAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Newer")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Older")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Settled")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SettledAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Why")
+                        .IsRequired()
+                        .HasMaxLength(600)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Older", "Newer")
+                        .IsUnique();
+
+                    b.ToTable("StewardDecisionConflicts");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.StewardDecisionReplace", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("DecisionId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Why")
+                        .IsRequired()
+                        .HasMaxLength(600)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DecisionId", "Number")
+                        .IsUnique();
+
+                    b.ToTable("StewardDecisionReplaces");
+                });
+
             modelBuilder.Entity("Whetstone.Models.StewardEntry", b =>
                 {
                     b.Property<int>("Id")
@@ -701,6 +856,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Basis")
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("DeliveredAt")
@@ -714,13 +872,25 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Placed")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Reads")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Release")
                         .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReversedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReversedBecause")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Text")
@@ -735,6 +905,87 @@ namespace Whetstone.Migrations
                     b.HasIndex("ProjectKey", "Kind", "At");
 
                     b.ToTable("StewardEntries");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.StewardFollowUp", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("CitedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CitedBy")
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Decision")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("DroppedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Decision");
+
+                    b.ToTable("StewardFollowUps");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.StewardInstruction", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClosedBy")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClosedNote")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DeliveredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Until")
+                        .IsRequired()
+                        .HasMaxLength(600)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "ClosedAt");
+
+                    b.ToTable("StewardInstructions");
                 });
 
             modelBuilder.Entity("Whetstone.Models.StewardOutcome", b =>
@@ -814,6 +1065,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("OptionChangesJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("OptionsJson")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -830,6 +1084,12 @@ namespace Whetstone.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ProposedFile")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProposedText")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Question")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -838,8 +1098,18 @@ namespace Whetstone.Migrations
                         .HasMaxLength(10)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("StoryRewordingsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StorySentence")
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("TicketId")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("Touches")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Why")
                         .IsRequired()
@@ -881,15 +1151,14 @@ namespace Whetstone.Migrations
                     b.Property<string>("LastRunSummary")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("Memo")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("MemoUpdatedAt")
+                    b.Property<DateTime?>("RegisterBuiltAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RestingAtSha")
                         .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RunDueReason")
                         .HasColumnType("TEXT");
 
                     b.HasKey("ProjectKey");
@@ -904,6 +1173,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("AgreedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("AgreedFile")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Plan")
@@ -924,6 +1196,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Unit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("WalkthroughTicketId")
                         .HasColumnType("INTEGER");
 
                     b.HasKey("Id");
@@ -1060,6 +1335,9 @@ namespace Whetstone.Migrations
 
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("Walkthrough")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("WorktreePath")
                         .HasColumnType("TEXT");
@@ -1464,6 +1742,15 @@ namespace Whetstone.Migrations
                     b.Navigation("Ticket");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.StewardDecisionReplace", b =>
+                {
+                    b.HasOne("Whetstone.Models.StewardDecision", null)
+                        .WithMany("Replaces")
+                        .HasForeignKey("DecisionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Whetstone.Models.TicketAnalysis", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
@@ -1524,6 +1811,11 @@ namespace Whetstone.Migrations
             modelBuilder.Entity("Whetstone.Models.Label", b =>
                 {
                     b.Navigation("Assignments");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.StewardDecision", b =>
+                {
+                    b.Navigation("Replaces");
                 });
 
             modelBuilder.Entity("Whetstone.Models.Ticket", b =>

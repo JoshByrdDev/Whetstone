@@ -1,40 +1,43 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Chip, GhostButton, Panel } from './ui';
 import { BODY, MONO, TIER, chamfer, fade } from './orbit';
 import { Markdown } from './Markdown';
 import { UnitReport } from './UnitReport';
 import { DecisionSheet } from './DecisionSheet';
-import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
-import { agreeStewardUnit, setStewardUnitReleased, startStewardPlan } from '../api/steward';
+import { Quiet, ago, label, remember, remembered } from './stewardParts';
+import {
+  Between, Counts, DecisionsBeside, LOOK, StoryView, Strip, isWalkthrough, phaseWord, servedBy, sliceDecisions, standings, storyOf,
+} from './stewardSlice';
+import type { Standing } from './stewardSlice';
+import { useNarrow } from '../hooks/useNarrow';
+import { agreeStewardUnit, setStewardUnitReleased } from '../api/steward';
 import type {
-  StewardPlanOutcome, StewardPlanUnitView, StewardPlanView, StewardStatus, UnitStage,
+  StewardMode, StewardPlanOutcome, StewardPlanUnitView, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus, UnitStage,
 } from '../api/steward';
 
 /**
  * The plan, as something to read and to move along.
  *
- * A plan is one document and the units cut from it, and a person needs three things of it at
- * different moments: where the whole stands (the rail), what one unit promised and how far each
- * promise is (its outcomes, in the spec's own words and order), and the text itself - the unit's
- * spec, or the document all of them come from.
+ * A plan is its slices, a charter that decides nothing, and the register of decisions
+ * (docs/plans-as-slices.md). A person needs three things of it at different moments: where the
+ * whole stands (the slices in lanes by stage, each with the strip of its outcomes), what one slice
+ * promised and how far each promise is (its story step by step, its outcomes in the spec's own words
+ * and order, what stands between it and built, the decisions it is held to - see stewardSlice.tsx),
+ * and the plan as read - generated from the charter, the project's decisions and the slices, never
+ * maintained by hand.
  *
- * A unit goes one way: a draft, agreed, building, built, released. Two of those steps are a
- * person's and are taken here - agreeing a draft, and saying a built unit has gone out. Everything
- * between is the steward's and the fleet's, and is only shown.
+ * A slice goes one way: an idea, a draft, agreed, building, built, released. Two of those steps are
+ * a person's and are taken here - agreeing a draft, and saying a built slice has gone out. Ideas are
+ * the owner's too, written in the repo or committed from a steward's proposal. Everything else is
+ * the steward's and the fleet's, and is only shown.
  */
 
-type Selected = number | 'master';
-
-const STATE_TIER: Record<StewardPlanOutcome['state'], keyof typeof TIER> = {
-  NotStarted: 'backlog', InProgress: 'active', Done: 'done',
-};
-const STATE_WORD: Record<StewardPlanOutcome['state'], string> = {
-  NotStarted: 'not started', InProgress: 'in progress', Done: 'done',
-};
+type Selected = number | 'plan' | 'master';
 
 /** Where a unit stands, in words, and the tier that colours it. */
 const STAGE: Record<UnitStage, { word: string; tier: keyof typeof TIER }> = {
+  idea: { word: 'idea', tier: 'backlog' },
   draft: { word: 'draft - yours to agree', tier: 'gate' },
   notAgreed: { word: 'not agreed', tier: 'backlog' },
   agreed: { word: 'agreed', tier: 'queue' },
@@ -45,6 +48,7 @@ const STAGE: Record<UnitStage, { word: string; tier: keyof typeof TIER }> = {
 
 /** The way a unit goes, for the strip that shows how far along it is. */
 const STEPS: { stage: UnitStage; word: string }[] = [
+  { stage: 'idea', word: 'Idea' },
   { stage: 'draft', word: 'Draft' },
   { stage: 'agreed', word: 'Agreed' },
   { stage: 'building', word: 'Building' },
@@ -52,34 +56,50 @@ const STEPS: { stage: UnitStage; word: string }[] = [
   { stage: 'released', word: 'Released' },
 ];
 
-export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes }: {
+export function StewardPlan({ project, view, status, waiting, register, mode, onPlan, onChanged, onNotes, onNow, onDecisions, onNew }: {
   project: string;
   view: StewardPlanView | null;
   status: StewardStatus | null;
+  /** The questions on Now: what holds an outcome, and which decisions an open question touches. */
+  waiting: StewardQuestion[];
+  register: StewardRegister | null;
+  /** What the steward may do, which says whose a merge is. */
+  mode?: StewardMode;
   /** Read another of the project's plans; null is the one being worked. */
   onPlan: (key: string | null) => void;
   /** Something here changed what the page shows. */
   onChanged: () => Promise<void>;
   /** Show a unit's notes for its release, in the record. */
   onNotes: (unit: number) => void;
+  /** Go to Now, where questions are answered. */
+  onNow: () => void;
+  /** Go to the register. */
+  onDecisions: () => void;
+  /** Go to the tab where a plan is started. */
+  onNew: () => void;
 }) {
   const current = view?.plan?.current;
+  const narrow = useNarrow();
   // A server from before units had stages says only agreed, draft and done: read the stage off those.
-  const units = (view?.plan?.units ?? []).map(u => ({
-    ...u,
-    stage: u.stage ?? (u.done ? 'built' : u.agreed ? (u.unit === current ? 'building' : 'agreed') : u.draft ? 'draft' : 'notAgreed'),
-  }));
+  // An agreed slice with work done or moving is being built, whichever one the board counts as current:
+  // a slice held open by one last outcome must not hide the one actually being worked.
+  const units = (view?.plan?.units ?? []).map(u => {
+    const stage: UnitStage = u.stage ?? (u.done ? 'built' : u.agreed ? (u.unit === current ? 'building' : 'agreed') : u.draft ? 'draft' : 'notAgreed');
+    return { ...u, stage: stage === 'agreed' && u.progress.done + u.progress.inProgress > 0 ? 'building' as UnitStage : stage };
+  });
   const plans = view?.plan?.plans ?? [];
   const plan = view?.plan?.plan;
   const [picked, setPicked] = useState<Selected | null>(null);
   // Another plan's units are another set: whatever was picked in the last one means nothing here.
   useEffect(() => { setPicked(null); }, [plan?.key]);
 
-  // Until somebody picks, the page is on the unit that wants something: a draft to agree or a
-  // built unit to release first, then the one being built.
-  const asking = units.find(u => u.stage === 'built') ?? units.find(u => u.stage === 'draft' && !u.cannotAgree);
-  const selected: Selected | null = picked ?? asking?.unit ?? current
-    ?? (units.length > 0 ? units[units.length - 1].unit : view?.master ? 'master' : null);
+  // Until somebody picks, the page is on the slice being worked - the latest one being built - and
+  // then on one that wants something of you. A release waits in its own lane, so it no longer
+  // decides where the page opens.
+  const building = [...units].reverse().find(u => u.stage === 'building');
+  const asking = units.find(u => u.stage === 'draft' && !u.cannotAgree) ?? units.find(u => u.stage === 'built');
+  const selected: Selected | null = picked ?? building?.unit ?? current ?? asking?.unit
+    ?? (units.length > 0 ? units[units.length - 1].unit : view?.readable ? 'plan' : view?.master ? 'master' : null);
   const unit = typeof selected === 'number' ? units.find(u => u.unit === selected) : undefined;
 
   if (!view) return <Quiet>Reading the plan.</Quiet>;
@@ -99,28 +119,42 @@ export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes 
         </div>
       )}
 
-      {units.length === 0 && !view.master
-        ? <Quiet>{view.why ?? 'This plan has no units yet.'}</Quiet>
+      {(view.plan?.moved?.length ?? 0) > 0 && (
+        <Panel tone={TIER.blocked.c} className="mb-3">
+          {view.plan!.moved!.map((m, i) => (
+            <div key={i} style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>{m}</div>
+          ))}
+        </Panel>
+      )}
+
+      {units.length === 0 && !view.master && !view.readable
+        ? <Quiet>{view.why ?? 'This plan has no slices yet.'}</Quiet>
         : (
           <>
-            <div className="flex flex-wrap gap-2" style={{ marginBottom: 14 }}>
-              {view.master && (
-                <RailItem on={selected === 'master'} onClick={() => setPicked('master')} lead="All"
-                  title={plan?.name && plan.name !== 'The plan' ? plan.name : 'The whole plan'} sub={view.master.file} />
-              )}
-              {units.map(u => {
-                const s = STAGE[u.stage];
-                return (
-                  <RailItem
-                    key={u.unit} on={selected === u.unit} onClick={() => setPicked(u.unit)}
-                    lead={String(u.unit).padStart(2, '0')} title={u.title} colour={TIER[s.tier].c}
-                    sub={`${s.word}${u.stage === 'building' || u.stage === 'agreed' ? ` - ${u.progress.percent}%` : ''}`}
-                    percent={u.agreed ? u.progress.percent : undefined}
-                  />
-                );
-              })}
-            </div>
+            {(view.readable || view.master) && (
+              <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 10 }}>
+                {view.readable && (
+                  <Chip on={selected === 'plan'} onClick={() => setPicked('plan')} title={view.charter ? 'The charter, decisions and slices, generated' : 'The decisions and slices, generated'}>
+                    Whole plan
+                  </Chip>
+                )}
+                {view.master && (
+                  <Chip on={selected === 'master'} onClick={() => setPicked('master')} title={view.master.file}>
+                    {view.charter ? 'Original plan (retired)' : 'Plan document'}
+                  </Chip>
+                )}
+              </div>
+            )}
 
+            {narrow
+              ? <SliceStrip units={units} selected={selected} onPick={setPicked} />
+              : <Lanes units={units} selected={selected} onPick={setPicked} />}
+
+            {selected === 'plan' && view.readable && (
+              <Panel key="plan" className="orbit-swap">
+                <div style={{ maxWidth: 780 }}><Markdown doc text={view.readable} /></div>
+              </Panel>
+            )}
             {selected === 'master' && view.master && (
               <Panel key="master" className="orbit-swap">
                 <div style={{ maxWidth: 780 }}><Markdown doc text={view.master.text} /></div>
@@ -130,50 +164,109 @@ export function StewardPlan({ project, view, status, onPlan, onChanged, onNotes 
               <UnitView
                 key={`${plan?.key}.${unit.unit}`} project={project} plan={plan?.key} unit={unit} working={working}
                 status={unit.unit === current ? status : null} onChanged={onChanged} onNotes={onNotes}
+                waiting={waiting} register={working ? register : null} mode={mode} onNow={onNow} onDecisions={onDecisions}
               />
             )}
           </>
         )}
 
-      {working && <NewPlan project={project} has={units.length > 0 || !!view.master} onStarted={onChanged} />}
+      {units.length === 0 && !view.master && !view.readable && (
+        <div style={{ marginTop: 10 }}><GhostButton tone="go" onClick={onNew}>Start a plan</GhostButton></div>
+      )}
     </div>
   );
 }
 
-/** One stop on the rail: a unit, or the document they are all cut from. */
-function RailItem({ on, onClick, lead, title, sub, colour = 'var(--w-t400)', percent }: {
-  on: boolean; onClick: () => void; lead: string; title: string; sub: string; colour?: string; percent?: number;
-}) {
+type Unit = StewardPlanUnitView;
+
+/**
+ * The plan's stages as lanes, so its shape reads at once: what is still an idea, what is yours to
+ * agree, what is waiting, what is moving, what is yours to release, what has gone out. Left to right,
+ * the way a ticket crosses the board - so each of the owner's two steps sits where it falls.
+ */
+const LANES: { title: string; stages: UnitStage[]; c: string; empty: string }[] = [
+  { title: 'Ideas', stages: ['idea'], c: 'var(--w-t400)', empty: 'No ideas left.' },
+  { title: 'To agree', stages: ['draft', 'notAgreed'], c: TIER.gate.c, empty: 'No draft to agree.' },
+  { title: 'Agreed', stages: ['agreed'], c: TIER.queue.c, empty: 'Nothing agreed and waiting.' },
+  { title: 'Building', stages: ['building'], c: TIER.active.c, empty: 'Nothing being built.' },
+  { title: 'To release', stages: ['built'], c: TIER.gate.c, empty: 'Nothing to release.' },
+  { title: 'Released', stages: ['released'], c: TIER.done.c, empty: 'Nothing released yet.' },
+];
+
+function Lanes({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
+  return (
+    <Panel pad={false} className="mb-3">
+      <div className="grid" style={{ gridTemplateColumns: `repeat(${LANES.length}, minmax(0, 1fr))` }}>
+        {LANES.map((l, i) => {
+          const here = units.filter(u => l.stages.includes(u.stage));
+          return (
+            <div key={l.title} className="min-w-0 flex flex-col" style={{ padding: '10px 10px 12px', gap: 7, borderLeft: i ? '1px solid rgb(var(--w-line-rgb) / .08)' : undefined }}>
+              <div className="flex justify-between" style={label(l.c)}>
+                <span>{l.title}</span><span style={{ color: 'var(--w-t500)' }}>{here.length}</span>
+              </div>
+              {here.length === 0
+                ? <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t600)' }}>{l.empty}</div>
+                : here.map(u => <SliceCard key={u.unit} u={u} on={selected === u.unit} onClick={() => onPick(u.unit)} />)}
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
+/** On a phone, the slices in their order as one strip that scrolls sideways, opened at the one being read. */
+function SliceStrip({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = box.current?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (el && box.current) box.current.scrollLeft = el.offsetLeft - 8;
+  }, [selected]);
+  return (
+    <div ref={box} className="flex gap-2 overflow-x-auto mb-3" style={{ paddingBottom: 6 }}>
+      {units.map(u => (
+        <div key={u.unit} style={{ flex: '0 0 auto', width: 168 }}>
+          <SliceCard u={u} on={selected === u.unit} onClick={() => onPick(u.unit)} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** One slice in the plan: its number and title, where it stands, and the strip of its outcomes. */
+function SliceCard({ u, on, onClick }: { u: Unit; on: boolean; onClick: () => void }) {
+  const s = STAGE[u.stage];
+  const p = u.progress;
+  const sub = u.stage === 'idea' ? 'idea'
+    : u.stage === 'draft' ? `draft${(u.openDecisions?.length ?? 0) > 0 ? ` - ${u.openDecisions!.length} to settle` : ''}`
+    : u.stage === 'built' ? (u.release && u.release.outstanding > 0 ? `${u.release.outstanding} to tick off first` : 'ready to release')
+    : u.stage === 'released' ? `released${u.releasedAt ? ` ${u.releasedAt.slice(0, 10)}` : ''}`
+    : u.agreed ? `${p.done} of ${p.outcomes} done` : s.word;
   return (
     <button
       onClick={onClick}
       aria-current={on ? 'true' : undefined}
-      className="orbit-pick pick-lift text-left min-w-0 max-sm:w-full"
+      className="orbit-pick pick-lift text-left min-w-0 w-full block"
+      title={u.title}
       style={{
-        clipPath: chamfer(9),
-        padding: '8px 14px 9px',
-        maxWidth: 340,
-        background: on ? 'rgb(var(--w-accent-rgb) / .13)' : 'rgb(var(--w-line-rgb) / .04)',
-        border: `1px solid ${on ? 'rgb(var(--w-accent-rgb) / .5)' : 'rgb(var(--w-line-rgb) / .14)'}`,
+        clipPath: chamfer(7),
+        padding: '7px 10px 8px',
+        background: on ? 'rgb(var(--w-accent-rgb) / .13)' : u.stage === 'idea' ? 'transparent' : 'rgb(var(--w-line-rgb) / .04)',
+        border: `1px ${u.stage === 'idea' ? 'dashed' : 'solid'} ${on ? 'rgb(var(--w-accent-rgb) / .5)' : 'rgb(var(--w-line-rgb) / .16)'}`,
       }}
     >
       <div className="flex items-baseline gap-2 min-w-0">
-        <span style={{ font: `700 11px ${MONO}`, color: on ? 'var(--w-accent-text-lit)' : 'var(--w-t400)', flex: 'none' }}>{lead}</span>
-        <span className="truncate min-w-0" style={{ font: `600 12.5px ${BODY}`, color: on ? 'var(--w-accent-text-lit)' : 'var(--w-t200)' }}>{title}</span>
+        <span style={{ font: `700 10.5px ${MONO}`, color: on ? 'var(--w-accent-text-lit)' : 'var(--w-t400)', flex: 'none' }}>{String(u.unit).padStart(2, '0')}</span>
+        <span className="line-clamp-2 min-w-0" style={{ font: `600 12px/1.35 ${BODY}`, color: on ? 'var(--w-accent-text-lit)' : 'var(--w-t200)' }}>{shortTitle(u)}</span>
       </div>
-      <div className="truncate" style={{ ...label(colour), marginTop: 4 }}>{sub}</div>
-      {percent != null && <Bar percent={percent} colour={colour} />}
+      <div className="truncate" style={{ font: `400 11px ${BODY}`, color: u.stage === 'built' || u.stage === 'draft' ? TIER.gate.c : 'var(--w-t500)', marginTop: 3 }}>{sub}</div>
+      {u.stage !== 'idea' && u.groups.some(g => g.outcomes.length > 0) && <Strip unit={u} mini />}
     </button>
   );
 }
 
-function Bar({ percent, colour, height = 2 }: { percent: number; colour: string; height?: number }) {
-  return (
-    <div style={{ height, marginTop: 6, background: 'rgb(var(--w-line-rgb) / .12)' }}>
-      <div style={{ height, width: `${Math.max(0, Math.min(100, percent))}%`, background: colour }} />
-    </div>
-  );
-}
+/** "Slice 5: the desk's day" reads as its words once the number is beside it. */
+const shortTitle = (u: Unit) => u.title.replace(new RegExp(`^(?:slice|unit)\\s+0*${u.unit}\\s*[:.-]\\s*`, 'i'), '');
 
 /** How far along its one way a unit is: every step named, the ones behind it lit. */
 function Steps({ stage }: { stage: UnitStage }) {
@@ -195,27 +288,46 @@ function Steps({ stage }: { stage: UnitStage }) {
 
 type Show = 'outcomes' | 'spec' | 'report';
 
-function UnitView({ project, plan, unit, working, status, onChanged, onNotes }: {
+function UnitView({ project, plan, unit, working, status, onChanged, onNotes, waiting, register, mode, onNow, onDecisions }: {
   project: string; plan: string | undefined; unit: StewardPlanUnitView; working: boolean; status: StewardStatus | null;
   onChanged: () => Promise<void>; onNotes: (unit: number) => void;
+  waiting: StewardQuestion[]; register: StewardRegister | null; mode?: StewardMode;
+  onNow: () => void; onDecisions: () => void;
 }) {
   // A report has something to say once anything of the unit is done, and is the thing to read
   // before a built unit is released.
   const reportable = unit.agreed && (unit.progress.done > 0 || unit.stage === 'built' || unit.stage === 'released');
   const [show, setShow] = useState<Show>(() => {
-    // A draft is there to be read before it is agreed: it opens on its words.
-    if (unit.stage === 'draft') return 'spec';
+    // An idea is only its words. A draft now opens on its story and outcomes like any slice.
+    if (unit.stage === 'idea') return 'spec';
     const was = remembered('plan.show');
     return was === 'spec' || (was === 'report' && reportable) ? was : 'outcomes';
   });
-  const [leftOnly, setLeftOnly] = useState(() => remembered('plan.left') === '1');
   const pick = (v: Show) => { setShow(v); remember('plan.show', v); };
-  const left = (v: boolean) => { setLeftOnly(v); remember('plan.left', v ? '1' : '0'); };
+  // A group of outcomes opens while any of it is left and folds once all of it is done; a press
+  // overrides either way, until the slice changes.
+  const [folded, setFolded] = useState<Record<string, boolean>>({});
+
+  // One outcome the slice is narrowed to, from a citation, a cell or a line of what is left.
+  const [focus, setFocus] = useState<string | null>(null);
+  const toggle = (id: string) => setFocus(f => (f === id ? null : id));
+  // One decision lit in the column beside, from a #n in an outcome.
+  const [lit, setLit] = useState<number | null>(null);
 
   const s = STAGE[unit.stage];
   const c = TIER[s.tier].c;
-  const p = unit.progress;
   const anyOutcomes = unit.groups.some(g => g.outcomes.length > 0);
+  const steps = useMemo(() => storyOf(unit.text), [unit.text]);
+  const serves = useMemo(() => servedBy(steps), [steps]);
+  const standing = useMemo(() => standings(unit, waiting, mode), [unit, waiting, mode]);
+  const decisions = useMemo(() => sliceDecisions(unit, register, waiting), [unit, register, waiting]);
+  const known = decisions?.known;
+  const lightDecision = (n: number) => {
+    setLit(n);
+    document.getElementById(`decision-${n}`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  };
+  const render = (text: string) => <Sentence text={text} known={known} onDecision={lightDecision} />;
+  const sliceView = show === 'outcomes' && (anyOutcomes || !!steps);
 
   return (
     <Panel pad={false} className="orbit-swap">
@@ -223,28 +335,28 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes }: 
         <div className="flex items-baseline gap-x-3 gap-y-1 flex-wrap">
           <span className="min-w-0" style={{ font: `700 16px ${BODY}`, color: 'var(--w-t100)' }}>{unit.title}</span>
           <span style={label(c)}>{s.word}</span>
-          {unit.agreed && <span style={{ font: `700 13px ${MONO}`, color: c, marginLeft: 'auto' }}>{p.percent}%</span>}
         </div>
-        {unit.agreed && <Bar percent={p.percent} colour={c} height={3} />}
         <Steps stage={unit.stage} />
+        {unit.agreed && anyOutcomes && (
+          <div className="flex items-end gap-x-5 gap-y-2 flex-wrap" style={{ marginTop: 12 }}>
+            <Strip unit={unit} standing={standing} focus={focus} onPick={toggle} />
+            <Counts unit={unit} standing={standing} />
+          </div>
+        )}
 
         {working && <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes}
           onReport={show === 'report' ? undefined : () => pick('report')} />}
         {working && unit.agreed && (unit.openDecisions?.length ?? 0) > 0 && (
           <StillOpen project={project} unit={unit} onChanged={onChanged} />
         )}
+        {working && unit.agreed && unit.stage !== 'built' && unit.stage !== 'released' && (
+          <Between unit={unit} standing={standing} onPick={id => { toggle(id); pick('outcomes'); }} onNow={onNow} render={render} />
+        )}
 
         <div className="flex items-center gap-x-4 gap-y-2 flex-wrap" style={{ marginTop: 12 }}>
-          <span style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t400)' }}>
-            {p.outcomes} outcome{p.outcomes === 1 ? '' : 's'}
-            {unit.agreed && <>: {p.done} done, {p.inProgress} in progress, {p.notStarted} not started</>}
-          </span>
           <span className="truncate min-w-0" style={{ font: `400 11px ${MONO}`, color: 'var(--w-t600)' }}>{unit.file}</span>
           <span className="flex items-center gap-2 flex-wrap" style={{ marginLeft: 'auto' }}>
-            {show === 'outcomes' && unit.agreed && p.done > 0 && p.done < p.outcomes && (
-              <Chip on={leftOnly} onClick={() => left(!leftOnly)} title="Hide the outcomes that are done">What is left</Chip>
-            )}
-            <Chip on={show === 'outcomes'} onClick={() => pick('outcomes')}>Outcomes</Chip>
+            <Chip on={show === 'outcomes'} onClick={() => pick('outcomes')} title="Its story, its outcomes and the decisions it is held to">The slice</Chip>
             <Chip on={show === 'spec'} onClick={() => pick('spec')} title="The unit's spec, as committed">The spec</Chip>
             {reportable && (
               <Chip on={show === 'report'} onClick={() => pick('report')} title="One Classroom report on the whole unit">Report</Chip>
@@ -260,37 +372,73 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes }: 
 
       {show === 'report'
         ? <div key="report" className="orbit-swap"><UnitReport project={project} plan={plan} unit={unit.unit} title={unit.title} onNotes={onNotes} /></div>
-        : show === 'spec'
-        ? <div key="spec" className="orbit-swap" style={{ padding: '14px 16px 18px', maxWidth: 812 }}><Markdown doc text={unit.text} /></div>
-        : !anyOutcomes
-          ? <div style={{ font: `400 12px ${BODY}`, color: 'var(--w-t600)', padding: '14px 16px' }}>This spec lists no outcomes the board can read. Open the spec to read it as written.</div>
-          : (
-            <div key="outcomes" className="orbit-swap">
-              {unit.groups.map(g => {
-                const shown = leftOnly ? g.outcomes.filter(o => o.state !== 'Done') : g.outcomes;
-                if (shown.length === 0) return null;
+        : show === 'spec' || !sliceView
+        ? (
+          <div key="spec" className="orbit-swap" style={{ padding: '14px 16px 18px', maxWidth: 812 }}>
+            {show === 'outcomes' && unit.stage !== 'idea' && (
+              <div style={{ font: `400 12px ${BODY}`, color: 'var(--w-t600)', marginBottom: 10 }}>
+                This spec has no story or outcomes the board can read, so here it is as written.
+              </div>
+            )}
+            <Markdown doc text={unit.text} />
+          </div>
+        )
+        : (
+          <div key="slice" className="orbit-swap grid lg:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="min-w-0">
+              {steps && (
+                <div style={{ padding: '14px 16px 12px' }}>
+                  <StoryView steps={steps} standing={standing} focus={focus} onPick={toggle} agreed={unit.agreed} render={render} />
+                </div>
+              )}
+              {sortGroups(unit).map(g => {
+                if (g.outcomes.length === 0) return null;
                 const done = g.outcomes.filter(o => o.state === 'Done').length;
+                const complete = unit.agreed && done === g.outcomes.length;
+                // An outcome pointed at from elsewhere on the page is never left folded away.
+                const open = g.outcomes.some(o => o.outcome === focus) || !(folded[g.heading] ?? complete);
                 return (
                   <div key={g.heading}>
-                    <div
-                      className="flex items-baseline gap-3"
-                      style={{ padding: '12px 16px 6px', background: 'rgb(var(--w-line-rgb) / .03)', borderBottom: '1px solid rgb(var(--w-line-rgb) / .08)' }}
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() => setFolded(f => ({ ...f, [g.heading]: open }))}
+                      className="orbit-tap flex items-baseline gap-3 w-full text-left"
+                      style={{ padding: '12px 16px 6px', background: 'rgb(var(--w-line-rgb) / .03)', borderTop: '1px solid rgb(var(--w-line-rgb) / .08)', borderBottom: open ? '1px solid rgb(var(--w-line-rgb) / .08)' : undefined }}
                     >
-                      <span className="min-w-0" style={{ font: `700 12px ${BODY}`, color: 'var(--w-t100)' }}>{g.heading || 'Outcomes'}</span>
+                      <span aria-hidden style={{ font: `700 10px ${MONO}`, color: 'var(--w-t500)', width: 10, flex: 'none' }}>{open ? '-' : '+'}</span>
+                      <span className="min-w-0" style={{ font: `700 12px ${BODY}`, color: complete ? 'var(--w-t400)' : 'var(--w-t100)' }}>{g.heading || 'Outcomes'}</span>
                       {unit.agreed && (
-                        <span style={{ ...label(done === g.outcomes.length ? TIER.done.c : 'var(--w-t500)'), marginLeft: 'auto', flex: 'none' }}>
+                        <span style={{ ...label(complete ? TIER.done.c : 'var(--w-t500)'), marginLeft: 'auto', flex: 'none' }}>
                           {done} of {g.outcomes.length} done
                         </span>
                       )}
-                    </div>
-                    {shown.map(o => <OutcomeRow key={o.outcome} o={o} agreed={unit.agreed} />)}
+                    </button>
+                    {open && <div key="open" className="orbit-swap">{g.outcomes.map(o => (
+                      <OutcomeRow key={o.outcome} o={o} agreed={unit.agreed} standing={standing.get(o.outcome)}
+                        serves={serves.get(o.outcome)} hasStory={!!steps} render={render}
+                        spot={focus ? (focus === o.outcome ? 'lit' : 'dim') : undefined} onFocus={() => toggle(o.outcome)} />
+                    ))}</div>}
                   </div>
                 );
               })}
             </div>
-          )}
+            {decisions && (
+              <aside className="min-w-0 lg:border-l max-lg:border-t" style={{ padding: '14px 14px 16px', borderColor: 'rgb(var(--w-line-rgb) / .1)', background: 'rgb(var(--w-line-rgb) / .02)' }}>
+                <DecisionsBeside set={decisions} lit={lit} onLight={setLit} onAll={onDecisions} />
+              </aside>
+            )}
+          </div>
+        )}
     </Panel>
   );
+}
+
+/** A slice's outcome groups with what is left first, then by heading: A, B, ... Z. */
+function sortGroups(unit: StewardPlanUnitView) {
+  const complete = (g: StewardPlanUnitView['groups'][number]) => unit.agreed && g.outcomes.every(o => o.state === 'Done');
+  return [...unit.groups].sort((a, b) => Number(complete(a)) - Number(complete(b))
+    || a.heading.localeCompare(b.heading, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
 /**
@@ -455,36 +603,46 @@ function StillOpen({ project, unit, onChanged }: { project: string; unit: Stewar
   );
 }
 
-/** One promise of the unit: what it says, where it stands, and the tickets carrying it. */
-function OutcomeRow({ o, agreed }: { o: StewardPlanOutcome; agreed: boolean }) {
-  const c = TIER[STATE_TIER[o.state]].c;
+/** One promise of the unit: what it says, where it stands, the steps it serves, and the tickets carrying it. */
+function OutcomeRow({ o, agreed, standing, serves, hasStory, render, spot, onFocus }: {
+  o: StewardPlanOutcome; agreed: boolean; standing?: Standing; serves?: number[]; hasStory: boolean;
+  render: (text: string) => ReactNode; spot?: 'lit' | 'dim'; onFocus: () => void;
+}) {
+  const look = standing?.look ?? (o.state === 'Done' ? 'done' : o.state === 'InProgress' ? 'moving' : 'todo');
+  const c = LOOK[look].c;
   const open = o.tickets.filter(t => t.phase !== 'Done');
+  // What the row is for in the story: the steps it makes true, or that it is a check no step cites.
+  const role = !hasStory ? null
+    : serves ? `step ${serves.join(', ')}`
+    : isWalkthrough(o) ? 'drives the whole story' : 'a check: no step cites it';
   return (
     <div
-      className="flex gap-x-3 gap-y-1 max-sm:flex-wrap"
-      style={{ padding: '9px 16px', borderBottom: '1px solid rgb(var(--w-line-rgb) / .06)' }}
+      className="orbit-spot spot-flat flex gap-x-3 gap-y-1 max-sm:flex-wrap" data-spot={spot}
+      style={{ padding: '9px 16px', borderBottom: '1px solid rgb(var(--w-line-rgb) / .06)', background: spot === 'lit' ? 'rgb(var(--w-accent-rgb) / .05)' : undefined }}
     >
       <div className="flex items-baseline gap-3 flex-none" style={{ width: agreed ? 128 : 30 }}>
-        <span style={{ font: `700 11.5px ${MONO}`, color: 'var(--w-t200)', width: 30, flex: 'none' }}>{o.outcome}</span>
+        <button type="button" onClick={onFocus} className="orbit-tap" title="Narrow the slice to this outcome"
+          style={{ font: `700 11.5px ${MONO}`, color: 'var(--w-t200)', width: 30, flex: 'none', textAlign: 'left' }}>{o.outcome}</button>
         {/* A draft's outcomes have no standing yet: saying "not started" of each would be noise. */}
-        {agreed && <span style={label(c)}>{STATE_WORD[o.state]}</span>}
+        {agreed && <span style={label(c)}>{LOOK[look].word}</span>}
       </div>
       <div className="min-w-0 flex-1 max-sm:basis-full">
-        <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: o.state === 'Done' ? 'var(--w-t400)' : 'var(--w-t200)' }}>
-          <Sentence text={o.text} />
+        <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: look === 'done' ? 'var(--w-t400)' : 'var(--w-t200)' }}>
+          {render(o.text)}
         </div>
         {(o.note || o.moreToFile) && (
           <div style={{ font: `400 11.5px/1.5 ${BODY}`, color: fade('var(--w-t400)', 80), marginTop: 3 }}>
             {o.moreToFile && <span style={{ color: TIER.active.c }}>More to file. </span>}{o.note}
           </div>
         )}
-        {o.tickets.length > 0 && (
+        {(o.tickets.length > 0 || role) && (
           <div className="flex flex-wrap gap-x-2.5 gap-y-0.5" style={{ marginTop: 4 }}>
+            {role && <span style={{ font: `400 11px ${MONO}`, color: 'var(--w-t500)' }}>{role}</span>}
             {/* What is still moving is named; what is merged is only counted, or a dozen numbers
                 bury the one ticket anybody is waiting for. */}
             {open.map(t => (
-              <span key={t.id} title={t.title} style={{ font: `600 11px ${MONO}`, color: TIER.active.c }}>
-                #{t.id} <span style={{ fontWeight: 400, color: 'var(--w-t400)' }}>{t.phase}</span>
+              <span key={t.id} title={t.title} style={{ font: `600 11px ${MONO}`, color: t.phase === 'Blocked' ? TIER.blocked.c : TIER.active.c }}>
+                #{t.id} <span style={{ fontWeight: 400, color: 'var(--w-t400)' }}>{phaseWord(t.phase)}</span>
               </span>
             ))}
             {o.tickets.length > open.length && (
@@ -502,103 +660,29 @@ function OutcomeRow({ o, agreed }: { o: StewardPlanOutcome; agreed: boolean }) {
   );
 }
 
-/** An outcome's sentence, with the spec's own emphasis and code kept. */
-function Sentence({ text }: { text: string }) {
+/**
+ * An outcome's sentence, with the spec's own emphasis and code kept, and each decision it cites by
+ * number made a link to that decision beside the slice.
+ */
+function Sentence({ text, known, onDecision }: { text: string; known?: Set<number>; onDecision?: (n: number) => void }) {
   // One line of prose: the document renderer would wrap it in a paragraph with its own size.
-  const parts = text.split(/(\*\*.+?\*\*|`[^`]+`)/g);
+  const parts = text.split(/(\*\*.+?\*\*|`[^`]+`|#\d+\b)/g);
   return (
     <>
-      {parts.map((p, i) => p.startsWith('**') && p.endsWith('**') && p.length > 4
-        ? <strong key={i} style={{ fontWeight: 600, color: 'var(--w-t100)' }}>{p.slice(2, -2)}</strong>
-        : p.startsWith('`') && p.endsWith('`') && p.length > 2
-          ? <code key={i} style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t300)' }}>{p.slice(1, -1)}</code>
-          : p)}
+      {parts.map((p, i) => {
+        if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return <strong key={i} style={{ fontWeight: 600, color: 'var(--w-t100)' }}>{p.slice(2, -2)}</strong>;
+        if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return <code key={i} style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t300)' }}>{p.slice(1, -1)}</code>;
+        const n = /^#(\d+)$/.exec(p);
+        if (n && known?.has(Number(n[1])) && onDecision) {
+          return (
+            <button key={i} type="button" onClick={() => onDecision(Number(n[1]))} className="orbit-tap" title={`Decision #${n[1]}`}
+              style={{ font: `700 11px ${MONO}`, color: 'var(--w-accent-text)', borderBottom: '1px dotted rgb(var(--w-accent-rgb) / .6)' }}>
+              {p}
+            </button>
+          );
+        }
+        return p;
+      })}
     </>
-  );
-}
-
-const FIELD = 'w-full min-w-0 rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none';
-
-/**
- * Start a plan. What this makes is two documents with the right shape and nothing in them: the
- * plan, and a first unit as a draft. Writing them is a conversation, not a form - so this ends by
- * saying where they are, for whoever sits down to write them.
- */
-function NewPlan({ project, has, onStarted }: { project: string; has: boolean; onStarted: () => Promise<void> }) {
-  const [name, setName] = useState('');
-  const [key, setKey] = useState('');
-  const [folder, setFolder] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
-  const [made, setMade] = useState<{ master: string; first: string; settings: string } | null>(null);
-
-  // The key follows the name until somebody types one of their own.
-  const [keyTouched, setKeyTouched] = useState(false);
-  const slug = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
-  const theKey = keyTouched ? key : slug(name);
-  const theFolder = folder.trim() || (theKey ? `docs/plans/${theKey}` : '');
-
-  const start = async () => {
-    setBusy(true); setFailed(null);
-    try {
-      const r = await startStewardPlan(project, { key: theKey, name: name.trim(), folder: folder.trim() || undefined });
-      setMade({ master: r.data.master, first: r.data.first, settings: r.settings });
-      await onStarted();
-    } catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <div style={{ marginTop: 22 }}>
-      <Fold id="new-plan" open={!has} title="Start a new plan" colour="var(--w-accent)"
-        meta={has ? 'once this one is finished' : undefined}>
-        <Panel className="mb-2">
-          {made
-            ? (
-              <div style={{ font: `400 12.5px/1.6 ${BODY}`, color: 'var(--w-t200)' }}>
-                The plan is started, with nothing in it yet. Two documents are on the base branch:
-                <div style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t300)', margin: '6px 0' }}>{made.master}<br />{made.first}</div>
-                Write the plan first, then the first unit from it, in a session in the repo; each file says what goes where.
-                Then agree the unit here. The project's settings now point at this plan
-                (<span style={{ font: `400 11.5px ${MONO}` }}>{made.settings}</span>): commit that file in the project's folder.
-              </div>
-            )
-            : (
-              <>
-                <div style={{ font: `400 12px/1.55 ${BODY}`, color: 'var(--w-t400)', marginBottom: 10 }}>
-                  {has
-                    ? 'A project works one plan at a time. Starting another keeps this one to be read and moves the steward to the new one, so it waits until every ticket of this plan is closed.'
-                    : 'A plan is one document saying what is to be built, and a unit spec for each slice of it. This writes both into the repo with their shape and nothing else, for you to fill in.'}
-                </div>
-                <div className="grid gap-2 sm:grid-cols-3">
-                  <label className="min-w-0">
-                    <div style={{ ...label(), marginBottom: 4 }}>What it is called</div>
-                    <input value={name} onChange={e => setName(e.target.value)} placeholder="Customer accounts" className={FIELD} />
-                  </label>
-                  <label className="min-w-0">
-                    <div style={{ ...label(), marginBottom: 4 }}>Its key</div>
-                    <input value={theKey} onChange={e => { setKeyTouched(true); setKey(slug(e.target.value)); }} placeholder="customer-accounts" className={FIELD} />
-                  </label>
-                  <label className="min-w-0">
-                    <div style={{ ...label(), marginBottom: 4 }}>Where in the repo</div>
-                    <input value={folder} onChange={e => setFolder(e.target.value)} placeholder={theFolder || 'docs/plans/its-key'} className={FIELD} />
-                  </label>
-                </div>
-                <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 10 }}>
-                  <GhostButton tone="go" disabled={busy || name.trim().length < 3 || !theKey} onClick={start}>
-                    {busy ? 'Starting' : 'Start the plan'}
-                  </GhostButton>
-                  {theFolder && (
-                    <span className="min-w-0 truncate" style={{ font: `400 11px ${MONO}`, color: 'var(--w-t600)' }}>
-                      {theFolder}/PLAN.md, {theFolder}/units/
-                    </span>
-                  )}
-                </div>
-                {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 8 }}>{failed}</div>}
-              </>
-            )}
-        </Panel>
-      </Fold>
-    </div>
   );
 }

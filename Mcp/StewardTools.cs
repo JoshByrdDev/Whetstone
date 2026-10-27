@@ -29,8 +29,11 @@ public class StewardTools
     [McpServerTool(Name = "steward_begin"), Description(
         "Open a run. Call this first, once. 'locked' means another run is still going: stop now and do nothing. " +
         "Otherwise it answers with the mode, why this run was started, any answers and standing instructions the owner has " +
-        "given since the last run (each is a decision made: apply them first), " +
-        "the result of bringing the base branch up to date, and the board's status. In 'propose' mode every tool that changes " +
+        "given since the last run that ended properly, and the owner's own changes to the register of decisions " +
+        "(changedDecisions: recorded, withdrawn, or now replacing another) - each is a decision made: apply them first. " +
+        "When it says the last run did not finish, that run may have acted on some of them already: check the board before " +
+        "acting again. " +
+        "It also hands over the result of bringing the base branch up to date, and the board's status. In 'propose' mode every tool that changes " +
         "something only says what it would have done: carry on exactly as normal, so the owner can read what you would do.")]
     public static Task<StewardReply> Begin(StewardService s, [Description("The project key.")] string project) =>
         s.BeginAsync(project);
@@ -49,19 +52,28 @@ public class StewardTools
 
     [McpServerTool(Name = "steward_status"), Description(
         "The board as it stands: every open ticket with its phase, what it waits on and any question it asked; the limits " +
-        "and how much of each is used; the plan's units and which are agreed; how far the unit being worked is; each outcome's " +
-        "state and tickets; what is waiting on the owner; and your own memo from the last run. Changes nothing.")]
+        "and how much of each is used; the plan's units and which are agreed; how far the unit being worked is; every outcome " +
+        "not yet Done in every agreed unit, with its state, note and tickets; what is waiting on the owner; your open ticket notes (ticketNotes), your rulings in force, facts " +
+        "not yet in the notes store (learnedPending), and what the last three runs did (recentRuns). Changes nothing.")]
     public static Task<StewardReply> Status(StewardService s, [Description("The project key.")] string project) =>
         s.StatusAsync(project);
 
     [McpServerTool(Name = "steward_decisions"), Description(
-        "What the owner has decided through you: every answer to a question you asked and every standing instruction they " +
-        "left, oldest first. Each is a decision made. Pass a query to get only those that mention it - the full list grows " +
-        "for as long as the project runs, so search it before answering a blocked ticket or writing a ticket's criteria.")]
+        "The register of decisions: what the owner has decided and is still in force, each by its number (#n). It holds " +
+        "the plan's decisions, every unit's settled decisions, the answers to your questions and the owner's standing " +
+        "words, in one place, with one status each. By default only what is in force comes back; a provisional one is " +
+        "marked with what it lasts until. An answer comes with every option it was picked from ('offered': picked, your " +
+        "own pick, or neither), because what was turned down is decided too. Narrow it by unit (that slice's decisions " +
+        "and the project's), by outcome within a unit, or by a query - search it before answering a blocked ticket, " +
+        "writing a ticket's criteria or asking the owner. Pass history to see replaced and withdrawn decisions too, " +
+        "each with what replaced it; never act on one of those. 'next' is the number a draft's next open decision takes.")]
     public static Task<StewardReply> Decisions(StewardService s,
         [Description("The project key.")] string project,
-        [Description("Optional text to look for in the question, its key or the answer.")] string? query = null) =>
-        s.DecisionsAsync(project, query);
+        [Description("Optional text to look for in the rule, the question, its key or its options.")] string? query = null,
+        [Description("Optional unit of the plan being worked: its decisions, and the project's.")] int? unit = null,
+        [Description("Optional outcome id within that unit, like A2: only the unit's decisions that apply to it.")] string? outcome = null,
+        [Description("True to include replaced and withdrawn decisions, as history.")] bool history = false) =>
+        s.DecisionsAsync(project, query, unit, outcome, history);
 
     [McpServerTool(Name = "steward_review"), Description(
         "A finished ticket's record: what it asked, the summary, work items, each check and whether it carries a current pass, " +
@@ -70,8 +82,21 @@ public class StewardTools
         "is listed under clearedByOwner, which only the owner sets, from the board. A flag marked 'blocks' means the " +
         "work is not proved: send it back saying what the flag says.")]
     public static Task<StewardReply> Review(StewardService s,
-        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId) =>
-        s.ReviewAsync(project, ticketId);
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("Optional: one part of a long review - record (description, summary, work items, comments), checks " +
+                     "(QA items), findings (independent review), or flags. Leave it out first: a review that fits comes whole, " +
+                     "and one that does not comes as its head and flags with each part's size.")] string? part = null) =>
+        s.ReviewAsync(project, ticketId, part);
+
+    [McpServerTool(Name = "steward_close_unchanged"), Description(
+        "Close a ticket at NeedsReview that has nothing to merge, because what it asked for is already true on the base " +
+        "(steward_merge answered 'nothing-to-merge'). Only when its review holds - its checks passed on the base - and only in " +
+        "full mode; in manage mode closing is the owner's: ask, with the ticket's id. Say why: what on the base already does " +
+        "it. That goes on the record for the owner. Then set its outcomes and note anything for release, as after a merge.")]
+    public static Task<StewardReply> CloseUnchanged(StewardService s,
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("Why there is nothing to merge: what on the base already does what it asked, and where.")] string why) =>
+        s.CloseUnchangedAsync(project, ticketId, why);
 
     [McpServerTool(Name = "steward_diff"), Description(
         "The ticket's change itself, as one diff against its base. A long diff is cut and says so: ask again with a path " +
@@ -85,6 +110,7 @@ public class StewardTools
         "Check a ticket at NeedsReview, then merge it into the base branch and close it. Call it only once you have read the " +
         "review and the diff and are signing the work off. Every answer short of 'merged' names what to do instead: " +
         "'owner' - ask, and leave it unmerged (the owner clears a flag from the board; an answer does not); 'not-proved' - send it back saying what the flags say; 'behind' - rebase, " +
+        "'nothing-to-merge' - its answer says what to do (steward_close_unchanged when the work is already on the base); " +
         "then merge again; 'check-failed' - send it back to NeedsImplementation with the output; 'check-could-not-run' - the " +
         "machine, not the ticket: leave it at review and ask the owner once; 'conflict' - send it back to NeedsImplementation " +
         "naming the files; 'not-in-this-mode' - merging is not yours here. None of them means look for another way. " +
@@ -116,12 +142,12 @@ public class StewardTools
 
     [McpServerTool(Name = "steward_answer_blocked"), Description(
         "Answer a blocked ticket and return it to the queue it stopped in. ONLY from a decision already made: say the choice " +
-        "and quote the place that decides it (the spec and section, the file and line, the owner's answer by its key). Your " +
+        "and quote the decision that settles it by its number (#n), or the spec and section. Your " +
         "answer is handed to the run that picks the ticket up. When something merely broke and the cause has passed, the " +
         "answer is 'retry'. Anything no decision settles is the owner's: leave it blocked and ask.")]
     public static Task<StewardReply> AnswerBlocked(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
-        [Description("The choice, and the place that decides it, quoted.")] string answer) =>
+        [Description("The choice, and the decision that settles it (#n), quoted.")] string answer) =>
         s.AnswerBlockAsync(project, ticketId, answer);
 
     [McpServerTool(Name = "steward_amend"), Description(
@@ -166,9 +192,15 @@ public class StewardTools
         s.SetOutcomeAsync(project, unit, outcome, state, moreToFile, note);
 
     [McpServerTool(Name = "steward_draft_unit"), Description(
-        "Write or revise the DRAFT spec for the unit after the last agreed one, committed to the base branch. One draft " +
-        "ahead, never two. Its status line must say it is a draft: only the owner agrees a unit, and until they do nothing " +
-        "in a draft may be ticketed or used to answer a question.")]
+        "Write or revise the DRAFT spec for the slice after the last agreed one, committed to the base branch. One draft " +
+        "ahead, never two. Where the plan has ideas, it expands the next idea IN PLACE - same file, the idea's paragraph " +
+        "kept at the top as the story's seed - and a slice no idea stands for is refused ('no-idea'). Its status line must " +
+        "say it is a draft: only the owner agrees a slice, and until they do nothing in a draft may be ticketed or used to " +
+        "answer a question. Its story ('The walk-through this unit makes possible') is checked: every sentence cites the " +
+        "outcomes that make it true, like (A1) or (B1, B2), every id cited is an outcome of the draft, and it is at most " +
+        "250 words - otherwise refused ('story'). The answer says what it is past 180 words and which outcomes no step " +
+        "cites: say why each is not part of the walk-through. Number what it leaves open from the 'next' that " +
+        "steward_decisions gives: a number the register already holds is refused ('number-taken').")]
     public static Task<StewardReply> DraftUnit(StewardService s,
         [Description("The project key.")] string project,
         [Description("The file's name, numbered like the plan's other units.")] string fileName,
@@ -182,18 +214,33 @@ public class StewardTools
         "answer reaches a later run as a decision made. 'already-asked' means it was - never re-ask. Then keep everything " +
         "else moving. When what you need is the owner's answer to decisions a unit's spec leaves open under \"To decide\", " +
         "name the unit and those decisions' numbers instead of summarising them: the board shows the owner each one as the " +
-        "spec writes it, with its options and your pick, and writes the answers into the spec under \"Decided\".")]
+        "spec writes it, with its options and your pick, and writes the answers into the spec under \"Decided\". " +
+        "Before asking, search steward_decisions for the subject, and say in 'touches' every decision in force the question " +
+        "bears on - an empty list is your claim that none does. The owner is shown each touched decision beside the " +
+        "question, and an answer that changes one replaces it in the register; say on each option which it would change. " +
+        "To propose an idea - a new slice, one split in two, one reworded - pass idea with its file and whole text: the owner " +
+        "is asked to commit it as written, and the board commits it on a yes. Only the owner changes ideas. For a question " +
+        "about a slice being built whose answer changes a step of its story, pass unit and story: the sentence as it stands " +
+        "and its rewording under each option; the board commits the rewording with the decision. A built slice's story " +
+        "is never rewritten.")]
     public static Task<StewardReply> AskOwner(StewardService s,
         [Description("The project key.")] string project,
         [Description("A short name for this question, lowercase with hyphens, like sms-provider. Yours for good.")] string key,
         [Description("The question, as one line a person can answer.")] string question,
         [Description("Why it matters now, with whatever fact the owner needs to choose.")] string why,
         [Description("What is held up until this is answered.")] string heldUp,
-        [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended. Leave out when you name decisions: those are their own options.")] BlockOption[]? options = null,
+        [Description("The numbers of the decisions in force this question bears on, from steward_decisions. Required: an empty list when none does.")] int[] touches,
+        [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended. Leave out when you name decisions: those are their own options.")] StewardOption[]? options = null,
         [Description("The ticket that raised it, when one did.")] int? ticketId = null,
         [Description("The unit of the plan whose open decisions this asks about.")] int? unit = null,
-        [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null) =>
-        s.AskAsync(project, new StewardAsk(key, question, why, options, heldUp, ticketId, unit, decisions));
+        [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null,
+        [Description("The open follow-ups this question takes up, by id: they stop waiting once it is asked.")] int[]? followUps = null,
+        [Description("An idea to propose: the slice file's name (number first, no folder) and its whole text, with its status line saying idea. Asked on its own, without options: the owner commits it or leaves the ideas as they are.")] StewardIdeaProposal? idea = null,
+        [Description("For a slice being built (with unit): the sentence of its story the answer changes, quoted exactly, and its rewording under each option that changes it, by the option's label.")] StewardStoryChange? story = null) =>
+        s.AskAsync(project, new StewardAsk(key, question, why,
+            options?.Select(o => new BlockOption(o.Label, o.Detail, o.Recommended)).ToList(), heldUp, ticketId, unit, decisions, touches,
+            options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!), followUps,
+            idea, story));
 
     [McpServerTool(Name = "steward_record_call"), Description(
         "Record a call you made for the owner about one ticket - an answer you gave it, a choice you made in filing it, what " +
@@ -204,6 +251,73 @@ public class StewardTools
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
         [Description("What was asked or chosen, the choice, and the place that decides it.")] string text) =>
         s.RecordAsync(project, StewardEntryKind.Call, ticketId, text);
+
+    [McpServerTool(Name = "steward_note_ticket"), Description(
+        "Write down one thing you mean to do about one ticket, for your later runs: 'when this merges, set C4 Done and note " +
+        "its words for release', 'when it is back at review, merge it if only the rebase changed'. Write it the moment you " +
+        "decide it, not at the end of the run: a run that stops part-way keeps what it wrote. It is shown first by " +
+        "steward_review for that ticket and in every run's status (ticketNotes) until you close it with steward_done_with. " +
+        "One thing per note. Not a fact about the repo, and not a call for the owner (that is steward_record_call).")]
+    public static Task<StewardReply> NoteTicket(StewardService s,
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("What is to be done, and when.")] string text) =>
+        s.NoteTicketAsync(project, ticketId, text);
+
+    [McpServerTool(Name = "steward_done_with"), Description(
+        "Close a ticket note, by the id steward_note_ticket gave it: what it said is done, or is no longer to be done. " +
+        "Close it in the same breath as doing it, so the next run is never told to do it again.")]
+    public static Task<StewardReply> DoneWith(StewardService s,
+        [Description("The project key.")] string project, [Description("The note's id.")] int noteId) =>
+        s.DoneWithAsync(project, noteId);
+
+    [McpServerTool(Name = "steward_rule"), Description(
+        "Record a standing call you will apply again: something you have taken as settled for tickets still to be written " +
+        "or reviews still to come, like 'a by-inspection pass on an infra/ change is fine when a test asserts the config'. " +
+        "Say what it rests on - the decisions it reads by number (#n), or the spec and section - because a ruling " +
+        "is only a reading of decisions already made, never a new one: anything no decision settles is the owner's to " +
+        "answer, not yours to rule. It applies at once and every run is handed every ruling in force (status: rulings). " +
+        "The owner sees each one and may reverse it; a reversal reaches your next run with what should hold instead. " +
+        "Record it the moment you make the call. Not a call about one ticket (steward_record_call), not a fact about the repo.")]
+    public static Task<StewardReply> Rule(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The ruling, as one sentence you could apply without context.")] string ruling,
+        [Description("What it rests on: the decisions it reads, by number (#n), or the spec and section.")] string restsOn,
+        [Description("The numbers of the register's decisions it reads. Required: an empty list when it reads only a spec. When one is replaced or withdrawn, the ruling is flagged.")] int[] reads,
+        [Description("The ticket that raised it, when one did.")] int? ticketId = null) =>
+        s.RuleAsync(project, ruling, restsOn, ticketId, reads);
+
+    [McpServerTool(Name = "steward_close_instruction"), Description(
+        "Close one of the owner's instructions whose end has come - 'hold merges until that test is fixed', and the test is " +
+        "fixed - saying how it came. Until it is closed it is in force and every run is handed it (status: instructions). " +
+        "An instruction is not a decision: it is never in the register, and closing it changes nothing decided.")]
+    public static Task<StewardReply> CloseInstruction(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The instruction's id, from status or the briefing.")] int id,
+        [Description("How its end came: what is now true, and where to see it.")] string how) =>
+        s.CloseInstructionAsync(project, id, how);
+
+    [McpServerTool(Name = "steward_follow_up"), Description(
+        "Record something the owner left open in an answer - 'let's talk about a dynamic role', 'so this will need to be " +
+        "a permission' - against the decision the answer made. Read every answer for these: the owner fills in no extra " +
+        "field. Each waits on the register page until a question you ask (followUps) or an idea takes it up, or the owner " +
+        "drops it; every run is handed the open ones (briefing: followUps).")]
+    public static Task<StewardReply> FollowUp(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The decision whose answer left it, by number.")] int decision,
+        [Description("What was left open, in a line, quoting the owner where you can.")] string text) =>
+        s.FollowUpAsync(project, decision, text);
+
+    [McpServerTool(Name = "steward_learned"), Description(
+        "Put a fact about the repo into the project's notes store: where a screen or a function lives, how a check or the " +
+        "stack behaves, what the seed holds, a port that is taken. Something a worker or the owner would be just as wrong " +
+        "without - first-hand, not a guess. It is saved the moment you call this, and placed in the store after the run, " +
+        "beside or folded into the note that already covers it; until then status lists it under learnedPending. One fact " +
+        "per call, stated so it stands on its own. Not a ruling (steward_rule), not something to do (steward_note_ticket).")]
+    public static Task<StewardReply> Learned(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The fact, in one or two sentences, with the paths and names that make it useful.")] string fact,
+        [Description("Optional short name for its note, lowercase with hyphens, like visit-day-read.")] string? key = null) =>
+        s.LearnedAsync(project, fact, key);
 
     [McpServerTool(Name = "steward_note_for_release"), Description(
         "After merging a ticket that leaves the owner something to read before the base branch is released: a migration and " +
@@ -219,15 +333,14 @@ public class StewardTools
             "infrastructure, an account. 'action': something for the owner to do, check or approve - wording to read, a line " +
             "for their own documents, a step by hand. 'note': only to know.")] string kind) =>
         s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text, kind);
-
-    [McpServerTool(Name = "steward_save_memo"), Description(
-        "Replace your memo to the next run, which starts from nothing but the plan, the board and this. It holds only what " +
-        "the next run needs and cannot read anywhere else: what you took as decided for tickets still to be written, and two " +
-        "short paragraphs on what this run did and what to pick up. Where an outcome stands is set on the outcome; a call " +
-        "about one ticket goes on the record. It has a length limit because every run reads all of it: 'saved-too-long' " +
-        "means cut it and save again.")]
-    public static Task<StewardReply> SaveMemo(StewardService s,
-        [Description("The project key.")] string project,
-        [Description("The whole memo, replacing what was there.")] string memo) =>
-        s.SaveMemoAsync(project, memo);
 }
+
+/// <summary>
+/// One option of a steward's question to the owner. Its own shape rather than the worker's
+/// <see cref="BlockOption"/>, because only a steward's question says which decisions an option changes.
+/// </summary>
+public record StewardOption(
+    [Description("The choice itself, as a short phrase a person can pick off a list.")] string Label,
+    [Description("What taking it costs and rules out, in a line.")] string? Detail = null,
+    [Description("Set on the ONE option you would pick.")] bool Recommended = false,
+    [Description("Which of the question's touched decisions picking this would change, by number. Empty when it leaves them as they are.")] int[]? Changes = null);

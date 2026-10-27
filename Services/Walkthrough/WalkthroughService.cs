@@ -254,7 +254,7 @@ public class WalkthroughService
         var ctx = new WalkthroughValidator.Context(doc, description,
             shots.Select(s => new WalkthroughValidator.Shot(s.shot.Order, s.shot.Caption, QaShotDto.From(t.Id, s.shot).ImageUrl, s.w, s.h, s.shot.Focus())).ToList(),
             attachments.Select(x => new WalkthroughValidator.Attachment(x.name, AttachmentUrl(t.Id, x.rel), x.w, x.h)).ToList(),
-            Snippet);
+            Snippet, string.Join(" ", changed.Select(c => c.Path)));
 
         return (new Material(t.ProjectKey, AnalysisRunner.ReadDir(t, cfg), prompt, ctx), null);
     }
@@ -317,7 +317,7 @@ public class WalkthroughService
         var ctx = new WalkthroughValidator.Context(doc, spec,
             shots.Select(s => new WalkthroughValidator.Shot(s.shot.N, s.shot.Caption, UnitShotUrl(r.Id, s.shot.N), s.w, s.h, s.shot.Focus)).ToList(),
             Array.Empty<WalkthroughValidator.Attachment>(),
-            Snippet);
+            Snippet, string.Join(" ", changed.Select(c => c.Path)));
 
         return (new Material(r.ProjectKey, cfg.ProjectPath, prompt, ctx), null);
     }

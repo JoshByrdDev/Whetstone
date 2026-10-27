@@ -77,6 +77,8 @@ builder.Services.AddSingleton<EventStore>();
 builder.Services.AddSingleton<IssueTrackerFactory>();
 builder.Services.AddSingleton<LinkedIssueResolver>();
 builder.Services.AddSingleton<HeartbeatManager>();
+// A steward run its owner asks for from the Steward page: wakes the heartbeat, or starts one itself.
+builder.Services.AddSingleton<StewardRunner>();
 // Notices the dashboard raises itself. Goes through the heartbeat's own notifier script.
 builder.Services.AddSingleton<NotificationSender>();
 // Which agent CLI the one-shot runs below shell out to, and how. Reads the provider off global

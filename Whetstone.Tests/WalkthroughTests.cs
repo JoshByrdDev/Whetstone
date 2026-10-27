@@ -292,6 +292,94 @@ public class WalkthroughTests
         Assert.Contains(result.Problems, p => p.Contains("500 words") && p.Contains("under 420"));
     }
 
+    // ---- pictures ------------------------------------------------------------------------------
+
+    private static RawPictureItem Item(string id, string text, string? kind = null, string? change = null, string? @in = null) =>
+        new(id, text) { Kind = kind, Change = change, In = @in };
+
+    [Fact]
+    public async Task A_picture_keeps_its_ids_across_beats_and_a_beat_without_one_holds_the_last()
+    {
+        var result = await WalkthroughValidator.ValidateAsync(Script(
+            new RawScene("The idea", "picture")
+            {
+                Beats = new[]
+                {
+                    Say("Every rollover reached the same screen.") with { Picture = new RawPicture(new[] { Item("gate", "Rollover"), Item("screen", "Distribution screen") })
+                        { Arrows = new[] { new RawArrow("gate", "screen") } } },
+                    Say("Now older ones take a turn first.") with { Picture = new RawPicture(new[]
+                        {
+                            Item("gate", "Rollover"), Item("legacy", "Original selection", change: "new"), Item("screen", "Distribution screen"),
+                        }) { Arrows = new[] { new RawArrow("gate", "legacy") { Change = "new" }, new RawArrow("legacy", "screen") } } },
+                    Say("That turn is the whole change.") with { Lit = new[] { "legacy" } },
+                },
+            }), Ctx() with { Vocabulary = "src/distribution.tsx" });
+
+        Assert.Empty(result.Problems);
+        var beats = result.Scenes.Single().Beats;
+        Assert.Equal(2, beats[0].Cue!.Picture!.Items.Count);
+        Assert.Equal("new", beats[1].Cue!.Picture!.Items[1].Change);
+        Assert.Null(beats[2].Cue!.Picture);                       // holds the second picture
+        Assert.Equal(new[] { "legacy" }, beats[2].Cue!.Lit);      // and can still point into it
+    }
+
+    [Fact]
+    public async Task A_picture_loses_what_does_not_hold_together_and_says_why()
+    {
+        var result = await WalkthroughValidator.ValidateAsync(Script(
+            new RawScene("Bad", "picture")
+            {
+                Beats = new[]
+                {
+                    Say("x") with
+                    {
+                        Picture = new RawPicture(new[]
+                        {
+                            Item("gate", "Rollover check"),
+                            Item("gate", "Rollover again"),
+                            Item("kafka", "Kafka broker queue"),
+                            Item("legacy", "Original selection", @in: "gate"),
+                            Item("sel", "Selection", kind: "triangle"),
+                        }) { Arrows = new[] { new RawArrow("gate", "kafka"), new RawArrow("gate", "legacy") } },
+                        Lit = new[] { "kafka" },
+                    },
+                },
+            }), Ctx());
+
+        var picture = result.Scenes.Single().Beats[0].Cue!.Picture!;
+        Assert.Equal(new[] { "gate", "legacy" }, picture.Items.Select(i => i.Id));
+        Assert.Null(picture.Items[1].In);                          // "gate" is a box, not a group
+        Assert.Single(picture.Arrows);
+        Assert.Contains(result.Problems, p => p.Contains("used twice"));
+        Assert.Contains(result.Problems, p => p.Contains("\"kafka\"") && p.Contains("none of its words"));
+        Assert.Contains(result.Problems, p => p.Contains("is not a group in this picture"));
+        Assert.Contains(result.Problems, p => p.Contains("kind \"triangle\""));
+        Assert.Contains(result.Problems, p => p.Contains("arrow gate -> kafka"));
+        Assert.Contains(result.Problems, p => p.Contains("lit \"kafka\""));
+    }
+
+    [Fact]
+    public async Task A_picture_scene_that_opens_on_nothing_is_left_out()
+    {
+        var result = await WalkthroughValidator.ValidateAsync(Script(
+            new RawScene("Empty", "picture") { Beats = new[] { Say("x"), Say("y") with { Picture = new RawPicture(new[] { Item("gate", "Rollover") }) } } }), Ctx());
+
+        Assert.Empty(result.Scenes);
+        Assert.Contains(result.Problems, p => p.Contains("first beat must draw a picture"));
+    }
+
+    [Fact]
+    public void The_brief_teaches_pictures_by_id_not_by_animation()
+    {
+        var p = WalkthroughPrompt.Build(new Whetstone.Models.Ticket { Id = 4, Title = "t", Branch = "b" },
+            new Whetstone.Models.TicketAnalysis(), PromptDoc, "Save an address", "the ask",
+            Array.Empty<WalkthroughPrompt.ShotMaterial>(), Array.Empty<WalkthroughPrompt.AttachmentMaterial>(),
+            Array.Empty<WalkthroughPrompt.ChangedFile>(), "abc1234");
+        Assert.Contains("## Pictures", p);
+        Assert.Contains("BY ID", p);
+        Assert.Contains("\"picture\": a small animated diagram", p);
+    }
+
     // ---- the prompt, for each subject ----------------------------------------------------------
 
     private static readonly AnalysisDocument.Doc PromptDoc = new("h", new[]

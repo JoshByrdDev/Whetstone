@@ -708,8 +708,8 @@ public class TicketService
         var t = await GetAsync(id);
         if (t is null) return null;
 
-        if (!PhaseMachine.CanTransition(t.Phase, to, t.Track))
-            throw new InvalidTransitionException($"Illegal transition {t.Phase} → {to}", t.Phase, PhaseMachine.NextPhases(t.Phase, t.Track));
+        if (!PhaseMachine.CanTransitionFor(t, to))
+            throw new InvalidTransitionException($"Illegal transition {t.Phase} → {to}", t.Phase, PhaseMachine.NextPhasesFor(t));
 
         // What the ticket has to be CARRYING for this hand-off, checked only for the workers the
         // requirement is aimed at. A person moving a ticket by hand is making a deliberate choice
@@ -719,7 +719,7 @@ public class TicketService
         {
             var unmet = HandoffRequirements.Unmet(t, t.Phase, to, await LastBackwardAtAsync(id));
             if (unmet is not null)
-                throw new HandoffRequirementException(unmet, t.Phase, to, PhaseMachine.NextPhases(t.Phase, t.Track));
+                throw new HandoffRequirementException(unmet, t.Phase, to, PhaseMachine.NextPhasesFor(t));
 
             // A block that says nothing stops the work and withholds the one thing needed to restart
             // it: nobody can answer a question that was never asked, and the board shows the bare

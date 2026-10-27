@@ -1,21 +1,26 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
-import { Chip, GhostButton, PageHead, Panel } from './ui';
-import { BODY, MONO, TIER } from './orbit';
+import { Chip, GhostButton, PageHead, Panel, SectionRule } from './ui';
+import { BODY, DISPLAY, TIER, chamfer } from './orbit';
+import { AgentMascot } from './AgentMascot';
+import type { Mood } from '../theme';
 import { ActivityFeed } from './ActivityFeed';
+import { Markdown } from './Markdown';
 import { StewardPlan } from './StewardPlan';
+import { NewPlan } from './StewardNewPlan';
 import { StewardRecord } from './StewardRecord';
+import { StewardDecisions } from './StewardDecisions';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { DecisionSheet } from './DecisionSheet';
-import { Fold, OptionRow, Quiet, ago, label, remember, remembered } from './stewardParts';
+import { OptionRow, ago, label, remember, remembered } from './stewardParts';
 import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
-  answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan,
-  getStewardStatus, markStewardEntry, setStewardMode, tellSteward,
+  answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan, getStewardRegister,
+  getStewardStatus, keepStewardRuling, markStewardEntry, reverseStewardRuling, runStewardNow, setStewardMode, unseenRuling,
 } from '../api/steward';
 import type {
-  StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardStatus,
+  StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus,
 } from '../api/steward';
 
 /**
@@ -23,13 +28,13 @@ import type {
  *
  * The steward runs unattended and brings a person only what is theirs to decide, so this page is
  * built around that: what is waiting on you comes first and is the only thing here you have to act
- * on. The plan it is working from, and the record of what it did in your place, are each a view of
- * their own beside that one: three different reasons to open this page, and none of them is helped
- * by scrolling past the other two.
+ * on. The plan it is working from, the decisions it works by, and the record of what it did in your
+ * place are each a view of their own beside that one: different reasons to open this page, and none
+ * of them is helped by scrolling past the others.
  */
 
-/** The page's three views, in the order of how often each is the reason somebody came. */
-type View = 'now' | 'plan' | 'record';
+/** The page's views, in the order of how often each is the reason somebody came. */
+type View = 'now' | 'plan' | 'decisions' | 'record' | 'new';
 
 const MODES: { id: StewardMode; label: string; says: string }[] = [
   { id: 'off', label: 'Off', says: 'No steward. Nothing runs.' },
@@ -44,6 +49,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const [status, setStatus] = useState<StewardStatus | null>(null);
   const [entries, setEntries] = useState<StewardEntry[]>([]);
   const [plan, setPlan] = useState<StewardPlanView | null>(null);
+  const [register, setRegister] = useState<StewardRegister | null>(null);
   // Which of the project's plans is being read: null is the one being worked.
   const [planKey, setPlanKey] = useState<string | null>(null);
   // The unit whose notes the record is showing, when somebody came from that unit's release.
@@ -52,7 +58,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   useEffect(() => { setPlanKey(null); setNotesUnit(null); }, [project]);
   const [view, setView] = useState<View>(() => {
     const v = remembered('view');
-    return v === 'plan' || v === 'record' ? v : 'now';
+    return v === 'plan' || v === 'decisions' || v === 'record' || v === 'new' ? v : 'now';
   });
   const show = (v: View) => { setView(v); remember('view', v); };
   const [error, setError] = useState<string | null>(null);
@@ -60,13 +66,15 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const load = useCallback(async () => {
     if (!project) return;
     try {
-      const [p, s, e, pl] = await Promise.all([
+      const [p, s, e, pl, r] = await Promise.all([
         getSteward(project), getStewardStatus(project), getStewardEntries(project),
         // The plan is read from the project's repo, and a repo that cannot be read must not be
         // what stops a person answering a question.
         getStewardPlan(project, planKey).catch(() => ({ why: 'The plan could not be read just now.' } as StewardPlanView)),
+        // So is the register's list of units; the decisions themselves are the board's.
+        getStewardRegister(project).catch(() => null),
       ]);
-      setPage(p); setStatus(s); setEntries(e); setPlan(pl); setError(null);
+      setPage(p); setStatus(s); setEntries(e); setPlan(pl); setRegister(r); setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -75,7 +83,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   // A steward's run changes this page from the outside, so it is re-read on a slow tick. Slow
   // because nothing here is urgent to the second: a question waits for a person either way.
   useEffect(() => {
-    setPage(null); setStatus(null); setEntries([]); setPlan(null);
+    setPage(null); setStatus(null); setEntries([]); setPlan(null); setRegister(null);
     load();
     const t = setInterval(load, 15000);
     return () => clearInterval(t);
@@ -104,7 +112,6 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   }, [runningNow, load]);
 
   const off = page?.mode === 'off';
-  const progress = status?.progress;
   // A ticket in review whose merge waits on a flag only its owner can clear. Answering the
   // question that asked about it lifts nothing, so the ticket stays here until the flag is
   // cleared or the ticket leaves review; one an open question names is already shown under it.
@@ -122,9 +129,14 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const waitingCount = (page?.waiting.length ?? 0) + heldCount;
   // What a release still asks of its owner: the notes that are something to do, not only to know.
   const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && e.release !== 'Note').length;
-  const sub = !page ? 'Loading' : off ? 'No steward for this project'
-    : runningNow || page.running ? 'A run is in progress'
-    : `Last run ${ago(page.lastRunEndedAt)}${page.due ? ` - a run is due: ${page.dueReason}` : page.resting ? ' - resting until something changes' : ''}`;
+  // Rulings the steward made that the owner has not yet seen: they apply already, so they count.
+  const unseen = entries.filter(unseenRuling).length;
+  const recordCount = outstanding + unseen;
+  const inForce = (register?.decisions ?? []).filter(d => d.status === 'inForce' || d.status === 'provisional').length;
+  const pairs = register?.mayConflict.length ?? 0;
+  // Where the steward stands is the card's to say, on the Now tab; the head only says what the
+  // page cannot show at all.
+  const sub = !page ? 'Loading' : off ? 'No steward for this project' : undefined;
 
   return (
     <div className="max-w-7xl mx-auto px-3 sm:px-6 py-4">
@@ -156,78 +168,53 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
         </Panel>
       )}
 
-      {page && (
-        <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t500)', margin: '2px 0 18px' }}>
-          {MODES.find(m => m.id === page.mode)?.says}
-          {page.mode !== page.modeSetting && page.fullUnavailable && <> {page.fullUnavailable}</>}
-        </div>
-      )}
-
       {page && !off && (
         <>
-          <div className="flex flex-wrap gap-2" style={{ marginBottom: 18 }}>
+          <div className="flex flex-wrap gap-2" style={{ margin: '6px 0 18px' }}>
             <Chip on={view === 'now'} onClick={() => show('now')} title="What is waiting on you, and what it is doing">
               Now{waitingCount > 0 ? ` ${waitingCount}` : ''}
             </Chip>
             <Chip on={view === 'plan'} onClick={() => show('plan')} title="The plan it works from, and how far each part is">
-              The plan{progress ? ` ${progress.percent}%` : ''}
+              The plan
             </Chip>
-            <Chip on={view === 'record'} onClick={() => show('record')} title="What it did in your place, and what to read before a release">
-              The record{outstanding > 0 ? ` ${outstanding}` : ''}
+            <Chip on={view === 'decisions'} onClick={() => show('decisions')}
+              title={`The register: what is decided and whether it still is${pairs > 0 ? ` - ${pairs} pair${pairs === 1 ? '' : 's'} that may disagree` : ''}`}>
+              Decisions {pairs > 0 ? pairs : inForce > 0 ? inForce : ''}
+            </Chip>
+            <Chip on={view === 'record'} onClick={() => show('record')}
+              title={`What it did in your place, and what to read before a release${recordCount > 0
+                ? ` - ${[unseen > 0 ? `${unseen} new ruling${unseen === 1 ? '' : 's'}` : '', outstanding > 0 ? `${outstanding} to deal with before a release` : ''].filter(Boolean).join(', ')}`
+                : ''}`}>
+              The record{recordCount > 0 ? ` ${recordCount}` : ''}
+            </Chip>
+            <Chip on={view === 'new'} onClick={() => show('new')} title="Start the project's next plan, once this one is finished">
+              New plan
             </Chip>
           </div>
 
           {view === 'now' && (
             <div key="now" className="orbit-swap">
-              <Fold id="waiting" open title="Waiting on you" colour={TIER.blocked.c} count={waitingCount}>
-                {waitingCount === 0 && !hearing && <Quiet>Nothing is waiting on you.</Quiet>}
-                {/* Mounted whatever the count, since reading their flags is what makes the count. */}
-                <div className="flex flex-col gap-3" style={{ marginBottom: waitingCount > 0 ? 32 : 0 }}>
-                  {page.waiting.map(q => (
-                    <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
-                      onAnswer={async a => { await answerStewardQuestion(page.project, q.key, a); await load(); }} />
-                  ))}
-                  {inReview.map(t => (
-                    <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
-                  ))}
-                </div>
-              </Fold>
+              {/* The steward itself on the left, what it needs from you on the right. One column
+                  on a phone, the steward first: it says why the right side is what it is. */}
+              <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-6 items-start" style={{ marginBottom: 32 }}>
+                <StewardCard page={page} running={runningNow || page.running} fleet={state.status} live={live} onRan={load} />
 
-              <Fold
-                id="live" open title="Live" colour={TIER.queue.c}
-                meta={runningNow ? 'a run is in progress'
-                  : live.length > 0 ? `last heard ${ago(live[live.length - 1].timestamp)}` : 'no run going'}
-              >
-                <div className="mb-8">
-                  <ActivityFeed
-                    events={live} solo
-                    empty="Nothing from this steward in the recent feed. When a run starts, what it thinks, says and does shows here as it happens."
-                  />
-                </div>
-              </Fold>
-
-              <Fold id="last-run" open title="Last run" colour={TIER.queue.c} meta={page.lastRunEndedAt ? ago(page.lastRunEndedAt) : undefined}>
-                <Panel className="mb-8">
-                  <div style={{ font: `400 12.5px/1.55 ${BODY}`, color: 'var(--w-t200)' }}>
-                    {page.lastRunSummary ?? 'No run has finished yet.'}
+                <div className="min-w-0">
+                  <SectionRule title="Waiting on you" colour={TIER.blocked.c} count={waitingCount} />
+                  {/* Mounted whatever the count, since reading their flags is what makes the count. */}
+                  <div className="flex flex-col gap-3">
+                    {page.waiting.map(q => (
+                      <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
+                        onAnswer={async (a, replaces, story) => { await answerStewardQuestion(page.project, q.key, a, replaces, story); await load(); }} />
+                    ))}
+                    {inReview.map(t => (
+                      <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
+                    ))}
                   </div>
-                  {page.memo && (
-                    <details className="mt-3">
-                      <summary className="orbit-tap cursor-pointer" style={{ ...label(), display: 'inline-block' }}>
-                        Its memo to its next run
-                      </summary>
-                      <pre
-                        className="mt-2 whitespace-pre-wrap"
-                        style={{ font: `400 11.5px/1.55 ${MONO}`, color: 'var(--w-t400)' }}
-                      >{page.memo}</pre>
-                    </details>
-                  )}
-                </Panel>
-              </Fold>
+                  {waitingCount === 0 && <NothingWaiting checking={hearing} />}
+                </div>
+              </div>
 
-              <Fold id="tell" open title="Tell your steward" colour="var(--w-accent)" meta="a standing instruction, read by every run">
-                <Tell onSend={async text => { await tellSteward(page.project, text); await load(); }} />
-              </Fold>
             </div>
           )}
 
@@ -235,9 +222,26 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
             <div key="plan" className="orbit-swap">
               <StewardPlan
                 project={page.project} view={plan} status={status} onChanged={load}
+                waiting={page.waiting} register={register} mode={page.mode}
                 onPlan={key => { setPlan(null); setPlanKey(key); }}
                 onNotes={unit => { setNotesUnit(unit); show('record'); }}
+                onNow={() => show('now')} onDecisions={() => show('decisions')} onNew={() => show('new')}
               />
+            </div>
+          )}
+
+          {view === 'new' && (
+            <div key="new" className="orbit-swap">
+              <NewPlan
+                project={page.project} onStarted={async () => { setPlanKey(null); await load(); }}
+                has={(plan?.plan?.units?.length ?? 0) > 0 || (plan?.plan?.plans?.length ?? 0) > 0 || !!plan?.master || !!plan?.charter}
+              />
+            </div>
+          )}
+
+          {view === 'decisions' && (
+            <div key="decisions" className="orbit-swap">
+              <StewardDecisions project={page.project} register={register} onChanged={load} />
             </div>
           )}
 
@@ -246,6 +250,8 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
               <StewardRecord
                 entries={entries} answered={page.answered} unit={notesUnit} onUnit={setNotesUnit}
                 onMark={async (id, mark) => { await markStewardEntry(page.project, id, mark); await load(); }}
+                onKeep={async id => { await keepStewardRuling(page.project, id); await load(); }}
+                onReverse={async (id, because) => { await reverseStewardRuling(page.project, id, because); await load(); }}
               />
             </div>
           )}
@@ -260,7 +266,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
  * the commonest answer is "yes, that one" and it should cost a single press.
  */
 function QuestionCard({ project, q, onAnswer, onSettled }: {
-  project: string; q: StewardQuestion; onAnswer: (answer: string) => Promise<void>;
+  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[], story?: string) => Promise<void>;
   /** After it was answered on a unit's own decisions rather than through `onAnswer`. */
   onSettled: () => Promise<void>;
 }) {
@@ -283,10 +289,19 @@ function QuestionCard({ project, q, onAnswer, onSettled }: {
 }
 
 function OptionsCard({ project, q, onAnswer }: {
-  project: string; q: StewardQuestion; onAnswer: (answer: string) => Promise<void>;
+  project: string; q: StewardQuestion; onAnswer: (answer: string, replaces?: number[], story?: string) => Promise<void>;
 }) {
   const recommended = q.options.findIndex(o => o.recommended);
   const [pick, setPick] = useState<number | 'other'>(recommended >= 0 ? recommended : 'other');
+  // Which touched decisions the answer replaces: what the picked option says it changes, until
+  // the owner says otherwise. Shown, never assumed - the override is the owner's to see.
+  const changesOf = (p: number | 'other') => p === 'other' ? [] : (q.changes?.[q.options[p].label] ?? []);
+  const [replaces, setReplaces] = useState<number[]>(() => changesOf(recommended >= 0 ? recommended : 'other'));
+  // The sentence of the slice's story this answer rewrites, as the picked option words it, and yours to edit.
+  const rewordingOf = (p: number | 'other') => p === 'other' ? '' : (q.story?.rewordings?.[q.options[p].label] ?? '');
+  const [story, setStory] = useState(() => rewordingOf(recommended >= 0 ? recommended : 'other'));
+  const choose = (p: number | 'other') => { setPick(p); setReplaces(changesOf(p)); setStory(rewordingOf(p)); };
+  const touches = q.touches ?? [];
   const [other, setOther] = useState('');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -304,7 +319,7 @@ function OptionsCard({ project, q, onAnswer }: {
 
   const send = async () => {
     setBusy(true); setFailed(null);
-    try { await onAnswer(answer); }
+    try { await onAnswer(answer, touches.length > 0 ? replaces : undefined, q.story && story.trim() ? story.trim() : undefined); }
     catch (err) { setFailed(err instanceof Error ? err.message : String(err)); setBusy(false); }
   };
 
@@ -316,13 +331,63 @@ function OptionsCard({ project, q, onAnswer }: {
 
       {q.ticketId != null && <StewardTicketFlags project={project} ticketId={q.ticketId} />}
 
+      {q.idea && (
+        <div style={{ marginTop: 12 }}>
+          <div style={label()}>The idea, as it would be committed - {q.idea.file}</div>
+          <div style={{
+            marginTop: 6, padding: '10px 14px', clipPath: chamfer(8),
+            background: 'rgb(var(--w-line-rgb) / .04)', border: '1px solid rgb(var(--w-line-rgb) / .14)',
+          }}><Markdown text={q.idea.text} /></div>
+        </div>
+      )}
+
       <div className="flex flex-col gap-1.5" style={{ marginTop: 12 }}>
         {q.options.map((o, i) => (
-          <OptionRow key={i} on={pick === i} onClick={() => setPick(i)} title={o.label} detail={o.detail}
+          <OptionRow key={i} on={pick === i} onClick={() => choose(i)} title={o.label} detail={o.detail}
             tag={o.recommended ? "the steward's pick" : undefined} />
         ))}
-        <OptionRow on={pick === 'other'} onClick={() => setPick('other')} title="Something else" />
+        <OptionRow on={pick === 'other'} onClick={() => choose('other')} title="Something else" />
       </div>
+
+      {q.story && (
+        <div style={{ marginTop: 12 }}>
+          <div style={label()}>The slice's story now says</div>
+          <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 4 }}>{q.story.sentence}</div>
+          <div style={{ ...label(), marginTop: 8 }}>With your answer it will say</div>
+          <textarea value={story} onChange={e => setStory(e.target.value)} rows={2}
+            placeholder="Leave empty to keep the sentence as it is"
+            aria-label="The story sentence, reworded"
+            className="mt-1 w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none" />
+        </div>
+      )}
+
+      {touches.length > 0 && (
+        <div style={{ marginTop: 12 }}>
+          <div style={label()}>Decided already, and touched by this</div>
+          <div className="flex flex-col gap-1.5" style={{ marginTop: 6 }}>
+            {touches.map(t => {
+              const on = replaces.includes(t.number);
+              return (
+                <button key={t.number} type="button" role="checkbox" aria-checked={on}
+                  onClick={() => setReplaces(r => on ? r.filter(n => n !== t.number) : [...r, t.number])}
+                  className="orbit-tap text-left"
+                  style={{
+                    clipPath: chamfer(8), padding: '7px 11px',
+                    background: on ? 'rgb(var(--w-blocked-rgb) / .1)' : 'rgb(var(--w-line-rgb) / .04)',
+                    border: `1px solid ${on ? 'rgb(var(--w-blocked-rgb) / .45)' : 'rgb(var(--w-line-rgb) / .14)'}`,
+                  }}>
+                  <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t200)' }}>
+                    <span style={{ fontWeight: 600 }}>#{t.number}</span> {t.rule ?? ''}
+                  </div>
+                  <div style={{ ...label(on ? TIER.blocked.c : undefined), marginTop: 3 }}>
+                    {on ? `Your answer replaces #${t.number}` : `#${t.number} stands beside your answer`}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {pick === 'other'
         ? (
@@ -352,22 +417,139 @@ function OptionsCard({ project, q, onAnswer }: {
   );
 }
 
-function Tell({ onSend }: { onSend: (text: string) => Promise<void> }) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const send = async () => {
-    setBusy(true);
-    try { await onSend(text.trim()); setText(''); } finally { setBusy(false); }
+/**
+ * The steward as a presence: the theme's mascot in the mood of what it is doing, where it stands
+ * in one honest sentence, what its last run did, and under that its own strand of the live feed.
+ * The mascot animates itself by mood, so a working steward bobs, one with a run due stands by,
+ * and one with nothing to find sleeps.
+ */
+function StewardCard({ page, running, fleet, live, onRan }: {
+  page: StewardPage; running: boolean; fleet: DashboardState['status']; live: HeartbeatEvent[]; onRan: () => void;
+}) {
+  // Asking for a run: held while the request is out, then what the board said, until the next ask.
+  const [asking, setAsking] = useState(false);
+  const [said, setSaid] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => { setSaid(null); }, [page.project]);
+  const runNow = async () => {
+    setAsking(true); setSaid(null);
+    try {
+      const r = await runStewardNow(page.project);
+      setSaid({ ok: true, text: r.answer === 'queued' ? (r.why ?? 'The heartbeat will start it.') : 'Started. It shows below as it works.' });
+      onRan();
+    } catch (err) {
+      setSaid({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    } finally { setAsking(false); }
   };
+  const cannotRun = running ? 'A run is already going.' : page.mode === 'off' ? 'The steward is off for this project.' : null;
+
+  // The heartbeat starts a due run, so a run that is due is due "shortly" only while it is going;
+  // otherwise only Run now below starts one.
+  const held = page.due && !running && (fleet === 'stopped' || fleet === 'off-hours');
+  const mood: Mood = running ? 'running' : held ? 'stopped' : page.due ? 'idle' : 'sleeping';
+  const word = running ? 'Working' : page.due ? 'A run is due' : page.resting ? 'Resting' : 'Standing by';
+  const when = running
+    ? page.lastRunStartedAt ? `started ${ago(page.lastRunStartedAt)}` : null
+    : page.lastRunEndedAt ? `last run ${ago(page.lastRunEndedAt)}` : null;
+  const line = running ? 'A run is in progress. What it thinks, says and does shows below as it happens.'
+    : held ? fleet === 'off-hours'
+      ? 'Waiting for working hours: the heartbeat starts no run until then.'
+      : 'Waiting for the heartbeat, which is stopped. Run now starts one without it.'
+    : page.due ? "Starts on the heartbeat's next pass."
+    : page.resting ? 'Nothing to do until a ticket comes back, you answer something, or the base branch moves.'
+    : 'Waiting for something to change.';
+  const heard = live.length > 0 ? `last heard ${ago(live[live.length - 1].timestamp)}` : null;
+
   return (
-    <div className="mb-8">
-      <textarea
-        value={text} onChange={e => setText(e.target.value)} rows={2}
-        placeholder="Something it should hold to from now on. It reads this as a decision you have made."
-        className="w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none"
+    <Panel tone={running ? TIER.active.c : undefined} className="min-w-0">
+      <div className="flex items-center gap-4" style={{ marginBottom: 14 }}>
+        <div style={{ padding: 6 }}><AgentMascot mood={mood} size={64} /></div>
+        <div className="min-w-0">
+          <div style={{ font: `700 17px ${DISPLAY}`, color: 'var(--w-t100)', letterSpacing: '.02em' }}>Steward</div>
+          {/* Why it is due, on hover: the list repeats what the page already shows, so it is not spelled out. */}
+          <div style={{ ...label(running ? TIER.active.c : 'var(--w-t400)'), marginTop: 3 }}
+            title={page.due && page.dueReason ? `Due because ${page.dueReason}` : undefined}>
+            {word}{when ? ` - ${when}` : ''}
+          </div>
+          <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 5 }}>{line}</div>
+        </div>
+      </div>
+
+      {/* Run it now rather than when the heartbeat next finds it due. Disabled while a run is
+          going, so a second press can never start a second agent in the steward's one berth. */}
+      <div className="flex flex-wrap items-center gap-3" style={{ marginBottom: 14 }}>
+        <GhostButton tone="go" onClick={runNow} disabled={asking || !!cannotRun}
+          title={cannotRun ?? (fleet === 'stopped' || fleet === 'off-hours'
+            ? 'Start one run of the steward now. The heartbeat stays stopped.'
+            : 'Wake the heartbeat to start a run of the steward now.')}>
+          {asking ? 'Starting' : 'Run now'}
+        </GhostButton>
+        {said && (
+          <span key={said.text} className="orbit-swap min-w-0"
+            style={{ font: `400 12px/1.5 ${BODY}`, color: said.ok ? 'var(--w-t400)' : TIER.blocked.c }}>
+            {said.text}
+          </span>
+        )}
+      </div>
+
+      <LastRun summary={page.lastRunSummary} />
+
+      <div className="flex items-center justify-between" style={{ ...label(), margin: '16px 0 6px' }}>
+        <span>Live</span>
+        {heard && <span style={{ textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>{heard}</span>}
+      </div>
+      <ActivityFeed
+        events={live} solo
+        empty="Nothing from this steward in the recent feed. When a run starts, it shows here as it happens."
       />
-      <div className="flex justify-end" style={{ marginTop: 6 }}>
-        <GhostButton onClick={send} disabled={busy || !text.trim()}>{busy ? 'Recording' : 'Leave instruction'}</GhostButton>
+    </Panel>
+  );
+}
+
+/** What the last run did, held to a few lines until asked for. */
+function LastRun({ summary }: { summary?: string | null }) {
+  const [whole, setWhole] = useState(false);
+  const [long, setLong] = useState(false);
+  const text = useRef<HTMLDivElement>(null);
+  // Only offer "more" when the clamp is actually hiding something.
+  useLayoutEffect(() => {
+    const el = text.current;
+    if (el && !whole) setLong(el.scrollHeight > el.clientHeight + 1);
+  }, [summary, whole]);
+
+  return (
+    <div>
+      <div style={{ ...label(), marginBottom: 6 }}>Last run</div>
+      <div ref={text} className={whole ? '' : 'line-clamp-5'}
+        style={{ font: `400 12.5px/1.55 ${BODY}`, color: summary ? 'var(--w-t200)' : 'var(--w-t500)' }}>
+        {summary ?? 'No run has finished yet.'}
+      </div>
+      {(long || whole) && (
+        <button type="button" onClick={() => setWhole(w => !w)} className="orbit-tap"
+          style={{ ...label('var(--w-t300)'), marginTop: 4 }}>
+          {whole ? 'less' : 'more'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** The right column with nothing in it: the space stays, and says why it is empty. */
+function NothingWaiting({ checking }: { checking: boolean }) {
+  return (
+    <div
+      className="flex flex-col items-center justify-center text-center"
+      style={{
+        minHeight: 260, padding: '32px 24px', clipPath: chamfer(13),
+        border: '1px dashed rgb(var(--w-line-rgb) / .22)', background: 'rgb(var(--w-line-rgb) / .04)',
+      }}
+    >
+      <div style={{ font: `600 14px ${BODY}`, color: 'var(--w-t200)' }}>
+        {checking ? 'Checking finished tickets' : 'Nothing is waiting on you'}
+      </div>
+      <div style={{ font: `400 12px/1.55 ${BODY}`, color: 'var(--w-t500)', marginTop: 6, maxWidth: 340 }}>
+        {checking
+          ? 'Reading the flags on tickets in review. A flag only you can clear will show here.'
+          : 'When the steward needs a decision, or a finished ticket has a flag only you can clear, it shows up here.'}
       </div>
     </div>
   );

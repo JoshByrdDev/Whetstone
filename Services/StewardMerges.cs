@@ -17,6 +17,13 @@ namespace Whetstone.Services;
 /// same merge rather than starting another, and whichever call is there when it finishes is given
 /// the answer. A call that drops takes nothing down with it.
 /// </para>
+/// <para>
+/// An answer nobody collected is kept, so a merge that finished between calls is not lost - but only
+/// for the ticket as it was checked. Each merge is stamped with the ticket's phase, branch tip and
+/// distance from the base when it starts, and a kept answer is handed out only while that stamp
+/// still holds. Without that, a dropped call's "behind" outlived the rebase that answered it: the
+/// steward rebased, asked again, was told "behind" again, and the rebase then had nothing to do.
+/// </para>
 /// </summary>
 public class StewardMerges
 {
@@ -29,22 +36,33 @@ public class StewardMerges
     /// </summary>
     public TimeSpan KeepFor { get; set; } = TimeSpan.FromMinutes(20);
 
-    private sealed record InFlight(Task<StewardReply> Task, DateTime StartedAt)
+    private sealed record InFlight(Task<StewardReply> Task, DateTime StartedAt, string? Stamp)
     {
         public DateTime? FinishedAt;
     }
 
     private readonly ConcurrentDictionary<(string Project, int Ticket), InFlight> _merges = new();
     private readonly Func<string, int, Task<StewardReply>> _merge;
+    private readonly Func<string, int, Task<string?>>? _stamp;
 
     public StewardMerges(IServiceScopeFactory scopes) : this(async (project, ticketId) =>
     {
         await using var scope = scopes.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<StewardService>().MergeAsync(project, ticketId, CancellationToken.None);
+    }, async (project, ticketId) =>
+    {
+        await using var scope = scopes.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<StewardService>().MergeStampAsync(project, ticketId, CancellationToken.None);
     })
     { }
 
-    public StewardMerges(Func<string, int, Task<StewardReply>> merge) => _merge = merge;
+    /// <param name="merge">The merge itself.</param>
+    /// <param name="stamp">What the ticket is right now, as far as a merge's answer depends on it; null keeps any answer for <see cref="KeepFor"/>.</param>
+    public StewardMerges(Func<string, int, Task<StewardReply>> merge, Func<string, int, Task<string?>>? stamp = null)
+    {
+        _merge = merge;
+        _stamp = stamp;
+    }
 
     /// <summary>
     /// Start the ticket's merge, or join the one already going, and wait on it for <see cref="Wait"/>.
@@ -53,12 +71,18 @@ public class StewardMerges
     public async Task<StewardReply> MergeAsync(string projectKey, int ticketId, CancellationToken ct = default)
     {
         var key = (projectKey, ticketId);
-        if (_merges.TryGetValue(key, out var old) && old.FinishedAt is { } at && DateTime.UtcNow - at > KeepFor)
+        var stamp = _stamp is null ? null : await _stamp(projectKey, ticketId);
+        // A finished answer nobody collected is the answer only for the ticket it was given about -
+        // except "merged", which changed the ticket itself and must still reach the steward. A merge
+        // still running is joined whatever: it is past every check that reads the ticket.
+        if (_merges.TryGetValue(key, out var old) && old.FinishedAt is { } at
+            && (DateTime.UtcNow - at > KeepFor
+                || (_stamp is not null && stamp != old.Stamp && old.Task.Result.Answer != "merged")))
             _merges.TryRemove(new KeyValuePair<(string, int), InFlight>(key, old));
 
         var merge = _merges.GetOrAdd(key, _ =>
         {
-            var started = new InFlight(Task.Run(() => _merge(projectKey, ticketId)), DateTime.UtcNow);
+            var started = new InFlight(Task.Run(() => _merge(projectKey, ticketId)), DateTime.UtcNow, stamp);
             started.Task.ContinueWith(_ => started.FinishedAt = DateTime.UtcNow, TaskScheduler.Default);
             return started;
         });

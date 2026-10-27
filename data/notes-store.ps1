@@ -331,7 +331,7 @@ function Get-NoteTitle {
 # The store lives in the HUB repo, never the worker's worktree: a worktree belongs to one ticket and
 # is thrown away with it, so a fact written there would be learned and lost in the same cycle.
 function Write-MemoryNote {
-    param([string]$MemoryDir, [string]$Key, [string]$Text, [string]$Stamp)
+    param([string]$MemoryDir, [string]$Key, [string]$Text, [string]$Stamp, [string]$Source = 'heartbeat-reflection')
 
     if (-not $MemoryDir) { return $false }
     try {
@@ -347,7 +347,7 @@ function Write-MemoryNote {
             "metadata:",
             "  node_type: memory",
             "  type: project",
-            "  source: heartbeat-reflection",
+            "  source: $Source",
             "  learned: $Stamp",
             "  last-confirmed: $Stamp",
             "---",
@@ -528,6 +528,45 @@ $Text
     if (-not $desc) { $desc = Get-NoteSummary -Text $Text }
     Add-IndexLine -MemoryDir $MemoryDir -Key $target -Title (Get-NoteTitle -Key $target) -Summary $desc
     return @{ Outcome = 'merged'; Key = $target }
+}
+
+# ---- A fact a steward said it learned ----------------------------------------------------------
+
+# Place one fact a steward run handed over with steward_learned. The same placement reflection
+# uses - fold it into the note that already covers it, or write a new one - but no review queue:
+# the steward said it outright, so it is first-hand by construction, and the board keeps it until
+# it lands. A key that is taken gets a number rather than overwriting what is there.
+#
+# Returns @{ Outcome = 'new' | 'merged' | 'appended' | 'none'; Key = <note key or $null> }.
+function Add-LearnedFact {
+    param([string]$MemoryDir, [string]$Key, [string]$Text, [string]$Stamp, $ReflectCmd, [string]$RepoDir)
+
+    $none = @{ Outcome = 'none'; Key = $null }
+    $Text = ("$Text" -replace "\s+", " ").Trim()
+    if (-not $MemoryDir -or -not $Text) { return $none }
+    if (-not (Test-Path $MemoryDir)) { New-Item -ItemType Directory -Path $MemoryDir -Force | Out-Null }
+
+    $candidates = @(Find-RelatedNotes -MemoryDir $MemoryDir -Text $Text)
+    if ($candidates.Count -gt 0 -and $ReflectCmd) {
+        $placement = Resolve-FactPlacement -MemoryDir $MemoryDir -Text $Text -Candidates $candidates `
+            -Stamp $Stamp -ReflectCmd $ReflectCmd -RepoDir $RepoDir
+        if ($placement.Outcome -eq 'merged' -or $placement.Outcome -eq 'appended') {
+            return @{ Outcome = $placement.Outcome; Key = $placement.Key }
+        }
+    }
+
+    $base = "$Key".Trim().ToLowerInvariant()
+    if (-not $base) { $base = ($Text.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-') }
+    if ($base.Length -gt 56) { $base = $base.Substring(0, 56).TrimEnd('-') }
+    if (-not $base) { return $none }
+    $k = $base
+    $n = 2
+    while (Test-Path (Join-Path $MemoryDir "$k.md")) { $k = "$base-$n"; $n++ }
+
+    if (Write-MemoryNote -MemoryDir $MemoryDir -Key $k -Text $Text -Stamp $Stamp -Source 'steward') {
+        return @{ Outcome = 'new'; Key = $k }
+    }
+    return $none
 }
 
 # ---- Aging ------------------------------------------------------------------------------------

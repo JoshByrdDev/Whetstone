@@ -406,7 +406,7 @@ function Resolve-Worktree {
     param(
         [string]$RepoDir, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
         [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BaseBranch, [string]$BranchPrefix,
-        [string[]]$CopyFiles, [string[]]$Setup, [string]$ReviewBranch, [bool]$MergeLocally,
+        [string[]]$CopyFiles, [string[]]$Setup, [string]$ReviewBranch, [bool]$MergeLocally, [bool]$OnBase,
         [string]$WorktreeName, [switch]$MayCreate, [switch]$NoSetup
     )
 
@@ -492,6 +492,45 @@ function Resolve-Worktree {
             Write-Log "  Review worktree at $($res.path) never finished setup - running it again"
         }
         else { Write-Log "  Prepared a detached review worktree at $($res.path)" }
+        $prepError = Initialize-Worktree -Path $res.path -RepoDir $RepoDir -CopyFiles $CopyFiles -Setup $Setup
+        if ($prepError) { return @{ ok = $false; reason = $prepError } }
+        return $res
+    }
+
+    # ---- A slice's walk-through: the base branch as it stands, checked out DETACHED ----
+    #
+    # It changes no code, so it owns no branch: QA drives the slice's story against what the base
+    # already has. Detached for the same reasons as a review - nothing to commit onto, and no clash
+    # with the base being checked out in the human's own folder.
+    if ($OnBase) {
+        $res = Invoke-WithMutex -Name "hub-$RepoDir" -TimeoutMs 900000 -Body {
+            git -C $RepoDir worktree prune *> $null
+            $hasOrigin = @(git -C $RepoDir remote 2>$null) -contains 'origin'
+            if ($hasOrigin) { git -C $RepoDir fetch origin --prune *> $null }
+            $startRef = Resolve-BaseRef -RepoDir $RepoDir -BaseBranch $BaseBranch -MergeLocally $MergeLocally
+            if (-not $startRef) { return @{ ok = $false; reason = "base branch '$BaseBranch' not found" } }
+            $sha = "$(git -C $RepoDir rev-parse --verify --quiet $startRef 2>$null)".Trim()
+            if (-not $sha) { return @{ ok = $false; reason = "could not read '$startRef'" } }
+            $wtPath = Join-Path $WorktreeRoot (Get-WorktreeDirName "walkthrough-ticket-$TicketId")
+            if (Test-Path $wtPath) {
+                $dirty = git -C $wtPath status --porcelain 2>$null
+                if ($dirty) {
+                    return @{ ok = $false; reason = "the walk-through worktree at '$wtPath' has uncommitted changes - a previous run changed files it was only supposed to test. Inspect and clean it by hand" }
+                }
+                git -C $wtPath checkout --detach $sha *> $null
+                if ($LASTEXITCODE -ne 0) { return @{ ok = $false; reason = "could not move the walk-through worktree at '$wtPath' to $sha" } }
+                return @{ ok = $true; path = $wtPath; branch = $BaseBranch; sha = $sha; created = $false }
+            }
+            if (-not (Test-Path $WorktreeRoot)) { New-Item -ItemType Directory -Path $WorktreeRoot -Force | Out-Null }
+            git -C $RepoDir worktree add --detach $wtPath $sha *> $null
+            if ($LASTEXITCODE -ne 0) { return @{ ok = $false; reason = "could not create a detached worktree of '$startRef' at '$wtPath'" } }
+            return @{ ok = $true; path = $wtPath; branch = $BaseBranch; sha = $sha; created = $true }
+        }
+        if (-not $res.ok) { return $res }
+        if (-not $res.created) {
+            $marker = Get-SetupFailedMarker -Path $res.path
+            if (-not ($marker -and (Test-Path $marker))) { return $res }
+        }
         $prepError = Initialize-Worktree -Path $res.path -RepoDir $RepoDir -CopyFiles $CopyFiles -Setup $Setup
         if ($prepError) { return @{ ok = $false; reason = $prepError } }
         return $res
@@ -1288,6 +1327,10 @@ $skill       = "$($Claim.skill)"
 $track       = "$($Claim.ticket.track)".Trim()
 if (-not $track) { $track = "Delivery" }
 $isReview    = ($track -eq "Review")
+# A slice's walk-through owns no branch either: it tests the base as it stands. Both read-only kinds
+# skip everything that writes to a branch - the leftover commit, the branch record, the hand-back.
+$isWalkthrough = [bool]$Claim.ticket.walkthrough
+$readsOnly   = $isReview -or $isWalkthrough
 # The branch under review lives on the review target, not on ticket.branch - a review ticket never
 # owns a branch. Empty for a delivery ticket.
 $reviewBranch = "$($Claim.ticket.review.sourceBranch)".Trim()
@@ -1361,7 +1404,11 @@ You are reading ``$reviewBranch`` to give its author feedback. You are not build
   found. There is no route back to implementation - the code is not ours to fix.
 "@
 } else {
-    $trackRules = ""
+    $trackRules = if ($isWalkthrough) { @"
+**This ticket is a slice's WALK-THROUGH. Your working directory is the base branch as it stands, checked out detached.**
+
+There is no change to test and no branch of this ticket's own. Drive the slice's story, written in the ticket's description, end to end against the app as the base has it, one step at a time, capturing each. Change no file and commit nothing: a step that fails is reported by blocking this ticket with the step it failed at, never fixed here.
+"@ } else { "" }
 }
 # Dashboard-owned per-project data dir (holds reflect-prompt and the review queue).
 $projectDataDir = "$($Claim.project.dataDir)"
@@ -1459,7 +1506,7 @@ if ($onHost -and $repoDir) {
         Stop-CycleEarly -Reason "Could not sync with the board host ($runHost): $($sync.reason)" `
             -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $($sync.reason). No work was attempted; the ticket goes back to the queue."
     }
-    $recordedBranch = if ($isReview) { "" } else { "$($Claim.ticket.branch)".Trim() }
+    $recordedBranch = if ($readsOnly) { "" } else { "$($Claim.ticket.branch)".Trim() }
     if ($recordedBranch) {
         $got = Get-BoardBranch -RepoDir $repoDir -Branch $recordedBranch
         if (-not $got.ok) {
@@ -1501,13 +1548,13 @@ if ($repoDir) {
         Resolve-Workspace -Members $repoMembers -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BranchPrefix $effectivePrefix `
-            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally
+            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase $isWalkthrough
     } else {
         Resolve-Worktree -RepoDir $repoDir -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BaseBranch $effectiveBase -BranchPrefix $effectivePrefix `
             -CopyFiles @($Claim.project.worktreeCopyFiles) -Setup @($Claim.project.worktreeSetup) `
-            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally
+            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase $isWalkthrough
     }
 
     if (-not $wt.ok) {
@@ -1534,7 +1581,11 @@ if ($repoDir) {
     }
     if ($wt.path) {
         $workDir = $wt.path
-        if ($isReview) {
+        if ($isWalkthrough) {
+            Write-Log "  Walk-through worktree: $workDir (detached at $($wt.sha) on '$($wt.branch)')"
+            # Not Set-TicketBranch: the base is not this ticket's branch, and a merge must never see it as one.
+        }
+        elseif ($isReview) {
             Write-Log "  Review worktree: $workDir (detached at $($wt.sha) on '$($wt.branch)')"
             # Deliberately NOT Set-TicketBranch. ticket.branch means "the branch this ticket owns",
             # and a review ticket owns none - the branch it reads is recorded on its review target,
@@ -2010,7 +2061,7 @@ elseif (-not $resultReceived) {
 # detached head off their work, from an agent that was told in three places not to change anything.
 # So a dirty tree here is not a miss to paper over, it is the signal that the one rule of this phase
 # was broken - reported on the ticket and left exactly where it is for a person to look at.
-if ($repoDir -and $isReview) {
+if ($repoDir -and $readsOnly) {
     $dirty = @(git -C $workDir status --porcelain 2>$null | Where-Object { $_ })
     if ($dirty.Count -gt 0) {
         $names = ($dirty | Select-Object -First 10 | ForEach-Object { "- $($_.Trim())" }) -join "`n"
@@ -2124,7 +2175,7 @@ function Invoke-HandOffNets {
 # Commit anything the worker forgot, loudly, so the ticket keeps moving and the miss is visible
 # on the ticket rather than showing up as a confusing workspace failure one phase later.
 $script:handOffSentBack = $false
-if ($repoDir -and -not $isReview) {
+if ($repoDir -and -not $readsOnly) {
     if ($multiRepo) {
         foreach ($m in @($workMembers | Where-Object { -not $_.readOnly })) {
             Invoke-HandOffNets -WorkDir $m.path -RepoDir $m.hub -EffectiveBase $m.baseBranch -Label $m.dir -Member $m
@@ -2154,7 +2205,7 @@ if ($qaMirror) {
 # ticket before it moves anything (see the branch accept route). A hand-back that fails blocks the
 # ticket, because the work now exists on one machine only and the next run, on either, would not
 # start from it.
-if ($onHost -and $repoDir -and -not $isReview -and $wt -and $wt.branch) {
+if ($onHost -and $repoDir -and -not $readsOnly -and $wt -and $wt.branch) {
     $tip = "$(git -C $workDir rev-parse --verify --quiet HEAD 2>$null)".Trim()
     if ($tip -and $tip -eq $boardStartSha) {
         Write-Log "  Nothing new on '$($wt.branch)' - nothing to hand back."

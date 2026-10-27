@@ -453,6 +453,9 @@ export interface TicketDetail {
   skipClassroomAnalysis?: boolean;
   // The analysis the current refinement pass was handed, and what it ruled on each finding.
   independentReview?: IndependentReview | null;
+  // The unit of a plan this ticket belongs to and the outcomes it carries. Set by a steward when it
+  // files the ticket, or by the owner from the drawer. Null when it is in no plan.
+  plan?: { key: string; unit: number; outcomes: string[] } | null;
 }
 
 /** One thing an independent Classroom analysis raised, and refinement's ruling on it. */

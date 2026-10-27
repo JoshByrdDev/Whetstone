@@ -237,7 +237,7 @@ function Resolve-Workspace {
     param(
         [object[]]$Members, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
         [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix,
-        [string]$ReviewBranch, [bool]$MergeLocally,
+        [string]$ReviewBranch, [bool]$MergeLocally, [bool]$OnBase,
         [double]$SetupTimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 })
     )
 
@@ -250,7 +250,7 @@ function Resolve-Workspace {
         $wt = Resolve-Worktree -RepoDir $m.hub -WorktreeRoot $WorktreeRoot -Skill $Skill -TicketId $TicketId `
             -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken -BaseBranch $m.baseBranch `
             -BranchPrefix $BranchPrefix -CopyFiles @($m.copy) -Setup @($m.setup) -ReviewBranch $ReviewBranch `
-            -MergeLocally $MergeLocally
+            -MergeLocally $MergeLocally -OnBase $OnBase
         if ($wt.ok -and $wt.path) {
             $one = $m.Clone(); $one.path = $wt.path
             $wt.members = @($one)
@@ -261,6 +261,7 @@ function Resolve-Workspace {
     # Refused upstream as well (RepoLayout, the claim, ticket creation); here so this can never be
     # the code that finds out.
     if ($ReviewBranch) { return @{ ok = $false; reason = "a project of several repos cannot run the Review track yet (docs/multi-repo-plan.md)" } }
+    if ($OnBase) { return @{ ok = $false; reason = "a project of several repos cannot run a slice's walk-through yet (docs/multi-repo-plan.md)" } }
     if ($MergeLocally) { return @{ ok = $false; reason = "a project of several repos delivers by pull request; mergeInsteadOfPr is refused for it" } }
     if (-not $WorktreeRoot) { return @{ ok = $false; reason = "no worktree root configured for this project and none could be derived from its path" } }
 

@@ -24,27 +24,39 @@ public record StewardTicketDraft(
     IReadOnlyList<int>? DependsOn = null, string? Priority = null, bool CodeReviewOnly = false);
 
 /// <summary>What a steward wants to put to the owner.</summary>
+/// <param name="Touches">The register's decisions the question bears on; empty when none does. Required.</param>
+/// <param name="Changes">For each option, by its label, which of <paramref name="Touches"/> picking it would change.</param>
 public record StewardAsk(
     string Key, string Question, string Why, IReadOnlyList<BlockOption>? Options, string HeldUp, int? TicketId = null,
-    int? Unit = null, IReadOnlyList<int>? Decisions = null);
+    int? Unit = null, IReadOnlyList<int>? Decisions = null, IReadOnlyList<int>? Touches = null,
+    IReadOnlyDictionary<string, IReadOnlyList<int>>? Changes = null, IReadOnlyList<int>? FollowUps = null,
+    StewardIdeaProposal? Idea = null, StewardStoryChange? Story = null);
+
+/// <summary>The sentence of a slice's story an answer would change, and its rewording under each option, by label.</summary>
+public record StewardStoryChange(string Sentence, IReadOnlyDictionary<string, string>? Rewordings);
 
 /// <summary>A steward's record kept elsewhere, to be taken in once. See <see cref="StewardService.ImportAsync"/>.</summary>
 public record StewardImport(
     IReadOnlyList<StewardImportQuestion>? Questions = null, IReadOnlyList<StewardImportEntry>? Entries = null,
-    IReadOnlyList<StewardImportOutcome>? Outcomes = null, IReadOnlyList<StewardImportTicket>? Tickets = null,
-    string? Memo = null);
+    IReadOnlyList<StewardImportOutcome>? Outcomes = null, IReadOnlyList<StewardImportTicket>? Tickets = null);
 
 /// <summary>A question as it was asked; with <paramref name="Answer"/> when the owner has answered it.</summary>
 public record StewardImportQuestion(string Key, string Question, string? Why = null,
     IReadOnlyList<BlockOption>? Options = null, string? HeldUp = null, DateTime? AskedAt = null,
     string? Answer = null, DateTime? AnsweredAt = null);
 
-/// <param name="Kind">Call, BeforeRelease or OwnerSaid.</param>
-public record StewardImportEntry(string Kind, string Text, int? TicketId = null, DateTime? At = null);
+/// <param name="Kind">Any record kind: Call, BeforeRelease, OwnerSaid, TicketNote, Ruling or Learned.</param>
+/// <param name="Basis">A ruling's: what it rests on.</param>
+/// <param name="Key">A learned fact's suggested note key.</param>
+public record StewardImportEntry(string Kind, string Text, int? TicketId = null, DateTime? At = null,
+    string? Basis = null, string? Key = null);
 
 public record StewardImportOutcome(int Unit, string Outcome, string State, bool MoreToFile = false, string? Note = null);
 
 public record StewardImportTicket(int Id, int Unit, IReadOnlyList<string> Outcomes, bool FiledBySteward = true);
+
+/// <summary>One idea a new plan starts with: its title, and its paragraph.</summary>
+public record StewardNewIdea(string Title, string? Paragraph);
 
 /// <summary>
 /// A project's steward: everything it may do, and every limit on it.
@@ -68,7 +80,7 @@ public record StewardImportTicket(int Id, int Unit, IReadOnlyList<string> Outcom
 /// </list>
 /// </para>
 /// </summary>
-public class StewardService
+public partial class StewardService
 {
     /// <summary>A run that died holding the lease stops the next one, not all of them.</summary>
     private static readonly TimeSpan RunLeaseTtl = TimeSpan.FromMinutes(90);
@@ -214,34 +226,87 @@ public class StewardService
 
         var s = await StewardDue.StateAsync(_db, projectKey);
         var why = s.DueReason;
-        s.DueReason = null;
-        s.DueSince = null;
+        // Handed over, not yet dealt with: the reasons, answers and instructions below are only
+        // marked done by steward_end. A run that dies part-way leaves them for the next one.
+        s.RunDueReason = why;
         s.LastRunStartedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
 
-        // Every answer the owner has given is in front of this run, so none of them is a reason
-        // for another.
-        var fresh = await _db.StewardQuestions
+        var fresh = await _db.StewardQuestions.AsNoTracking()
             .Where(q => q.ProjectKey == projectKey && q.Answer != null && q.AnswerDeliveredAt == null).ToListAsync(ct);
-        foreach (var q in fresh) q.AnswerDeliveredAt = DateTime.UtcNow;
-        var said = await _db.StewardEntries
+        var said = await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid && e.DeliveredAt == null)
             .OrderBy(e => e.At).ToListAsync(ct);
-        foreach (var e in said) e.DeliveredAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
+        var reversed = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt != null && e.DeliveredAt == null)
+            .OrderBy(e => e.ReversedAt).ToListAsync(ct);
+        await EnsureRegisterAsync(cfg!, ct);
+        var changed = await UndeliveredAsync(projectKey, ct);
+        var instructed = await _db.StewardInstructions.AsNoTracking()
+            .Where(i => i.ProjectKey == projectKey && i.ClosedAt == null && i.DeliveredAt == null).OrderBy(i => i.At).ToListAsync(ct);
 
         SyncFromResult? sync = null;
         if (cfg!.Steward.SyncFrom.Length > 0)
             sync = await _git.SyncFromAsync(projectKey, cfg.Steward.SyncFrom, cfg.StewardMode == StewardMode.Propose, ct);
 
+        var (still, gone) = await FreshReasonsAsync(projectKey, why, ct);
+        var walkthroughs = await WalkthroughsAsync(cfg, ct);
+
         return new StewardReply("started", null, new
         {
             mode = cfg.StewardMode.ToString().ToLowerInvariant(),
-            because = why ?? "nothing in particular: a look at whether anything is left to file",
+            // Why this run was owed, checked against the board as it is now: a ticket that was
+            // blocked when the reason was written may have been answered since.
+            because = still.Count > 0 ? string.Join("; ", still) : "nothing in particular: a look at whether anything is left to file",
+            noLongerSo = gone.Count > 0 ? gone : null,
             newAnswers = fresh.Select(q => new { q.Key, q.Question, q.Answer }),
-            newInstructions = said.Select(e => e.Text),
+            newInstructions = said.Select(e => e.Text)
+                .Concat(instructed.Select(i => $"[instruction {i.Id}] {i.Text} - until {i.Until}. Close it with steward_close_instruction when that comes.")),
+            // Rulings of yours the owner has reversed since the last run that ended properly: stop
+            // applying each, and apply what the owner said instead. Each is a decision made.
+            reversedRulings = reversed.Select(e => new { e.Id, ruling = e.Text, ownerSaid = e.ReversedBecause }),
+            // The owner's own changes to the register since the last run: a decision recorded,
+            // withdrawn, or now replacing another. Apply what is in force; stop applying what is not.
+            changedDecisions = changed.Select(d => new
+            {
+                number = d.Number, rule = d.Rule,
+                withdrawn = d.WithdrawnAt is null ? null : d.WithdrawnBecause,
+                replaces = d.Replaces.Count == 0 ? null : d.Replaces.Select(r => new { number = r.Number, why = r.Why }),
+            }),
             sync,
+            // The slice's decisions in force, provisional ones coming due, rulings reading a decision
+            // that no longer holds, open follow-ups and instructions.
+            briefing = await BriefingAsync(cfg, ct),
+            // Walk-throughs the board closed (passed: Z1 done) or filed (every other outcome done).
+            walkthroughs,
             status = (await StatusAsync(projectKey, ct)).Data,
         });
+    }
+
+    private static readonly Regex TicketReason = new(@"^#(\d+) is (ready for review|blocked)$");
+
+    /// <summary>
+    /// The reasons a run is owed, split into those still true and those the board has moved past.
+    /// Only a reason about where a ticket stands can go stale; every other reason (an answer, an
+    /// instruction, a run that did not finish) is news until a run has dealt with it.
+    /// </summary>
+    private async Task<(List<string> Still, List<string> Gone)> FreshReasonsAsync(string projectKey, string? why, CancellationToken ct)
+    {
+        var still = new List<string>();
+        var gone = new List<string>();
+        var reasons = (why ?? "").Split("; ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var r in reasons)
+        {
+            var m = TicketReason.Match(r);
+            if (!m.Success) { still.Add(r); continue; }
+            var id = int.Parse(m.Groups[1].Value);
+            var phase = await _db.Tickets.AsNoTracking().Where(t => t.Id == id && t.ProjectKey == projectKey)
+                .Select(t => (TicketPhase?)t.Phase).FirstOrDefaultAsync(ct);
+            var want = m.Groups[2].Value == "blocked" ? TicketPhase.Blocked : TicketPhase.NeedsReview;
+            if (phase == want) still.Add(r);
+            else gone.Add($"{r} (now {phase?.ToString() ?? "gone"})");
+        }
+        return (still, gone);
     }
 
     /// <summary>
@@ -259,8 +324,32 @@ public class StewardService
         var exported = await ExportDecisionsAsync(cfg!, ct);
 
         var s = await StewardDue.StateAsync(_db, projectKey);
+        // What this run was handed at its start is dealt with now, and only now. Anything that
+        // arrived while it ran (an answer, a ticket at review) is still news for the next.
+        if (s.LastRunStartedAt is { } began)
+        {
+            var now = DateTime.UtcNow;
+            foreach (var q in await _db.StewardQuestions.Where(q => q.ProjectKey == projectKey && q.Answer != null
+                         && q.AnswerDeliveredAt == null && q.AnsweredAt <= began).ToListAsync(ct))
+                q.AnswerDeliveredAt = now;
+            foreach (var e in await _db.StewardEntries.Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid
+                         && e.DeliveredAt == null && e.At <= began).ToListAsync(ct))
+                e.DeliveredAt = now;
+            foreach (var e in await _db.StewardEntries.Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling
+                         && e.ReversedAt != null && e.DeliveredAt == null && e.ReversedAt <= began).ToListAsync(ct))
+                e.DeliveredAt = now;
+            await DeliveredAsync(projectKey, began, ct);
+            foreach (var i in await _db.StewardInstructions.Where(i => i.ProjectKey == projectKey && i.DeliveredAt == null && i.At <= began).ToListAsync(ct))
+                i.DeliveredAt = now;
+        }
+        StewardDue.Settle(s);
         s.LastRunEndedAt = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(summary)) s.LastRunSummary = summary.Trim();
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Run,
+            Text = string.IsNullOrWhiteSpace(summary) ? "Ended without saying what it did." : summary.Trim(),
+        });
         // A run that only proposed changed nothing, so it has not earned the board a rest.
         s.RestingAtSha = nothingToFile && cfg!.StewardMode != StewardMode.Propose
             ? await _git.BaseHeadAsync(projectKey, ct) : null;
@@ -297,39 +386,34 @@ public class StewardService
             var s = await StewardDue.StateAsync(_db, projectKey);
             s.LastRunEndedAt = DateTime.UtcNow;
             s.RestingAtSha = null;
+            // What it was handed is still due (begin never cleared it), and the next run is told
+            // this one stopped part-way, so it checks what was left half done. The gap between runs
+            // still holds, so a run that dies on every start is not restarted in a loop.
+            s.RunDueReason = null;
+            await StewardDue.MarkAsync(_db, projectKey, "the last run did not finish");
+            _db.StewardEntries.Add(new StewardEntry
+            {
+                ProjectKey = projectKey, Kind = StewardEntryKind.Run, Text = $"Did not finish: {reason}.",
+            });
             await _db.SaveChangesAsync();
         }
         return released;
     }
 
     /// <summary>
-    /// Write the owner's decisions out to the project's repo, when it names a file for them.
+    /// Write the register of decisions out to the project's repo, when it names a file for them.
     /// Best-effort by design: the hub is a person's checkout, and when it is busy or dirty this
-    /// says so and leaves it - the next answer, or the end of the next run, writes the whole file
-    /// again, so nothing is lost by skipping once.
+    /// says so and leaves it - the next change to the register, or the end of the next run, writes
+    /// the whole file again, so nothing is lost by skipping once.
     /// </summary>
     private async Task<string?> ExportDecisionsAsync(ProjectConfig cfg, CancellationToken ct)
     {
         var file = cfg.Steward.DecisionsFile;
         if (file.Length == 0 || cfg.StewardMode is StewardMode.Off or StewardMode.Propose) return null;
+        await EnsureRegisterAsync(cfg, ct);
+        if (await RegisterTextAsync(cfg, ct) is not { } text) return null;
 
-        var answered = await _db.StewardQuestions.AsNoTracking()
-            .Where(q => q.ProjectKey == cfg.Name && q.Answer != null).ToListAsync(ct);
-        var said = await _db.StewardEntries.AsNoTracking()
-            .Where(e => e.ProjectKey == cfg.Name && e.Kind == StewardEntryKind.OwnerSaid).ToListAsync(ct);
-        if (answered.Count == 0 && said.Count == 0) return null;
-
-        var lines = answered.Select(q => (At: q.AnsweredAt ?? q.AskedAt,
-                Text: $"- {(q.AnsweredAt ?? q.AskedAt).ToLocalTime():yyyy-MM-dd}, **{q.Key}**: {q.Question} {q.Answer}"))
-            .Concat(said.Select(e => (e.At, Text: $"- {e.At.ToLocalTime():yyyy-MM-dd}: {e.Text.Replace("\n", " ")}")))
-            .OrderBy(x => x.At).Select(x => x.Text);
-        var text = "# Decisions\n\n"
-            + "What this project's owner has decided through its steward: the answers to its questions, and standing "
-            + "instructions, oldest first. Written out by the ticket board from its own record each time one is added; "
-            + "edits made here are overwritten.\n\n"
-            + string.Join("\n\n", lines) + "\n";
-
-        var (sha, unchanged, refusal) = await _git.CommitFileAsync(cfg.Name, file, text, "The owner's decisions, as recorded on the board", ct);
+        var (sha, unchanged, refusal) = await _git.CommitFileAsync(cfg.Name, file, text, "The owner's decisions, written out from the board's register", ct);
         return refusal is not null ? $"not written to {file}: {refusal}" : unchanged ? null : $"written to {file} at {sha}";
     }
 
@@ -358,7 +442,7 @@ public class StewardService
     /// <summary>
     /// The board as a steward needs it: every open ticket and what it waits on, the limits and
     /// how much of each is used, the plan and how far it is, what is waiting on the owner, and the
-    /// steward's own memo to itself.
+    /// steward's own notes, rulings and recent runs.
     /// </summary>
     public async Task<StewardReply> StatusAsync(string projectKey, CancellationToken ct = default)
     {
@@ -398,9 +482,30 @@ public class StewardService
         // Only this plan's tickets count toward it: the last plan's unit 1 is not this one's.
         var mine = all.Where(t => (t.PlanKey ?? "") == key).ToList();
         var current = StewardProgress.Current(plan, states);
-        var memo = s?.Memo ?? "";
+        var recentRuns = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Run)
+            .OrderByDescending(e => e.At).ThenByDescending(e => e.Id).Take(3).ToListAsync(ct);
+        var byId = all.ToDictionary(t => t.Id);
+        // Every open ticket note, by ticket - Done tickets included, since what is left to do after
+        // a merge is most of what these say. A note whose ticket is gone has nothing to act on.
+        var ticketNotes = (await OpenNotesAsync(projectKey, null, ct))
+            .Where(n => n.TicketId is { } id && byId.ContainsKey(id))
+            .GroupBy(n => n.TicketId!.Value)
+            .Select(g => new
+            {
+                ticket = g.Key,
+                phase = byId[g.Key].Phase.ToString(),
+                title = byId[g.Key].Title,
+                notes = g.Select(n => new { n.Id, n.Text, n.At }),
+            }).ToList();
         var waiting = await _db.StewardQuestions.AsNoTracking()
             .Where(q => q.ProjectKey == projectKey && q.Answer == null).OrderBy(q => q.AskedAt).ToListAsync(ct);
+        var rulings = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt == null)
+            .OrderBy(e => e.At).ToListAsync(ct);
+        var learned = await UnplacedAsync(projectKey, ct);
+        var flags = await RulingFlagsAsync(projectKey, ct);
+        var instructions = await OpenInstructionsAsync(projectKey, ct);
 
         return new StewardReply("status", null, new
         {
@@ -416,53 +521,48 @@ public class StewardService
                 ? (object)"This project has no plan configured (steward.plan.units), so there is nothing to file tickets from."
                 : plan.Select(u => new { unit = u.Number, u.File, u.Agreed, u.Draft, outcomes = u.Outcomes.Count }),
             progress = current is null ? null : StewardProgress.For(current, states, mine),
-            outcomes = current is null ? null : current.Outcomes.Select(o =>
-            {
-                var st = states.FirstOrDefault(x => x.Unit == current.Number && x.Outcome == o);
-                return new
+            // Every outcome not yet Done, in every agreed unit - not only the earliest unit with one
+            // left. One outcome waiting on the owner for weeks would otherwise hide every later
+            // unit's notes from the run, and the notes are where what is left to file now lives.
+            outcomes = plan.Where(u => u.Agreed).SelectMany(u => u.Outcomes.Select(o => (u, o)))
+                .Select(x => (x.u, x.o, st: states.FirstOrDefault(s => s.Unit == x.u.Number && s.Outcome == x.o)))
+                .Where(x => x.st?.State != StewardOutcomeState.Done)
+                .Select(x => new
                 {
-                    outcome = o,
-                    state = (st?.State ?? StewardOutcomeState.NotStarted).ToString(),
-                    moreToFile = st?.MoreToFile ?? false,
-                    note = st?.Note,
-                    tickets = mine.Where(t => t.PlanUnit == current.Number && StewardProgress.OutcomesOf(t).Contains(o))
+                    unit = x.u.Number,
+                    outcome = x.o,
+                    state = (x.st?.State ?? StewardOutcomeState.NotStarted).ToString(),
+                    moreToFile = x.st?.MoreToFile ?? false,
+                    note = x.st?.Note,
+                    tickets = mine.Where(t => t.PlanUnit == x.u.Number && StewardProgress.OutcomesOf(t).Contains(x.o))
                         .Select(t => $"#{t.Id} {t.Phase}"),
-                };
-            }),
+                }),
             waitingOnOwner = waiting.Select(q => new { q.Key, q.Question, q.HeldUp, asked = q.AskedAt }),
             done = all.Count - open.Count,
             tickets = rows,
-            memo,
-            memoLength = $"{memo.Length}/{cfg.Steward.MemoMaxChars}",
-            memoTooLong = memo.Length > cfg.Steward.MemoMaxChars
-                ? "Your memo is over its limit, and every run reads all of it. Cut it now and save it again." : null,
+            // What earlier runs meant to do, by ticket. Each stays until closed with steward_done_with.
+            ticketNotes,
+            // Your standing rulings, in force until the owner reverses one. Apply them as you would
+            // a decision already made - they are readings of decisions, never new ones.
+            rulings = rulings.Select(e => new
+            {
+                e.Id, ruling = e.Text, restsOn = e.Basis, reads = Numbers(e.Reads), ticket = e.TicketId, keptByOwner = e.HandledAt != null,
+                // A ruling reading a decision that no longer holds: apply it no further until the owner says.
+                flagged = flags.TryGetValue(e.Id, out var f) ? f : null,
+            }),
+            // What the owner told you to do for a while, each with its end. Close one with
+            // steward_close_instruction when its end has come.
+            instructions = instructions.Select(i => new { i.Id, i.Text, i.Until }),
+            // Facts you said with steward_learned that are not in the notes store yet: they go in
+            // after this run. Until then the store's index does not list them, so they are here.
+            learnedPending = learned.Select(e => e.Text),
+            // The last three runs, newest first: what each did, or why it stopped.
+            recentRuns = recentRuns.Select(e => new { e.At, e.Text }),
         });
     }
 
-    /// <summary>
-    /// Everything the owner has decided through the steward: the answers to its questions and
-    /// their standing instructions, newest last. With <paramref name="query"/>, only those that
-    /// mention it - the full list grows for as long as the project runs.
-    /// </summary>
-    public async Task<StewardReply> DecisionsAsync(string projectKey, string? query, CancellationToken ct = default)
-    {
-        var cfg = Config(projectKey);
-        if (Off(cfg, projectKey) is { } off) return off;
-
-        var answered = await _db.StewardQuestions.AsNoTracking()
-            .Where(q => q.ProjectKey == projectKey && q.Answer != null).ToListAsync(ct);
-        var said = await _db.StewardEntries.AsNoTracking()
-            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.OwnerSaid).ToListAsync(ct);
-
-        var lines = answered.Select(q => (At: q.AnsweredAt ?? q.AskedAt, Key: (string?)q.Key, Text: $"{q.Question} -> {q.Answer}"))
-            .Concat(said.Select(e => (e.At, Key: (string?)null, e.Text)))
-            .OrderBy(x => x.At).ToList();
-        if (!string.IsNullOrWhiteSpace(query))
-            lines = lines.Where(x => $"{x.Key} {x.Text}".Contains(query.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
-
-        return new StewardReply("decisions", null,
-            lines.Select(x => new { on = x.At.ToLocalTime().ToString("yyyy-MM-dd"), key = x.Key, decided = x.Text }));
-    }
+    /// <summary>One option a question offered, as <see cref="DecisionsAsync"/> hands it back.</summary>
+    private sealed record Offered(string Label, string? Detail, bool Picked, bool StewardsPick);
 
     // ---- finished tickets ----------------------------------------------------------
 
@@ -497,8 +597,24 @@ public class StewardService
     }
 
     /// <summary>A finished ticket's record, what it changed, and what about it a merge has to weigh.</summary>
-    public async Task<StewardReply> ReviewAsync(string projectKey, int ticketId, CancellationToken ct = default)
+    /// <summary>
+    /// The most of a review sent in one answer. Past it, an MCP client saves the answer to a file the
+    /// steward has no way to read whole - so a long review is sent as its head and its flags, and the
+    /// rest by part.
+    /// </summary>
+    public const int ReviewMaxChars = 24000;
+
+    /// <summary>The parts a long review is read in.</summary>
+    public static readonly string[] ReviewParts = { "record", "checks", "findings", "flags" };
+
+    public async Task<StewardReply> ReviewAsync(string projectKey, int ticketId, CancellationToken ct = default) =>
+        await ReviewAsync(projectKey, ticketId, null, ct);
+
+    public async Task<StewardReply> ReviewAsync(string projectKey, int ticketId, string? part, CancellationToken ct = default)
     {
+        part = part?.Trim().ToLowerInvariant();
+        if (!string.IsNullOrEmpty(part) && !ReviewParts.Contains(part))
+            return Refuse("bad-request", $"A review's parts are {string.Join(", ", ReviewParts)}.");
         var cfg = Config(projectKey);
         if (Off(cfg, projectKey) is { } off) return off;
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
@@ -508,38 +624,85 @@ public class StewardService
         var lastBackward = await _tickets.LastBackwardAtAsync(t.Id);
         var said = t.Comments.Where(c => c.Author != AuthorKind.System).OrderBy(c => c.CreatedAt).ToList();
 
-        return new StewardReply("review", null, new
+        var notes = await OpenNotesAsync(projectKey, t.Id, ct);
+        var qa = t.QaItems.OrderBy(q => q.Order).ToList();
+        var findings = t.GateFindings.OrderBy(f => f.Order).ToList();
+
+        // Every answer opens with this: which ticket, and what an earlier run meant to do about it -
+        // first, because it is often why this review matters. Close each with steward_done_with.
+        var reply = new Dictionary<string, object?>
         {
-            id = t.Id,
-            phase = t.Phase.ToString(),
-            title = t.Title,
-            description = t.Description,
-            summary = t.ImplementationSummary,
-            workItems = t.WorkItems.OrderBy(w => w.Order).Select(w => new { w.Done, scope = w.Scope.ToString(), w.Text }),
-            qaItems = t.QaItems.OrderBy(q => q.Order).Select(q => new
+            ["id"] = t.Id,
+            ["phase"] = t.Phase.ToString(),
+            ["title"] = t.Title,
+            ["yourNotes"] = notes.Select(n => new { n.Id, n.Text, n.At }),
+        };
+        var parts = new Dictionary<string, Dictionary<string, object?>>
+        {
+            ["record"] = new()
             {
-                status = q.Status.ToString(),
-                verified = HandoffRequirements.IsVerified(q, lastBackward),
-                byInspection = q.PassedByInspection,
-                q.Text,
-                q.Note,
-            }),
-            codeReviewOnly = t.SkipQaTesting,
-            qaShots = t.QaShots.Count,
-            independentReview = t.GateFindings.OrderBy(f => f.Order)
-                .Select(f => new { f.Title, ruling = f.Ruling?.ToString(), why = f.RulingNote }),
-            sentBackBefore = await SendBacksAsync(t.Id),
-            changed = change is null ? (object)"this ticket has no branch" : change,
-            flags = change is null ? new List<StewardFlag>() : await FlagsAsync(cfg!, t, change, ct),
-            // Owner flags the owner has cleared for this change as it stands: merge does not stop on these.
-            clearedByOwner = change is null ? new List<string>() : (await ClearedAsync(projectKey, t.Id, change, ct)).ToList(),
-            // A worker never edits the owner's own documents: the line it would have written is in
-            // its comment under this heading, wherever in the record that comment now sits.
-            forTheOwnersDocs = said.Where(c => Regex.IsMatch(c.Body, @"for the owner['’]s docs", RegexOptions.IgnoreCase))
-                .Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
-            // The last things the phases said, newest last: the refinement hand-off is where open questions sit.
-            comments = said.TakeLast(4).Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
-        });
+                ["description"] = t.Description,
+                ["summary"] = t.ImplementationSummary,
+                ["workItems"] = t.WorkItems.OrderBy(w => w.Order).Select(w => new { w.Done, scope = w.Scope.ToString(), w.Text }),
+                // A worker never edits the owner's own documents: the line it would have written is in
+                // its comment under this heading, wherever in the record that comment now sits.
+                ["forTheOwnersDocs"] = said.Where(c => Regex.IsMatch(c.Body, @"for the owner['’]s docs", RegexOptions.IgnoreCase))
+                    .Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
+                // The last things the phases said, newest last: the refinement hand-off is where open questions sit.
+                ["comments"] = said.TakeLast(4).Select(c => new { by = c.Author.ToString(), @in = c.Phase?.ToString(), c.Body }),
+            },
+            ["checks"] = new()
+            {
+                ["codeReviewOnly"] = t.SkipQaTesting,
+                ["qaShots"] = t.QaShots.Count,
+                ["qaItems"] = qa.Select(q => new
+                {
+                    status = q.Status.ToString(),
+                    verified = HandoffRequirements.IsVerified(q, lastBackward),
+                    byInspection = q.PassedByInspection,
+                    q.Text,
+                    q.Note,
+                }),
+            },
+            ["findings"] = new()
+            {
+                ["independentReview"] = findings.Select(f => new { f.Title, ruling = f.Ruling?.ToString(), why = f.RulingNote }),
+            },
+            ["flags"] = new()
+            {
+                ["sentBackBefore"] = await SendBacksAsync(t.Id),
+                ["changed"] = change is null ? "this ticket has no branch" : change,
+                ["flags"] = change is null ? new List<StewardFlag>() : await FlagsAsync(cfg!, t, change, ct),
+                // Owner flags the owner has cleared for this change as it stands: merge does not stop on these.
+                ["clearedByOwner"] = change is null ? new List<string>() : (await ClearedAsync(projectKey, t.Id, change, ct)).ToList(),
+            },
+        };
+
+        if (!string.IsNullOrEmpty(part))
+        {
+            foreach (var kv in parts[part]) reply[kv.Key] = kv.Value;
+            return new StewardReply("review", null, reply);
+        }
+
+        var whole = new Dictionary<string, object?>(reply);
+        foreach (var p in parts.Values) foreach (var kv in p) whole[kv.Key] = kv.Value;
+        if (System.Text.Json.JsonSerializer.Serialize(whole).Length <= ReviewMaxChars)
+            return new StewardReply("review", null, whole);
+
+        // Too long to send whole. The flags are what a merge stops on, so they always come; the rest
+        // is counted, so the steward knows what it is asking for.
+        foreach (var kv in parts["flags"]) reply[kv.Key] = kv.Value;
+        reply["checksAtAGlance"] = new
+        {
+            items = qa.Count,
+            passedAndCurrent = qa.Count(q => q.Status == QaStatus.Passed && HandoffRequirements.IsVerified(q, lastBackward)),
+            byInspection = qa.Count(q => q.PassedByInspection),
+        };
+        reply["findingsAtAGlance"] = new { findings = findings.Count, unruled = findings.Count(f => f.Ruling is null) };
+        reply["parts"] = ReviewParts.ToDictionary(p => p, p => System.Text.Json.JsonSerializer.Serialize(parts[p]).Length);
+        return new StewardReply("review",
+            "Too long to send whole, so this is its head and its flags. Ask again with part = record, checks or findings for the "
+            + "rest; 'parts' gives each one's size in characters.", reply);
     }
 
     /// <summary>The ticket's change itself. With <paramref name="path"/>, one file of it.</summary>
@@ -579,11 +742,14 @@ public class StewardService
         if (t is null) return no!;
         if (t.Track != TicketTrack.Delivery) return Refuse("not-ready", "Only a delivery ticket is merged.");
         if (t.Phase != TicketPhase.NeedsReview)
-            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is merged.");
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is merged.{await LeftReviewAsync(t)}");
 
         var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
         if (change is null || change.Ahead == 0)
-            return Refuse("nothing-to-merge", $"Ticket {ticketId} has no commits that the base lacks.");
+            return Refuse("nothing-to-merge", $"Ticket {ticketId} has no commits that the base lacks: there is nothing to merge. "
+                + "If its review holds because what it asked for is already true on the base, close it with steward_close_unchanged, "
+                + "saying why, then set its outcomes and note anything for release as after a merge. If the work should be "
+                + "there and is not, send it back to NeedsImplementation saying so.");
 
         var flags = await FlagsAsync(cfg, t, change, ct);
         var cleared = await ClearedAsync(projectKey, t.Id, change, ct);
@@ -618,8 +784,9 @@ public class StewardService
                         new { check = c.Name, output = run.Output });
                 return Refuse("check-failed",
                     run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result. Send it back to NeedsImplementation with this."
-                                 : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this.",
-                    new { check = c.Name, output = run.Output });
+                                 : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this: "
+                                   + "'failing' is every line in the whole output that names a failure, 'output' is how it ended.",
+                    new { check = c.Name, failing = run.Failures ?? Array.Empty<string>(), output = run.Output });
             }
         }
 
@@ -644,6 +811,69 @@ public class StewardService
         return new StewardReply("merged", null, new { commit = sha, closed = true });
     }
 
+    /// <summary>
+    /// Why a ticket is no longer at NeedsReview, from the transition that took it away - so a merge
+    /// or a send-back refused as not-ready says where it went and who moved it, not only that it moved.
+    /// Empty when it never was at review.
+    /// </summary>
+    private async Task<string> LeftReviewAsync(Ticket t)
+    {
+        var left = await _db.PhaseTransitions.AsNoTracking()
+            .Where(p => p.TicketId == t.Id && p.From == TicketPhase.NeedsReview)
+            .OrderByDescending(p => p.At).ThenByDescending(p => p.Id).FirstOrDefaultAsync();
+        if (left is null) return "";
+        var mins = (int)(DateTime.UtcNow - left.At).TotalMinutes;
+        var when = mins < 2 ? "just now" : mins < 120 ? $"{mins} minutes ago" : $"{mins / 60} hours ago";
+        var why = string.IsNullOrWhiteSpace(left.Reason) ? "" : $": {Head(left.Reason.Trim(), 300)}";
+        return $" It left NeedsReview for {left.To} {when}, moved by {left.Actor.ToString().ToLowerInvariant()}{why}."
+            + " Nothing for you to do about it now: it comes back to review by itself.";
+    }
+
+    /// <summary>
+    /// Close a ticket at review that has nothing to merge, because what it asked for is already true
+    /// on the base. Only in full mode, which is the mode that closes tickets; only at NeedsReview;
+    /// only when the branch really has no commit the base lacks. The reason goes on the record.
+    /// </summary>
+    public async Task<StewardReply> CloseUnchangedAsync(string projectKey, int ticketId, string why, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        if (cfg.StewardMode == StewardMode.Manage)
+            return Refuse("not-in-this-mode", "Closing a ticket is the owner's in this mode. Ask them, with the ticket's id.");
+        why = why?.Trim() ?? "";
+        if (why.Length == 0) return Refuse("bad-request", "Say why there is nothing to merge: what on the base already does what it asked.");
+        var (t, no) = await TicketOfAsync(projectKey, ticketId);
+        if (t is null) return no!;
+        if (t.Track != TicketTrack.Delivery) return Refuse("not-ready", "Only a delivery ticket is closed this way.");
+        if (t.Phase != TicketPhase.NeedsReview)
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is closed.{await LeftReviewAsync(t)}");
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        if (change is not null && change.Ahead > 0)
+            return Refuse("has-commits", $"Ticket {ticketId} has {change.Ahead} commit(s) the base lacks. It is merged, not closed.");
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"close ticket {ticketId} unchanged: {Head(why, 200)}");
+
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = ticketId,
+            Text = $"Closed with nothing to merge. {why}",
+        });
+        await _db.SaveChangesAsync(ct);
+        await _tickets.TransitionAsync(ticketId, TicketPhase.Done, $"Closed with nothing to merge: {Head(why, 300)}", TransitionActor.Steward);
+        return new StewardReply("closed", null, new { closed = true });
+    }
+
+    /// <summary>
+    /// What a ticket is right now, as far as a merge's answer depends on it: its phase, its branch's
+    /// tip, and how far it is from the base either way. See <see cref="StewardMerges"/>.
+    /// </summary>
+    public async Task<string?> MergeStampAsync(string projectKey, int ticketId, CancellationToken ct = default)
+    {
+        var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId && x.ProjectKey == projectKey, ct);
+        if (t is null) return null;
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        return $"{t.Phase}|{change?.Tip}|{change?.Behind}|{change?.Ahead}";
+    }
+
     public async Task<StewardReply> RebaseAsync(string projectKey, int ticketId, CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
@@ -652,7 +882,7 @@ public class StewardService
         if (t is null) return no!;
         if (string.IsNullOrWhiteSpace(t.Branch)) return Refuse("no-branch", $"Ticket {ticketId} has no branch.");
         if (t.Phase != TicketPhase.NeedsReview)
-            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. A branch is only rebased from here while it waits at NeedsReview: at any other time a worker may be in it.");
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. A branch is only rebased from here while it waits at NeedsReview: at any other time a worker may be in it.{await LeftReviewAsync(t)}");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rebase {t.Branch} onto the base");
 
         var r = await _git.RebaseAsync(projectKey, t.Branch, ct);
@@ -680,7 +910,7 @@ public class StewardService
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
         if (t is null) return no!;
         if (t.Phase != TicketPhase.NeedsReview)
-            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is sent back from here.");
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is sent back from here.{await LeftReviewAsync(t)}");
         var before = await SendBacksAsync(ticketId);
         if (before >= cfg.Steward.SendBacksPerTicket)
             return Refuse("limit", $"Ticket {ticketId} has been sent back {before} time(s) already. The next is the owner's: ask.");
@@ -754,7 +984,8 @@ public class StewardService
     }
 
     private static string? PlanLine(Ticket t) =>
-        t.PlanUnit is null ? null : $"**Plan**\n\nUnit {t.PlanUnit}: {t.PlanOutcomes}.";
+        t.PlanUnit is null ? null
+            : $"**Plan**\n\nUnit {t.PlanUnit}{(string.IsNullOrWhiteSpace(t.PlanOutcomes) ? "" : $": {t.PlanOutcomes}")}.";
 
     // ---- the next tickets ---------------------------------------------------------
 
@@ -786,6 +1017,8 @@ public class StewardService
         if (unit is null) return Refuse("bad-request", $"The plan has no unit numbered {d.Unit}.");
         if (!unit.Agreed) return Refuse("unit-not-agreed", $"{unit.File} is not agreed. Only the owner agrees a unit of the plan.");
         var outcomes = (d.Outcomes ?? Array.Empty<string>()).Select(o => o.Trim()).Where(o => o.Length > 0).Distinct().ToList();
+        if (WalkthroughOf(cfg.Steward.Plan, unit) is { } walk && outcomes.Contains(walk))
+            return Refuse("board", $"{walk} is the walk-through, and the board files it once every other outcome of the unit is done.");
         if (outcomes.Count == 0) return Refuse("bad-request", "Say which of the unit's outcomes this ticket delivers.");
         if (outcomes.Where(o => !unit.Outcomes.Contains(o)).ToList() is { Count: > 0 } unknown)
             return Refuse("bad-request", $"{unit.File} has no outcome {string.Join(", ", unknown)}.");
@@ -842,6 +1075,8 @@ public class StewardService
         if (u is null || !u.Agreed) return Refuse("unit-not-agreed", $"Unit {unit} is not an agreed unit of the plan.");
         outcome = outcome?.Trim() ?? "";
         if (!u.Outcomes.Contains(outcome)) return Refuse("bad-request", $"{u.File} has no outcome {outcome}.");
+        if (outcome == WalkthroughOf(cfg.Steward.Plan, u) && st == StewardOutcomeState.Done)
+            return Refuse("board", $"{outcome} is the walk-through: the board calls it done when its ticket passes QA, and nothing else does.");
         if (note?.Length > 400)
             return Refuse("bad-request", "The note is a line for the next run: what is left to file and what it waits on. 400 characters at most. What a merged ticket built is in the code.");
         if (st == StewardOutcomeState.Done && moreToFile)
@@ -881,20 +1116,41 @@ public class StewardService
         var path = $"{p.UnitsDir}/{fileName.Trim()}";
         var there = plan.FirstOrDefault(u => u.Number == number);
         if (there is not null && !string.Equals(there.File, path, StringComparison.OrdinalIgnoreCase))
-            return Refuse("exists", $"Unit {number} is already drafted as {there.File}. Revise that file, under its own name.");
+            return Refuse("exists", $"Unit {number} is already {(there.Idea ? "an idea" : "drafted")} as {there.File}. {(there.Idea ? "Expand" : "Revise")} that file, under its own name.");
+        // A plan of ideas is drafted only from its ideas: the steward writes none, it expands the
+        // next one in place. A plan from before ideas has none, and drafts as it always has.
+        if (there is null && plan.Any(u => u.Idea))
+            return Refuse("no-idea", $"There is no idea numbered {number} to expand. Ideas are the owner's: propose one with steward_ask_owner (idea).");
 
         var unit = TicketGitService.ReadUnit(p, number, path, text ?? "");
         if (unit.Agreed || !unit.Draft)
             return Refuse("bad-request", "Its status line must say it is a draft. Only the owner agrees a unit.");
         if (unit.Outcomes.Count == 0) return Refuse("bad-request", "The draft has no outcomes written the way the plan's other units write them.");
+        // The story is the promise: every step cites the outcomes that make it true, and a story
+        // too long to read is a slice too big to build (docs/plans-as-slices.md, section 4).
+        var story = SliceStory.Check(text ?? "", unit.Outcomes);
+        if (story.Errors.Count > 0)
+            return Refuse("story", string.Join(" ", story.Errors), new { words = story.Words, notes = story.Notes });
+        // A decision keeps its number when the owner settles it, and numbers are the project's,
+        // once: one the register already holds would be two decisions under one name.
+        var asks = UnitDecisions.Open(text ?? "").Select(d => d.Number).ToList();
+        if (asks.Count > 0)
+        {
+            await EnsureRegisterAsync(cfg, ct);
+            if (await _db.StewardDecisions.Where(d => d.ProjectKey == projectKey && asks.Contains(d.Number))
+                    .Select(d => (int?)d.Number).FirstOrDefaultAsync(ct) is { } taken)
+                return Refuse("number-taken", $"#{taken} is already decision #{taken} in the register. Number what the draft leaves open from steward_decisions' 'next'.");
+        }
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"{(there is null ? "write" : "revise")} the draft spec {path} ({unit.Outcomes.Count} outcomes)");
 
         var (sha, unchanged, refusal) = await _git.CommitFileAsync(projectKey, path, text!,
             there is null ? $"A draft spec for unit {number}" : $"The draft spec for unit {number}, revised", ct);
         if (refusal is not null) return Refuse("refused", refusal);
+        if (!unchanged && (there is null || there.Idea)) await WriteReadableAsync(cfg, ct);
         return unchanged ? new StewardReply("unchanged")
-            : new StewardReply(there is null ? "drafted" : "revised", null, new { file = path, outcomes = unit.Outcomes.Count, commit = sha });
+            : new StewardReply(there is null || there.Idea ? "drafted" : "revised", story.Notes.Count > 0 ? string.Join(" ", story.Notes) : null,
+                new { file = path, outcomes = unit.Outcomes.Count, commit = sha, storyWords = story.Words, notCited = story.Uncited });
     }
 
     // ---- what goes to the owner, and the record ---------------------------------------
@@ -914,8 +1170,13 @@ public class StewardService
         // needs no options of its own - and has to name decisions the spec really leaves open, or
         // the owner is handed an empty sheet.
         var asks = (a.Decisions ?? Array.Empty<int>()).Distinct().ToList();
-        if (a.Unit is null != (asks.Count == 0))
-            return Refuse("bad-request", "Name a unit and its decisions together, or neither.");
+        var story = a.Story;
+        if (asks.Count > 0 && a.Unit is null) return Refuse("bad-request", "Name the unit whose open decisions these are.");
+        if (story is not null && a.Unit is null) return Refuse("bad-request", "A story is a slice's: name the slice (unit) it belongs to.");
+        if (a.Unit is not null && asks.Count == 0 && story is null)
+            return Refuse("bad-request", "Name a unit with its open decisions, or with the sentence of its story an answer would change - or neither.");
+        if (a.Idea is not null && (a.Unit is not null || asks.Count > 0))
+            return Refuse("bad-request", "A proposed idea is its own question: ask it without a unit or decisions.");
         if (a.Unit is { } unitNo)
         {
             var spec = (await _git.PlanAsync(projectKey, ct)).FirstOrDefault(u => u.Number == unitNo);
@@ -923,6 +1184,28 @@ public class StewardService
             var open = UnitDecisions.Open(spec.Text).Select(d => d.Number).ToHashSet();
             if (asks.FirstOrDefault(n => !open.Contains(n)) is var missing and > 0)
                 return Refuse("bad-request", $"#{missing} is not an open decision in {spec.File}. Only a decision written under \"To decide\" in the template's shape can be asked this way.");
+            if (story is not null)
+            {
+                // Only a slice being built has a story that changes with the owner's answers: a
+                // draft is the steward's to revise, and a built slice's story is never rewritten.
+                if (!spec.Agreed) return Refuse("bad-request", $"{spec.File} is not agreed: revise the draft's story with steward_draft_unit instead.");
+                if ((await BuiltUnitsAsync(cfg, ct)).Contains(unitNo))
+                    return Refuse("bad-request", $"Slice {unitNo} is built: its story is history and is never rewritten. A later slice says what it changes.");
+                if (string.IsNullOrWhiteSpace(story.Sentence) || !SliceStory.Has(spec.Text, story.Sentence))
+                    return Refuse("bad-request", $"Quote the sentence exactly as {spec.File}'s story has it, once.");
+                if ((story.Rewordings ?? new Dictionary<string, string>()).Count == 0)
+                    return Refuse("bad-request", "Give the sentence's rewording under each option that changes it.");
+                foreach (var label in story.Rewordings!.Keys)
+                    if (options.All(o => !string.Equals(o.Label.Trim(), label.Trim(), StringComparison.OrdinalIgnoreCase)))
+                        return Refuse("bad-request", $"\"{label}\" is not one of the options.");
+            }
+        }
+        if (a.Idea is not null)
+        {
+            if (!cfg.Steward.Plan.Configured) return Refuse("no-plan", "This project has no plan folder for an idea.");
+            if (IdeaRefusal(cfg.Steward.Plan, await _git.PlanAsync(projectKey, ct), a.Idea) is { } no) return Refuse("bad-request", no);
+            // The owner says yes or no to the idea as written: the board's two answers, not the steward's.
+            options = new List<BlockOption> { new(CommitIdea, $"Commit {a.Idea.File.Trim()} as written", true), new(LeaveIdeas) };
         }
         if (asks.Count == 0 || options.Count > 0)
         {
@@ -931,9 +1214,43 @@ public class StewardService
                 return Refuse("bad-request", "Mark exactly one option as the one you would pick.");
         }
 
+        // What it touches is the steward's claim, made where the owner can see it: an override is
+        // declared when it is asked about, never found afterwards.
+        if (a.Touches is null)
+            return Refuse("bad-request", "Say which decisions this bears on (touches), by number, from steward_decisions - an empty list when none does.");
+        var touches = a.Touches.Distinct().ToList();
+        if (touches.Count > 0)
+        {
+            await EnsureRegisterAsync(cfg, ct);
+            var all = await RegisterAsync(projectKey, track: false, ct);
+            var map = ReplacedIndex(all);
+            foreach (var n in touches)
+            {
+                var d = all.FirstOrDefault(x => x.Number == n);
+                if (d is null) return Refuse("bad-request", $"There is no decision #{n}.");
+                var st = StatusOf(d, map);
+                if (st.Name == Withdrawn) return Refuse("bad-request", $"#{n} is withdrawn: there is nothing in force to touch.");
+                if (st.Name == Replaced)
+                    return Refuse("bad-request", $"#{n} no longer holds; touch what replaced it ({string.Join(", ", st.ReplacedBy.Select(r => $"#{r.By}"))}).");
+            }
+        }
+        var changes = new Dictionary<string, List<int>>();
+        foreach (var (label, nums) in a.Changes ?? new Dictionary<string, IReadOnlyList<int>>())
+        {
+            if (options.All(o => !string.Equals(o.Label.Trim(), label.Trim(), StringComparison.OrdinalIgnoreCase)))
+                return Refuse("bad-request", $"\"{label}\" is not one of the options.");
+            if (nums.FirstOrDefault(n => !touches.Contains(n)) is var stray and > 0)
+                return Refuse("bad-request", $"An option can only change a decision the question touches; #{stray} is not in touches.");
+            if (nums.Count > 0) changes[label.Trim()] = nums.Distinct().ToList();
+        }
+
+        var (citing, notWaiting) = await FollowUpsToCiteAsync(projectKey, a.FollowUps, ct);
+        if (notWaiting is not null) return notWaiting;
+
         if (await _db.StewardQuestions.AnyAsync(q => q.ProjectKey == projectKey && q.Key == key, ct))
             return Refuse("already-asked", $"\"{key}\" has been asked already. A question is asked once.");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"ask the owner: {a.Question.Trim()}");
+        Cite(citing, $"question:{key}");
 
         _db.StewardQuestions.Add(new StewardQuestion
         {
@@ -947,6 +1264,12 @@ public class StewardService
             PlanUnit = a.Unit,
             PlanKey = a.Unit is null ? null : cfg.Steward.Plan.Key,
             Decisions = asks.Count == 0 ? null : string.Join(",", asks),
+            Touches = string.Join(",", touches),
+            OptionChangesJson = changes.Count == 0 ? null : JsonSerializer.Serialize(changes, Json),
+            ProposedFile = a.Idea?.File.Trim(),
+            ProposedText = a.Idea?.Text,
+            StorySentence = story?.Sentence.Trim(),
+            StoryRewordingsJson = story is null ? null : JsonSerializer.Serialize(story.Rewordings, Json),
         });
         await _db.SaveChangesAsync(ct);
 
@@ -989,6 +1312,224 @@ public class StewardService
         return new StewardReply("noted");
     }
 
+    /// <summary>The longest a ticket note may be: one thing to do, not an essay.</summary>
+    public const int TicketNoteMaxChars = 600;
+
+    /// <summary>
+    /// Write down something to do about one ticket, for later runs: it is shown by
+    /// <see cref="ReviewAsync"/> and in every run's status until <see cref="DoneWithAsync"/> closes it.
+    /// </summary>
+    public async Task<StewardReply> NoteTicketAsync(string projectKey, int ticketId, string text, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        text = text?.Trim() ?? "";
+        if (text.Length == 0) return Refuse("bad-request", "Say what is to be done, and when.");
+        if (text.Length > TicketNoteMaxChars)
+            return Refuse("bad-request", $"A ticket note is one thing to do, at most {TicketNoteMaxChars} characters. "
+                + "A fact about the repo is not a ticket note; a call for the owner goes on the record.");
+        var (t, no) = await TicketOfAsync(projectKey, ticketId);
+        if (t is null) return no!;
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"note on ticket {ticketId}: {Head(text, 200)}");
+
+        var e = new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.TicketNote, TicketId = ticketId, Text = text };
+        _db.StewardEntries.Add(e);
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("noted", null, new { id = e.Id });
+    }
+
+    /// <summary>Close a ticket note: what it said is done, or no longer to be done.</summary>
+    public async Task<StewardReply> DoneWithAsync(string projectKey, int noteId, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        var e = await _db.StewardEntries.FirstOrDefaultAsync(
+            x => x.Id == noteId && x.ProjectKey == projectKey && x.Kind == StewardEntryKind.TicketNote, ct);
+        if (e is null) return Refuse("not-found", $"There is no ticket note {noteId} here.");
+        if (e.HandledAt is not null) return new StewardReply("already-done");
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"close note {noteId} on ticket {e.TicketId}");
+        e.HandledAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("done");
+    }
+
+    /// <summary>The longest a ruling, or what it rests on, may be.</summary>
+    public const int RulingMaxChars = 600;
+
+    /// <summary>
+    /// Record a standing call: something the steward has taken as settled and will apply again,
+    /// with the decision or document it rests on. It applies at once, is handed to every run, and
+    /// is the owner's to keep or reverse.
+    /// </summary>
+    public async Task<StewardReply> RuleAsync(string projectKey, string text, string basis, int? ticketId = null, CancellationToken ct = default) =>
+        await RuleAsync(projectKey, text, basis, ticketId, null, ct);
+
+    /// <summary>
+    /// As above, with the register's decisions the ruling reads. When one of them is replaced or
+    /// withdrawn the ruling is flagged on the record and in the next briefing.
+    /// </summary>
+    public async Task<StewardReply> RuleAsync(string projectKey, string text, string basis, int? ticketId, IReadOnlyList<int>? reads,
+        CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        text = text?.Trim() ?? "";
+        basis = basis?.Trim() ?? "";
+        if (text.Length == 0) return Refuse("bad-request", "Say what you will take as settled from now on.");
+        if (basis.Length == 0)
+            return Refuse("bad-request", "Say what it rests on: the spec and section, the plan's decision, or the owner's answer by its key. "
+                + "A ruling that rests on nothing the owner decided is a question for the owner.");
+        if (text.Length > RulingMaxChars || basis.Length > RulingMaxChars)
+            return Refuse("bad-request", $"A ruling and what it rests on are each at most {RulingMaxChars} characters: one call, not a policy.");
+        if (ticketId is { } tid && (await TicketOfAsync(projectKey, tid)).Item1 is null)
+            return Refuse("not-found", $"There is no ticket {tid} here.");
+        var live = await _db.StewardEntries.AsNoTracking().Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling
+            && e.ReversedAt == null).ToListAsync(ct);
+        if (live.FirstOrDefault(e => string.Equals(e.Text.Trim(), text, StringComparison.OrdinalIgnoreCase)) is { } had)
+            return new StewardReply("already-ruled", "That ruling is already in force.", new { id = had.Id });
+        var read = (reads ?? Array.Empty<int>()).Distinct().ToList();
+        if (read.Count > 0)
+        {
+            await EnsureRegisterAsync(cfg, ct);
+            var all = await RegisterAsync(projectKey, track: false, ct);
+            var map = ReplacedIndex(all);
+            foreach (var n in read)
+            {
+                var d = all.FirstOrDefault(x => x.Number == n);
+                if (d is null) return Refuse("bad-request", $"There is no decision #{n}.");
+                if (StatusOf(d, map).Name is Replaced or Withdrawn) return Refuse("bad-request", $"#{n} no longer holds: a ruling cannot read it.");
+            }
+        }
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rule: {Head(text, 200)}");
+
+        var r = new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Ruling, TicketId = ticketId, Text = text, Basis = basis,
+            Reads = reads is null ? null : string.Join(",", read),
+        };
+        _db.StewardEntries.Add(r);
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("ruled", null, new { id = r.Id });
+    }
+
+    /// <summary>The owner has read a ruling and lets it stand. Not a reason to run. No tool reaches this.</summary>
+    public async Task<StewardReply> OwnerKeepsRulingAsync(string projectKey, int id, CancellationToken ct = default)
+    {
+        var e = await RulingAsync(projectKey, id, ct);
+        if (e is null) return Refuse("not-found", $"There is no ruling {id} here.");
+        if (e.ReversedAt is not null) return Refuse("bad-request", "That ruling was reversed.");
+        e.HandledAt ??= DateTime.UtcNow;
+        // Kept while it reads a decision that no longer holds: it stands on what replaced it now,
+        // and a withdrawn one it read drops out of what it reads.
+        if (e.Reads is not null && Config(projectKey) is { } cfg)
+        {
+            var all = await RegisterAsync(projectKey, track: false, ct);
+            var map = ReplacedIndex(all);
+            var now = new List<int>();
+            foreach (var n in Numbers(e.Reads))
+            {
+                var d = all.FirstOrDefault(x => x.Number == n);
+                var st = d is null ? null : StatusOf(d, map);
+                if (st?.Name == Replaced) now.AddRange(st.ReplacedBy.Select(r => r.By));
+                else if (st?.Name != Withdrawn) now.Add(n);
+            }
+            e.Reads = string.Join(",", now.Distinct());
+        }
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("kept");
+    }
+
+    /// <summary>
+    /// The owner reverses a ruling, saying what should hold instead. It stops being handed to runs,
+    /// and the reversal reaches the next run as a decision made. No tool reaches this.
+    /// </summary>
+    public async Task<StewardReply> OwnerReversesRulingAsync(string projectKey, int id, string because, CancellationToken ct = default)
+    {
+        because = because?.Trim() ?? "";
+        if (because.Length == 0) return Refuse("bad-request", "Say what should hold instead: the steward reads it as a decision made.");
+        var e = await RulingAsync(projectKey, id, ct);
+        if (e is null) return Refuse("not-found", $"There is no ruling {id} here.");
+        if (e.ReversedAt is not null) return Refuse("bad-request", "That ruling is already reversed.");
+        e.ReversedAt = DateTime.UtcNow;
+        e.ReversedBecause = because;
+        e.HandledAt ??= e.ReversedAt;
+        e.DeliveredAt = null;
+        if (Config(projectKey)?.StewardMode is { } m && m != StewardMode.Off)
+            await StewardDue.MarkAsync(_db, projectKey, $"the owner reversed ruling {id}");
+        await _db.SaveChangesAsync(ct);
+        _heartbeat?.Wake();
+        return new StewardReply("reversed");
+    }
+
+    private Task<StewardEntry?> RulingAsync(string projectKey, int id, CancellationToken ct) =>
+        _db.StewardEntries.FirstOrDefaultAsync(x => x.Id == id && x.ProjectKey == projectKey && x.Kind == StewardEntryKind.Ruling, ct);
+
+    /// <summary>The longest a learned fact may be.</summary>
+    public const int LearnedMaxChars = 1200;
+
+    /// <summary>
+    /// Queue a fact about the repo for the project's notes store. Saved at once; placed by the
+    /// launcher after the run, beside the notes already there.
+    /// </summary>
+    public async Task<StewardReply> LearnedAsync(string projectKey, string fact, string? key = null, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        fact = System.Text.RegularExpressions.Regex.Replace(fact ?? "", @"\s+", " ").Trim();
+        if (fact.Length == 0) return Refuse("bad-request", "Say the fact.");
+        if (fact.Length > LearnedMaxChars)
+            return Refuse("bad-request", $"A fact is at most {LearnedMaxChars} characters. Two facts are two calls.");
+        key = NoteKey(key);
+        if ((await UnplacedAsync(projectKey, ct)).Any(e => string.Equals(e.Text, fact, StringComparison.OrdinalIgnoreCase)))
+            return new StewardReply("already-queued");
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"learn: {Head(fact, 200)}");
+
+        _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.Learned, Text = fact, Placed = key });
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("queued", cfg.ResolvedMemoryDir.Length == 0
+            ? "This project keeps no notes store, so it waits on the board for its owner."
+            : "It goes into the notes store after this run.");
+    }
+
+    /// <summary>A note key as the store spells them: lowercase words and hyphens, at most 60 characters. Null when there is none.</summary>
+    public static string? NoteKey(string? key)
+    {
+        var k = System.Text.RegularExpressions.Regex.Replace((key ?? "").ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+        if (k.Length > 60) k = k[..60].TrimEnd('-');
+        return k.Length == 0 ? null : k;
+    }
+
+    /// <summary>The facts not yet placed in the notes store, oldest first.</summary>
+    public Task<List<StewardEntry>> UnplacedAsync(string projectKey, CancellationToken ct = default) =>
+        _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Learned && e.HandledAt == null)
+            .OrderBy(e => e.At).ThenBy(e => e.Id).ToListAsync(ct);
+
+    /// <summary>
+    /// The launcher placed a learned fact: say where it went. Called by <c>steward.ps1</c> after a
+    /// run, never by the steward. A fact placed already keeps its first answer.
+    /// </summary>
+    public async Task<StewardReply> PlacedAsync(string projectKey, int id, string where, CancellationToken ct = default)
+    {
+        var e = await _db.StewardEntries.FirstOrDefaultAsync(
+            x => x.Id == id && x.ProjectKey == projectKey && x.Kind == StewardEntryKind.Learned, ct);
+        if (e is null) return Refuse("not-found", $"There is no learned fact {id} here.");
+        if (e.HandledAt is not null) return new StewardReply("already-placed");
+        e.HandledAt = DateTime.UtcNow;
+        e.Placed = string.IsNullOrWhiteSpace(where) ? "placed" : where.Trim();
+        await _db.SaveChangesAsync(ct);
+        return new StewardReply("placed");
+    }
+
+    /// <summary>The open ticket notes, oldest first; one ticket's with <paramref name="ticketId"/>.</summary>
+    private async Task<List<StewardEntry>> OpenNotesAsync(string projectKey, int? ticketId, CancellationToken ct)
+    {
+        var q = _db.StewardEntries.AsNoTracking().Where(e => e.ProjectKey == projectKey
+            && e.Kind == StewardEntryKind.TicketNote && e.HandledAt == null);
+        if (ticketId is { } id) q = q.Where(e => e.TicketId == id);
+        return await q.OrderBy(e => e.At).ThenBy(e => e.Id).ToListAsync(ct);
+    }
+
     /// <summary>A release note's kind by name. Null for anything that is not one: a number is not a kind.</summary>
     public static StewardReleaseKind? ParseRelease(string? name)
     {
@@ -998,44 +1539,93 @@ public class StewardService
         return null;
     }
 
-    /// <summary>
-    /// Replace the steward's memo to its next run. Saved even when it is too long - a run that
-    /// could not save would leave the next one nothing - and the answer says so, so it is cut.
-    /// </summary>
-    public async Task<StewardReply> SaveMemoAsync(string projectKey, string memo, CancellationToken ct = default)
-    {
-        var (cfg, off) = await WritableAsync(projectKey);
-        if (cfg is null) return off!;
-        if (cfg.StewardMode == StewardMode.Propose)
-            return new StewardReply("proposed", "Nothing happened in this run, so the memo must not say it did: it was left as it was.");
-
-        var s = await StewardDue.StateAsync(_db, projectKey);
-        s.Memo = (memo ?? "").Replace("\r\n", "\n").Trim();
-        s.MemoUpdatedAt = DateTime.UtcNow;
-        await _db.SaveChangesAsync(ct);
-        var over = s.Memo.Length > cfg.Steward.MemoMaxChars;
-        return new StewardReply(over ? "saved-too-long" : "saved", over
-            ? $"The memo is {s.Memo.Length} characters and its limit is {cfg.Steward.MemoMaxChars}: every run reads all of it. Cut it and save again. Where an outcome stands is set on the outcome; a call about one ticket goes on the record; this is only what the next run needs and cannot read anywhere else."
-            : null);
-    }
-
     // ---- the owner's side: no steward verb reaches these --------------------------------
 
     /// <summary>The owner's answer to one waiting question. A decision made, and a reason to run.</summary>
-    public async Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, CancellationToken ct = default)
+    public Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, CancellationToken ct = default) =>
+        OwnerAnswersAsync(projectKey, key, answer, null, ct);
+
+    /// <summary>
+    /// The owner's answer, and which of the decisions the question touched it replaces. Null
+    /// <paramref name="replaces"/> takes what the picked option said it would change; an empty list
+    /// replaces nothing. Only a decision the question touched can be replaced this way: the override
+    /// is the one the owner was shown.
+    /// </summary>
+    public async Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, IReadOnlyList<int>? replaces,
+        CancellationToken ct = default) => await OwnerAnswersAsync(projectKey, key, answer, replaces, null, ct);
+
+    /// <summary>
+    /// As above; for a question about a slice being built, <paramref name="story"/> is the owner's
+    /// own wording of the sentence the answer changes (null takes the picked option's).
+    /// </summary>
+    public async Task<StewardReply> OwnerAnswersAsync(string projectKey, string key, string answer, IReadOnlyList<int>? replaces,
+        string? story, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(answer)) return Refuse("bad-request", "The answer is empty.");
         var q = await _db.StewardQuestions.FirstOrDefaultAsync(x => x.ProjectKey == projectKey && x.Key == key, ct);
         if (q is null) return Refuse("not-waiting", $"No question named \"{key}\".");
         if (q.Answer is not null) return Refuse("not-waiting", $"\"{key}\" was answered on {q.AnsweredAt:yyyy-MM-dd}.");
+        var touched = Numbers(q.Touches);
+        var picked = replaces?.Distinct().ToList() ?? ChangesOf(q, answer);
+        if (picked.FirstOrDefault(n => !touched.Contains(n)) is var stray and > 0)
+            return Refuse("bad-request", $"\"{key}\" does not touch #{stray}, so its answer cannot replace it. Record a change to #{stray} on the register instead.");
+        var cfg = Config(projectKey);
+        var text = Regex.Replace(answer.Trim(), @"\s*\n\s*", " ");
 
-        q.Answer = Regex.Replace(answer.Trim(), @"\s*\n\s*", " ");
+        // A proposed idea is committed on a yes, and is no decision: ideas are the owner's text.
+        var idea = q.ProposedFile is not null;
+        string? ideaDone = null;
+        if (idea && text.StartsWith(CommitIdea, StringComparison.OrdinalIgnoreCase))
+        {
+            if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+            if (await CommitIdeaAsync(cfg, q, ct) is { } no) return Refuse("refused", no);
+            ideaDone = $"{q.ProposedFile} committed";
+        }
+
+        q.Answer = text;
         q.AnsweredAt = DateTime.UtcNow;
+        StewardDecision? made = null;
+        if (!idea)
+        {
+            // The answer is a decision, and the register is where its status lives from now on.
+            if (cfg is not null) await EnsureRegisterAsync(cfg, ct);
+            made = await AnswerDecisionAsync(q, picked, ct);
+        }
+
+        // An answer about a slice being built rewords the sentence of its story it changes, and
+        // writes itself under "Decided", in one commit: the story stays true, and only answers change it.
+        string? storyDone = null;
+        if (made is not null && cfg is not null && q.StorySentence is not null && q.PlanUnit is { } unit
+            && (story ?? RewordingOf(q, text)) is { Length: > 0 } rewording)
+        {
+            var spec = (await _git.PlanAsync(projectKey, ct)).FirstOrDefault(u => u.Number == unit);
+            if (spec is null || !spec.Agreed) return Refuse("refused", $"Slice {unit} is not an agreed slice now, so its story was not changed and nothing was recorded.");
+            var reworded = SliceStory.Reword(spec.Text, q.StorySentence, rewording);
+            if (reworded is null) return Refuse("refused", $"The sentence is no longer in {spec.File}'s story as it was asked about. Nothing was recorded; answer it without the story, or have it asked again.");
+            reworded = UnitDecisions.AppendDecided(reworded,
+                $"- **(#{made.Number}) {Head(q.Question, 160).TrimEnd('?', '.')}.** Decided by the owner {DateTime.Now:yyyy-MM-dd}: {text.TrimEnd('.')}.");
+            var (sha, _, no) = await _git.CommitFileAsync(projectKey, spec.File, reworded,
+                $"Slice {unit}: #{made.Number}, and the story sentence it changes, by its owner", ct);
+            if (no is not null) return Refuse("refused", no);
+            made.SourceRef = spec.File;
+            storyDone = $"{spec.File} reworded at {sha}";
+        }
+
         await StewardDue.MarkAsync(_db, projectKey, $"the owner answered {key}");
         await _db.SaveChangesAsync(ct);
-        var exported = Config(projectKey) is { } cfg ? await ExportDecisionsAsync(cfg, ct) : null;
+        var exported = cfg is not null ? await ExportDecisionsAsync(cfg, ct) : null;
+        if (ideaDone is not null && cfg is not null) await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
-        return new StewardReply("recorded", exported);
+        return new StewardReply("recorded", string.Join("; ", new[] { exported, ideaDone, storyDone }.Where(x => x is not null)) is { Length: > 0 } w ? w : null);
+    }
+
+    /// <summary>The rewording of a story sentence under the option the answer starts with.</summary>
+    private static string? RewordingOf(StewardQuestion q, string answer)
+    {
+        if (string.IsNullOrEmpty(q.StoryRewordingsJson)) return null;
+        var map = JsonSerializer.Deserialize<Dictionary<string, string>>(q.StoryRewordingsJson, Json) ?? new();
+        return map.Where(kv => answer.StartsWith(kv.Key.Trim(), StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(kv => kv.Key.Length).Select(kv => kv.Value).FirstOrDefault();
     }
 
     /// <summary>
@@ -1102,15 +1692,97 @@ public class StewardService
         return new StewardReply("cleared", null, new { flag = raised.Flag, tip = change.Tip });
     }
 
+    /// <summary>
+    /// The owner links a ticket to a unit of one of the project's plans, and to which of its
+    /// outcomes it carries, or unlinks it (<paramref name="unit"/> null). The link is what every
+    /// count of a unit's progress is taken from, so it is checked against the plan as committed:
+    /// the unit and each outcome must be in it. Outcomes are optional - a ticket can belong to a
+    /// unit without carrying any one of its outcomes. Not the steward's: no tool reaches this.
+    /// </summary>
+    public async Task<StewardReply> LinkTicketAsync(int ticketId, string? planKey, int? unit, IReadOnlyList<string>? outcomes,
+        CancellationToken ct = default)
+    {
+        var t = await _db.Tickets.FirstOrDefaultAsync(x => x.Id == ticketId, ct);
+        if (t is null) return Refuse("not-found", $"There is no ticket {ticketId}.");
+        var cfg = Config(t.ProjectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{t.ProjectKey}'.");
+
+        string? key = null;
+        string? title = null;
+        var picked = new List<string>();
+        if (unit is not null)
+        {
+            var plan = planKey is null ? cfg.Steward.Plan : cfg.Steward.PlanByKey(planKey);
+            if (plan is null || !plan.Configured) return Refuse("no-plan", $"This project has no plan '{planKey}'.");
+            var units = await _git.PlanOfAsync(t.ProjectKey, plan, ct);
+            var u = units.FirstOrDefault(x => x.Number == unit);
+            if (u is null) return Refuse("bad-request", $"{plan.DisplayName} has no unit {unit}.");
+            picked = (outcomes ?? Array.Empty<string>()).Select(o => o.Trim()).Where(o => o.Length > 0).Distinct().ToList();
+            if (picked.Where(o => !u.Outcomes.Contains(o)).ToList() is { Count: > 0 } unknown)
+                return Refuse("bad-request", $"{u.File} has no outcome {string.Join(", ", unknown)}.");
+            // In the spec's own order, whatever order they were ticked in.
+            picked = u.Outcomes.Where(picked.Contains).ToList();
+            key = plan.Key;
+            title = $"{plan.DisplayName}, unit {u.Number}";
+        }
+
+        var joined = unit is null ? null : string.Join(", ", picked);
+        if ((t.PlanKey ?? "") == (key ?? "") && t.PlanUnit == unit && (t.PlanOutcomes ?? "") == (joined ?? ""))
+            return new StewardReply("unchanged");
+
+        var was = t.PlanUnit;
+        t.PlanKey = key;
+        t.PlanUnit = unit;
+        t.PlanOutcomes = joined;
+        // A ticket the steward filed carries its link as a line in its description too, for the
+        // agents that read it. Kept in step, never added to a description that had none.
+        if (t.Description is { } d && PlanLineAt.IsMatch(d))
+        {
+            var rest = PlanLineAt.Replace(d, "").TrimEnd();
+            t.Description = PlanLine(t) is { } line ? $"{rest}\n\n{line}" : rest;
+        }
+        t.UpdatedAt = DateTime.UtcNow;
+        // Out of the plan, the steward has nothing more to do about it.
+        if (unit is null)
+            foreach (var n in await _db.StewardEntries.Where(e => e.TicketId == ticketId
+                         && e.Kind == StewardEntryKind.TicketNote && e.HandledAt == null).ToListAsync(ct))
+                n.HandledAt = DateTime.UtcNow;
+        if (cfg.StewardMode != StewardMode.Off)
+            await StewardDue.MarkAsync(_db, t.ProjectKey, unit is null
+                ? $"the owner took #{ticketId} out of unit {was}"
+                : $"the owner linked #{ticketId} to unit {unit}");
+        await _db.SaveChangesAsync(ct);
+
+        await _tickets.AddCommentAsync(ticketId, unit is null
+            ? "Taken out of the plan by the owner."
+            : $"Linked to {title}{(picked.Count > 0 ? $" ({string.Join(", ", picked)})" : "")} by the owner.", AuthorKind.System);
+        if (cfg.StewardMode != StewardMode.Off) _heartbeat?.Wake();
+        return new StewardReply("linked", null, new { plan = key, unit, outcomes = picked });
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex PlanLineAt = new(
+        @"(\r?\n)*\*\*Plan\*\*\r?\n\r?\nUnit \d+[^\r\n]*\s*$");
+
     /// <summary>A standing instruction from the owner that answers no question.</summary>
     public async Task<StewardReply> OwnerSaysAsync(string projectKey, string text, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(text)) return Refuse("bad-request", "There is nothing to record.");
-        if (Config(projectKey) is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
-        _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, Text = text.Trim() });
+        if (Config(projectKey) is not { } cfg) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        await EnsureRegisterAsync(cfg, ct);
+        var said = new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, Text = text.Trim() };
+        _db.StewardEntries.Add(said);
+        await _db.SaveChangesAsync(ct);
+        // Instructions with an end are a kind of their own later (docs/plans-as-slices.md, section 3);
+        // until then the owner's word counts as decided, as it always has.
+        _db.StewardDecisions.Add(new StewardDecision
+        {
+            ProjectKey = projectKey, Number = await NextNumberAsync(projectKey, ct), Rule = said.Text,
+            Source = StewardDecisionSource.OwnerSaid, SourceRef = $"record line {said.Id}", ImportKey = $"said:{said.Id}",
+            MadeAt = said.At, DeliveredAt = DateTime.UtcNow,
+        });
         await StewardDue.MarkAsync(_db, projectKey, "the owner left an instruction");
         await _db.SaveChangesAsync(ct);
-        var exported = await ExportDecisionsAsync(Config(projectKey)!, ct);
+        var exported = await ExportDecisionsAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply("recorded", exported);
     }
@@ -1123,6 +1795,9 @@ public class StewardService
     {
         var e = await _db.StewardEntries.FirstOrDefaultAsync(x => x.Id == id && x.ProjectKey == projectKey, ct);
         if (e is null) return Refuse("no-entry", $"No line {id} in this project's record.");
+        if (e.Kind == StewardEntryKind.TicketNote) return Refuse("bad-request", "A ticket note is the steward's own, and it closes it.");
+        if (e.Kind == StewardEntryKind.Ruling) return Refuse("bad-request", "A ruling is kept or reversed, not ticked off.");
+        if (e.Kind == StewardEntryKind.Learned) return Refuse("bad-request", "A learned fact is placed in the notes store, not ticked off.");
         if (release is not null)
         {
             if (e.Kind != StewardEntryKind.BeforeRelease) return Refuse("bad-request", "Only a note for a release has a kind.");
@@ -1240,10 +1915,13 @@ public class StewardService
         var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == which.Key).ToListAsync(ct);
         var notes = await UnitNotesAsync(projectKey, which, isWorking, plan, rows, all, track: false, ct);
         var current = isWorking ? StewardProgress.Current(plan, states) : null;
+        var moved = await MovedSlicesAsync(projectKey, which, plan, ct);
 
         return new StewardReply("plan", null, new
         {
             plans,
+            // Agreed slices whose number or file changed since: tickets and outcomes carry those.
+            moved = moved.Values,
             plan = new { which.Key, name = which.DisplayName, working = isWorking, which.UnitsDir },
             current = current?.Number,
             units = plan.Select(u =>
@@ -1268,11 +1946,16 @@ public class StewardService
                     // Where it is on the way from a draft to released, in one word.
                     stage = row?.ReleasedAt is not null ? "released" : built ? "built"
                         : u.Agreed ? u.Number == current?.Number ? "building" : "agreed"
-                        : u.Draft ? "draft" : "notAgreed",
+                        : u.Draft ? "draft" : u.Idea ? "idea" : "notAgreed",
+                    movedFrom = moved.TryGetValue(u.Number, out var mv) ? mv : null,
+                    // An idea's paragraph, which is what the plan shows of it.
+                    idea = u.Idea ? SliceStory.IdeaParagraph(u.Text) : null,
+                    story = SliceStory.Find(u.Text)?.Text,
                     agreedAt = row?.AgreedAt,
                     releasedAt = row?.ReleasedAt,
                     // Why a draft cannot be agreed from here, or null when it can (or is not a draft).
-                    cannotAgree = !u.Draft ? null
+                    cannotAgree = u.Idea ? "An idea is drafted before it is agreed: the steward expands it when its turn comes."
+                        : !u.Draft ? null
                         : !isWorking ? "This plan is finished: nothing is filed against it."
                         : earlier.Count > 0 ? $"Unit {earlier[0]} comes first and is not agreed."
                         : TicketGitService.MarkAgreed(which, u.Text, DateTime.Now) is null
@@ -1303,6 +1986,8 @@ public class StewardService
                                 state = (st?.State ?? StewardOutcomeState.NotStarted).ToString(),
                                 moreToFile = st?.MoreToFile ?? false,
                                 note = st?.Note,
+                                // When the steward last said where it stands: how long a held outcome has sat.
+                                updatedAt = st is null ? (DateTime?)null : DateTime.SpecifyKind(st.UpdatedAt, DateTimeKind.Utc),
                                 tickets = its.Where(t => StewardProgress.OutcomesOf(t).Contains(o.Outcome)).OrderBy(t => t.Id)
                                     .Select(t => new { t.Id, phase = t.Phase.ToString(), t.Title }),
                             };
@@ -1374,11 +2059,18 @@ public class StewardService
 
         var text = u.Text;
         IReadOnlyList<string> said = Array.Empty<string>();
+        IReadOnlyList<(int Number, string Title, string Rule)> each = Array.Empty<(int, string, string)>();
         if (choices.Count > 0)
         {
-            var (settled, s, refusal) = UnitDecisions.Settle(text, choices, DateTime.Now);
+            var (settled, s, e, refusal) = UnitDecisions.SettleEach(text, choices, DateTime.Now);
             if (settled is null) return Refuse("bad-request", refusal!);
-            (text, said) = (settled, s);
+            (text, said, each) = (settled, s, e);
+            // A settled decision keeps the number its spec gave it, so that number must be free.
+            await EnsureRegisterAsync(cfg, ct);
+            var numbers = each.Select(x => x.Number).ToList();
+            if (await _db.StewardDecisions.Where(d => d.ProjectKey == projectKey && numbers.Contains(d.Number))
+                    .Select(d => (int?)d.Number).FirstOrDefaultAsync(ct) is { } taken)
+                return Refuse("number-taken", $"#{taken} is already a decision in the register, so the spec's #{taken} cannot keep its number. Renumber it in {u.File} from steward_decisions' next number, and commit that.");
         }
         if (agree)
         {
@@ -1399,7 +2091,19 @@ public class StewardService
         if (no is not null) return Refuse("refused", no);
 
         var summary = $"Unit {unit}: {(n == 0 ? "agreed" : $"{(agree ? "agreed, and " : "")}decided {string.Join("; ", said)}")}. Written into {u.File} at {sha}.";
-        if (agree) (await UnitRowAsync(projectKey, p.Key, unit, ct)).AgreedAt = DateTime.UtcNow;
+        if (agree)
+        {
+            var row = await UnitRowAsync(projectKey, p.Key, unit, ct);
+            (row.AgreedAt, row.AgreedFile) = (DateTime.UtcNow, u.File);
+        }
+        // The register holds each decision's status; the spec keeps the words, written once, above.
+        foreach (var (number, title, rule) in each)
+            _db.StewardDecisions.Add(new StewardDecision
+            {
+                ProjectKey = projectKey, Number = number, Title = title, Rule = rule, Source = StewardDecisionSource.Slice,
+                PlanKey = p.Key, PlanUnit = unit, SourceRef = u.File, ImportKey = $"slice:{p.Key}:{number}",
+                QuestionKey = q?.Key, Question = q?.Question, DeliveredAt = DateTime.UtcNow,
+            });
         if (q is not null)
         {
             (q.Answer, q.AnsweredAt) = (summary, DateTime.UtcNow);
@@ -1412,6 +2116,7 @@ public class StewardService
         }
         await _db.SaveChangesAsync(ct);
         var exported = n > 0 || q is not null ? await ExportDecisionsAsync(cfg, ct) : null;
+        if (agree) await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply(agree ? "agreed" : "decided", exported, new
         {
@@ -1464,22 +2169,22 @@ public class StewardService
         foreach (var n in notes.Where(n => n.HandledAt is null)) n.HandledAt = now;
         (row.ReleasedAt, row.ReleasedSha) = (now, await _git.BaseHeadAsync(projectKey, ct));
         await _db.SaveChangesAsync(ct);
+        await WriteReadableAsync(cfg, ct);
         return new StewardReply("released", null, new { at = row.ReleasedSha });
     }
 
     /// <summary>
-    /// The owner starts a new plan: its two documents are committed to the base branch - the plan
-    /// itself, and a first unit as a draft - each from a template that says what goes where, so
-    /// whoever writes it (a person, or a session they sit with) has a shape to write into that
-    /// the board can read. Refused while the plan being worked has a ticket still open: a steward
-    /// in the middle of one plan is not handed another.
+    /// The owner starts a new plan: its charter and its first ideas are committed to the base
+    /// branch, each from a template (docs/plans-as-slices.md, "Starting a plan"). The steward then
+    /// expands the first idea into a draft. Refused while a run is open, or while the plan being
+    /// worked has a ticket still open: a steward in the middle of one plan is not handed another.
     /// <para>
     /// It does not write the project's config; the caller does, once this has answered "started",
     /// because where a project's settings live is not this service's to know.
     /// </para>
     /// </summary>
     public async Task<StewardReply> OwnerStartsPlanAsync(string projectKey, string? key, string? name, string? folder,
-        string planTemplate, string unitTemplate, CancellationToken ct = default)
+        string charterTemplate, string ideaTemplate, IReadOnlyList<StewardNewIdea>? ideas, CancellationToken ct = default)
     {
         var cfg = Config(projectKey);
         if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
@@ -1488,6 +2193,10 @@ public class StewardService
         if (!StewardPlan.IsKey(key)) return Refuse("bad-request", "The key is the plan's short name: lowercase letters, digits and hyphens, 40 at most.");
         if (name.Length is < 3 or > 80) return Refuse("bad-request", "Give the plan a name a person would call it, 3 to 80 characters.");
         if (cfg.Steward.PlanByKey(key) is not null) return Refuse("exists", $"This project already has a plan with the key \"{key}\".");
+        var wanted = (ideas ?? Array.Empty<StewardNewIdea>()).Where(i => !string.IsNullOrWhiteSpace(i.Title)).ToList();
+        if (wanted.Count == 0) return Refuse("bad-request", "Give at least one idea: a title, and a paragraph on who can do what at the end of it.");
+        if (wanted.Any(i => string.IsNullOrWhiteSpace(i.Paragraph)))
+            return Refuse("bad-request", "Each idea needs its paragraph: who, what they can do at the end, what it builds on, what it is not.");
 
         folder = string.IsNullOrWhiteSpace(folder) ? $"docs/plans/{key}" : folder.Replace('\\', '/').Trim().Trim('/');
         if (folder.Split('/').Any(part => part is "" or "." or ".." || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0))
@@ -1503,25 +2212,38 @@ public class StewardService
                 return Refuse("plan-in-flight", $"{working.DisplayName} still has {open.Count} ticket{(open.Count == 1 ? "" : "s")} open ({string.Join(", ", open.Take(8).Select(i => $"#{i}"))}). Finish or close them first: the plan being worked is the one a steward files against.");
         }
 
-        var master = $"{folder}/PLAN.md";
-        var units = $"{folder}/units";
-        var first = $"{units}/01-first-unit.md";
-        if (await _git.FileAtBaseAsync(projectKey, master, ct) is not null) return Refuse("exists", $"{master} is already in the repo.");
-        if (await _git.FileAtBaseAsync(projectKey, first, ct) is not null) return Refuse("exists", $"{first} is already in the repo.");
-
-        string Fill(string t) => t.Replace("{{NAME}}", name).Replace("{{KEY}}", key).Replace("{{DATE}}", DateTime.Now.ToString("yyyy-MM-dd"))
-            .Replace("{{PLAN_FILE}}", "../PLAN.md").Replace("{{UNITS_DIR}}", "units");
-        var unitText = Fill(unitTemplate);
+        var charter = $"{folder}/charter.md";
+        var units = $"{folder}/slices";
+        if (await _git.FileAtBaseAsync(projectKey, charter, ct) is not null) return Refuse("exists", $"{charter} is already in the repo.");
         var probe = new StewardPlan(units, StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed, StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
-        if (!TicketGitService.ReadUnit(probe, 1, first, unitText).Draft)
-            return Refuse("bad-template", "The unit template does not read as a draft, so it was not written.");
+        var day = DateTime.Now.ToString("yyyy-MM-dd");
+        var files = new List<(string Path, string Text)>();
+        for (var i = 0; i < wanted.Count; i++)
+        {
+            var title = Regex.Replace(wanted[i].Title.Trim(), @"\s+", " ");
+            var slug = Regex.Replace(title.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
+            if (slug.Length > 50) slug = slug[..50].Trim('-');
+            var path = $"{units}/{i + 1:00}-{(slug.Length > 0 ? slug : "idea")}.md";
+            var text = ideaTemplate.Replace("{{TITLE}}", title).Replace("{{DATE}}", day)
+                .Replace("{{PARAGRAPH}}", Regex.Replace(wanted[i].Paragraph!.Trim(), @"\s*\n\s*", " "));
+            if (!TicketGitService.ReadUnit(probe, i + 1, path, text).Idea)
+                return Refuse("bad-template", "The idea template does not read as an idea, so nothing was written.");
+            if (await _git.FileAtBaseAsync(projectKey, path, ct) is not null) return Refuse("exists", $"{path} is already in the repo.");
+            files.Add((path, text));
+        }
 
-        var (_, _, no1) = await _git.CommitFileAsync(projectKey, master, Fill(planTemplate), $"{name}: the plan, to be written", ct);
+        string Fill(string t) => t.Replace("{{NAME}}", name).Replace("{{KEY}}", key).Replace("{{DATE}}", day).Replace("{{UNITS_DIR}}", "slices");
+        var (_, _, no1) = await _git.CommitFileAsync(projectKey, charter, Fill(charterTemplate), $"{name}: the charter, to be written", ct);
         if (no1 is not null) return Refuse("refused", no1);
-        var (sha, _, no2) = await _git.CommitFileAsync(projectKey, first, unitText, $"{name}: a first unit, as a draft", ct);
-        if (no2 is not null) return Refuse("refused", $"{master} was committed, but the first unit was not: {no2}");
+        string? sha = null;
+        foreach (var (path, text) in files)
+        {
+            var (s1, _, no2) = await _git.CommitFileAsync(projectKey, path, text, $"{name}: an idea, {Path.GetFileName(path)}", ct);
+            if (no2 is not null) return Refuse("refused", $"{charter} was committed, but {path} was not: {no2}");
+            sha = s1;
+        }
 
-        return new StewardReply("started", null, new { key, name, master, units, first, commit = sha });
+        return new StewardReply("started", null, new { key, name, charter, units, ideas = files.Select(f => f.Path), commit = sha });
     }
 
     /// <summary>
@@ -1529,8 +2251,7 @@ public class StewardService
     /// <para>
     /// The owner's to run, once, when a project's stand-in moves into the dashboard from wherever
     /// it lived before. Safe to run again: a question already here by its key is left alone, an
-    /// identical line is not added twice, an outcome is set to what the import says, and the memo
-    /// is only filled when there is none. Everything it brings in is history, so none of it is
+    /// identical line is not added twice, and an outcome is set to what the import says. Everything it brings in is history, so none of it is
     /// handed to the next run as news - that run finds it where every later one will.
     /// </para>
     /// </summary>
@@ -1571,6 +2292,8 @@ public class StewardService
             {
                 ProjectKey = projectKey, Kind = kind, TicketId = e.TicketId, Text = text, At = e.At ?? now,
                 DeliveredAt = kind == StewardEntryKind.OwnerSaid ? now : null,
+                Basis = kind == StewardEntryKind.Ruling ? e.Basis?.Trim() : null,
+                Placed = kind == StewardEntryKind.Learned ? NoteKey(e.Key) : null,
             });
             if (kind == StewardEntryKind.OwnerSaid) said++; else entries++;
         }
@@ -1599,17 +2322,10 @@ public class StewardService
             tickets++;
         }
 
-        var s = await StewardDue.StateAsync(_db, projectKey);
-        var memo = false;
-        if (!string.IsNullOrWhiteSpace(import.Memo) && string.IsNullOrWhiteSpace(s.Memo))
-        {
-            s.Memo = import.Memo.Replace("\r\n", "\n").Trim();
-            s.MemoUpdatedAt = now;
-            memo = true;
-        }
-
         await _db.SaveChangesAsync(ct);
-        return new StewardReply("imported", null, new { questions, ownerSaid = said, entries, outcomes, tickets, memo });
+        // What came in is folded into the register too: it is where decisions are read from.
+        var register = await BuildRegisterAsync(Config(projectKey)!, ct);
+        return new StewardReply("imported", null, new { questions, ownerSaid = said, entries, outcomes, tickets, register });
     }
 
     private static string Head(string s, int max)

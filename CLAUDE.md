@@ -220,9 +220,16 @@ class, not a habit:
   First used by the Classroom walkthrough; `UserFlow` takes a `spot` prop that applies it per stop.
 - **`orbit-pan`** — a camera move on a picture: a screenshot zooming to the row that proves the point.
   Its own, slower speed (`--w-dur-pan`), because the eye follows it rather than the hand causing it.
+- **`orbit-morph`** — a part of a narrated picture moving to where it now belongs: a box sliding to
+  make room, re-colouring from unchanged to new. The page only sets where each part should be
+  (`transform`, `width`, `height`, colours); `data-morph="enter"` / `"exit"` cover a part arriving and
+  one kept mounted while it leaves. Its own speed, `--w-dur-morph`. The Classroom walkthrough's
+  `picture` scene (`WalkthroughPicture.tsx`) is its first user: the deck says what is on screen at
+  each beat, by id, and the move is worked out from the difference - so a new kind of explanation
+  needs a new picture, never a new scene kind.
 - **`orbit-row`** — the board's own row shell, which additionally carries its tier's skin.
 
-Durations and travel are `--w-dur-1/2/3` (plus `--w-dur-pan` for `orbit-pan` alone) and `--w-nudge`; the curve for anything that *moves* is
+Durations and travel are `--w-dur-1/2/3` (plus `--w-dur-pan` for `orbit-pan` and `--w-dur-morph` for `orbit-morph`) and `--w-nudge`; the curve for anything that *moves* is
 `--w-ease`. Reduced motion is handled once, in the layer, for every class above.
 
 **The check before you commit a new surface:** does every hovering, opening, or swapping thing on it
@@ -319,6 +326,9 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
 | A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
+| What is decided, and whether it still is | the register (`StewardDecision`, docs/plans-as-slices.md section 3). Recording, replacing, withdrawing, and settling a pair the import flagged are REST routes with no tool behind them; `steward_decisions` only reads. A replacing is stored on the newer decision only, and a number is the project's for good |
+| Ideas are the owner's; a building slice's story changes only with an answer | committing a proposed idea, and rewording a story sentence, happen only on the owner's answer to a question; `steward_draft_unit` refuses a draft no idea stands for, and a story that does not check |
+| A slice's walk-through is the board's | the board files it (`Ticket.Walkthrough`, straight to NeedsQa on the base) and calls it done on a pass; the steward can do neither |
 
 **The words are taken.** "Orchestrator" is `heartbeat.ps1` and "owner" is the human whose ticket it
 is - both everywhere in this code. The stand-in is the *steward*, and a new name for it in one file
@@ -332,7 +342,10 @@ is not authentication - nothing on this machine is - so do not describe it as a 
 **It runs in a berth of its own.** The orchestrator asks `GET /api/steward/due` each pass and
 starts `data/steward.ps1` in slot 99, beside the worker slots and never counted against them.
 A run is started by something happening (a ticket reached review or blocked, the owner answered,
-the base moved), not by a clock, and at most once per project in five minutes.
+the base moved), not by a clock, and at most once per project in five minutes. The owner can
+also ask for one from the Steward page (`POST /api/steward/run`, `StewardRunner`): it wakes a
+running heartbeat so the heartbeat stays the one launcher, and only while the heartbeat is stopped
+does the board start `steward.ps1` itself, in the same slot - a heartbeat started later adopts it.
 
 **A steward changes no file.** On claude that is a fact: the run is launched with no shell and no
 editor (`--tools Read,Grep,Glob`) and does everything through its MCP tools. On codex and gemini it
@@ -351,7 +364,7 @@ is the prompt's rule alone - the same gap, for the same reason, as the local-onl
 plan numbers its units from one, so a ticket and an outcome carry the plan's key beside the unit
 (`Ticket.PlanKey`, `StewardOutcome.Plan`), and anything that counts a unit's tickets filters on
 both. A count by `PlanUnit` alone is right until the day a second plan starts and wrong from then
-on. Starting one is the owner's (the Steward page, `data/plan-templates/` for the two documents'
+on. Starting one is the owner's (the Steward page, `data/plan-templates/` for the charter's, an idea's and a draft's
 shape) and is refused while the plan being worked has a ticket open.
 
 The rules that outrank that skill are `data/steward-prompt.md`. Changing what a steward may do?

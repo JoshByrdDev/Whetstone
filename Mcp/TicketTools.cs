@@ -446,7 +446,8 @@ public class TicketTools
         var accepted = new List<TicketService.QaShotSave>();
         var errors = new List<string>();
         var order = 0;
-        foreach (var shot in incoming.Take(6))
+        // A walk-through captures every step of its story, which a 250-word story keeps well under 40.
+        foreach (var shot in incoming.Take(t.Walkthrough ? 40 : 6))
         {
             try
             {

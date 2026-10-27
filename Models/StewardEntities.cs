@@ -72,6 +72,35 @@ public class StewardQuestion
     /// <summary>Those decisions' numbers, comma separated, in the order asked.</summary>
     public string? Decisions { get; set; }
 
+    /// <summary>
+    /// The register's decisions this question bears on, comma separated: the steward's claim, made
+    /// when it asks, of what an answer could change. Empty is a claim too - that nothing does. Null
+    /// on a question asked before questions said.
+    /// </summary>
+    public string? Touches { get; set; }
+
+    /// <summary>
+    /// Which of <see cref="Touches"/> each option would change, as a JSON object from an option's
+    /// label to numbers. The card starts from it when that option is picked; the owner's ticks are
+    /// what the answer replaces.
+    /// </summary>
+    public string? OptionChangesJson { get; set; }
+
+    /// <summary>
+    /// An idea the steward proposes - new, split, or rewritten - as the file and the whole text the
+    /// board commits on a yes. Only the owner changes ideas; this is how the steward asks.
+    /// </summary>
+    public string? ProposedFile { get; set; }
+    public string? ProposedText { get; set; }
+
+    /// <summary>
+    /// For a question about a slice being built: the sentence of its story an answer would change,
+    /// and its rewording under each option (a JSON object from an option's label to the new
+    /// sentence). The board commits the rewording with the decision, in the slice's file.
+    /// </summary>
+    public string? StorySentence { get; set; }
+    public string? StoryRewordingsJson { get; set; }
+
     public DateTime AskedAt { get; set; } = DateTime.UtcNow;
 
     /// <summary>The owner's answer, in their words or their click. Null while it waits.</summary>
@@ -107,6 +136,36 @@ public enum StewardEntryKind
     /// and handed to every run along with the answers.
     /// </summary>
     OwnerSaid,
+    /// <summary>
+    /// Something the steward means to do about one ticket, for its own later runs: "when this
+    /// merges, set C4 done and note its words". Unlike a <see cref="Call"/> it is read back, by
+    /// every run, until the steward closes it (<see cref="StewardEntry.HandledAt"/>). Written by
+    /// the call that decides it, so a run that dies part-way does not lose it.
+    /// </summary>
+    TicketNote,
+    /// <summary>
+    /// A standing call the steward made and will apply again - "a 'by inspection' pass is fine for
+    /// infra/ changes" - with what it rests on (<see cref="StewardEntry.Basis"/>). Every run is
+    /// handed every live ruling, so it is applied by being read, not remembered. It applies at
+    /// once; the owner keeps it (<see cref="StewardEntry.HandledAt"/>, "seen") or reverses it
+    /// (<see cref="StewardEntry.ReversedAt"/>), and a reversal reaches the next run like an answer.
+    /// A ruling is still only a reading of decisions already made: it decides nothing the owner has not.
+    /// </summary>
+    Ruling,
+    /// <summary>
+    /// A fact about the repo the steward learned: where a screen lives, how a check behaves, what a
+    /// seed holds. Queued the moment it is said, so a run that dies keeps it, and placed in the
+    /// project's notes store after the run by the launcher (<see cref="StewardEntry.HandledAt"/>,
+    /// with where it went in <see cref="StewardEntry.Placed"/>). From there every reader of the
+    /// store has it - the steward, the workers and the owner's own sessions.
+    /// </summary>
+    Learned,
+    /// <summary>
+    /// One run, as it ended: its own one-line summary from steward_end, or why it stopped without
+    /// one. The last few are handed to every run (recentRuns), which is all the continuity a run
+    /// needs now that everything else lives on the thing it is about.
+    /// </summary>
+    Run,
 }
 
 /// <summary>
@@ -151,17 +210,43 @@ public class StewardEntry
 
     /// <summary>
     /// When the owner ticked this off as read or dealt with. The owner's alone: no tool sets it, so
-    /// a steward cannot clear its own notes out of the way of a release.
+    /// a steward cannot clear its own notes out of the way of a release. For a
+    /// <see cref="StewardEntryKind.Ruling"/>, when the owner saw it (kept or reversed it).
+    /// For a <see cref="StewardEntryKind.TicketNote"/>, when the steward closed it.
     /// </summary>
     public DateTime? HandledAt { get; set; }
+
+    /// <summary>For a <see cref="StewardEntryKind.Ruling"/>: the decision or document it rests on.</summary>
+    public string? Basis { get; set; }
+
+    /// <summary>
+    /// For a <see cref="StewardEntryKind.Ruling"/>: when the owner reversed it, and in their words
+    /// what should hold instead. A reversed ruling is no longer handed to runs; the reversal is,
+    /// once, through <see cref="DeliveredAt"/>.
+    /// </summary>
+    public DateTime? ReversedAt { get; set; }
+    public string? ReversedBecause { get; set; }
+
+    /// <summary>
+    /// For a <see cref="StewardEntryKind.Ruling"/>: the register's decisions it reads, comma
+    /// separated. When one of them is replaced or withdrawn the ruling is flagged, rather than
+    /// standing quietly on a decision that no longer holds. Null on a ruling made before rulings said.
+    /// </summary>
+    public string? Reads { get; set; }
+
+    /// <summary>
+    /// For a <see cref="StewardEntryKind.Learned"/> fact: its suggested note key while queued, and
+    /// once placed, where it went ("new note x", "folded into x", "filed for review").
+    /// </summary>
+    public string? Placed { get; set; }
 }
 
 /// <summary>
 /// What a project's steward carries from one run to the next, and what decides whether it runs.
 /// <para>
-/// A run starts from nothing: the plan, the board and this row. <see cref="Memo"/> is its own
-/// note to its next run and is the only free text here, held to a length because every run reads
-/// all of it - a memo left to grow is a tax on every run after.
+/// A run starts from nothing but the plan, the board and the record. This row is not a note to
+/// the next run - there is none any more (docs/steward-without-memo.md) - only when runs happened,
+/// why one is owed, and the day's count of tickets filed.
 /// </para>
 /// </summary>
 public class StewardState
@@ -169,15 +254,19 @@ public class StewardState
     /// <summary>One row per project; the project's key is the row's.</summary>
     public string ProjectKey { get; set; } = "";
 
-    public string Memo { get; set; } = "";
-    public DateTime? MemoUpdatedAt { get; set; }
-
     /// <summary>
     /// Why a run is owed, or null when none is. Set by whatever changed (a ticket came for review,
     /// one blocked, the owner answered) and cleared when a run begins.
     /// </summary>
     public string? DueReason { get; set; }
     public DateTime? DueSince { get; set; }
+
+    /// <summary>
+    /// The due reasons the open run was handed at its start. They stay in <see cref="DueReason"/>
+    /// until the run ends properly, and only then are they taken out, so a run that dies part-way
+    /// leaves the project as due as it found it. Null while no run is open.
+    /// </summary>
+    public string? RunDueReason { get; set; }
 
     /// <summary>
     /// The base branch's head at the end of a run that left nothing to file. While the head is
@@ -188,6 +277,13 @@ public class StewardState
     public DateTime? LastRunStartedAt { get; set; }
     public DateTime? LastRunEndedAt { get; set; }
     public string? LastRunSummary { get; set; }
+
+    /// <summary>
+    /// When the register of decisions was first built from what the project already had. Until
+    /// then the first read or write of the register builds it, so no decision goes missing between
+    /// the old record and the new.
+    /// </summary>
+    public DateTime? RegisterBuiltAt { get; set; }
 
     /// <summary>The local day the count below belongs to; a new day starts it again.</summary>
     public string? CreatedDay { get; set; }
@@ -297,9 +393,189 @@ public class StewardUnit
     /// <summary>When the owner agreed it from the board. Null when they agreed it by hand, in the file.</summary>
     public DateTime? AgreedAt { get; set; }
 
+    /// <summary>
+    /// The file it was agreed as. A slice's number is fixed once it is agreed, because tickets and
+    /// outcomes carry it; a renamed or renumbered agreed slice is flagged rather than silently
+    /// treated as a new one.
+    /// </summary>
+    public string? AgreedFile { get; set; }
+
+    /// <summary>When the board filed its walk-through as a ticket, and which (piece 8).</summary>
+    public int? WalkthroughTicketId { get; set; }
+
     /// <summary>When the owner said its work had been released. Null until then.</summary>
     public DateTime? ReleasedAt { get; set; }
 
     /// <summary>The base branch's head when it was released: what "released" meant that day.</summary>
     public string? ReleasedSha { get; set; }
+}
+
+/// <summary>Where a <see cref="StewardDecision"/> came from.</summary>
+public enum StewardDecisionSource
+{
+    /// <summary>The owner's answer to a question the steward asked.</summary>
+    Question,
+    /// <summary>One of a unit's decisions, settled by the owner and written into its spec under "Decided".</summary>
+    Slice,
+    /// <summary>A row of a plan document's own decisions section, from the day the plan was written.</summary>
+    Plan,
+    /// <summary>Recorded by the owner directly, from the register page.</summary>
+    Owner,
+    /// <summary>A standing word from the owner that answered no question.</summary>
+    OwnerSaid,
+}
+
+/// <summary>
+/// One decision in a project's register: what is true, what it applies to, and whether it still is.
+/// <para>
+/// The register is the one home of a decision's status (docs/plans-as-slices.md, section 3). Its
+/// text is written once, when it is made, and is never edited: a decision that changes is a newer
+/// one that replaces it, and the replacing is stored only on the newer one
+/// (<see cref="StewardDecisionReplace"/>), so "replaced" is never written twice and cannot
+/// disagree with itself. A spec's "Decided" section and the decisions file are copies written out
+/// from here.
+/// </para>
+/// </summary>
+public class StewardDecision
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>
+    /// <c>#n</c>: one sequence per project, never reused. A unit's decision keeps the number its
+    /// spec gave it; everything else takes the next one after the highest in use.
+    /// </summary>
+    public int Number { get; set; }
+
+    /// <summary>What is true, in a sentence or two. Written once.</summary>
+    public string Rule { get; set; } = "";
+
+    /// <summary>A unit decision's short title, as its spec gives it.</summary>
+    public string? Title { get; set; }
+
+    /// <summary>
+    /// What it applies to. No unit: the project as a whole. A unit (with the plan it belongs to,
+    /// since a unit's number means nothing without its plan): that slice. With outcomes too, comma
+    /// separated: only those outcomes of it.
+    /// </summary>
+    public string? PlanKey { get; set; }
+    public int? PlanUnit { get; set; }
+    public string? Outcomes { get; set; }
+
+    /// <summary>
+    /// Provisional: in force only until a named point. With <see cref="ProvisionalUnit"/>, until that
+    /// unit of the same plan is built; without, until the owner says.
+    /// </summary>
+    public bool Provisional { get; set; }
+    public int? ProvisionalUnit { get; set; }
+
+    /// <summary>Withdrawn by the owner, with nothing in its place.</summary>
+    public DateTime? WithdrawnAt { get; set; }
+    public string? WithdrawnBecause { get; set; }
+
+    public StewardDecisionSource Source { get; set; }
+
+    /// <summary>The question it answered, by key, with the question and its options as they were asked.</summary>
+    public string? QuestionKey { get; set; }
+    public string? Question { get; set; }
+    public string? OptionsJson { get; set; }
+
+    /// <summary>Where it was read from or written to: a spec file, a plan document, a record line.</summary>
+    public string? SourceRef { get; set; }
+
+    /// <summary>What the register's import knows it by, so taking in the same record twice adds nothing.</summary>
+    public string? ImportKey { get; set; }
+
+    /// <summary>The day it was made, which for an imported decision is the day its source says.</summary>
+    public DateTime MadeAt { get; set; } = DateTime.UtcNow;
+    public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// When its status last changed: recorded, withdrawn, or given something to replace. With
+    /// <see cref="DeliveredAt"/> null, a change the next run is handed as news - for what reaches
+    /// the register by no other road a run already watches (an answer, an instruction).
+    /// </summary>
+    public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? DeliveredAt { get; set; }
+
+    public List<StewardDecisionReplace> Replaces { get; set; } = new();
+}
+
+/// <summary>One decision a newer one overrides, and in a line why. Kept only on the newer decision.</summary>
+public class StewardDecisionReplace
+{
+    public int Id { get; set; }
+    public int DecisionId { get; set; }
+
+    /// <summary>The number of the decision replaced.</summary>
+    public int Number { get; set; }
+    public string Why { get; set; } = "";
+}
+
+/// <summary>
+/// Something the owner told the steward to do for a while: "hold merges until that test is fixed".
+/// Not a decision - it has an end, and it is never in the register. The steward closes it when its
+/// end has come, and says how; the owner can close it at any time.
+/// </summary>
+public class StewardInstruction
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+    public string Text { get; set; } = "";
+
+    /// <summary>The condition that ends it, in the owner's words: "until the test is fixed".</summary>
+    public string Until { get; set; } = "";
+    public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>When a run was first handed it. Until then it is news.</summary>
+    public DateTime? DeliveredAt { get; set; }
+
+    public DateTime? ClosedAt { get; set; }
+    /// <summary>"steward" or "owner".</summary>
+    public string? ClosedBy { get; set; }
+    /// <summary>How its end came, or why the owner closed it.</summary>
+    public string? ClosedNote { get; set; }
+}
+
+/// <summary>
+/// An open item the owner left in an answer - "let's talk about a dynamic role" - recorded by the
+/// steward against the decision it came with. It waits on the register page until a question or
+/// an idea takes it up, or the owner drops it.
+/// </summary>
+public class StewardFollowUp
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>The decision whose answer left it.</summary>
+    public int Decision { get; set; }
+    public string Text { get; set; } = "";
+    public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>What took it up: "question:&lt;key&gt;" or "idea:&lt;file&gt;". Null while it waits.</summary>
+    public string? CitedBy { get; set; }
+    public DateTime? CitedAt { get; set; }
+
+    /// <summary>When the owner dropped it, as nothing to take up.</summary>
+    public DateTime? DroppedAt { get; set; }
+}
+
+/// <summary>
+/// Two decisions the register's import thinks may disagree, put to the owner rather than assumed.
+/// Settled by the owner: the newer replaces the older, or both stand.
+/// </summary>
+public class StewardDecisionConflict
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+    public int Older { get; set; }
+    public int Newer { get; set; }
+
+    /// <summary>What the two have in common that made the import think so.</summary>
+    public string Why { get; set; } = "";
+    public DateTime FoundAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>"replaced" or "both-stand", once the owner has said.</summary>
+    public string? Settled { get; set; }
+    public DateTime? SettledAt { get; set; }
 }

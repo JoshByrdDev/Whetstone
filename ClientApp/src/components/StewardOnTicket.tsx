@@ -11,7 +11,8 @@ const RELEASE_WORD: Record<string, string> = {
 };
 
 /**
- * What the project's steward decided about this ticket, and what it leaves for a release.
+ * What the project's steward decided about this ticket, what it means to do about it next, and
+ * what it leaves for a release. Read-only: the steward closes its own notes.
  *
  * These lines are written for the ticket's owner to read back and reverse, and the place somebody
  * goes to ask "why was this merged like that" is the ticket, not a list of every call on every
@@ -34,10 +35,14 @@ export function StewardOnTicket({ project, ticketId }: { project: string; ticket
       <div className="text-[11px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-gray-500 mb-2.5">From the steward</div>
       <div className="flex flex-col gap-2">
         {[...rows].reverse().map(e => (
-          <div key={e.id} className="rounded-lg border border-hair px-3 py-2.5" style={{ opacity: e.handledAt ? 0.6 : 1 }}>
+          <div key={e.id} className="rounded-lg border border-hair px-3 py-2.5" style={{ opacity: (e.kind === 'Ruling' ? e.reversedAt : e.handledAt) ? 0.6 : 1 }}>
             <div className="text-[10px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-gray-500 mb-1">
-              {e.kind === 'Call' ? 'A call it made for you' : RELEASE_WORD[e.release ?? 'Note']}
-              {e.handledAt ? ' - ticked off' : ''}
+              {e.kind === 'Call' ? 'A call it made for you'
+                : e.kind === 'TicketNote' ? (e.handledAt ? 'It meant to do - done' : 'It means to do')
+                : e.kind === 'Ruling' ? (e.reversedAt ? 'A ruling it made - you reversed it' : 'A ruling it made')
+                : e.kind !== 'BeforeRelease' ? 'From the steward'
+                : RELEASE_WORD[e.release ?? 'Note']}
+              {e.handledAt && e.kind === 'BeforeRelease' ? ' - ticked off' : ''}
             </div>
             <Markdown text={e.text} />
           </div>

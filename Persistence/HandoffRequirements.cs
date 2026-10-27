@@ -167,6 +167,8 @@ public static class HandoffRequirements
     /// </summary>
     public static Requirement? For(TicketPhase from, TicketPhase to, Ticket? t = null) => (from, to) switch
     {
+        // A walk-through's pass is held to the same proof as any QA pass: every step, on this pass, with shots.
+        (TicketPhase.QaTesting, TicketPhase.NeedsReview) when t is { Walkthrough: true } => For(TicketPhase.QaTesting, TicketPhase.NeedsRefinement),
         (TicketPhase.QaTesting, TicketPhase.NeedsRefinement) when t is { SkipQaTesting: true } => null,
 
         // The one requirement not about something already written on the ticket, so it is the one
@@ -278,6 +280,8 @@ public static class HandoffRequirements
 
         var req = For(from, to, t);
         if (req is null) return null;
+        // A walk-through passing straight to review is checked as the QA pass it is.
+        if (t.Walkthrough && from == TicketPhase.QaTesting && to == TicketPhase.NeedsReview) to = TicketPhase.NeedsRefinement;
 
         if (from == TicketPhase.Refining && to == TicketPhase.NeedsReview)
         {

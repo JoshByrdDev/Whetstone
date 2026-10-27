@@ -17,7 +17,7 @@ namespace Whetstone.Tests;
 /// lines is.
 /// </para>
 /// </summary>
-public class StewardServiceTests : IDisposable
+public partial class StewardServiceTests : IDisposable
 {
     private readonly SqliteConnection _conn;
     private readonly DbContextOptions<DashboardDbContext> _options;
@@ -46,7 +46,6 @@ public class StewardServiceTests : IDisposable
 
     private void Configure(string mode, string steward = """
         "limits": { "createdPerDay": 2, "openAtOnce": 3, "sendBacksPerTicket": 1 },
-        "memoMaxChars": 1000,
         "plan": { "units": "docs/units" },
         "neverMerge": ["infra/"]
         """)
@@ -126,7 +125,7 @@ public class StewardServiceTests : IDisposable
     public async Task Nothing_is_changed_outside_a_run()
     {
         Assert.Equal("no-run", (await In(s => s.CreateAsync("alpha", Draft()))).Answer);
-        Assert.Equal("no-run", (await In(s => s.SaveMemoAsync("alpha", "x"))).Answer);
+        Assert.Equal("no-run", (await In(s => s.NoteTicketAsync("alpha", 1, "x"))).Answer);
     }
 
     [Fact]
@@ -409,7 +408,7 @@ public class StewardServiceTests : IDisposable
     private static StewardAsk Question(string key = "sms-provider") => new(key,
         "Which provider sends our texts?", "The first notice ticket cannot be written without one.",
         new[] { new BlockOption("The one we already pay for", "No new bill", true), new BlockOption("A new one", "Costs money") },
-        "Every ticket that sends a text.");
+        "Every ticket that sends a text.", Touches: Array.Empty<int>());
 
     [Fact]
     public async Task A_question_is_asked_once_for_good()
@@ -482,8 +481,7 @@ public class StewardServiceTests : IDisposable
                 new StewardImportEntry("Call", "Kept the wording: unit 1, A2.", id),
             },
             Outcomes: new[] { new StewardImportOutcome(1, "A1", "InProgress", true, "The screen is left.") },
-            Tickets: new[] { new StewardImportTicket(id, 1, new[] { "A1" }) },
-            Memo: "Swept group A.");
+            Tickets: new[] { new StewardImportTicket(id, 1, new[] { "A1" }) });
 
         Assert.Equal("imported", (await In(s => s.ImportAsync("alpha", import))).Answer);
         Assert.Equal("imported", (await In(s => s.ImportAsync("alpha", import))).Answer);   // again: nothing doubles
@@ -493,7 +491,6 @@ public class StewardServiceTests : IDisposable
             Assert.Equal(2, await ctx.StewardQuestions.CountAsync());
             Assert.Equal(2, await ctx.StewardEntries.CountAsync());
             Assert.Equal("A1", (await ctx.Tickets.FindAsync(id))!.PlanOutcomes);
-            Assert.Equal("Swept group A.", (await ctx.StewardStates.FindAsync("alpha"))!.Memo);
         }
 
         // History, not news: the first run is not handed any of it as new, and can still find it.
@@ -520,8 +517,9 @@ public class StewardServiceTests : IDisposable
 
         var last = _git.Committed[^1];
         Assert.Equal("docs/decisions.md", last.Path);
-        Assert.Contains("**sms-provider**: Which provider sends our texts? The one we already pay for.", last.Content);
-        Assert.Contains("A ticket carries one whole outcome.", last.Content);
+        Assert.Contains("- **#1** The one we already pay for. (", last.Content);
+        Assert.Contains("answering `sms-provider`: Which provider sends our texts?", last.Content);
+        Assert.Contains("- **#2** A ticket carries one whole outcome.", last.Content);
     }
 
     [Fact]
@@ -866,17 +864,25 @@ public class StewardServiceTests : IDisposable
         Assert.Equal(StewardOutcomeState.Done, after.StewardOutcomes.Single(o => o.Plan == "").State);
     }
 
-    private const string PlanTemplate = "# {{NAME}}\n\nStarted {{DATE}}.\n";
-    private const string UnitTemplate = "# Unit 1\n\n> **Status: draft, awaiting the owner.**\n\n- **A1.** A person can ...\n";
+    private const string CharterTemplate = "# {{NAME}}\n\nStarted {{DATE}}. Slices in {{UNITS_DIR}}.\n";
+    private const string IdeaTemplate = "# {{TITLE}}\n\n> **Status: idea.** Written {{DATE}}.\n\n{{PARAGRAPH}}\n";
+    private static readonly StewardNewIdea[] TwoIdeas =
+    {
+        new("A first booking", "A customer books a first visit."),
+        new("Invites", "A business invites its customers."),
+    };
 
     [Fact]
-    public async Task A_new_plan_is_its_two_documents_and_waits_for_the_last_one_to_finish()
+    public async Task A_new_plan_is_its_charter_and_ideas_and_waits_for_the_last_one_to_finish()
     {
-        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "Not A Key", "Next", null, PlanTemplate, UnitTemplate))).Answer);
-        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", "../outside", PlanTemplate, UnitTemplate))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "Not A Key", "Next", null, CharterTemplate, IdeaTemplate, TwoIdeas))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", "../outside", CharterTemplate, IdeaTemplate, TwoIdeas))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate, Array.Empty<StewardNewIdea>()))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate,
+            new[] { new StewardNewIdea("No paragraph", "") }))).Answer);
         // The plan being worked has no key, so "" is taken; and it has a ticket still open.
         var open = await Built(1, "A1", phase: TicketPhase.Implementing);
-        var held = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, PlanTemplate, UnitTemplate));
+        var held = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate, TwoIdeas));
         Assert.Equal("plan-in-flight", held.Answer);
         Assert.Contains($"#{open}", held.Why);
         Assert.Empty(_git.Committed);
@@ -886,14 +892,17 @@ public class StewardServiceTests : IDisposable
             (await ctx.Tickets.SingleAsync(t => t.Id == open)).Phase = TicketPhase.Done;
             await ctx.SaveChangesAsync();
         }
-        _git.InRepo["docs/plans/taken/PLAN.md"] = "already here";
-        Assert.Equal("exists", (await In(s => s.OwnerStartsPlanAsync("alpha", "taken", "Taken", null, PlanTemplate, UnitTemplate))).Answer);
+        _git.InRepo["docs/plans/taken/charter.md"] = "already here";
+        Assert.Equal("exists", (await In(s => s.OwnerStartsPlanAsync("alpha", "taken", "Taken", null, CharterTemplate, IdeaTemplate, TwoIdeas))).Answer);
+        Assert.Equal("bad-template", (await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, "# {{TITLE}}\n", TwoIdeas))).Answer);
 
-        var r = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, PlanTemplate, UnitTemplate));
+        var r = await In(s => s.OwnerStartsPlanAsync("alpha", "next", "Next thing", null, CharterTemplate, IdeaTemplate, TwoIdeas));
         Assert.Equal("started", r.Answer);
-        Assert.Equal(new[] { "docs/plans/next/PLAN.md", "docs/plans/next/units/01-first-unit.md" }, _git.Committed.Select(c => c.Path));
+        Assert.Equal(new[] { "docs/plans/next/charter.md", "docs/plans/next/slices/01-a-first-booking.md", "docs/plans/next/slices/02-invites.md" },
+            _git.Committed.Select(c => c.Path));
         Assert.StartsWith("# Next thing", _git.Committed[0].Content);
-        Assert.DoesNotContain("{{", _git.Committed[0].Content);
+        Assert.Contains("A business invites its customers.", _git.Committed[2].Content);
+        Assert.All(_git.Committed, c => Assert.DoesNotContain("{{", c.Content));
     }
 
     [Fact]
@@ -901,12 +910,12 @@ public class StewardServiceTests : IDisposable
     {
         var paths = new DashboardPaths(_dataRoot);
         var file = paths.ProjectConfigDefaults("alpha");
-        Assert.Null(await StewardPlanFile.StartAsync(file, "next", "Next thing", "docs/plans/next/units", "docs/plans/next/PLAN.md"));
+        Assert.Null(await StewardPlanFile.StartAsync(file, "next", "Next thing", "docs/plans/next/slices", "docs/plans/next/charter.md"));
 
         var cfg = new ProjectRegistry(paths).GetProjectConfig("alpha");
         Assert.Equal("next", cfg.Steward.Plan.Key);
         Assert.Equal("Next thing", cfg.Steward.Plan.DisplayName);
-        Assert.Equal("docs/plans/next/PLAN.md", cfg.Steward.Plan.Master);
+        Assert.Equal("docs/plans/next/charter.md", cfg.Steward.Plan.Charter);
         var past = Assert.Single(cfg.Steward.PastPlans);
         Assert.Equal("docs/units", past.UnitsDir);
         Assert.Same(past, cfg.Steward.PlanByKey(""));
@@ -956,18 +965,10 @@ public class StewardServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task A_memo_over_its_limit_is_saved_and_said_to_be_too_long()
-    {
-        await Begin();
-        Assert.Equal("saved", (await In(s => s.SaveMemoAsync("alpha", "Next: file A2 once #1 merges."))).Answer);
-        Assert.Equal("saved-too-long", (await In(s => s.SaveMemoAsync("alpha", new string('x', 1001)))).Answer);
-    }
-
-    [Fact]
     public async Task Only_the_next_unit_can_be_drafted_and_never_as_agreed()
     {
         await Begin();
-        const string draft = "> **Status: draft, awaiting the owner.**\n\n## Outcomes\n\n- **A1.** Something new.\n";
+        const string draft = "> **Status: draft, awaiting the owner.**\n\n## The walk-through this unit makes possible\n\nA person does something new (A1).\n\n## Outcomes\n\n- **A1.** Something new.\n";
         Assert.Equal("not-next", (await In(s => s.DraftUnitAsync("alpha", "04-later.md", draft))).Answer);
         Assert.Equal("bad-request", (await In(s => s.DraftUnitAsync("alpha", "02-second.md", draft.Replace("draft, awaiting the owner", "agreed")))).Answer);
         Assert.Equal("exists", (await In(s => s.DraftUnitAsync("alpha", "02-other-name.md", draft))).Answer);
@@ -994,6 +995,53 @@ public class StewardServiceTests : IDisposable
         checks = new TaskCompletionSource<StewardReply>();
         checks.SetResult(new StewardReply("not-ready"));
         Assert.Equal("not-ready", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(2, started);
+    }
+
+    [Fact]
+    public async Task A_kept_answer_is_not_handed_out_once_the_ticket_has_changed_since()
+    {
+        var started = 0;
+        var checks = new TaskCompletionSource<StewardReply>();
+        var stamp = "NeedsReview|tip-a|2|1";
+        var merges = new StewardMerges((_, _) => { started++; return checks.Task; }, (_, _) => Task.FromResult<string?>(stamp))
+            { Wait = TimeSpan.FromMilliseconds(50) };
+
+        // The call that asked gave up before the answer came; the answer is kept.
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+        checks.SetResult(new StewardReply("behind"));
+        await Task.Delay(20);
+
+        // The steward rebased in between: the kept 'behind' is about a branch that is gone.
+        stamp = "NeedsReview|tip-b|0|1";
+        checks = new TaskCompletionSource<StewardReply>();
+        checks.SetResult(new StewardReply("merged"));
+        Assert.Equal("merged", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(2, started);
+    }
+
+    [Fact]
+    public async Task A_kept_answer_is_handed_out_while_the_ticket_is_as_it_was()
+    {
+        var started = 0;
+        var checks = new TaskCompletionSource<StewardReply>();
+        var stamp = "NeedsReview|tip-a|0|1";
+        var merges = new StewardMerges((_, _) => { started++; return checks.Task; }, (_, _) => Task.FromResult<string?>(stamp))
+            { Wait = TimeSpan.FromMilliseconds(50) };
+
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+        checks.SetResult(new StewardReply("check-failed"));
+        await Task.Delay(20);
+        Assert.Equal("check-failed", (await merges.MergeAsync("alpha", 1)).Answer);
+        Assert.Equal(1, started);
+
+        // A merge that succeeded moved the ticket to Done, and its answer still reaches the steward.
+        checks = new TaskCompletionSource<StewardReply>();
+        Assert.Equal("checking", (await merges.MergeAsync("alpha", 1)).Answer);
+        checks.SetResult(new StewardReply("merged"));
+        await Task.Delay(20);
+        stamp = "Done|tip-a|0|0";
+        Assert.Equal("merged", (await merges.MergeAsync("alpha", 1)).Answer);
         Assert.Equal(2, started);
     }
 
@@ -1038,12 +1086,516 @@ public class StewardServiceTests : IDisposable
             Task.FromResult<IReadOnlyList<StewardFlag>>(flags);
     }
 
+    // ---- a run that dies part-way ----------------------------------------------------
+
+    private async Task<string> BeginJson() => System.Text.Json.JsonSerializer.Serialize((await Begin()).Data);
+
+    [Fact]
+    public async Task A_run_that_dies_part_way_leaves_its_answers_and_reasons_for_the_next()
+    {
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question()));
+        await In(s => s.EndAsync("alpha", "asked one question", false));
+        await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "The one we already pay for."));
+
+        // Handed the answer, then killed before steward_end.
+        Assert.Contains("The one we already pay for.", await BeginJson());
+        await using (var c = NewCtx()) Assert.True(await Steward(c).AbandonRunAsync("alpha", "the process ended"));
+        await using (var ctx = NewCtx())
+        {
+            var st = await ctx.StewardStates.FindAsync("alpha");
+            Assert.Contains("the owner answered sms-provider", st!.DueReason);
+            Assert.Contains("the last run did not finish", st.DueReason);
+            Assert.Null((await ctx.StewardQuestions.SingleAsync()).AnswerDeliveredAt);
+        }
+
+        // The next run is handed the same answer, and why it is due.
+        var again = await BeginJson();
+        Assert.Contains("The one we already pay for.", again);
+        Assert.Contains("the last run did not finish", again);
+    }
+
+    [Fact]
+    public async Task A_run_that_ends_settles_what_it_was_handed_and_keeps_what_came_in_meanwhile()
+    {
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question()));
+        await In(s => s.AskAsync("alpha", Question("map-provider")));
+        await In(s => s.EndAsync("alpha", "asked two questions", false));
+        await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "The one we already pay for."));
+
+        await Begin();
+        // While it runs: the owner answers the other, and a ticket comes for review.
+        await Task.Delay(20);
+        await In(s => s.OwnerAnswersAsync("alpha", "map-provider", "None."));
+        await using (var c = NewCtx()) await Steward(c).MarkDueAsync("alpha", "#9 is ready for review");
+        Assert.Equal("ended", (await In(s => s.EndAsync("alpha", "applied an answer", false))).Answer);
+
+        await using var ctx = NewCtx();
+        var st = (await ctx.StewardStates.FindAsync("alpha"))!;
+        Assert.DoesNotContain("sms-provider", st.DueReason);
+        Assert.Contains("map-provider", st.DueReason);
+        Assert.Contains("#9 is ready for review", st.DueReason);
+        Assert.Null(st.RunDueReason);
+        var qs = await ctx.StewardQuestions.ToListAsync();
+        Assert.NotNull(qs.Single(q => q.Key == "sms-provider").AnswerDeliveredAt);
+        Assert.Null(qs.Single(q => q.Key == "map-provider").AnswerDeliveredAt);
+    }
+
+    // ---- ticket notes ----------------------------------------------------------------
+
+    private static string Json(StewardReply r) => System.Text.Json.JsonSerializer.Serialize(r.Data);
+
+    [Fact]
+    public async Task A_ticket_note_is_shown_by_review_and_status_until_it_is_closed()
+    {
+        var id = await AtReview();
+        Assert.Equal("no-run", (await In(s => s.NoteTicketAsync("alpha", id, "Merge it once rebased."))).Answer);
+
+        await Begin();
+        var noted = await In(s => s.NoteTicketAsync("alpha", id, "When it merges, set A1 Done."));
+        Assert.Equal("noted", noted.Answer);
+        var noteId = (int)noted.Data!.GetType().GetProperty("id")!.GetValue(noted.Data)!;
+
+        Assert.Contains("When it merges, set A1 Done.", Json(await In(s => s.ReviewAsync("alpha", id))));
+        var status = Json(await In(s => s.StatusAsync("alpha")));
+        Assert.Contains("ticketNotes", status);
+        Assert.Contains("When it merges, set A1 Done.", status);
+
+        // A run that dies keeps it: the next run is still shown it.
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "killed");
+        Assert.Contains("When it merges, set A1 Done.", await BeginJson());
+
+        Assert.Equal("done", (await In(s => s.DoneWithAsync("alpha", noteId))).Answer);
+        Assert.Equal("already-done", (await In(s => s.DoneWithAsync("alpha", noteId))).Answer);
+        Assert.DoesNotContain("set A1 Done", Json(await In(s => s.ReviewAsync("alpha", id))));
+        Assert.DoesNotContain("set A1 Done", Json(await In(s => s.StatusAsync("alpha"))));
+    }
+
+    [Fact]
+    public async Task A_ticket_note_is_one_thing_on_a_ticket_of_this_project()
+    {
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.NoteTicketAsync("alpha", id, "  "))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.NoteTicketAsync("alpha", id, new string('x', StewardService.TicketNoteMaxChars + 1)))).Answer);
+        Assert.NotEqual("noted", (await In(s => s.NoteTicketAsync("alpha", id + 50, "No such ticket."))).Answer);
+        Assert.Equal("not-found", (await In(s => s.DoneWithAsync("alpha", 9999))).Answer);
+        // Only a ticket note can be closed this way, not a call or a release note.
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.Call, id, "Kept the wording."));
+        var call = Entries().Single(e => e.Kind == StewardEntryKind.Call).Id;
+        Assert.Equal("not-found", (await In(s => s.DoneWithAsync("alpha", call))).Answer);
+    }
+
+    [Fact]
+    public async Task Propose_mode_only_says_it_would_note_a_ticket()
+    {
+        Configure("propose");
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("proposed", (await In(s => s.NoteTicketAsync("alpha", id, "When it merges, set A1 Done."))).Answer);
+        Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.TicketNote);
+    }
+
+    [Fact]
+    public async Task Taking_a_ticket_out_of_the_plan_closes_its_notes()
+    {
+        var id = await Loose();
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A1" }))).Answer);
+        await Begin();
+        await In(s => s.NoteTicketAsync("alpha", id, "When it merges, set A1 Done."));
+        await In(s => s.LinkTicketAsync(id, null, null, null));
+        Assert.NotNull(Entries().Single(e => e.Kind == StewardEntryKind.TicketNote).HandledAt);
+    }
+
+    // ---- rulings ----------------------------------------------------------------------
+
+    private const string InfraRule = "A by-inspection pass on an infra/ change is fine when a test asserts the config.";
+
+    private async Task<int> Ruled()
+    {
+        var r = await In(s => s.RuleAsync("alpha", InfraRule, "the owner's answer infra-checks"));
+        Assert.Equal("ruled", r.Answer);
+        return Entries().Single(e => e.Kind == StewardEntryKind.Ruling).Id;
+    }
+
+    [Fact]
+    public async Task A_ruling_applies_at_once_and_every_run_is_handed_it()
+    {
+        Assert.Equal("no-run", (await In(s => s.RuleAsync("alpha", InfraRule, "x"))).Answer);
+        await Begin();
+        var id = await Ruled();
+        Assert.Equal("already-ruled", (await In(s => s.RuleAsync("alpha", InfraRule.ToUpperInvariant(), "again"))).Answer);
+        Assert.Contains("infra-checks", Json(await In(s => s.StatusAsync("alpha"))));
+        await In(s => s.EndAsync("alpha", "ruled once", false));
+        Assert.Contains(InfraRule, await BeginJson());
+
+        // Keeping it changes nothing for the steward but the owner's mark.
+        Assert.Equal("kept", (await In(s => s.OwnerKeepsRulingAsync("alpha", id))).Answer);
+        Assert.Contains("\"keptByOwner\":true", Json(await In(s => s.StatusAsync("alpha"))));
+    }
+
+    [Fact]
+    public async Task A_ruling_must_say_what_it_rests_on()
+    {
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.RuleAsync("alpha", InfraRule, " "))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.RuleAsync("alpha", "", "the spec"))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.RuleAsync("alpha", new string('x', StewardService.RulingMaxChars + 1), "the spec"))).Answer);
+        Assert.Equal("not-found", (await In(s => s.RuleAsync("alpha", InfraRule, "the spec", 999))).Answer);
+    }
+
+    [Fact]
+    public async Task A_reversed_ruling_stops_being_handed_over_and_its_reversal_reaches_the_next_run_once()
+    {
+        await Begin();
+        var id = await Ruled();
+        await In(s => s.EndAsync("alpha", "ruled once", false));
+
+        Assert.Equal("bad-request", (await In(s => s.OwnerReversesRulingAsync("alpha", id, "  "))).Answer);
+        Assert.Equal("reversed", (await In(s => s.OwnerReversesRulingAsync("alpha", id, "Every infra/ change is run on the stack."))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerKeepsRulingAsync("alpha", id))).Answer);
+        await using (var c = NewCtx()) Assert.Contains($"the owner reversed ruling {id}", (await c.StewardStates.FindAsync("alpha"))!.DueReason);
+
+        // Handed to the next run, which dies: handed again.
+        var first = await BeginJson();
+        Assert.Contains("Every infra/ change is run on the stack.", first);
+        Assert.DoesNotContain($"\"restsOn\"", first);
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "killed");
+        Assert.Contains("Every infra/ change is run on the stack.", await BeginJson());
+
+        // Once a run ends properly, it is delivered and not handed over again.
+        await In(s => s.EndAsync("alpha", "applied the reversal", false));
+        Assert.DoesNotContain("Every infra/ change is run on the stack.", await BeginJson());
+    }
+
+    [Fact]
+    public async Task The_owners_tick_box_does_not_reach_rulings_or_ticket_notes()
+    {
+        var t = await AtReview();
+        await Begin();
+        var id = await Ruled();
+        await In(s => s.NoteTicketAsync("alpha", t, "When it merges, set A1 Done."));
+        var note = Entries().Single(e => e.Kind == StewardEntryKind.TicketNote).Id;
+        Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", id, true, null))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", note, true, null))).Answer);
+    }
+
+    // ---- what it learned about the repo --------------------------------------------------
+
+    [Fact]
+    public async Task A_learned_fact_is_queued_at_once_and_survives_a_run_that_dies()
+    {
+        Assert.Equal("no-run", (await In(s => s.LearnedAsync("alpha", "The day read is loadDay in core/day.ts."))).Answer);
+        await Begin();
+        Assert.Equal("queued", (await In(s => s.LearnedAsync("alpha", "The day read is  loadDay in core/day.ts.", "Day Read!"))).Answer);
+        Assert.Equal("already-queued", (await In(s => s.LearnedAsync("alpha", "the day read is loadDay in core/day.ts."))).Answer);
+        Assert.Contains("loadDay", Json(await In(s => s.StatusAsync("alpha"))));
+
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "killed");
+        await using (var c = NewCtx())
+        {
+            var q = await Steward(c).UnplacedAsync("alpha");
+            Assert.Equal("The day read is loadDay in core/day.ts.", Assert.Single(q).Text);
+            Assert.Equal("day-read", q[0].Placed);   // its suggested key, as the store spells keys
+        }
+    }
+
+    [Fact]
+    public async Task A_placed_fact_leaves_the_queue_and_says_where_it_went()
+    {
+        await Begin();
+        await In(s => s.LearnedAsync("alpha", "Port 52547 is free for the emulator."));
+        int id;
+        await using (var c = NewCtx()) id = (await Steward(c).UnplacedAsync("alpha")).Single().Id;
+
+        Assert.Equal("placed", (await In(s => s.PlacedAsync("alpha", id, "new note emulator-port"))).Answer);
+        Assert.Equal("already-placed", (await In(s => s.PlacedAsync("alpha", id, "folded into x"))).Answer);
+        Assert.Equal("not-found", (await In(s => s.PlacedAsync("alpha", id + 99, "x"))).Answer);
+        var e = Entries().Single(x => x.Kind == StewardEntryKind.Learned);
+        Assert.Equal("new note emulator-port", e.Placed);
+        Assert.NotNull(e.HandledAt);
+        Assert.DoesNotContain("52547", Json(await In(s => s.StatusAsync("alpha"))));
+        Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", id, false, null))).Answer);
+    }
+
+    [Fact]
+    public async Task A_learned_fact_is_one_fact_and_propose_only_says_so()
+    {
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.LearnedAsync("alpha", "  "))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.LearnedAsync("alpha", new string('x', StewardService.LearnedMaxChars + 1)))).Answer);
+        Configure("propose");
+        Assert.Equal("proposed", (await In(s => s.LearnedAsync("alpha", "The seed has two businesses."))).Answer);
+        Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.Learned);
+    }
+
+    // ---- the briefing, without a memo -------------------------------------------------
+
+    [Fact]
+    public async Task Every_run_is_handed_what_the_last_three_runs_did_newest_first_and_no_memo()
+    {
+        foreach (var n in new[] { "one", "two", "three", "four" })
+        {
+            await Begin();
+            await In(s => s.EndAsync("alpha", $"Run {n}.", false));
+        }
+        await Begin();
+        await using (var c = NewCtx()) await Steward(c).AbandonRunAsync("alpha", "the process ended");
+
+        var status = Json(await In(s => s.StatusAsync("alpha")));
+        Assert.Contains("recentRuns", status);
+        Assert.Contains("Did not finish: the process ended.", status);
+        Assert.Contains("Run four.", status);
+        Assert.Contains("Run three.", status);
+        Assert.DoesNotContain("Run two.", status);
+        Assert.True(status.IndexOf("Did not finish", StringComparison.Ordinal) < status.IndexOf("Run four.", StringComparison.Ordinal));
+        Assert.DoesNotContain("\"memo", status);
+    }
+
+    [Fact]
+    public async Task The_briefing_lists_every_open_outcome_in_every_agreed_unit_not_only_the_earliest()
+    {
+        _git.Second = "> **Status: agreed 2026-01-02.**\n\n- **A1.** One.\n- **A2.** Two.\n";
+        await In(s => s.ImportAsync("alpha", new StewardImport(Outcomes: new[]
+        {
+            new StewardImportOutcome(1, "A1", "Done"),
+            new StewardImportOutcome(1, "A2", "InProgress", false, "Waits on the owner for weeks."),
+            new StewardImportOutcome(2, "A1", "NotStarted", true, "File after #9 merges."),
+            new StewardImportOutcome(2, "A2", "Done"),
+        })));
+
+        var status = Json(await In(s => s.StatusAsync("alpha")));
+        Assert.Contains("Waits on the owner for weeks.", status);   // unit 1, the earliest with work left
+        Assert.Contains("File after #9 merges.", status);           // unit 2, which used to be hidden behind it
+        Assert.Contains("\"unit\":2,\"outcome\":\"A1\"", status);
+        Assert.DoesNotContain("\"unit\":1,\"outcome\":\"A1\"", status);   // Done: nothing for a run to do
+        Assert.DoesNotContain("\"unit\":2,\"outcome\":\"A2\"", status);
+    }
+
+    [Fact]
+    public async Task A_decision_comes_back_with_every_option_it_was_picked_from()
+    {
+        await Begin();
+        await In(s => s.AskAsync("alpha", Question()));
+        await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "A new one (Costs money). Only for texts."));
+
+        var d = Json(await In(s => s.DecisionsAsync("alpha", null)));
+        Assert.Contains("\"Label\":\"A new one\",\"Detail\":\"Costs money\",\"Picked\":true,\"StewardsPick\":false", d);
+        Assert.Contains("\"Label\":\"The one we already pay for\",\"Detail\":\"No new bill\",\"Picked\":false,\"StewardsPick\":true", d);
+        // A search finds it by an option it turned down, too.
+        Assert.Contains("sms-provider", Json(await In(s => s.DecisionsAsync("alpha", "no new bill"))));
+    }
+
+    // ---- the gaps its own tools left --------------------------------------------------
+
+    [Fact]
+    public async Task A_review_that_fits_comes_whole_and_one_part_comes_alone()
+    {
+        var id = await AtReview();
+        var whole = Json(await In(s => s.ReviewAsync("alpha", id)));
+        Assert.Contains("\"description\"", whole);
+        Assert.Contains("\"qaItems\"", whole);
+        Assert.Contains("\"flags\"", whole);
+
+        var checks = Json(await In(s => s.ReviewAsync("alpha", id, "checks")));
+        Assert.Contains("\"qaItems\"", checks);
+        Assert.Contains("\"title\"", checks);
+        Assert.DoesNotContain("\"description\"", checks);
+        Assert.Equal("bad-request", (await In(s => s.ReviewAsync("alpha", id, "everything"))).Answer);
+    }
+
+    [Fact]
+    public async Task A_review_too_long_to_send_whole_comes_as_its_head_and_flags_with_each_parts_size()
+    {
+        var id = await AtReview();
+        await using (var c = NewCtx())
+        {
+            var t = await c.Tickets.FindAsync(id);
+            t!.Description = new string('d', StewardService.ReviewMaxChars + 100);
+            await c.SaveChangesAsync();
+        }
+        var r = await In(s => s.ReviewAsync("alpha", id));
+        Assert.Contains("part", r.Why);
+        var head = Json(r);
+        Assert.Contains("\"flags\"", head);
+        Assert.Contains("\"parts\"", head);
+        Assert.DoesNotContain("dddddddddd", head);
+        Assert.Contains("dddddddddd", Json(await In(s => s.ReviewAsync("alpha", id, "record"))));
+    }
+
+    [Fact]
+    public async Task A_run_is_told_which_of_its_reasons_the_board_has_moved_past()
+    {
+        var atReview = await AtReview();
+        await using (var c = NewCtx())
+        {
+            var st = Steward(c);
+            await st.MarkDueAsync("alpha", $"#{atReview} is blocked");        // answered since: now at review
+            await st.MarkDueAsync("alpha", $"#{atReview} is ready for review");
+            await st.MarkDueAsync("alpha", "the owner answered sms-provider");
+        }
+        var begin = (await Begin()).Data!;
+        var because = (string)begin.GetType().GetProperty("because")!.GetValue(begin)!;
+        var gone = (List<string>)begin.GetType().GetProperty("noLongerSo")!.GetValue(begin)!;
+        Assert.Contains($"#{atReview} is ready for review", because);
+        Assert.Contains("the owner answered sms-provider", because);
+        Assert.DoesNotContain("is blocked", because);
+        Assert.Equal($"#{atReview} is blocked (now NeedsReview)", Assert.Single(gone));
+    }
+
+    [Fact]
+    public void The_lines_that_name_a_failure_are_picked_out_of_the_whole_output()
+    {
+        var output = new[]
+        {
+            "> vitest run", " RUN  v2.1.0",
+            " FAIL  src/day.test.ts > the day read > lists a missed visit",
+            "AssertionError: expected 2 to be 3",
+            "   at src/day.test.ts:41:17",
+        }.Concat(Enumerable.Range(1, 80).Select(i => $"  ok line {i}"))
+         .Concat(new[] { " Test Files  1 failed | 40 passed (41)", "      Tests  1 failed | 900 passed (901)" }).ToList();
+
+        var picked = CheckFailures.Pick(output);
+        Assert.Contains(picked, l => l.Contains("FAIL  src/day.test.ts"));
+        Assert.Contains(picked, l => l.Contains("AssertionError: expected 2 to be 3"));
+        Assert.Contains(picked, l => l.Contains("src/day.test.ts:41:17"));   // the line after, for where
+        Assert.Contains(picked, l => l.Contains("1 failed | 900 passed"));
+        Assert.DoesNotContain(picked, l => l.Contains("ok line 40"));
+        Assert.Empty(CheckFailures.Pick(new[] { "all good", "0 failed" }));
+    }
+
+    [Fact]
+    public async Task A_merge_refused_as_not_ready_says_where_the_ticket_went_and_why()
+    {
+        var id = await AtReview();
+        await using (var c = NewCtx())
+            await new TicketService(c).TransitionAsync(id, TicketPhase.NeedsImplementation, "Rebase conflict in src/day.ts");
+        await Begin();
+        var r = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("not-ready", r.Answer);
+        Assert.Contains("left NeedsReview for NeedsImplementation", r.Why);
+        Assert.Contains("Rebase conflict in src/day.ts", r.Why);
+    }
+
+    [Fact]
+    public async Task A_ticket_with_nothing_to_merge_is_closed_in_full_mode_with_its_reason_on_the_record()
+    {
+        _git.Ahead = 0;
+        var id = await AtReview();
+        await Begin();
+        var merge = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("nothing-to-merge", merge.Answer);
+        Assert.Contains("steward_close_unchanged", merge.Why);
+
+        Assert.Equal("bad-request", (await In(s => s.CloseUnchangedAsync("alpha", id, " "))).Answer);
+        Assert.Equal("closed", (await In(s => s.CloseUnchangedAsync("alpha", id, "The day read already lists missed visits (#280)."))).Answer);
+        Assert.Equal(TicketPhase.Done, (await Reload(id)).Phase);
+        Assert.Contains("nothing to merge", Entries().Single(e => e.Kind == StewardEntryKind.Call).Text);
+    }
+
+    [Fact]
+    public async Task Closing_unchanged_is_refused_with_commits_to_merge_or_outside_full_mode()
+    {
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("has-commits", (await In(s => s.CloseUnchangedAsync("alpha", id, "Already there."))).Answer);
+        _git.Ahead = 0;
+        Configure("manage");
+        Assert.Equal("not-in-this-mode", (await In(s => s.CloseUnchangedAsync("alpha", id, "Already there."))).Answer);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+    }
+
+    // ---- the owner's link from a ticket to the plan --------------------------------
+
+    private async Task<int> Loose(string? description = null)
+    {
+        await using var ctx = NewCtx();
+        var t = new Ticket { ProjectKey = "alpha", Title = "Made by hand", Description = description, Phase = TicketPhase.Backlog };
+        ctx.Tickets.Add(t);
+        await ctx.SaveChangesAsync();
+        return t.Id;
+    }
+
+    private async Task<StewardState?> State() { await using var ctx = NewCtx(); return await ctx.StewardStates.FindAsync("alpha"); }
+
+    [Fact]
+    public async Task The_owner_links_a_hand_made_ticket_to_a_unit_and_the_steward_is_owed_a_run()
+    {
+        var id = await Loose();
+        var r = await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A2", "A1", "A1" }));
+        Assert.Equal("linked", r.Answer);
+
+        var t = await Reload(id);
+        Assert.Equal(1, t.PlanUnit);
+        Assert.Equal("", t.PlanKey);
+        Assert.Equal("A1, A2", t.PlanOutcomes); // the spec's order, once each
+        Assert.Contains($"linked #{id} to unit 1", (await State())!.DueReason);
+    }
+
+    [Fact]
+    public async Task A_unit_can_be_linked_without_naming_an_outcome_and_a_draft_unit_counts()
+    {
+        var id = await Loose();
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 2, null))).Answer);
+        var t = await Reload(id);
+        Assert.Equal(2, t.PlanUnit);
+        Assert.Equal("", t.PlanOutcomes);
+    }
+
+    [Fact]
+    public async Task A_unit_or_outcome_the_plan_does_not_have_is_refused_and_nothing_changes()
+    {
+        var id = await Loose();
+        Assert.Equal("bad-request", (await In(s => s.LinkTicketAsync(id, null, 9, null))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "Q9" }))).Answer);
+        Assert.Equal("no-plan", (await In(s => s.LinkTicketAsync(id, "nope", 1, null))).Answer);
+        Assert.Equal("not-found", (await In(s => s.LinkTicketAsync(id + 100, null, 1, null))).Answer);
+        Assert.Null((await Reload(id)).PlanUnit);
+    }
+
+    [Fact]
+    public async Task Taking_a_filed_ticket_out_of_the_plan_clears_the_link_and_its_line_in_the_description()
+    {
+        await Begin();
+        Assert.Equal("created", (await In(s => s.CreateAsync("alpha", Draft(outcomes: new[] { "A1" })))).Answer);
+        int id;
+        await using (var ctx = NewCtx()) id = (await ctx.Tickets.SingleAsync()).Id;
+        Assert.Contains("Unit 1: A1.", (await Reload(id)).Description);
+
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A2" }))).Answer);
+        var moved = (await Reload(id)).Description!;
+        Assert.Contains("Unit 1: A2.", moved);
+        Assert.DoesNotContain("Unit 1: A1.", moved);
+
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, null, null))).Answer);
+        var t = await Reload(id);
+        Assert.Null(t.PlanUnit);
+        Assert.Null(t.PlanKey);
+        Assert.Null(t.PlanOutcomes);
+        Assert.DoesNotContain("**Plan**", t.Description);
+        Assert.StartsWith(Whole[..20], t.Description);
+    }
+
+    [Fact]
+    public async Task Linking_works_with_the_steward_off_and_owes_it_nothing()
+    {
+        Configure("off");
+        var id = await Loose("Something to fix.");
+        Assert.Equal("linked", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A1" }))).Answer);
+        Assert.Equal("Something to fix.", (await Reload(id)).Description); // no line added to one that had none
+        Assert.Null((await State())?.DueReason);
+        Assert.Equal("unchanged", (await In(s => s.LinkTicketAsync(id, null, 1, new[] { "A1" }))).Answer);
+    }
+
     /// <summary>A repository with one agreed unit (A1, A2), one draft, and a branch that is ready to merge.</summary>
     private sealed class FakeGit : IStewardGit
     {
         public string Head = "abc";
         public IReadOnlyList<string> Files = new[] { "src/app.ts" };
         public int Behind;
+        /// <summary>Commits the branch has that the base lacks; none is a ticket with nothing to merge.</summary>
+        public int Ahead = 1;
         /// <summary>The change as the owner would see it; a new value is the ticket reworked.</summary>
         public string ChangeId = "change-1";
         public CheckRun Check = new(true, false, "");
@@ -1057,12 +1609,20 @@ public class StewardServiceTests : IDisposable
         /// <summary>The second unit's spec, which a test may give decisions to leave open.</summary>
         public string Second = "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n";
 
+        /// <summary>The first unit's spec, agreed.</summary>
+        public string First = "> **Status: agreed 2026-01-01.**\n\n- **A1.** One.\n- **A2.** Two.\n";
+        /// <summary>The first unit's file: a test renames it to move an agreed slice.</summary>
+        public string FirstFile = "docs/units/01-first.md";
+
+        /// <summary>Slices after the second, by number: a test's ideas.</summary>
+        public SortedDictionary<int, (string File, string Text)> More = new();
+
         public Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<PlanUnit>>(new[]
             {
-                TicketGitService.ReadUnit(P, 1, "docs/units/01-first.md", "> **Status: agreed 2026-01-01.**\n\n- **A1.** One.\n- **A2.** Two.\n"),
+                TicketGitService.ReadUnit(P, 1, FirstFile, First),
                 TicketGitService.ReadUnit(P, 2, "docs/units/02-second.md", Second),
-            });
+            }.Concat(More.Select(m => TicketGitService.ReadUnit(P, m.Key, m.Value.File, m.Value.Text))).ToList());
 
         public Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default) =>
             PlanAsync(projectKey, ct);
@@ -1074,7 +1634,7 @@ public class StewardServiceTests : IDisposable
             Task.FromResult(InRepo.TryGetValue(path, out var text) ? text : null);
 
         public Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default) =>
-            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, 1, "1 file changed", "main", "tip0123456", ChangeId));
+            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, Ahead, "1 file changed", "main", "tip0123456", ChangeId));
 
         public Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default) =>
             Task.FromResult<(string, bool, int)?>(("diff", false, 4));

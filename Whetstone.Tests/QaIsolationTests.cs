@@ -37,6 +37,7 @@ public class QaIsolationTests : IDisposable
     [InlineData("GET", "/api/steward/due")]
     [InlineData("POST", "/api/steward/launching")]
     [InlineData("POST", "/api/steward/abandon")]
+    [InlineData("POST", "/api/steward/run")]
     [InlineData("POST", "/mcp/steward")]
     [InlineData("GET", "/mcp/steward/sse")]
     [InlineData("POST", "/api/notifications/test")]
