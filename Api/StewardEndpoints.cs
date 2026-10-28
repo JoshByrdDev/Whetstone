@@ -69,6 +69,10 @@ public static class StewardEndpoints
                 running = await steward.RunOpenAsync(project!) || runner.RunningProject == project,
                 due,
                 dueReason,
+                // A run that is owed but held by the gap between runs: "not due" to the heartbeat, which
+                // the page must not read as "nothing to do". When it may start, and how long the gap is.
+                heldUntil = await steward.RunHeldUntilAsync(project!, ct),
+                gapMinutes = (int)Math.Round(steward.MinGapBetweenRuns.TotalMinutes),
                 lastRunStartedAt = s?.LastRunStartedAt,
                 lastRunEndedAt = s?.LastRunEndedAt,
                 lastRunSummary = s?.LastRunSummary,

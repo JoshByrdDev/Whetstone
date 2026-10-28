@@ -60,6 +60,13 @@ export interface StewardPage {
   running: boolean;
   due: boolean;
   dueReason: string;
+  /**
+   * When a run that is owed may start, while the gap between runs holds it back. `due` is false for
+   * that whole time, because the heartbeat may not start it yet; this says it is coming, and when.
+   */
+  heldUntil?: string | null;
+  /** The least time, in minutes, between the start of one run and the next. */
+  gapMinutes: number;
   lastRunStartedAt?: string | null;
   lastRunEndedAt?: string | null;
   lastRunSummary?: string | null;
@@ -142,11 +149,12 @@ export const getStewardStatus = (project: string) =>
 
 /**
  * Run the steward now. `started` when the board launched it (the heartbeat is stopped), `queued`
- * when the running heartbeat was woken to launch it; anything else is refused with `why`.
+ * when the running heartbeat was woken to launch it; anything else is refused with `why`. A queued
+ * run held by the gap between runs carries `data.heldUntil`, when the heartbeat will start it.
  */
 export const runStewardNow = (project: string) =>
   fetch(`/api/steward/run?${q(project)}`, { method: 'POST' })
-    .then(json<{ answer: 'started' | 'queued'; why?: string | null }>);
+    .then(json<{ answer: 'started' | 'queued'; why?: string | null; data?: { heldUntil?: string; gapMinutes?: number } | null }>);
 
 export const setStewardMode = (project: string, mode: StewardMode) =>
   fetch(`/api/steward/mode?${q(project)}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ mode }) })

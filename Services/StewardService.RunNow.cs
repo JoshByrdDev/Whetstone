@@ -1,9 +1,27 @@
+using Microsoft.EntityFrameworkCore;
+
 namespace Whetstone.Services;
 
 public partial class StewardService
 {
     /// <summary>The reason a run asked for from the Steward page is handed, as its opening line says it.</summary>
     public const string OwnerAskedReason = "its owner asked for a run";
+
+    /// <summary>
+    /// When a run that is owed may start, while <see cref="MinGapBetweenRuns"/> still holds it back,
+    /// or null when nothing holds it: none is owed, one is open, or the gap is over. <see cref="DueAsync"/>
+    /// answers "not due" for the whole of the gap, which is right for the heartbeat and wrong to show
+    /// an owner who has just asked for a run - this is what lets the page and Run now say when instead.
+    /// </summary>
+    public async Task<DateTime?> RunHeldUntilAsync(string projectKey, CancellationToken ct = default)
+    {
+        if (await RunOpenAsync(projectKey)) return null;
+        var s = await _db.StewardStates.AsNoTracking().FirstOrDefaultAsync(x => x.ProjectKey == projectKey, ct);
+        if (string.IsNullOrEmpty(s?.DueReason) || s.LastRunStartedAt is not { } started) return null;
+        // Stored as UTC; said so, or it is serialised without a zone and read as the reader's local time.
+        var until = DateTime.SpecifyKind(started, DateTimeKind.Utc) + MinGapBetweenRuns;
+        return until > DateTime.UtcNow ? until : null;
+    }
 
     /// <summary>
     /// The owner asks for a run now, from the Steward page. This only says whether one may start and

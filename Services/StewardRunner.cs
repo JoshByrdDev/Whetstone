@@ -74,6 +74,18 @@ public sealed class StewardRunner
 
             if (_heartbeat.IsRunning)
             {
+                // Within the gap after the last run started, a woken heartbeat finds the run not yet due
+                // and goes back to its idle sleep, which can be far longer than the gap. So it is woken
+                // again when the gap is over, and the owner is told when that is rather than "now".
+                if (await steward.RunHeldUntilAsync(projectKey, ct) is { } until)
+                {
+                    WakeAt(until);
+                    var gap = (int)Math.Round(steward.MinGapBetweenRuns.TotalMinutes);
+                    return new StewardReply("queued",
+                        $"Held for now: the steward waits {gap} minutes between the start of one run and the next, and the last one " +
+                        $"started less than that ago. The heartbeat starts this one at {until:HH:mm} UTC.",
+                        new { heldUntil = until, gapMinutes = gap });
+                }
                 _heartbeat.Wake();
                 return new StewardReply("queued",
                     "The heartbeat is running, so it starts the run on its next pass. It has been woken to take it now.");
@@ -83,6 +95,17 @@ public sealed class StewardRunner
             return Launch(projectKey);
         }
         finally { _one.Release(); }
+    }
+
+    /// <summary>
+    /// Wake the heartbeat just after <paramref name="when"/>. A few seconds late on purpose: woken a
+    /// moment early it would find the run still held and sleep again. Nothing to cancel - a wake that
+    /// finds nothing owed, or no heartbeat running, does nothing.
+    /// </summary>
+    private void WakeAt(DateTime when)
+    {
+        var wait = when - DateTime.UtcNow + TimeSpan.FromSeconds(3);
+        _ = Task.Delay(wait > TimeSpan.Zero ? wait : TimeSpan.Zero).ContinueWith(_ => _heartbeat.Wake(), TaskScheduler.Default);
     }
 
     private StewardReply Launch(string projectKey)

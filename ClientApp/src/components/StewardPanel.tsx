@@ -434,7 +434,13 @@ function StewardCard({ page, running, fleet, live, onRan }: {
     setAsking(true); setSaid(null);
     try {
       const r = await runStewardNow(page.project);
-      setSaid({ ok: true, text: r.answer === 'queued' ? (r.why ?? 'The heartbeat will start it.') : 'Started. It shows below as it works.' });
+      const until = r.answer === 'queued' ? r.data?.heldUntil : undefined;
+      setSaid({
+        ok: true,
+        text: until ? heldLine(until, r.data?.gapMinutes ?? page.gapMinutes)
+          : r.answer === 'queued' ? (r.why ?? 'The heartbeat will start it.')
+          : 'Started. It shows below as it works.',
+      });
       onRan();
     } catch (err) {
       setSaid({ ok: false, text: err instanceof Error ? err.message : String(err) });
@@ -442,11 +448,14 @@ function StewardCard({ page, running, fleet, live, onRan }: {
   };
   const cannotRun = running ? 'A run is already going.' : page.mode === 'off' ? 'The steward is off for this project.' : null;
 
+  // Owed, but held by the gap between runs: not "due" to the heartbeat yet, and not nothing either.
+  const heldFor = !running && page.heldUntil ? page.heldUntil : null;
+  const owed = page.due || heldFor !== null;
   // The heartbeat starts a due run, so a run that is due is due "shortly" only while it is going;
   // otherwise only Run now below starts one.
-  const held = page.due && !running && (fleet === 'stopped' || fleet === 'off-hours');
-  const mood: Mood = running ? 'running' : held ? 'stopped' : page.due ? 'idle' : 'sleeping';
-  const word = running ? 'Working' : page.due ? 'A run is due' : page.resting ? 'Resting' : 'Standing by';
+  const held = owed && !running && (fleet === 'stopped' || fleet === 'off-hours');
+  const mood: Mood = running ? 'running' : held ? 'stopped' : owed ? 'idle' : 'sleeping';
+  const word = running ? 'Working' : owed ? 'A run is due' : page.resting ? 'Resting' : 'Standing by';
   const when = running
     ? page.lastRunStartedAt ? `started ${ago(page.lastRunStartedAt)}` : null
     : page.lastRunEndedAt ? `last run ${ago(page.lastRunEndedAt)}` : null;
@@ -454,6 +463,7 @@ function StewardCard({ page, running, fleet, live, onRan }: {
     : held ? fleet === 'off-hours'
       ? 'Waiting for working hours: the heartbeat starts no run until then.'
       : 'Waiting for the heartbeat, which is stopped. Run now starts one without it.'
+    : heldFor ? heldLine(heldFor, page.gapMinutes)
     : page.due ? "Starts on the heartbeat's next pass."
     : page.resting ? 'Nothing to do until a ticket comes back, you answer something, or the base branch moves.'
     : 'Waiting for something to change.';
@@ -503,6 +513,15 @@ function StewardCard({ page, running, fleet, live, onRan }: {
       />
     </Panel>
   );
+}
+
+/**
+ * A run that is owed but held by the gap between runs, said with the time it starts. The time is the
+ * reader's own clock, so a phone in another time zone reads its own.
+ */
+function heldLine(until: string, gapMinutes: number): string {
+  const at = new Date(until).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  return `Starts at about ${at}. The steward waits ${gapMinutes} minutes between the start of one run and the next, and the last one started less than that ago.`;
 }
 
 /** What the last run did, held to a few lines until asked for. */
