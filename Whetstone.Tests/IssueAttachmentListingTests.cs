@@ -253,4 +253,47 @@ public class IssueAttachmentListingTests : IDisposable
         Assert.Equal(new[] { "a.png", "b.png" }, r.NotCached.Select(s => s.FileName));
         Assert.All(r.NotCached, s => Assert.Contains("budget", s.Reason));
     }
+
+    /// <summary>
+    /// A prototype client attached to a feature is the contract the feature is built against, and
+    /// it is plain text a model can Read. It used to be reported as "not a readable type".
+    /// </summary>
+    [Theory]
+    [InlineData("api-client.ts")]
+    [InlineData("Widget.tsx")]
+    [InlineData("handler.js")]
+    [InlineData("Service.cs")]
+    [InlineData("deploy.ps1")]
+    [InlineData("tool.py")]
+    [InlineData("compose.yaml")]
+    [InlineData("values.yml")]
+    [InlineData("page.html")]
+    [InlineData("site.css")]
+    [InlineData("run.sh")]
+    [InlineData("schema.sql")]
+    public async Task Source_and_config_attachments_are_cached_with_a_local_path(string name)
+    {
+        Place(43, $"9-{name}", "export const x = 1;");
+
+        var r = await _store.CacheAsync(43, Attachments(("9", name, 19)), NoTracker);
+
+        Assert.Empty(r.NotCached);
+        var one = Assert.Single(r.Attachments);
+        Assert.Equal(name, one.FileName);
+        Assert.True(File.Exists(one.LocalPath));
+        Assert.Equal(name, Assert.Single(_store.ListCached(43)).FileName);
+    }
+
+    [Theory]
+    [InlineData("setup.exe")]
+    [InlineData("library.dll")]
+    [InlineData("bundle.zip")]
+    [InlineData("spec.docx")]
+    public async Task Binaries_are_still_skipped_by_name(string name)
+    {
+        var r = await _store.CacheAsync(44, Attachments(("9", name, 19)), NoTracker);
+
+        Assert.Empty(r.Attachments);
+        Assert.Contains("not a readable type", Assert.Single(r.NotCached).Reason);
+    }
 }

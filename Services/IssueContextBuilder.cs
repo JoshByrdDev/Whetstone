@@ -26,6 +26,17 @@ public class IssueContextBuilder
     // Siblings are named, not described - enough to see where this ticket's scope stops.
     private const int MaxSiblings = 25;
 
+    // Children are the opposite case: described, not just named. A ticket linked to a feature or an
+    // epic is linked to a heading, and the acceptance criteria live one level down in its stories -
+    // a row of titles there is a ticket with no requirements. So each child's text is read, in one
+    // batched call, up to a cap that keeps a forty-story epic from becoming the whole payload.
+    // Public because the snapshot reads the same set, and the two must agree on what "read" means.
+    public const int MaxChildrenRead = 15;
+
+    // Per field, per child. A story is a page or two; past this it is pasted logs or a spec that
+    // belongs in an attachment, and the cut is announced rather than made quietly.
+    public const int MaxChildFieldChars = 6000;
+
     // What the whole ancestor chain may contribute in downloads, shared nearest-first. The parent's
     // mockup is usually the one that settles the question; the epic's org chart three levels up is
     // usually not, and a hierarchy of well-illustrated epics would otherwise turn one context call
@@ -55,6 +66,23 @@ public class IssueContextBuilder
 
     public record Ancestry(AncestorDto[] ParentChain, IssueRef[] Siblings);
 
+    /// <param name="Readable">False when the batched read did not return this child (deleted, not
+    /// visible to this token, or the read failed). Listed anyway, as an unreadable ancestor is: a
+    /// missing description must never pass for an empty one.</param>
+    /// <param name="Truncated">True when the description or the criteria were cut at
+    /// <see cref="MaxChildFieldChars"/>; the cut text says so in-line too.</param>
+    public record ChildDto(string Key, string? Summary, string? Status, string? Type,
+        string? Description, string? AcceptanceCriteria, bool Readable, bool Truncated);
+
+    /// <summary>A child that exists but whose text was not read, and why. Never dropped silently.</summary>
+    public record ChildNotReadDto(string Key, string? Summary, string Reason);
+
+    public record Children(ChildDto[] Read, ChildNotReadDto[] NotRead);
+
+    /// <summary>How the children are read, many at once. A delegate so the cap and the fallbacks can
+    /// be tested without HTTP.</summary>
+    public delegate Task<IReadOnlyDictionary<string, Issue>> FetchBriefs(IReadOnlyCollection<string> keys);
+
     /// <summary>How one ancestor is read. A separate delegate so the walk can be tested without HTTP.</summary>
     public delegate Task<Issue?> FetchIssue(string key);
 
@@ -81,6 +109,8 @@ public class IssueContextBuilder
                     got.NotCached.Select(s => new NotCachedDto(s.FileName, s.Reason)).ToArray());
         });
 
+        var children = await ReadChildrenAsync(issue.Children, keys => tracker.GetBriefsAsync(keys));
+
         return new
         {
             key = issue.Key,
@@ -105,7 +135,11 @@ public class IssueContextBuilder
             // The other children of this issue's parent: what the surrounding work is, and therefore
             // where this ticket's own scope stops.
             siblings = ancestry.Siblings,
-            subtasks = issue.Children.Take(MaxSiblings).ToArray(),
+            // This issue's own children, each with its description and criteria. On a feature or an
+            // epic this is where the requirements are; the issue itself is usually a heading.
+            subtasks = children.Read,
+            // Children past the cap, named so a reader knows they exist and that it has not read them.
+            subtasksNotRead = children.NotRead,
             linkedIssues = await LinksAsync(issue, tracker),
             attachments = cache.Attachments.Select(ToDto).ToArray(),
             attachmentsNotCached = cache.NotCached.Select(s => new NotCachedDto(s.FileName, s.Reason)).ToArray(),
@@ -119,7 +153,10 @@ public class IssueContextBuilder
                 + "localPath. parentChain is ordered nearest-first and carries each ancestor's full "
                 + "description AND its attachments, downloaded the same way - on a sub-task that is usually "
                 + "where the acceptance criteria and the mockup both live, so read them before concluding "
-                + "the ticket is underspecified.",
+                + "the ticket is underspecified. subtasks is the other direction: on a feature, epic or "
+                + "story whose own text is a heading, each child's description and acceptanceCriteria are "
+                + "the requirements - read every one, and treat subtasksNotRead and any child with "
+                + "readable=false as text you have NOT seen, not as children that say nothing.",
         };
     }
 
@@ -197,6 +234,53 @@ public class IssueContextBuilder
 
         return new Ancestry(chain.ToArray(), siblings);
     }
+
+    // ---- Children ----------------------------------------------------------
+
+    /// <summary>
+    /// Read this issue's children's text in one batched call.
+    /// <para>
+    /// The children of a feature or an epic are where the work is specified, and the issue's own
+    /// copy of them is a key and a title. So the first <see cref="MaxChildrenRead"/> are read for
+    /// their description and criteria; the rest are named in <see cref="Children.NotRead"/> with the
+    /// cap as the reason. A child the read does not return is still listed, unreadable - the same
+    /// rule the parent chain keeps, for the same reason.
+    /// </para>
+    /// </summary>
+    public static async Task<Children> ReadChildrenAsync(IReadOnlyList<IssueRef> children, FetchBriefs fetch)
+    {
+        if (children.Count == 0) return new Children(Array.Empty<ChildDto>(), Array.Empty<ChildNotReadDto>());
+
+        var toRead = children.Take(MaxChildrenRead).ToArray();
+        var overCap = children.Skip(MaxChildrenRead)
+            .Select(c => new ChildNotReadDto(c.Key, c.Summary,
+                $"over the {MaxChildrenRead}-child cap for one context call ({children.Count} children in all)"))
+            .ToArray();
+
+        IReadOnlyDictionary<string, Issue> briefs;
+        // A child we cannot read must not fail the whole context call - it is listed unreadable.
+        try { briefs = await fetch(toRead.Select(c => c.Key).Distinct(StringComparer.OrdinalIgnoreCase).ToList()); }
+        catch { briefs = new Dictionary<string, Issue>(StringComparer.OrdinalIgnoreCase); }
+
+        var read = toRead.Select(c =>
+        {
+            if (!briefs.TryGetValue(c.Key, out var b))
+                return new ChildDto(c.Key, c.Summary, c.Status, c.Type, null, null, Readable: false, Truncated: false);
+
+            var (description, cutDescription) = Cap(b.Description);
+            var (criteria, cutCriteria) = Cap(b.AcceptanceCriteria);
+            return new ChildDto(c.Key, b.Summary ?? c.Summary, b.Status ?? c.Status, b.Type ?? c.Type,
+                description, criteria, Readable: true, Truncated: cutDescription || cutCriteria);
+        }).ToArray();
+
+        return new Children(read, overCap);
+    }
+
+    private static (string? Text, bool Cut) Cap(string? text)
+        => text is null || text.Length <= MaxChildFieldChars
+            ? (text, false)
+            : (text[..MaxChildFieldChars] + $"\n\n[truncated: {text.Length - MaxChildFieldChars} more characters - "
+               + "open the issue in the tracker for the rest]", true);
 
     // ---- Links -------------------------------------------------------------
 

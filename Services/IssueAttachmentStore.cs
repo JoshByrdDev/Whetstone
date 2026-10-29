@@ -14,12 +14,23 @@ namespace Whetstone.Services;
 /// </summary>
 public class IssueAttachmentStore
 {
-    /// <summary>What is worth caching: things a model can actually read.</summary>
+    /// <summary>
+    /// What is worth caching: things a model can actually read. Source and config are plain text, and
+    /// an attached prototype client or schema is often the contract a feature is built against - so
+    /// they are in. Anything compiled or archived is not: a model cannot read it, and an archive is a
+    /// way to carry a binary past this list.
+    /// </summary>
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".png", ".jpg", ".jpeg", ".webp", ".gif",   // screenshots and mockups
         ".pdf",                                      // specs, statements, letters
         ".txt", ".md", ".csv", ".json", ".xml", ".log", ".sql",
+        // source a model can Read as text
+        ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".cs", ".py", ".java", ".kt", ".go", ".rb", ".php",
+        ".ps1", ".psm1", ".sh", ".html", ".htm", ".css", ".scss", ".vue", ".svelte",
+        // config and contracts
+        ".yaml", ".yml", ".toml", ".ini", ".config", ".graphql", ".proto", ".xsd", ".wsdl", ".http",
+        ".tsv", ".diff", ".patch",
     };
 
     private const long MaxBytes = 20 * 1024 * 1024;  // per attachment

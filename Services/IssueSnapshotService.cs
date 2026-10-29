@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Whetstone.Models;
@@ -30,6 +31,16 @@ public class IssueSnapshotService
     /// would silently turn every stored baseline into "no baseline", and every mid-flight ticket
     /// would be told its issue had not changed when nobody had actually looked.
     /// </para>
+    /// <para>
+    /// <c>ChildHashes</c> came later, so it is optional: a baseline without it reads as "children
+    /// not compared", never as "no children". It is the issue's children by key, each with a short
+    /// hash of its title and full text - on a feature or an epic the requirements are in the
+    /// children, and a rewritten story's criteria are the change that can invalidate a plan. A hash
+    /// rather than the text, because a feature's stories in full would make every baseline a
+    /// document; the change is announced and the reader re-reads it through get_issue_context. A
+    /// child that was not read (over the cap, or not returned) is stored with an empty hash: it is
+    /// known to exist, so it is not "new" later, and its text is not claimed either way.
+    /// </para>
     /// </summary>
     public record Snapshot(
         string Key,
@@ -38,7 +49,8 @@ public class IssueSnapshotService
         string? Description,
         string[] CommentIds,
         string[] LinkKeys,
-        string[] AttachmentNames);
+        string[] AttachmentNames,
+        Dictionary<string, string>? ChildHashes = null);
 
     public record NewComment(string? Author, string? Created, string? Text);
 
@@ -50,7 +62,9 @@ public class IssueSnapshotService
         string? OldDescription, string? NewDescription,
         IReadOnlyList<NewComment> NewComments,
         IReadOnlyList<string> NewLinks,
-        IReadOnlyList<string> NewAttachments);
+        IReadOnlyList<string> NewAttachments,
+        IReadOnlyList<IssueRef> ChangedChildren,
+        IReadOnlyList<IssueRef> NewChildren);
 
     // ---- Capture -----------------------------------------------------------
 
@@ -61,8 +75,8 @@ public class IssueSnapshotService
     /// </summary>
     public async Task<string?> CaptureAsync(Ticket t)
     {
-        var issue = await ReadAsync(t);
-        return issue is null ? null : JsonSerializer.Serialize(Capture(issue), Json);
+        var read = await ReadAsync(t);
+        return read is not { } r ? null : JsonSerializer.Serialize(Capture(r.Issue, r.Children), Json);
     }
 
     /// <summary>
@@ -78,16 +92,34 @@ public class IssueSnapshotService
         catch { return Array.Empty<string>(); }
     }
 
-    private async Task<Issue?> ReadAsync(Ticket t)
+    /// <summary>
+    /// The issue, and its children's text as get_issue_context reads it: the same first
+    /// <see cref="IssueContextBuilder.MaxChildrenRead"/>, in one batched call, and only when there
+    /// are children - so an issue without any costs nothing extra. Children are null when that read
+    /// failed, which means "not compared", never "unchanged".
+    /// </summary>
+    private async Task<(Issue Issue, IReadOnlyDictionary<string, Issue>? Children)?> ReadAsync(Ticket t)
     {
         if (string.IsNullOrWhiteSpace(t.IssueKey)) return null;
+        IIssueTracker tracker;
+        Issue? issue;
         try
         {
-            var tracker = _trackers.For(t.ProjectKey);
+            tracker = _trackers.For(t.ProjectKey);
             if (!tracker.IsConfigured) return null;
-            return await tracker.GetIssueAsync(t.IssueKey);
+            issue = await tracker.GetIssueAsync(t.IssueKey);
+            if (issue is null) return null;
         }
         catch { return null; }
+
+        if (issue.Children.Count == 0)
+            return (issue, new Dictionary<string, Issue>(StringComparer.OrdinalIgnoreCase));
+        try
+        {
+            var keys = issue.Children.Take(IssueContextBuilder.MaxChildrenRead).Select(c => c.Key).Distinct().ToList();
+            return (issue, await tracker.GetBriefsAsync(keys));
+        }
+        catch { return (issue, null); }
     }
 
     /// <summary>
@@ -99,14 +131,31 @@ public class IssueSnapshotService
     /// change this whole mechanism exists to catch.
     /// </para>
     /// </summary>
-    public static Snapshot Capture(Issue issue) => new(
+    /// <param name="children">The children as read in one batch, keyed by issue key; null when they
+    /// were not read, which leaves the snapshot without children rather than claiming none.</param>
+    public static Snapshot Capture(Issue issue, IReadOnlyDictionary<string, Issue>? children = null) => new(
         issue.Key,
         issue.Updated,
         issue.Summary,
         issue.FullText,
         issue.Comments.Select(c => c.Id).ToArray(),
         issue.Links.Select(l => l.Key).ToArray(),
-        issue.Attachments.Select(a => a.FileName).ToArray());
+        issue.Attachments.Select(a => a.FileName).ToArray(),
+        children is null ? null : ChildHashesOf(issue, children));
+
+    private static Dictionary<string, string> ChildHashesOf(Issue issue, IReadOnlyDictionary<string, Issue> children)
+    {
+        var hashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in issue.Children)
+            hashes.TryAdd(c.Key, children.TryGetValue(c.Key, out var b) ? HashOf(b) : "");
+        return hashes;
+    }
+
+    // Field by field, each normalised, so a trailing newline the tracker's editor adds to a
+    // description is not an edit - the same tolerance the issue's own description gets.
+    private static string HashOf(Issue child)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
+            $"{Norm(child.Summary)}\0{Norm(child.Description)}\0{Norm(child.AcceptanceCriteria)}")))[..16];
 
     // ---- Diff --------------------------------------------------------------
 
@@ -124,18 +173,21 @@ public class IssueSnapshotService
         if (before is null) return null;
 
         var now = await ReadAsync(t);
-        if (now is null) return null;
+        if (now is not { } r) return null;
 
-        return Compare(before, now);
+        return Compare(before, r.Issue, r.Children);
     }
 
     /// <summary>
     /// The comparison itself, with no I/O — this is where "did it change, and what changed" is
     /// decided, so it is worth being able to test directly.
     /// </summary>
-    public static Diff Compare(Snapshot before, Issue now)
+    /// <param name="children">The children's text now, as <see cref="Capture"/> takes it. Children
+    /// are compared only when both this and the baseline have them: a baseline from before children
+    /// were kept, or a read that failed, says nothing about them either way.</param>
+    public static Diff Compare(Snapshot before, Issue now, IReadOnlyDictionary<string, Issue>? children = null)
     {
-        var after = Capture(now);
+        var after = Capture(now, children);
 
         // The issue-level `updated` stamp moves for any edit at all, so it is never the reason we
         // report a change — we always name what actually differs.
@@ -150,12 +202,28 @@ public class IssueSnapshotService
         var newAttachments = after.AttachmentNames
             .Where(a => !before.AttachmentNames.Contains(a, StringComparer.Ordinal)).ToArray();
 
+        // A child is new only when the baseline did not know it existed, and changed only when both
+        // sides actually read it - an empty hash is "not read", which is no evidence of an edit.
+        var changedChildren = new List<IssueRef>();
+        var newChildren = new List<IssueRef>();
+        if (before.ChildHashes is { } was && after.ChildHashes is { } nowHashes)
+        {
+            var wasByKey = new Dictionary<string, string>(was, StringComparer.OrdinalIgnoreCase);
+            foreach (var c in now.Children)
+            {
+                if (!nowHashes.TryGetValue(c.Key, out var hash)) continue;
+                if (!wasByKey.TryGetValue(c.Key, out var old)) newChildren.Add(c);
+                else if (old.Length > 0 && hash.Length > 0 && old != hash) changedChildren.Add(c);
+            }
+        }
+
         var changed = summaryChanged || descriptionChanged || newComments.Length > 0
-                   || newLinks.Length > 0 || newAttachments.Length > 0;
+                   || newLinks.Length > 0 || newAttachments.Length > 0
+                   || changedChildren.Count > 0 || newChildren.Count > 0;
 
         return new Diff(changed, summaryChanged, descriptionChanged,
             before.Summary, after.Summary, before.Description, after.Description,
-            newComments, newLinks, newAttachments);
+            newComments, newLinks, newAttachments, changedChildren, newChildren);
     }
 
     // ---- Rendering ---------------------------------------------------------
@@ -211,6 +279,11 @@ public class IssueSnapshotService
             sb.AppendLine($"NEW LINKED ISSUE(S): {string.Join(", ", diff.NewLinks)}");
         if (diff.NewAttachments.Count > 0)
             sb.AppendLine($"NEW ATTACHMENT(S): {string.Join(", ", diff.NewAttachments)} - call get_issue_context to have them downloaded, then read them.");
+        if (diff.ChangedChildren.Count > 0)
+            sb.AppendLine($"CHILD ISSUE(S) EDITED - their description or acceptance criteria changed since the plan was made: "
+                + $"{Names(diff.ChangedChildren)}. Call get_issue_context and re-read them under subtasks; on a parent issue that is where the requirements are.");
+        if (diff.NewChildren.Count > 0)
+            sb.AppendLine($"NEW CHILD ISSUE(S): {Names(diff.NewChildren)} - call get_issue_context to read them.");
 
         return sb.ToString().TrimEnd();
     }
@@ -220,4 +293,7 @@ public class IssueSnapshotService
          : string.Join("\n", s.Replace("\r\n", "\n").Split('\n').Select(l => "    " + l));
 
     private static string? Norm(string? s) => s?.Replace("\r\n", "\n").Trim();
+
+    private static string Names(IEnumerable<IssueRef> refs)
+        => string.Join(", ", refs.Select(r => string.IsNullOrWhiteSpace(r.Summary) ? r.Key : $"{r.Key} ({r.Summary})"));
 }

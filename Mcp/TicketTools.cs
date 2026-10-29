@@ -631,7 +631,7 @@ public class TicketTools
     }
 
     // Named get_issue_context by the method name, the way every other tool here is.
-    [McpServerTool, Description("Read a ticket's linked external issue in full, for context (READ-ONLY — we never write to the tracker). Works the same whether the project is on Jira or Azure Boards. Returns the description, any acceptance-criteria field, every comment, the parent chain with each ancestor's full description, sibling issues, linked issues with their summaries, and any attachments downloaded to local paths you can open with Read. On a sub-task the parent's description usually holds the acceptance criteria, and attachments are often the most informative part of a ticket, so check both.")]
+    [McpServerTool, Description("Read a ticket's linked external issue in full, for context (READ-ONLY — we never write to the tracker). Works the same whether the project is on Jira or Azure Boards. Returns the description, any acceptance-criteria field, every comment, the parent chain with each ancestor's full description, child issues (subtasks) with each one's description and acceptance criteria, sibling issues, linked issues with their summaries, and any attachments downloaded to local paths you can open with Read. On a sub-task the parent's description usually holds the acceptance criteria, and attachments are often the most informative part of a ticket, so check both.")]
     public static async Task<object> GetIssueContext(TicketService svc, IssueTrackerFactory factory, IssueContextBuilder builder,
         [Description("The local ticket id (the external issue is taken from its issueKey).")] int ticketId)
     {
