@@ -16,9 +16,9 @@ namespace Whetstone.Services;
 /// </summary>
 public static class AnalysisDocument
 {
-    /// <summary>The ten block kinds. Anything outside this set is dropped on the way in.</summary>
+    /// <summary>The eleven block kinds. Anything outside this set is dropped on the way in.</summary>
     public static readonly string[] Kinds =
-        ["prose", "keyValue", "comparison", "readingPath", "glossary", "callout", "question", "code", "userFlow", "coverage"];
+        ["prose", "keyValue", "comparison", "example", "readingPath", "glossary", "callout", "question", "code", "userFlow", "coverage"];
 
     /// <summary>
     /// The verdicts a run may return on one line of the requirement text.
@@ -46,6 +46,13 @@ public static class AnalysisDocument
     /// are dropped rather than rendered small.
     /// </summary>
     private const int MaxFlowNodes = 14;
+
+    /// <summary>
+    /// Ceiling on the cases in one <c>example</c>. An example earns its place by putting a rule's
+    /// edge in front of the reader - two cases that differ in one thing - and past four it has
+    /// become a test table, which the reader skims for the same reason they skim the rule.
+    /// </summary>
+    private const int MaxExampleCases = 4;
 
     /// <summary>
     /// The JSON Schema handed to <c>claude --json-schema</c>, which validates the model's output
@@ -81,7 +88,7 @@ public static class AnalysisDocument
                   "properties": {
                     "kind": {
                       "type": "string",
-                      "enum": ["prose", "keyValue", "comparison", "readingPath", "glossary", "callout", "question", "code", "userFlow", "coverage"]
+                      "enum": ["prose", "keyValue", "comparison", "example", "readingPath", "glossary", "callout", "question", "code", "userFlow", "coverage"]
                     },
                     "text": { "type": "string" },
                     "title": { "type": "string" },
@@ -308,28 +315,27 @@ public static class AnalysisDocument
 
             case "comparison":
             {
-                var columns = Strings(b, "columns");
-                if (columns.Count < 2) return null;
-
-                var rows = new List<List<string>>();
-                if (b.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array)
-                    foreach (var r in rowsEl.EnumerateArray())
-                    {
-                        if (r.ValueKind != JsonValueKind.Array) continue;
-                        var cells = r.EnumerateArray()
-                            .Where(c => c.ValueKind == JsonValueKind.String)
-                            .Select(c => c.GetString()!.Trim())
-                            .ToList();
-                        if (cells.Count == 0) continue;
-                        // Square it off against the header rather than dropping the row: a table that
-                        // renders one cell short is still readable, a missing row is not recoverable.
-                        while (cells.Count < columns.Count) cells.Add("");
-                        if (cells.Count > columns.Count) cells = cells.Take(columns.Count).ToList();
-                        rows.Add(cells);
-                    }
-
+                var (columns, rows) = Table(b);
                 return rows.Count > 0
                     ? new Block(kind) { Title = NullIfEmpty(title), Columns = columns, Rows = rows, Note = NullIfEmpty(note) }
+                    : null;
+            }
+
+            case "example":
+            {
+                // A comparison's table with a setup above it: `text` is the made-up situation, the
+                // rows are cases run through the real rule, `note` is what the cases show. Without the
+                // setup the rows are outcomes for inputs the reader was never introduced to, so a
+                // block missing it is dropped like any other block missing its payload.
+                if (text.Length == 0) return null;
+                var (columns, rows) = Table(b);
+                return rows.Count > 0
+                    ? new Block(kind)
+                    {
+                        Title = NullIfEmpty(title), Text = text,
+                        Columns = columns, Rows = rows.Take(MaxExampleCases).ToList(),
+                        Note = NullIfEmpty(note),
+                    }
                     : null;
             }
 
@@ -608,6 +614,33 @@ public static class AnalysisDocument
         Deserialize(blocksJson)?.Sections.Any(s => s.Blocks.Any(b => b.Kind == kind)) ?? false;
 
     // ---- helpers ----
+
+    /// <summary>A header of at least two columns and the rows under it, squared off against it.
+    /// No columns means no table, and the rows are then empty.</summary>
+    private static (List<string> columns, List<List<string>> rows) Table(JsonElement b)
+    {
+        var columns = Strings(b, "columns");
+        var rows = new List<List<string>>();
+        if (columns.Count < 2) return (columns, rows);
+
+        if (b.TryGetProperty("rows", out var rowsEl) && rowsEl.ValueKind == JsonValueKind.Array)
+            foreach (var r in rowsEl.EnumerateArray())
+            {
+                if (r.ValueKind != JsonValueKind.Array) continue;
+                var cells = r.EnumerateArray()
+                    .Where(c => c.ValueKind == JsonValueKind.String)
+                    .Select(c => c.GetString()!.Trim())
+                    .ToList();
+                if (cells.Count == 0) continue;
+                // Square it off against the header rather than dropping the row: a table that
+                // renders one cell short is still readable, a missing row is not recoverable.
+                while (cells.Count < columns.Count) cells.Add("");
+                if (cells.Count > columns.Count) cells = cells.Take(columns.Count).ToList();
+                rows.Add(cells);
+            }
+
+        return (columns, rows);
+    }
 
     private static string Str(JsonElement el, string name) =>
         el.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";

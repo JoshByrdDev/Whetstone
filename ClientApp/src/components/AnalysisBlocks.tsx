@@ -185,6 +185,7 @@ function BlockView({ block }: { block: Block }) {
     case 'prose': return <Prose block={block} />;
     case 'keyValue': return <KeyValue block={block} />;
     case 'comparison': return <Comparison block={block} />;
+    case 'example': return <Example block={block} />;
     case 'readingPath': return <ReadingPath block={block} />;
     case 'glossary': return <Glossary block={block} />;
     case 'callout': return <Callout block={block} />;
@@ -237,44 +238,77 @@ function KeyValue({ block }: { block: Block }) {
  * whole analysis into a horizontal scroll.
  */
 function Comparison({ block }: { block: Block }) {
-  const columns = block.columns ?? [];
-  const rows = block.rows ?? [];
-
   return (
     <div>
       <BlockTitle text={block.title} />
-      <div className="overflow-x-auto rounded-lg border border-hair">
-        <table className="w-full min-w-[34rem] border-collapse text-left">
-          <thead>
-            <tr className="bg-gray-900/70">
-              {columns.map((c, i) => (
-                <th key={i} className="px-3.5 py-2 text-[10.5px] font-semibold uppercase tracking-[calc(var(--w-track)*0.08em)] text-indigo-300/80 border-b border-hair">
-                  {c}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r, ri) => (
-              <tr key={ri} className={ri % 2 ? 'bg-gray-900/25' : undefined}>
-                {r.map((cell, ci) => (
-                  <td
-                    key={ci}
-                    className={`px-3.5 py-2.5 text-[12.5px] leading-snug align-top border-b border-hair ${
-                      ci === 0 ? 'text-gray-200 font-medium' : 'text-gray-400'
-                    }`}
-                  >
-                    {inline(cell)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <CaseTable columns={block.columns ?? []} rows={block.rows ?? []} />
       {block.note && (
         <p className="mt-1.5 text-[11.5px] text-gray-500 italic max-w-[68ch]">{inline(block.note)}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * A made-up situation run through the real rule: the setup, the cases, and what they show.
+ *
+ * Marked as invented on its face, because its names are — a reader who meets "Acme Corp" in an
+ * analysis of their own codebase should never wonder which customer that is. The behaviour in the
+ * rows is the code's; only the cast is made up.
+ */
+function Example({ block }: { block: Block }) {
+  return (
+    <div className="rounded-r-lg border-l-2 border-teal-600/70 bg-teal-950/15 px-4 py-3">
+      <div className="mb-1 flex flex-wrap items-baseline gap-x-2 text-[10px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-teal-300">
+        <span>{block.title ? `Example · ${block.title}` : 'Example'}</span>
+        <span className="font-normal normal-case tracking-normal text-[10.5px] text-gray-500">made-up names, real behaviour</span>
+      </div>
+      {block.text && (
+        <p className="mb-2.5 text-[13px] leading-[1.65] text-gray-300 max-w-[66ch]">{inline(block.text)}</p>
+      )}
+      <CaseTable columns={block.columns ?? []} rows={block.rows ?? []} min="min-w-[26rem]" />
+      {block.note && (
+        <p className="mt-2 text-[12.5px] leading-[1.6] text-gray-300 max-w-[66ch]">
+          <span className="mr-1.5 text-[10px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-teal-300/80">What it shows</span>
+          {inline(block.note)}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The table a comparison and an example share. Scrolls sideways inside itself rather than pushing
+ *  the page wider on a phone. */
+function CaseTable({ columns, rows, min = 'min-w-[34rem]' }: { columns: string[]; rows: string[][]; min?: string }) {
+  return (
+    <div className="overflow-x-auto rounded-lg border border-hair">
+      <table className={`w-full ${min} border-collapse text-left`}>
+        <thead>
+          <tr className="bg-gray-900/70">
+            {columns.map((c, i) => (
+              <th key={i} className="px-3.5 py-2 text-[10.5px] font-semibold uppercase tracking-[calc(var(--w-track)*0.08em)] text-indigo-300/80 border-b border-hair">
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, ri) => (
+            <tr key={ri} className={ri % 2 ? 'bg-gray-900/25' : undefined}>
+              {r.map((cell, ci) => (
+                <td
+                  key={ci}
+                  className={`px-3.5 py-2.5 text-[12.5px] leading-snug align-top border-b border-hair ${
+                    ci === 0 ? 'text-gray-200 font-medium' : 'text-gray-400'
+                  }`}
+                >
+                  {inline(cell)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

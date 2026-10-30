@@ -134,7 +134,7 @@ export const UNSETTLED: ReadonlySet<Verdict> = new Set<Verdict>(['partial', 'gap
 
 /** One typed block. Flat by design — see AnalysisDocument on the server. */
 export interface Block {
-  kind: 'prose' | 'keyValue' | 'comparison' | 'readingPath' | 'glossary' | 'callout' | 'question' | 'code' | 'userFlow' | 'coverage';
+  kind: 'prose' | 'keyValue' | 'comparison' | 'example' | 'readingPath' | 'glossary' | 'callout' | 'question' | 'code' | 'userFlow' | 'coverage';
   text?: string;
   title?: string;
   tone?: 'gotcha' | 'insight' | 'risk';

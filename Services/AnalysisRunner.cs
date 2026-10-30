@@ -588,13 +588,21 @@ public class AnalysisRunner : IAnalysisExecutor
         // invitation to try. What the exemption buys where it DOES apply: a run counting rulings
         // against the word budget shortens the map to protect the prose, which means dropping
         // requirements to save space.
+        // Examples are outside the budget for the coverage map's reason, from the other side: a run
+        // counting them against the prose would drop the example to save the sentence it explains.
         var budget = map.Segments.Count == 0
-            ? "**Length: 900-1600 words across all blocks.** Long enough to teach, short enough to finish."
+            ? """
+              **Length: 900-1600 words across all blocks, `example` blocks excepted.** Long enough
+              to teach, short enough to finish. Examples sit outside it so that one is never cut to
+              protect the prose it explains; their own limit is one per decision.
+              """.Replace("\n", "\n  ")
             : """
-              **Length: 900-1600 words across all blocks, the `coverage` block excepted.** Long
-              enough to teach, short enough to finish. The rulings sit outside the budget on purpose:
-              they are a table the reader scans, not prose they read, and shortening them to protect
-              a word count would mean dropping requirements to save space.
+              **Length: 900-1600 words across all blocks, the `coverage` and `example` blocks
+              excepted.** Long enough to teach, short enough to finish. The rulings sit outside the
+              budget on purpose: they are a table the reader scans, not prose they read, and
+              shortening them to protect a word count would mean dropping requirements to save
+              space. Examples sit outside it so that one is never cut to protect the prose it
+              explains; their own limit is one per decision.
               """.Replace("\n", "\n  ");
 
         var label = string.IsNullOrWhiteSpace(cfg.LearningLabel) ? "the domain" : cfg.LearningLabel;
@@ -680,10 +688,16 @@ public class AnalysisRunner : IAnalysisExecutor
            skipped and the one that makes every section after it legible. Be specific about the old
            rule, and **quote it**: one `code` block of the old lines, titled to say so ("Before, on
            main") and carrying no `startLine`, because those lines are not in the file any more.
+           Where the old rule is easier to picture than to read, follow it with an `example`, and
+           use the same made-up situation again in section 3 - the same input meeting the old rule
+           and then the new one is the clearest before-and-after this document can give.
         3. **What changed** - the change stated as the two or three DECISIONS it really is, with the
            rest named as plumbing. Not a file-by-file walk. **One `code` block is required here** -
            the lines the decision actually turns on. If you cannot point at lines that carry it, you
            have not found the decision yet; go back to the diff before writing this section.
+           **Follow each decision with an `example`** where one would help a reader picture it - a
+           rule with a condition, an order, a fallback, two rules that look alike. A decision that
+           is pure plumbing (a registration, a rename) gets none rather than a forced one.
         4. **The user's path** - one `userFlow` block: the route a person takes through the product to
            reach what this ticket changed, with every stop marked `new`, `changed`, `unchanged` or
            `removed`. Start far enough back that the reader recognises where they are - the unchanged
@@ -721,6 +735,25 @@ public class AnalysisRunner : IAnalysisExecutor
           config that governs it, where the data lands).
         - `comparison` - any real trade-off or coverage matrix. `columns` then `rows`; keep cells short
           enough to scan. Use `note` for the caveat under the table.
+        - `example` - a made-up situation that shows a rule working, for the reader who understood
+          the rule as stated but cannot yet picture it. `text` is the setup in one or two sentences:
+          who and what exists before anything happens ("Acme Corp, EIN 12-3456789, already has an
+          active 401(k) plan named Acme 401(k) Plan"). `columns` and `rows` are the cases - 2 to 4,
+          each an input, what happens, and why - and `note` is the one thing the cases show that the
+          rule did not say on its own.
+
+          - **Invent the names, never the behaviour.** The people, companies and numbers are made
+            up; every outcome must be what the code you read actually does with that input, and
+            follow from lines you have cited or quoted. An example whose outcome the code would not
+            produce teaches the reader a rule that does not exist, and looks more certain doing it
+            than any sentence could.
+          - **Show the edge, not the typical case.** The case worth a row is the one the rule turns
+            on: two inputs that differ in one thing and come out differently, the input that reaches
+            the fallback, the one that passes one check and fails the other. A row that only
+            restates the happy path teaches nothing the rule did not.
+          - **Keep one cast.** Introduce your made-up people and data once and reuse them in every
+            example in the document, so each new example costs the reader only what is new in it.
+          - Cells are short: a value or a few words. If a case needs a paragraph, it is prose.
         - `userFlow` - the user's route, as `nodes` and `edges`. **Give the graph and nothing else** -
           where a box sits, what colour it is and which way the arrows run is decided by the renderer,
           not by you. There is no layout field and adding one is not possible.
@@ -816,7 +849,8 @@ public class AnalysisRunner : IAnalysisExecutor
           not about whether to quote: a document with no snippets in it has failed this test, not
           passed it safely.
         - **Concrete or nothing.** Real files, real rules, real numbers, real edge cases. Anything that
-          would read the same on a different ticket should be deleted.
+          would read the same on a different ticket should be deleted. An `example`'s made-up names
+          are not an exception to this: the names are invented so the BEHAVIOUR can be concrete.
         - **Do not restate the record.** The reader can see the description, the work items and the
           implementation summary already. Your value is what you learned from the CODE that the ticket
           does not say.

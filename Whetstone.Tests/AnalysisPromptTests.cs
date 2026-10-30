@@ -209,14 +209,35 @@ public class AnalysisPromptTests
     [Fact]
     public void The_coverage_block_is_exempt_from_the_word_budget()
     {
-        Assert.Contains("the `coverage` block excepted",
+        Assert.Contains("the `coverage` and `example` blocks",
             Prompt(Map(new DescriptionSegmenter.Source(null, null, "- An ask"))));
     }
 
     [Fact]
     public void The_word_budget_still_applies_when_there_is_no_map()
     {
-        Assert.Contains("**Length: 900-1600 words across all blocks.**", Prompt(Empty));
+        var prompt = Prompt(Empty);
+        Assert.Contains("**Length: 900-1600 words across all blocks, `example` blocks excepted.**", prompt);
+        Assert.DoesNotContain("`coverage` and `example`", prompt);
+    }
+
+    /// <summary>
+    /// An example is asked for after each decision and documented as a block, with or without a
+    /// map - and its continuation lines sit under its bullet, not flush left where they would read
+    /// as a new paragraph of the block list.
+    /// </summary>
+    [Fact]
+    public void Examples_are_asked_for_and_documented_on_every_ticket()
+    {
+        foreach (var prompt in new[] { Prompt(Empty), Prompt(Map(new DescriptionSegmenter.Source(null, null, "- An ask"))) })
+        {
+            Assert.Contains("**Follow each decision with an `example`**", prompt);
+            Assert.Contains("\n- `example` - a made-up situation", prompt);
+            Assert.Contains("\n  - **Invent the names, never the behaviour.**", prompt);
+            Assert.Contains("\n- **Length: 900-1600 words", prompt);
+            Assert.DoesNotContain("\nprotect the prose", prompt);
+            Assert.DoesNotContain("\nexplains; their own limit", prompt);
+        }
     }
 
     /// <summary>

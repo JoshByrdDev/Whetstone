@@ -414,6 +414,39 @@ public class TicketAnalysisTests
     }
 
     /// <summary>
+    /// An example is a setup and its cases. The cases are capped at four, past which it is a test
+    /// table; a setup-less one is dropped, because its rows are outcomes for inputs nobody met.
+    /// </summary>
+    [Fact]
+    public void An_example_keeps_its_setup_cases_and_point()
+    {
+        var (doc, error) = AnalysisDocument.Parse(El("""
+        {
+          "headline": "h",
+          "sections": [{ "title": "What changed", "blocks": [
+            { "kind": "example", "title": "Two rules, one plan",
+              "text": "Acme Corp already has an active Acme 401(k) Plan.",
+              "columns": ["The advisor adds", "Already added?", "Duplicate rule?"],
+              "rows": [["Acme's own filing", "Yes"], ["acme 401(k) plan, typed", "-", "Yes", "extra"],
+                       ["c", "d", "e"], ["f", "g", "h"], ["i", "j", "k"]],
+              "note": "Only the create-time rule sees a manual entry." },
+            { "kind": "example", "columns": ["A", "B"], "rows": [["1", "2"]] }
+          ]}]
+        }
+        """));
+
+        Assert.Null(error);
+        var ex = Assert.Single(doc!.Sections[0].Blocks);
+        Assert.Equal("example", ex.Kind);
+        Assert.Equal("Acme Corp already has an active Acme 401(k) Plan.", ex.Text);
+        Assert.Equal("Two rules, one plan", ex.Title);
+        Assert.Equal("Only the create-time rule sees a manual entry.", ex.Note);
+        Assert.Equal(4, ex.Rows!.Count);
+        Assert.Equal(["Acme's own filing", "Yes", ""], ex.Rows[0]);
+        Assert.Equal(3, ex.Rows[1].Count);
+    }
+
+    /// <summary>
     /// A stop keeps the QA screenshot it names, and only the first stop to name one keeps it.
     /// <para>
     /// One screenshot is a picture of one place. A run that hangs the same shot on two stops has
