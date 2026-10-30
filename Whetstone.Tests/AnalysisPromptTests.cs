@@ -121,6 +121,21 @@ public class AnalysisPromptTests
         Assert.DoesNotContain("] (item) Back-fill historical cases", prompt);
     }
 
+    /// <summary>
+    /// A flow stop's `asks` sits inside the userFlow field list, so it has to land at that list's
+    /// indentation - flush left it would read as a block kind of its own.
+    /// </summary>
+    [Fact]
+    public void A_stop_is_asked_which_line_called_for_it_only_when_there_are_lines()
+    {
+        var prompt = Prompt(Map(new DescriptionSegmenter.Source(null, null, "- Only licensed advisors")));
+
+        Assert.Contains("\n  - `asks` - the ids of the requirement lines", prompt);
+        Assert.Contains("\n  - **6 to 12 nodes.**", prompt);
+        Assert.DoesNotContain("`asks`", Prompt(Empty));
+        Assert.Contains("\n  - **6 to 12 nodes.**", Prompt(Empty));
+    }
+
     [Fact]
     public void No_siblings_means_no_empty_list()
     {

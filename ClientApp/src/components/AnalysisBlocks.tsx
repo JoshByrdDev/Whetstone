@@ -1108,7 +1108,7 @@ function measure(node: FlowNode, shot: FlowShot | null) {
   const text = Math.max(decision ? 56 : 52, content + 42);
   const h = text + (shot ? SHOT_H + SHOT_PAD : 0);
 
-  return { label, refs, hint, shot, text, chip: !decision, opens: refs.length > 0 || !!node.explain, h };
+  return { label, refs, hint, shot, text, chip: !decision, opens: refs.length > 0 || !!node.explain || !!node.asks?.length, h };
 }
 
 /** Where a stop's screenshot sits inside it. Read by both the measure pass and the renderer, so the
@@ -1875,6 +1875,27 @@ function FlowStopCard({ box, hue, shown, canvas, onClose }: {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
+        {/* Why the stop is there, before what it does: the reader opening a new or changed stop is
+            usually asking which criterion called for it, and the answer is the ticket's own words. */}
+        {node.asks && node.asks.length > 0 && (
+          <div className="px-4 pt-2">
+            <div className="mb-1 text-[9px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-gray-500">
+              Asked for by
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {node.asks.map((a, i) => (
+                <blockquote key={i} className="border-l-2 pl-2.5 text-[12.5px] leading-[1.55] text-gray-300" style={{ borderColor: tone.stroke }}>
+                  {inline(a.text)}
+                  {a.origin && (
+                    <span className="ml-1.5 text-[10.5px] text-gray-500">
+                      inherited from {a.origin}{a.originRole ? `, the ${a.originRole}` : ''}
+                    </span>
+                  )}
+                </blockquote>
+              ))}
+            </div>
+          </div>
+        )}
         {node.explain && (
           <p className="px-4 pt-2 text-[13px] leading-[1.65] text-gray-300">
             {inline(node.explain)}

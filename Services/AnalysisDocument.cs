@@ -137,7 +137,8 @@ public static class AnalysisDocument
                           "actor": { "type": "string" },
                           "change": { "type": "string", "enum": ["new", "changed", "unchanged", "removed"] },
                           "refs": { "type": "array", "items": { "type": "string" } },
-                          "shot": { "type": "integer", "minimum": 0 }
+                          "shot": { "type": "integer", "minimum": 0 },
+                          "asks": { "type": "array", "items": { "type": "string" } }
                         }
                       }
                     },
@@ -368,7 +369,7 @@ public static class AnalysisDocument
 
             case "userFlow":
             {
-                var (nodes, edges) = ParseFlow(b);
+                var (nodes, edges) = ParseFlow(b, segments);
                 // One box and no line is not a flow, it is a label. Two nodes joined by one edge is
                 // the smallest thing that says "then".
                 return nodes.Count >= 2 && edges.Count > 0
@@ -493,10 +494,17 @@ public static class AnalysisDocument
     /// a graph where every edge connects two nodes that are on the page.
     /// </para>
     /// </summary>
-    private static (List<FlowNode> nodes, List<FlowEdge> edges) ParseFlow(JsonElement b)
+    private static (List<FlowNode> nodes, List<FlowEdge> edges) ParseFlow(
+        JsonElement b, IReadOnlyList<DescriptionSegmenter.Segment>? segments)
     {
         string[] nodeKinds = ["start", "screen", "step", "decision", "system", "end"];
         string[] changes = ["new", "changed", "unchanged", "removed"];
+
+        // The lines a stop can name, by id. Furniture is left out for the reason it is never ruled on:
+        // "Acceptance criteria" is not something anybody asked for.
+        var askable = (segments ?? [])
+            .Where(s => !DescriptionSegmenter.IsStructural(s.Kind))
+            .ToDictionary(s => s.Id, StringComparer.OrdinalIgnoreCase);
 
         var nodes = new List<FlowNode>();
         var ids = new HashSet<string>(StringComparer.Ordinal);
@@ -533,13 +541,24 @@ public static class AnalysisDocument
                     ? order
                     : (int?)null;
 
+                // The requirement lines that called for this stop, joined here exactly as a coverage
+                // row is: the run names ids, and the words come from the ticket. An id that names no
+                // line is dropped rather than shown as a quote of nothing.
+                var asks = Strings(n, "asks")
+                    .Select(a => askable.GetValueOrDefault(a))
+                    .OfType<DescriptionSegmenter.Segment>()
+                    .DistinctBy(s => s.Id)
+                    .Take(3)
+                    .Select(s => new FlowAsk(s.Text, s.Origin, s.OriginRole))
+                    .ToList();
+
                 nodes.Add(new FlowNode(
                     id, nodeKind, label,
                     NullIfEmpty(Str(n, "explain")),
                     NullIfEmpty(Str(n, "actor")),
                     change,
                     refs.Count > 0 ? refs : null,
-                    shot));
+                    shot) { Asks = asks.Count > 0 ? asks : null });
             }
 
         var edges = new List<FlowEdge>();
@@ -700,11 +719,23 @@ public static class AnalysisDocument
     /// </para></param>
     /// <param name="Ref">Legacy single citation. Read only — analyses written before
     /// <see cref="Refs"/> existed still carry it, and dropping it would silently lose their links.</param>
+    /// <param name="Asks">The requirement lines that called for this stop, in the ticket's own words.
+    /// What answers "which criterion is this" on the stop itself, rather than sending the reader to
+    /// the coverage map to find the line that matches.</param>
     public record FlowNode(string Id, string Kind, string Label, string? Explain, string? Actor,
         string Change, IReadOnlyList<string>? Refs, int? Shot)
     {
         public string? Ref { get; init; }
+        public IReadOnlyList<FlowAsk>? Asks { get; init; }
     }
+
+    /// <summary>
+    /// One requirement line quoted on a flow stop. Copied from <see cref="DescriptionSegmenter"/>,
+    /// never written by the run, for the reason <see cref="CoverageSegment"/> gives: a paraphrase of
+    /// a criterion is the thing the reader would then have to go and check against the real one.
+    /// </summary>
+    /// <param name="Origin">The ancestor's key when the line was inherited, as on a coverage row.</param>
+    public record FlowAsk(string Text, string? Origin, string? OriginRole);
 
     /// <param name="Label">What sends the user down this line — required in practice on the
     /// branches out of a <c>decision</c>, where an unlabelled fork tells the reader nothing.</param>

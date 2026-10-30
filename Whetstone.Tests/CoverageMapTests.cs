@@ -422,6 +422,88 @@ public class CoverageMapTests
         Assert.Equal(["Picker.tsx:88"], s.Refs);
     }
 
+    // ---- a flow stop's asks -------------------------------------------------
+
+    private static AnalysisDocument.FlowNode Stop(string markdown, string asks, string? origin = null)
+    {
+        var segments = DescriptionSegmenter.Compose([new DescriptionSegmenter.Source(origin, origin is null ? null : "story", markdown)]).Segments;
+        var (doc, error) = AnalysisDocument.Parse(El($$"""
+        {
+          "headline": "h",
+          "sections": [{ "title": "The user's path", "blocks": [{
+            "kind": "userFlow",
+            "nodes": [
+              { "id": "a", "kind": "screen", "label": "Employer detail", "change": "unchanged" },
+              { "id": "b", "kind": "end", "label": "Owner-only message", "change": "new", "asks": {{asks}} }
+            ],
+            "edges": [{ "from": "a", "to": "b", "change": "new" }]
+          }]}]
+        }
+        """), segments);
+        Assert.Null(error);
+        return doc!.Sections[0].Blocks[0].Nodes![1];
+    }
+
+    /// <summary>
+    /// A stop quotes the criterion that asked for it in the ticket's own words, which the run never
+    /// writes - it names the line and the words are joined on here, as on a coverage row.
+    /// </summary>
+    [Fact]
+    public void A_flow_stop_quotes_the_lines_it_names_in_the_tickets_words()
+    {
+        var stop = Stop("## Acceptance criteria\n\n- Only the owner adds plans\n- Anyone else is told so", """["S3"]""");
+
+        var ask = Assert.Single(stop.Asks!);
+        Assert.Equal("Anyone else is told so", ask.Text);
+        Assert.Null(ask.Origin);
+    }
+
+    /// <summary>
+    /// An id that names nothing, a heading, a repeat and a fourth line are all dropped: the first is a
+    /// quote of nothing, the second is furniture nobody asked for, and the last two are noise.
+    /// </summary>
+    [Fact]
+    public void A_flow_stop_keeps_only_real_distinct_lines_and_at_most_three()
+    {
+        var stop = Stop("## Acceptance criteria\n\n- One\n- Two\n- Three\n- Four",
+            """["S9", "S1", "S2", "s2", "S3", "S4", "S5"]""");
+
+        Assert.Equal(["One", "Two", "Three"], stop.Asks!.Select(a => a.Text));
+    }
+
+    [Fact]
+    public void An_inherited_line_on_a_stop_says_where_it_came_from()
+    {
+        var stop = Stop("- Only the owner adds plans", """["S1"]""", origin: "PROJ-123");
+
+        var ask = Assert.Single(stop.Asks!);
+        Assert.Equal("PROJ-123", ask.Origin);
+        Assert.Equal("story", ask.OriginRole);
+    }
+
+    [Fact]
+    public void A_stop_naming_nothing_real_carries_no_asks_and_survives_storage()
+    {
+        Assert.Null(Stop("- Only the owner adds plans", """["S7"]""").Asks);
+
+        var segments = Segments("- Only the owner adds plans");
+        var (doc, _) = AnalysisDocument.Parse(El("""
+        {
+          "headline": "h",
+          "sections": [{ "title": "P", "blocks": [{
+            "kind": "userFlow",
+            "nodes": [
+              { "id": "a", "kind": "screen", "label": "A", "change": "unchanged" },
+              { "id": "b", "kind": "end", "label": "B", "change": "new", "asks": ["S1"] }
+            ],
+            "edges": [{ "from": "a", "to": "b" }]
+          }]}]
+        }
+        """), segments);
+        var back = AnalysisDocument.Deserialize(AnalysisDocument.Serialize(doc!));
+        Assert.Equal("Only the owner adds plans", Assert.Single(back!.Sections[0].Blocks[0].Nodes![1].Asks!).Text);
+    }
+
     [Fact]
     public void The_map_is_findable_in_a_stored_document()
     {

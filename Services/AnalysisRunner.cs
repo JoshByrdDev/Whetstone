@@ -569,6 +569,20 @@ public class AnalysisRunner : IAnalysisExecutor
 
         """;
 
+        // Which criterion a stop answers. Conditional for the same reason as the coverage entry: with
+        // no requirement text there are no ids to name, and a field the run cannot fill is one it
+        // fills with something made up.
+        var flowAsksDoc = map.Segments.Count == 0 ? "" : """
+            - `asks` - the ids of the requirement lines that **called for this stop**: 1 to 3 from
+              the requirement text above. Set it on every `new`, `changed` or `removed` stop a line
+              asked for, and leave it off `unchanged` ones. The reader opens a stop to find out why
+              it is there, and is shown those lines in their own words beside your `explain` - so
+              name the line that asked for THIS stop, not every line in the same area. A new stop no
+              line asked for gets none, and that is worth a sentence in its `explain`: something was
+              built that nobody wrote down.
+
+            """.Replace("\n", "\n  ");
+
         // The exemption is worth stating only where there is a map to exempt. Without one it names a
         // block the run has not been told about, and every mention of a kind it cannot use is an
         // invitation to try. What the exemption buys where it DOES apply: a run counting rulings
@@ -741,7 +755,7 @@ public class AnalysisRunner : IAnalysisExecutor
             when the caption says that shot is of THIS stop, and never twice - one screenshot cannot
             be a picture of two different places, so if two stops both look like the same shot, it
             belongs to the one it actually shows.
-          - **6 to 12 nodes.** Every edge's `from` and `to` must be an `id` you declared. A line back
+          {{flowAsksDoc}}- **6 to 12 nodes.** Every edge's `from` and `to` must be an `id` you declared. A line back
             to an earlier stop is fine and often the truest part of the picture - a failed validation
             returning to the form is something the user really does.
           - **Every path ends where the user can see it ends.** A flow that stops at the write is

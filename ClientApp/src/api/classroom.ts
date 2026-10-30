@@ -59,9 +59,15 @@ export interface FlowNode {
    *  render time under the same rule as a coverage row's: a number that no longer names one shows
    *  no picture rather than a broken image. */
   shot?: number | null;
+  /** The requirement lines that called for this stop, in the ticket's own words — joined on by the
+   *  server from the ids the run named, never written by it. Absent on analyses written before. */
+  asks?: FlowAsk[];
   /** Legacy single citation, on analyses written before `refs`. Read via `nodeRefs`. */
   ref?: string;
 }
+
+/** One quoted criterion on a stop. `origin` is the ancestor's key when the line was inherited. */
+export interface FlowAsk { text: string; origin?: string | null; originRole?: string | null }
 
 /** A node's citations, whichever shape the analysis was written in. */
 export const nodeRefs = (n: FlowNode): string[] =>
