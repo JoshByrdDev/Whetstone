@@ -164,6 +164,9 @@ if (!isolation.On) builder.Services.AddHostedService<StackProbeService>();
 // How much subscription rate-limit headroom is left, polled once for every open tab. Reads Claude
 // Code's own login, and renews it when it ages out — see ClaudeUsageService.
 builder.Services.AddSingleton<ClaudeUsageService>();
+// Which Claude account new runs start on: the header's picker, and the smart switch that moves down
+// the account list by itself as each one fills. Ticked by the probe below, after each poll.
+builder.Services.AddSingleton<ClaudeAccountSwitcher>();
 if (!isolation.On) builder.Services.AddHostedService<ClaudeUsageProbe>();
 
 // The probes above are meters. The default for a background service that throws is to stop the

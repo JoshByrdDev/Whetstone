@@ -43,6 +43,8 @@ public static class ConfigEndpoints
         // The Claude logins the fleet can be switched between. Which one is in force is not here:
         // that is switched from the usage chip, through /api/usage/account. See ClaudeAccounts.
         "claudeAccounts",
+        // Moving down the account list by itself as each one fills. See ClaudeSmartSwitch.
+        ClaudeSmartSwitch.ConfigKey,
     };
 
     /// <summary>One entry in a provider's model dropdown, as the Settings panel reads it.</summary>
@@ -334,6 +336,8 @@ public static class ConfigEndpoints
                 // to - the one thing that has to be true before switching to it does any good.
                 claudeAccounts = ClaudeAccounts.All(g).Where(a => a.ConfigDir is not null)
                     .Select(a => new { name = a.Name, configDir = a.ConfigDir, signedIn = ClaudeAccounts.HasLogin(a) }),
+                // The smart switch, with every limit filled in, so the form shows what will be applied.
+                claudeSmartSwitch = SmartSwitchOut(g),
                 // The catalogue the Settings panel renders from.
                 agentProviders = AgentProviders,
                 notificationEventCatalog = NotificationEvents,
@@ -435,6 +439,10 @@ public static class ConfigEndpoints
                 if (accounts.Count > 0) target["claudeAccounts"] = accounts;
                 else target.Remove("claudeAccounts");
             }
+
+            // Limits clamped to 1..100 and names deduplicated where it is stored, as the accounts are.
+            if (target.ContainsKey(ClaudeSmartSwitch.ConfigKey))
+                target[ClaudeSmartSwitch.ConfigKey] = ClaudeSmartSwitch.Normalize(target[ClaudeSmartSwitch.ConfigKey]);
 
             SaveObject(paths.GlobalConfigPath, target, before);
             return Results.Ok(new { saved = true });
@@ -846,6 +854,16 @@ public static class ConfigEndpoints
         var body = await reader.ReadToEndAsync();
         try { return JsonNode.Parse(body)?.AsObject(); }
         catch (JsonException) { return null; }
+    }
+
+    private static object SmartSwitchOut(IReadOnlyDictionary<string, JsonElement> g)
+    {
+        var s = ClaudeSmartSwitch.Read(g);
+        return new
+        {
+            enabled = s.Enabled,
+            chain = s.Chain.Select(r => new { account = r.Account, weekly = r.Weekly, session = r.Session }),
+        };
     }
 
     internal static JsonObject LoadObject(string path)

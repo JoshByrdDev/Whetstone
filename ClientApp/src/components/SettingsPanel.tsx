@@ -7,6 +7,8 @@ import type { ThemePref, Weekday } from '../theme';
 import type { Track } from '../types/tickets';
 import { usePop } from '../hooks/usePop';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
+import { SmartSwitchField } from './SmartSwitchField';
+import type { SmartSwitchSetting } from './SmartSwitchField';
 
 // ---------- Shared field primitives -----------------------------------------
 
@@ -247,6 +249,8 @@ interface GlobalConfig {
   claudeOauthToken?: string;
   /** Claude logins beyond the CLI's own, which the usage chip can switch the fleet between. */
   claudeAccounts: ClaudeAccountOption[];
+  /** Moving down an ordered list of those accounts by itself as each one fills. */
+  claudeSmartSwitch: SmartSwitchSetting;
   /** Served by the API rather than hardcoded here, so the two halves cannot disagree about
    *  which providers and models exist. */
   agentProviders: AgentProviderOption[];
@@ -416,6 +420,7 @@ function withDefaults(d: GlobalConfig): GlobalConfig {
     maxQaLeases: d.maxQaLeases ?? 10,
     showWorkerHosts: d.showWorkerHosts ?? false,
     workerHostsInUse: d.workerHostsInUse ?? false,
+    claudeSmartSwitch: d.claudeSmartSwitch ?? { enabled: false, chain: [] },
   };
 }
 
@@ -488,6 +493,8 @@ function GlobalSettings() {
     const maxQa = cfg.maxQaLeases || 10;
     if (!Number.isInteger(cfg.qaLeases) || cfg.qaLeases < 1 || cfg.qaLeases > maxQa)
       errors.qaLeases = `A whole number from 1 to ${maxQa}`;
+    if (cfg.claudeSmartSwitch?.chain.some(r => !(r.weekly >= 1 && r.weekly <= 100) || !(r.session >= 1 && r.session <= 100)))
+      errors.claudeSmartSwitch = 'Each limit is a percent from 1 to 100';
   }
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -888,6 +895,16 @@ function GlobalSettings() {
             </span>
           )}
         </div>
+      </FieldGroup>
+
+      <FieldGroup title="Smart Switch">
+        <SmartSwitchField
+          value={cfg.claudeSmartSwitch}
+          accounts={['Default', ...(cfg.claudeAccounts ?? []).map(a => a.name.trim())]}
+          onChange={claudeSmartSwitch => update({ claudeSmartSwitch })}
+          dirty={dirty}
+        />
+        {errors.claudeSmartSwitch && <p className="text-xs text-red-400">{errors.claudeSmartSwitch}</p>}
       </FieldGroup>
 
       <FieldGroup title="Rate-Limit Meter">

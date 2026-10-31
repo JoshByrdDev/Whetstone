@@ -15,10 +15,11 @@ public class ClaudeUsageProbe : BackgroundService
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(1);
 
     private readonly ClaudeUsageService _usage;
+    private readonly ClaudeAccountSwitcher _switcher;
     private readonly ILogger<ClaudeUsageProbe> _log;
 
-    public ClaudeUsageProbe(ClaudeUsageService usage, ILogger<ClaudeUsageProbe> log)
-        => (_usage, _log) = (usage, log);
+    public ClaudeUsageProbe(ClaudeUsageService usage, ClaudeAccountSwitcher switcher, ILogger<ClaudeUsageProbe> log)
+        => (_usage, _switcher, _log) = (usage, switcher, log);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -27,6 +28,8 @@ public class ClaudeUsageProbe : BackgroundService
             try
             {
                 await _usage.RefreshAsync(stoppingToken);
+                // Straight after the poll, so the smart switch decides on numbers a second old.
+                await _switcher.TickAsync(stoppingToken);
             }
             // Only a stop of the host is a reason to leave; an HttpClient timeout is also an
             // OperationCanceledException, and it is just a failed pass.

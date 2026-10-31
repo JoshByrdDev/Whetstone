@@ -67,32 +67,46 @@ public static class UsageEndpoints
         // Switch which Claude login the fleet spends. Its own endpoint rather than one more key on
         // the Settings form because it is not a setting somebody saves and forgets - it is the thing
         // you reach for when one subscription has run dry, and it has to undo what running dry did.
+        // A switch by hand turns the smart switch off, and says so - see ClaudeAccountSwitcher.
         app.MapPost("/api/usage/account", async (
-            AccountSwitch body, ClaudeUsageService usage, DashboardPaths paths, CancellationToken ct) =>
+            AccountSwitch body, ClaudeUsageService usage, ClaudeAccountSwitcher switcher, CancellationToken ct) =>
         {
-            if (ClaudeAccounts.Find(usage.Accounts, body.Name) is not { } account)
+            var (account, turnedOff) = await switcher.SwitchAsync(body.Name, manual: true, ct: ct);
+            if (account is null)
                 return Results.BadRequest(new { error = $"No Claude account called '{body.Name}'." });
+            return Results.Ok(new { account = usage.AccountName, status = usage.Current.Status, smartSwitchTurnedOff = turnedOff });
+        });
 
-            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
-            var before = ConfigEndpoints.Snapshot(config);
-            // The default is stored as an absence, so a config file that has never heard of accounts
-            // and one that has been switched back are the same file.
-            if (account.ConfigDir is null) config.Remove("claudeAccount");
-            else config["claudeAccount"] = account.Name;
-            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
-
-            // A usage-limit pause belongs to the account that hit the limit. Left behind, it would
-            // hold Claude's phases idle until the old account's reset - the wait the switch was made
-            // to skip. Claude's alone: the other providers' accounts did not change. usage-limit.json
-            // is the name from before pauses were per provider, when it was always Claude's.
-            foreach (var name in new[] { "usage-limit-claude.json", "usage-limit.json" })
+        // What the smart switch sees: each account's last numbers, how they compare with its limits
+        // on the list, and the last switch. Read-only, for the Settings panel.
+        app.MapGet("/api/usage/accounts", (ClaudeUsageService usage, ClaudeAccountSwitcher switcher) =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var settings = switcher.Settings;
+            var readings = switcher.Readings;
+            return Results.Ok(new
             {
-                try { File.Delete(Path.Combine(paths.RunDir, name)); }
-                catch (IOException) { /* the heartbeat is reading it; it re-checks on its next pass */ }
-            }
-
-            await usage.RefreshAsync(ct, force: true);
-            return Results.Ok(new { account = usage.AccountName, status = usage.Current.Status });
+                active = usage.AccountName,
+                smartSwitch = settings.Enabled,
+                lastSwitch = switcher.LastSwitch,
+                accounts = usage.Accounts.Select(a =>
+                {
+                    readings.TryGetValue(a.Name, out var r);
+                    var (session, weekly) = ClaudeSmartSwitch.Load(r, now);
+                    var rung = settings.Chain.FirstOrDefault(x => x.Account.Equals(a.Name, StringComparison.OrdinalIgnoreCase));
+                    return new
+                    {
+                        name = a.Name,
+                        signedIn = ClaudeAccounts.HasLogin(a),
+                        fetchedAt = r?.FetchedAt,
+                        known = r?.FetchedAt is not null,
+                        session = Math.Round(session),
+                        weekly = Math.Round(weekly),
+                        blockedUntil = r?.BlockedUntil > now ? r.BlockedUntil : null,
+                        over = rung is null ? null : ClaudeSmartSwitch.Over(rung, r, now),
+                    };
+                }),
+            });
         });
 
         // Which providers some role runs on - which meters the app bar and the Metrics tab draw. A
@@ -129,7 +143,7 @@ public static class UsageEndpoints
             });
         });
 
-        app.MapGet("/api/usage", (ClaudeUsageService usage) =>
+        app.MapGet("/api/usage", (ClaudeUsageService usage, ClaudeAccountSwitcher switcher) =>
         {
             var s = usage.Current;
             return Results.Ok(new
@@ -141,6 +155,9 @@ public static class UsageEndpoints
                 // is nothing to choose between, and the chip draws no picker.
                 account = usage.AccountName,
                 accounts = usage.Accounts.Select(a => a.Name),
+                // Whether the picker is being driven by the smart switch, and its last move.
+                smartSwitch = switcher.Settings.Enabled,
+                lastSwitch = switcher.LastSwitch,
                 limits = s.Limits.Select(l => new
                 {
                     kind = l.Kind,

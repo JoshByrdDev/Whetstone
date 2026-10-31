@@ -20,11 +20,16 @@ public record UsageLimit(
 /// render: a failed poll leaves <see cref="Limits"/> holding the previous good answer, so the UI
 /// shows a stale number with a warning rather than blanking out on one dropped request.
 /// </summary>
+/// <param name="Account">
+/// Whose numbers <see cref="Limits"/> are. Carried with them rather than read from the config beside
+/// them, because the config can switch between a poll and its reader - see ClaudeAccountSwitcher.
+/// </param>
 public record UsageSnapshot(
     string Status,
     string? Message,
     DateTimeOffset? FetchedAt,
-    IReadOnlyList<UsageLimit> Limits)
+    IReadOnlyList<UsageLimit> Limits,
+    string? Account = null)
 {
     public static readonly UsageSnapshot Empty =
         new("unknown", null, null, Array.Empty<UsageLimit>());
@@ -359,7 +364,7 @@ public class ClaudeUsageService
                 _signInMessage = null;
                 lock (_gate)
                 {
-                    _snapshot = new UsageSnapshot("ok", null, DateTimeOffset.UtcNow, limits);
+                    _snapshot = new UsageSnapshot("ok", null, DateTimeOffset.UtcNow, limits, _account);
                 }
             }
             catch (Exception ex)
@@ -367,6 +372,42 @@ public class ClaudeUsageService
                 Degrade("error", "Usage API returned something unreadable.");
                 _log.LogDebug(ex, "Usage response did not parse");
             }
+        }
+    }
+
+    /// <summary>
+    /// One account's windows, read without touching anything: for an account the fleet is NOT on,
+    /// so the smart switch knows when it is worth going back to. Null when there is nothing to read.
+    ///
+    /// <para>
+    /// Never renews. A spent token stays spent and the answer is null - the account is not in use,
+    /// so nothing is waiting on it, and a second writer to the credential file of a login nobody is
+    /// running is all risk for a number the switcher can do without (it falls back to the reset
+    /// times it last saw). Shares no backoff with the timed poll: any failure is a null, and the
+    /// caller's own slower cadence is the back-off.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<UsageLimit>?> PeekAsync(ClaudeAccount account, CancellationToken ct = default)
+    {
+        if (_isolation.On || !_providers.UsesClaude) return null;
+
+        var (credentials, error) = ReadCredentials(account);
+        if (error is not null || credentials is null || IsSpent(credentials.ExpiresAt)) return null;
+
+        using var req = new HttpRequestMessage(HttpMethod.Get, UsageUrl);
+        req.Headers.TryAddWithoutValidation("Authorization", $"Bearer {credentials.AccessToken}");
+        req.Headers.TryAddWithoutValidation("anthropic-beta", "oauth-2025-04-20");
+        req.Headers.TryAddWithoutValidation("User-Agent", UserAgent);
+        try
+        {
+            using var res = await _http.SendAsync(req, ct);
+            if (!res.IsSuccessStatusCode) return null;
+            return ParseLimits(await res.Content.ReadAsStringAsync(ct));
+        }
+        catch (Exception ex) when (!ct.IsCancellationRequested)
+        {
+            _log.LogDebug(ex, "Usage peek for {Account} failed", account.Name);
+            return null;
         }
     }
 
@@ -622,11 +663,12 @@ public class ClaudeUsageService
     /// like it, and a dashboard whose meter dies whenever that file goes quiet is not a meter.
     /// </para>
     /// </summary>
-    private (Credentials? Credentials, string? Error) ReadCredentials()
+    private (Credentials? Credentials, string? Error) ReadCredentials(ClaudeAccount? of = null)
     {
+        var account = of ?? Account;
         // Only for the default account. A token of ours is one subscription's, and answering for a
         // second account with it would put the first account's numbers under the second one's name.
-        if (Account.ConfigDir is null)
+        if (account.ConfigDir is null)
         {
             var ours = Environment.GetEnvironmentVariable("CLAUDE_CODE_OAUTH_TOKEN");
             if (string.IsNullOrWhiteSpace(ours)) ours = ConfiguredToken();
@@ -634,12 +676,12 @@ public class ClaudeUsageService
                 return (new Credentials(ours, null, null, null), null);
         }
 
-        var path = CredentialsPath;
+        var path = Path.Combine(ClaudeAccounts.DirOf(account), ".credentials.json");
         if (!File.Exists(path))
             // A second account has no token to paste: the fix is to sign the CLI in to its folder.
-            return (null, Account.ConfigDir is null
+            return (null, account.ConfigDir is null
                 ? NoLogin
-                : $"The {Account.Name} account has not been signed in - use Sign in beside it in Settings.");
+                : $"The {account.Name} account has not been signed in - use Sign in beside it in Settings.");
 
         try
         {

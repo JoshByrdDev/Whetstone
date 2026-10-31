@@ -566,10 +566,15 @@ function Save-CodexUsage {
 }
 
 # Record that this provider's account refused a run, until $ResetsAt.
+#
+# For claude, also which login refused it: the config dir this run was started on ("" for the CLI's
+# own). The board's smart switch (ClaudeAccountSwitcher) reads it to tell a limit on the account in
+# force from one an older run hit on the account the fleet has already moved away from.
 function Set-UsageLimitPause {
     param([string]$Provider, [datetime]$ResetsAt, [string]$Text, [int]$TicketId = 0)
-    @{ provider = $Provider; resetsAt = $ResetsAt.ToString("o"); text = "$Text"; ticketId = $TicketId; at = (Get-Date).ToString("o") } |
-        ConvertTo-Json -Compress | Set-Content -Path (Get-UsageLimitFile $Provider) -Encoding UTF8
+    $pause = @{ provider = $Provider; resetsAt = $ResetsAt.ToString("o"); text = "$Text"; ticketId = $TicketId; at = (Get-Date).ToString("o") }
+    if ($Provider -eq 'claude') { $pause.configDir = "$env:CLAUDE_CONFIG_DIR" }
+    $pause | ConvertTo-Json -Compress | Set-Content -Path (Get-UsageLimitFile $Provider) -Encoding UTF8
 }
 
 # The reset time in a limit message, as local time; $null when the text is not a limit message at

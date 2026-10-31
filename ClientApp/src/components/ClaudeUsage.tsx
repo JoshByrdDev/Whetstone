@@ -29,6 +29,9 @@ interface Usage {
   /** Whose numbers these are, and every login the fleet could be switched to. */
   account: string;
   accounts: string[];
+  /** The smart switch is choosing the account; a pick by hand turns it off. */
+  smartSwitch?: boolean;
+  lastSwitch?: { from: string; to: string; reason: string; at: string; manual: boolean } | null;
   limits: UsageLimit[];
 }
 
@@ -102,17 +105,30 @@ function AccountPicker({ usage, onSwitch, busy }: {
 }) {
   const accounts = usage.accounts ?? [];
   if (accounts.length < 2) return null;
+  const auto = !!usage.smartSwitch;
+  const last = usage.lastSwitch && !usage.lastSwitch.manual
+    ? ` Last switch: ${usage.lastSwitch.from} → ${usage.lastSwitch.to} (${usage.lastSwitch.reason}).`
+    : '';
+  const pick = (name: string) => {
+    if (auto && !window.confirm('Smart switch is choosing the account. Picking one by hand turns smart switch off. Continue?')) return;
+    onSwitch(name);
+  };
   return (
-    <select
-      aria-label="Claude account"
-      title="Which Claude login new agent runs spend. Runs already out finish on the one they started with."
-      value={usage.account}
-      disabled={busy}
-      onChange={e => onSwitch(e.target.value)}
-      className="orbit-tap bg-gray-900 border border-hair rounded px-1.5 py-0.5 text-xs text-gray-300 focus:outline-none focus:border-gray-500 disabled:opacity-50 max-sm:max-w-[120px]"
-    >
-      {accounts.map(a => <option key={a} value={a}>{a}</option>)}
-    </select>
+    <span className="flex items-center gap-1">
+      <select
+        aria-label="Claude account"
+        title={auto
+          ? `Smart switch is choosing which Claude login new runs spend.${last} Picking one by hand turns it off.`
+          : 'Which Claude login new agent runs spend. Runs already out finish on the one they started with.'}
+        value={usage.account}
+        disabled={busy}
+        onChange={e => pick(e.target.value)}
+        className="orbit-tap bg-gray-900 border border-hair rounded px-1.5 py-0.5 text-xs text-gray-300 focus:outline-none focus:border-gray-500 disabled:opacity-50 max-sm:max-w-[120px]"
+      >
+        {accounts.map(a => <option key={a} value={a}>{a}</option>)}
+      </select>
+      {auto && <span className="text-[10px] uppercase tracking-wide text-emerald-400 max-sm:hidden">auto</span>}
+    </span>
   );
 }
 
