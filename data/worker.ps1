@@ -1766,6 +1766,17 @@ $stackNote = if ($stackSlot -gt 0) {
 } else {
     "0 - this machine's one copy of the stack, used exactly as your skill says."
 }
+# What else the run holds, by name. A project can take a resource only for the branches that need
+# it (resourcePaths), so whether this run may boot, say, an emulator is a fact about this claim and
+# not about the phase - and the skill can only follow a rule about it if the prompt says which.
+$heldResources = @($Claim.leases | Where-Object { "$_" -and "$_" -notlike 'ticket:*' } |
+    ForEach-Object { ("$_" -split '@')[0] })
+# Said only when it holds something: a phase that takes no lease is not told to avoid anything, since
+# what it may use without one (a scratch database, say) is its skill's to say.
+if ($heldResources.Count -gt 0) {
+    $stackNote += " This run holds: " + (($heldResources | ForEach-Object { "``$_``" }) -join ', ') +
+        ". Anything your skill uses only under a lease that is not in that list belongs to another run right now - do not touch it."
+}
 
 $prompt = (Get-Content -Path $PromptFile -Raw).
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).

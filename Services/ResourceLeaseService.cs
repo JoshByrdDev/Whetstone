@@ -44,7 +44,7 @@ public class ResourceLeaseService
     /// project that sets <c>parallelStacks</c>. Exclusivity is the point, and a resource that
     /// safely allows several is the exception worth writing down.
     /// </summary>
-    public int CapacityFor(string resourceKey)
+    public virtual int CapacityFor(string resourceKey)
     {
         // One worker per ticket is an invariant, not a preference: it is what makes a worktree safe
         // to write in. Short-circuited above the config so it cannot be raised by a typo in a

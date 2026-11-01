@@ -164,7 +164,7 @@ public static class TicketEndpoints
         // Atomically claim the next ticket for the one global heartbeat: most-progressed
         // workable ticket across all projects (or the given subset). Locks it into its "-ing"
         // phase and returns everything the orchestrator needs to launch the worker.
-        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity) =>
+        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths) =>
         {
             bool SkillExists(string projectKey, string skill) => File.Exists(paths.SkillFile(projectKey, skill));
 
@@ -278,7 +278,8 @@ public static class TicketEndpoints
             // What this claim saw is kept for the capacity meter: why each waiting ticket was passed
             // over is the answer to "why was that berth free", and only the claim knows it.
             var trace = new ClaimTrace();
-            var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter, skillFilter, trace);
+            var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter, skillFilter, trace,
+                resourcePaths.NeededAsync);
             capacity.RecordClaim(req?.Host, result is not null, trace);
             if (result is null)
                 return Results.Ok(new { claimed = (object?)null });

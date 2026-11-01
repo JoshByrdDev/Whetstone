@@ -170,7 +170,43 @@ public class ProjectConfig
             if (!DefaultPhaseResources.TryGetValue(skill, out names))
                 return Array.Empty<string>();
 
-        return names.Select(n => n.Contains(':') ? n : $"{Name}:{n}").ToArray();
+        return names.Select(Qualify).ToArray();
+    }
+
+    private string Qualify(string resource) => resource.Contains(':') ? resource : $"{Name}:{resource}";
+
+    /// <summary>
+    /// Resources a phase takes only when the ticket's branch changes something under one of the
+    /// listed path prefixes: <c>"resourcePaths": { "device:emulator": ["apps/mobile/"] }</c>. Named
+    /// the way <see cref="PhaseResources"/> names them. A run whose branch changes none of them
+    /// neither takes the resource nor may use it, so it no longer waits behind a run that does.
+    /// <para>
+    /// For a resource most of a phase's runs never touch: a device emulator only a mobile change
+    /// boots. Without this every QA run holds it, and it serialises QA on a machine whose stacks
+    /// could otherwise run side by side. A path on a project of several repos starts with its repo's
+    /// folder, as every path that stands on its own does.
+    /// </para>
+    /// </summary>
+    public Dictionary<string, string[]> ResourcePaths { get; init; } = new();
+
+    /// <summary>
+    /// The path prefixes that make <paramref name="resourceKey"/> (fully qualified, never
+    /// host-qualified) needed, or null when it is always needed.
+    /// </summary>
+    public string[]? PathsFor(string resourceKey)
+    {
+        foreach (var (name, paths) in ResourcePaths)
+            if (Qualify(name).Equals(resourceKey, StringComparison.Ordinal) && paths.Length > 0)
+                return paths;
+        return null;
+    }
+
+    /// <summary>Whether any of <paramref name="changed"/> falls under one of <paramref name="prefixes"/>, read with forward slashes.</summary>
+    public static bool Touches(IEnumerable<string> changed, IReadOnlyCollection<string> prefixes)
+    {
+        var norm = prefixes.Select(p => p.Replace('\\', '/').TrimStart('/')).Where(p => p.Length > 0).ToArray();
+        return changed.Select(c => c.Replace('\\', '/'))
+            .Any(c => norm.Any(p => c.StartsWith(p, StringComparison.OrdinalIgnoreCase)));
     }
 
     /// <summary>
@@ -557,6 +593,7 @@ public class ProjectRegistry
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
+            ResourcePaths = GetStrArrayMap(cfg, "resourcePaths"),
             Tracker = TrackerConfig.From(cfg),
             Stack = GetStack(cfg),
             Steward = StewardConfig.From(cfg),

@@ -174,7 +174,8 @@ public class TicketService
         TimeSpan? leaseTtl = null,
         IReadOnlyCollection<TicketPriority>? priorityFilter = null,
         IReadOnlyCollection<string>? skillFilter = null,
-        ClaimTrace? trace = null)
+        ClaimTrace? trace = null,
+        Func<Ticket, string, Task<bool>>? resourceNeeded = null)
     {
         if (maxAttempts < 1) maxAttempts = 1;
 
@@ -317,7 +318,14 @@ public class TicketService
                 // reasoning applies unchanged: a run that will not touch the stack must not queue
                 // for it, nor hold it away from a run that would.
                 var codeReviewOnly = skill is "qa-test" or "review-pr" && t.SkipQaTesting;
-                if (resourcesFor is not null && !codeReviewOnly) needed.AddRange(resourcesFor(t.ProjectKey, skill));
+                if (resourcesFor is not null && !codeReviewOnly)
+                {
+                    // A resource the project takes only for some branches (ProjectConfig.ResourcePaths)
+                    // is left out when this branch does not need it - so the run does not queue for
+                    // it, and does not hold it away from one that does.
+                    foreach (var key in resourcesFor(t.ProjectKey, skill))
+                        if (resourceNeeded is null || await resourceNeeded(t, key)) needed.Add(key);
+                }
 
                 leases = await _leases.TryAcquireAllAsync(needed, t.Id, skill,
                     leaseTtl ?? TimeSpan.FromMinutes(150));
@@ -369,11 +377,28 @@ public class TicketService
             return new ClaimResult((await GetAsync(t.Id))!, skill, resumed,
                 leases?.Select(l => l.ResourceKey).ToArray() ?? Array.Empty<string>(),
                 leases?.FirstOrDefault(l => l.ResourceKey == ResourceLeaseService.TicketKey(t.Id))?.Id ?? 0,
-                leases?.Where(l => l.ResourceKey != ResourceLeaseService.TicketKey(t.Id))
-                    .OrderBy(l => l.ResourceKey, StringComparer.Ordinal).Select(l => l.Slot).FirstOrDefault() ?? 0);
+                StackSlotOf(leases, t));
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Which copy of the project's stack a run was given: the slot of its lease on one of the
+    /// project's own resources (<c>alpha:app-stack</c>, or <c>alpha:app-stack@bravo-host</c>). Not
+    /// simply the first resource by name: a machine-wide one such as <c>device:emulator</c> sorts
+    /// ahead of it, has its own slots, and would hand a run on the stack's second copy the first
+    /// copy's ports. A run holding none of the project's own falls back to its first resource.
+    /// </summary>
+    private static int StackSlotOf(IReadOnlyList<ResourceLease>? leases, Ticket t)
+    {
+        var others = leases?.Where(l => l.ResourceKey != ResourceLeaseService.TicketKey(t.Id))
+            .OrderBy(l => l.ResourceKey, StringComparer.Ordinal).ToList();
+        if (others is null || others.Count == 0) return 0;
+        var own = others.FirstOrDefault(l =>
+            (WorkerHostConfig.SplitHostResource(l.ResourceKey)?.Resource ?? l.ResourceKey)
+                .StartsWith($"{t.ProjectKey}:", StringComparison.Ordinal));
+        return (own ?? others[0]).Slot;
     }
 
     /// <summary>
