@@ -173,7 +173,8 @@ public class TicketService
         Func<string, string, string[]>? resourcesFor = null,
         TimeSpan? leaseTtl = null,
         IReadOnlyCollection<TicketPriority>? priorityFilter = null,
-        IReadOnlyCollection<string>? skillFilter = null)
+        IReadOnlyCollection<string>? skillFilter = null,
+        ClaimTrace? trace = null)
     {
         if (maxAttempts < 1) maxAttempts = 1;
 
@@ -210,6 +211,7 @@ public class TicketService
             .ThenBy(t => t.Track)
             .ThenBy(t => t.UpdatedAt)
             .ToList();
+        if (trace is not null) trace.Workable = candidates.Count;
 
         // Tickets waiting on something else are passed over, not blocked: the wait is a fact about
         // the world, not a fault in the ticket, and it clears on its own when the blocker finishes.
@@ -220,7 +222,7 @@ public class TicketService
 
         foreach (var t in candidates)
         {
-            if (waiting.Contains(t.Id)) continue;
+            if (waiting.Contains(t.Id)) { trace?.Skip(ClaimSkip.Dependency); continue; }
 
             var target = PhaseMachine.ClaimTarget(t.Phase);
             var skill = PhaseMachine.SkillFor(target);
@@ -228,12 +230,13 @@ public class TicketService
             // A worker host only runs some phases (docs/worker-hosts-plan.md). Above the skill check
             // on purpose: a claim that is not going to run this ticket must not block it either -
             // that is for a claim that would, and the board host's next one will.
-            if (skillFilter is { Count: > 0 } && !skillFilter.Contains(skill)) continue;
+            if (skillFilter is { Count: > 0 } && !skillFilter.Contains(skill)) { trace?.Skip(ClaimSkip.Skill, skill); continue; }
 
             if (!skillExists(t.ProjectKey, skill))
             {
                 await TransitionAsync(t.Id, TicketPhase.Blocked,
                     $"No '{skill}' skill configured for project '{t.ProjectKey}'.");
+                trace?.Skip(ClaimSkip.BlockedNow);
                 continue;
             }
 
@@ -247,7 +250,7 @@ public class TicketService
             if (!resumed && _classroomGate is not null && t.Phase == TicketPhase.NeedsRefinement)
             {
                 gate = await _classroomGate.CheckAsync(t);
-                if (!gate.Ready) continue;
+                if (!gate.Ready) { trace?.Skip(ClaimSkip.Analysis); continue; }
             }
 
             // Being back here only means the last run did not finish the phase — not that it
@@ -274,7 +277,10 @@ public class TicketService
             // costs nothing and keeps the cap's own reason for sitting above it intact: a ticket
             // about to be blocked still never briefly holds the QA stack.
             if (_leases is not null && await _leases.HolderOfAsync(ResourceLeaseService.TicketKey(t.Id)) is not null)
+            {
+                trace?.Skip(ClaimSkip.Running);
                 continue;
+            }
 
             if (resumed && !advanced && t.HeartbeatAttempts >= maxAttempts)
             {
@@ -282,6 +288,7 @@ public class TicketService
                 // be re-run every cycle forever.
                 await TransitionAsync(t.Id, TicketPhase.Blocked,
                     $"No progress after {maxAttempts} heartbeat attempts in {t.Phase}. Blocked for review; unblock to retry.");
+                trace?.Skip(ClaimSkip.BlockedNow);
                 continue;
             }
 
@@ -314,7 +321,20 @@ public class TicketService
 
                 leases = await _leases.TryAcquireAllAsync(needed, t.Id, skill,
                     leaseTtl ?? TimeSpan.FromMinutes(150));
-                if (leases is null) continue;   // someone else holds it — try the next ticket
+                if (leases is null)   // someone else holds it — try the next ticket
+                {
+                    if (trace is not null)
+                    {
+                        // Which of them, so "the QA stack" and "the emulator" read as the two
+                        // separate bottlenecks they are. Read after the refusal, so it costs a claim
+                        // that went through nothing.
+                        var busy = new List<string>();
+                        foreach (var k in needed.Skip(1))
+                            if (await _leases.HolderOfAsync(k) is not null) busy.Add(k);
+                        trace.Skip(ClaimSkip.Resource, busy.Count > 0 ? string.Join(" + ", busy) : null);
+                    }
+                    continue;
+                }
             }
 
             if (resumed)

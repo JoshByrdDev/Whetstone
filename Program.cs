@@ -70,6 +70,8 @@ builder.Services.AddSingleton<SkillDriftService>();
 builder.Services.AddSingleton<BoardCommit>();
 builder.Services.AddSingleton<WorkerHostService>();
 builder.Services.AddSingleton<EventStore>();
+builder.Services.AddSingleton<CapacityMonitor>();
+builder.Services.AddSingleton<CapacitySnapshot>();
 // Per-project tracker access (Jira or Azure Boards, one per project) + live title/description
 // resolution for linked tickets. There is no container-wide tracker: which system a project's
 // issues live in — and the credentials for it — are properties of the project, so every caller
@@ -160,6 +162,10 @@ builder.Services.AddSingleton<TicketGitService>();
 // person poking at the running app and a QA agent are contenders for it rather than collisions.
 builder.Services.AddSingleton<ProjectStackService>();
 if (!isolation.On) builder.Services.AddHostedService<StackProbeService>();
+// Reads the board and writes its own table, nothing past the data folder - so it runs on the QA
+// copy too, where it says "stopped", which is the truth there.
+builder.Services.AddSingleton<CapacitySampler>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<CapacitySampler>());
 
 // How much subscription rate-limit headroom is left, polled once for every open tab. Reads Claude
 // Code's own login, and renews it when it ages out — see ClaudeUsageService.

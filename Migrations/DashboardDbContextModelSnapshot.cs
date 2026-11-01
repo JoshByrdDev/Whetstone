@@ -85,6 +85,40 @@ namespace Whetstone.Migrations
                     b.ToTable("AnalysisWalkthroughs");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.CapacitySample", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Busy")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("DetailJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Place")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Slots")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("At");
+
+                    b.ToTable("CapacitySamples");
+                });
+
             modelBuilder.Entity("Whetstone.Models.Comment", b =>
                 {
                     b.Property<int>("Id")
