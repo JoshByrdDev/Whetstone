@@ -10,9 +10,12 @@ $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'heartbeat-hosts.ps1')
 
 # How a body is encoded is heartbeat-common.ps1's, which cannot be dot-sourced here (it reads the
-# config and starts a provider), so its one function is lifted out of it as it stands.
+# config and starts a provider), so its functions are lifted out of it as they stand: that one,
+# and how a refusal's reason is read.
 $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
-. ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'ConvertTo-JsonBody' }, $false) | Select-Object -First 1).Extent.Text))
+foreach ($lifted in 'ConvertTo-JsonBody', 'Get-ApiError') {
+    . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq $lifted }, $false) | Select-Object -First 1).Extent.Text))
+}
 $JsonContentType = 'application/json; charset=utf-8'
 
 $DashboardUrl = 'http://board.test:5338'
@@ -413,6 +416,47 @@ Check 'a relative -File counts as ours, as before' (Test-RunsScript -CommandLine
 Check 'no -File at all is not a run' (Test-RunsScript -CommandLine 'powershell worker.ps1' -Script $mine) $false
 Check 'no command line is not a run' (Test-RunsScript -CommandLine '' -Script $mine) $false
 Check "the board's own launch of its heartbeat" (Test-RunsScript -CommandLine '"powershell" -ExecutionPolicy Bypass -File "C:\Whetstone\data\heartbeat.ps1"' -Script 'C:\Whetstone\data\heartbeat.ps1') $true
+
+# ---- A refusal's reason ----------------------------------------------------------------------
+# The API answers a refusal with {"error": ...}, sent chunked. PowerShell 5.1 leaves ErrorDetails
+# empty for a chunked body, which is how a refused hand-back came to say only "(409) Conflict".
+# A real listener and the real Invoke-RestMethod, because the stub above cannot reproduce that.
+Write-Host "== Get-ApiError"
+$port = Get-Random -Minimum 49200 -Maximum 49900
+$listener = New-Object System.Net.HttpListener
+$listener.Prefixes.Add("http://localhost:$port/")
+$listener.Start()
+# The listener answers on a second thread, so the request above is not left waiting on this one.
+$answer = {
+    param($Listener, [string]$Body, [bool]$Chunked)
+    $ctx = $Listener.GetContext()
+    $ctx.Response.StatusCode = 409
+    $ctx.Response.ContentType = 'application/json; charset=utf-8'
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+    if ($Chunked) { $ctx.Response.SendChunked = $true } else { $ctx.Response.ContentLength64 = $bytes.Length }
+    $ctx.Response.OutputStream.Write($bytes, 0, $bytes.Length)
+    $ctx.Response.Close()
+}
+function Get-RefusalReason {
+    param([string]$Body, [bool]$Chunked)
+    $ps = [PowerShell]::Create().AddScript($answer).AddArgument($listener).AddArgument($Body).AddArgument($Chunked)
+    $job = $ps.BeginInvoke()
+    $refusal = $null
+    try { Microsoft.PowerShell.Utility\Invoke-RestMethod -Uri "http://localhost:$port/" -Method Post -Body '{}' -TimeoutSec 10 }
+    catch { $refusal = $_ }
+    $null = $ps.EndInvoke($job); $ps.Dispose()
+    return (Get-ApiError $refusal)
+}
+try {
+    $why = '{"error":"The worktree at C:/x/ticket-12 has uncommitted changes."}'
+    Check 'a chunked refusal still gives its reason' (Get-RefusalReason -Body $why -Chunked $true) 'The worktree at C:/x/ticket-12 has uncommitted changes.'
+    Check 'a refusal with a length gives its reason' (Get-RefusalReason -Body $why -Chunked $false) 'The worktree at C:/x/ticket-12 has uncommitted changes.'
+    Check 'a body that is not the API''s JSON gives none' "$(Get-RefusalReason -Body '<html>bad gateway</html>' -Chunked $true)" ''
+    Check 'an empty body gives none' "$(Get-RefusalReason -Body '' -Chunked $false)" ''
+}
+catch { $script:fail++; $script:total++; Write-Host "FAIL  stopped by an exception: $($_.Exception.Message)" -ForegroundColor Red }
+finally { $listener.Stop(); $listener.Close() }
+Check 'no response at all gives none' "$(try { throw 'connection refused' } catch { Get-ApiError $_ })" ''
 
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "ALL $($script:total) CHECKS PASSED" -ForegroundColor Green }

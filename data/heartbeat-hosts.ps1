@@ -102,9 +102,8 @@ function Start-RemoteAgent {
         # The API's own reason, when it gave one: "400 Bad Request" alone is what left a refused
         # order undiagnosed for a day.
         $why = $_.Exception.Message
-        if ($_.ErrorDetails.Message) {
-            try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).error; if ($detail) { $why = "$why - $detail" } } catch { }
-        }
+        $detail = Get-ApiError $_
+        if ($detail) { $why = "$why - $detail" }
         Write-Log "  Could not order ticket #$ticketId onto $HostName slot ${Slot}: $why"
         # The claim charged an attempt for a run that never started. Left charged, three refused
         # orders block a ticket for "no progress" without it ever having been worked.

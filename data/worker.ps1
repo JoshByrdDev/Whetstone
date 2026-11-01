@@ -2239,7 +2239,8 @@ if ($onHost -and $repoDir -and -not $readsOnly -and $wt -and $wt.branch) {
             }
             catch {
                 $why = $_.Exception.Message
-                try { $detail = ($_.ErrorDetails.Message | ConvertFrom-Json).error; if ($detail) { $why = $detail } } catch { }
+                $detail = Get-ApiError $_
+                if ($detail) { $why = $detail }
             }
         }
         if ($why) {

@@ -248,6 +248,27 @@ function ConvertTo-JsonBody {
     return ,[System.Text.Encoding]::UTF8.GetBytes($Json)
 }
 
+# The API's own reason for refusing a call - the `error` of its JSON body - from the error record
+# Invoke-RestMethod threw, or $null when it gave none. PowerShell 5.1 fills ErrorDetails only for a
+# body with a Content-Length, and the API sends its refusals chunked, so the body is read from the
+# response stream when ErrorDetails is empty. Without that a refused hand-back said only "(409)
+# Conflict", and a dirty worktree on the board host was read as a hiccup and retried into QA.
+function Get-ApiError {
+    param($ErrorRecord)
+    $text = $null
+    if ($ErrorRecord.ErrorDetails -and $ErrorRecord.ErrorDetails.Message) { $text = $ErrorRecord.ErrorDetails.Message }
+    else {
+        try {
+            $stream = $ErrorRecord.Exception.Response.GetResponseStream()
+            if ($stream.CanSeek) { $stream.Position = 0 }
+            $text = (New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8)).ReadToEnd()
+        } catch { }
+    }
+    if (-not $text) { return $null }
+    try { $detail = ($text | ConvertFrom-Json).error; if ($detail) { return "$detail" } } catch { }
+    return $null
+}
+
 # Post one event to the dashboard's feed. Stamped with this process's agent slot unless the caller
 # names a different one, which the orchestrator does when it reports a slot it has just reaped.
 function Send-DashboardEvent {
