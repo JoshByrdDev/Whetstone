@@ -38,6 +38,7 @@ public class EventStore
     private string _currentState = "idle";
     private string? _currentProject;
     private DateTime? _lastEventTime;
+    private string? _lastSleepText;
 
     private readonly Dictionary<int, AgentState> _agents = new();
     private readonly object _agentLock = new();
@@ -143,6 +144,7 @@ public class EventStore
         {
             case EventTypes.Sleep:
                 _currentState = "sleeping";
+                _lastSleepText = evt.Text;
                 break;
             case EventTypes.Error:
                 _currentState = "error";
@@ -248,6 +250,29 @@ public class EventStore
     public int BusyAgentCount
     {
         get { lock (_agentLock) return _agents.Count(kv => kv.Value.Status == "running"); }
+    }
+
+    /// <summary>
+    /// What the orchestrator last said it was doing (<c>idle</c>, <c>sleeping</c>, <c>off-hours</c>),
+    /// and the text of its last sleep, which is how a usage-limit sleep is told from an idle one.
+    /// Not reconciled with liveness: ask <see cref="HeartbeatManager.IsRunning"/> for that.
+    /// </summary>
+    public (string State, string? SleepText) Orchestrator => (_currentState, _lastSleepText);
+
+    /// <summary>
+    /// How many of this machine's worker berths are out: running agents in slots 1 to
+    /// <see cref="HeartbeatManager.MaxWorkers"/>. The steward's berth and a worker host's are not
+    /// this machine's workers.
+    /// </summary>
+    public int BoardBusyCount
+    {
+        get
+        {
+            lock (_agentLock)
+                return _agents.Count(kv => kv.Value.Status == "running"
+                    && kv.Key >= 1 && kv.Key <= HeartbeatManager.MaxWorkers
+                    && kv.Value.Phase != EventPhases.Steward);
+        }
     }
 
     public List<HeartbeatEvent> GetRecent(int count = 50)

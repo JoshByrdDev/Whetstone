@@ -37,6 +37,7 @@ public class DashboardDbContext : DbContext
     public DbSet<StewardDecisionConflict> StewardDecisionConflicts => Set<StewardDecisionConflict>();
     public DbSet<StewardInstruction> StewardInstructions => Set<StewardInstruction>();
     public DbSet<StewardFollowUp> StewardFollowUps => Set<StewardFollowUp>();
+    public DbSet<CapacitySample> CapacitySamples => Set<CapacitySample>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -142,6 +143,13 @@ public class DashboardDbContext : DbContext
             e.HasIndex(p => p.At);
             e.HasIndex(p => new { p.ProjectKey, p.At });
             e.HasOne(p => p.Ticket).WithMany().HasForeignKey(p => p.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<CapacitySample>(e =>
+        {
+            e.Property(c => c.Place).HasMaxLength(64);
+            e.Property(c => c.Reason).HasMaxLength(32);
+            e.HasIndex(c => c.At);
         });
 
         b.Entity<ResourceLease>(e =>

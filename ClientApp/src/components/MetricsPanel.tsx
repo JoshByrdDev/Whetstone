@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { UsageMeters } from './ClaudeUsage';
+import { CapacityStrip } from './CapacityStrip';
 import { PageHead, Chip, SectionRule } from './ui';
 
 /**
@@ -157,6 +158,10 @@ export function MetricsPanel() {
       {/* Account-wide and unfiltered on purpose: the rate limit is one budget shared by every
           project and by the human's own sessions, so the project/day filters above do not apply. */}
       <UsageMeters />
+
+      {/* Whole-fleet like the meters: a berth is free or busy whatever project it would have
+          worked, so only the day window applies (the samples go back 30 days). */}
+      <CapacityStrip days={days} />
 
       <div className="flex gap-3 flex-wrap">
         <Stat

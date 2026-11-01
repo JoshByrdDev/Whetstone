@@ -164,7 +164,7 @@ public static class TicketEndpoints
         // Atomically claim the next ticket for the one global heartbeat: most-progressed
         // workable ticket across all projects (or the given subset). Locks it into its "-ing"
         // phase and returns everything the orchestrator needs to launch the worker.
-        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers) =>
+        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths) =>
         {
             bool SkillExists(string projectKey, string skill) => File.Exists(paths.SkillFile(projectKey, skill));
 
@@ -254,7 +254,10 @@ public static class TicketEndpoints
                 // Nothing in common is "nothing to claim", not "everything": an empty filter means
                 // every project to ClaimNextAsync, and an empty skill list every skill.
                 if (filter.Length == 0 || skillFilter.Length == 0)
+                {
+                    capacity.RecordClaim(req.Host, false, new ClaimTrace { NothingHere = true });
                     return Results.Ok(new { claimed = (object?)null });
+                }
             }
 
             // A project whose code is not where a worktree can be made of it is passed over, not
@@ -264,11 +267,20 @@ public static class TicketEndpoints
             if (claimable.Length < candidates.Length)
             {
                 // The same care as the worker host's filter: an empty list means every project.
-                if (claimable.Length == 0) return Results.Ok(new { claimed = (object?)null });
+                if (claimable.Length == 0)
+                {
+                    capacity.RecordClaim(req?.Host, false, new ClaimTrace { NothingHere = true });
+                    return Results.Ok(new { claimed = (object?)null });
+                }
                 filter = claimable;
             }
 
-            var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter, skillFilter);
+            // What this claim saw is kept for the capacity meter: why each waiting ticket was passed
+            // over is the answer to "why was that berth free", and only the claim knows it.
+            var trace = new ClaimTrace();
+            var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter, skillFilter, trace,
+                resourcePaths.NeededAsync);
+            capacity.RecordClaim(req?.Host, result is not null, trace);
             if (result is null)
                 return Results.Ok(new { claimed = (object?)null });
 
@@ -464,6 +476,24 @@ public static class TicketEndpoints
                 LargestToolResults = MetricsService.LargestToolResultsOf(c),
                 c.Mutations, Outcome = c.Outcome.ToString(), PhaseAfter = c.PhaseAfter?.ToString(),
             })));
+
+        // Why berths were free: slot-minutes by reason over the last few days, per machine and per
+        // day, plus each machine as it is this minute. Read-only; the samples are CapacitySampler's.
+        app.MapGet("/api/metrics/capacity", async (DashboardDbContext db, CapacitySnapshot snapshot, int? days) =>
+        {
+            var to = DateTime.UtcNow;
+            var from = to.AddDays(-Math.Clamp(days ?? 7, 1, 30));
+            var samples = await db.CapacitySamples.AsNoTracking().Where(s => s.At >= from).ToListAsync();
+            var summary = CapacitySummary.Build(samples, from, to, at => DateOnly.FromDateTime(at.ToLocalTime()));
+            var now = snapshot.Read().Select(p =>
+            {
+                var v = CapacityClassifier.Classify(p, to);
+                return new { place = p.Place, slots = p.Slots, busy = Math.Min(p.Busy, p.Slots), reason = v.Reason, detail = v.Detail };
+            });
+            var latest = samples.Where(s => s.Reason == CapacityReasons.NothingReady && s.DetailJson != null)
+                .OrderByDescending(s => s.At).FirstOrDefault();
+            return Results.Ok(new { summary, now, offDuty = CapacityReasons.OffDuty, lastNothingReady = latest?.DetailJson });
+        });
 
         // ---- Resource leases ------------------------------------------------
 

@@ -318,3 +318,34 @@ public class CycleRun
     /// </summary>
     public TicketPhase? PhaseAfter { get; set; }
 }
+
+/// <summary>
+/// One machine's berths at one minute: how many there were, how many were working, and - when some
+/// were not - the one reason that best explains why. Written by <see cref="Services.CapacitySampler"/>
+/// once a minute per place, and read back as slot-minutes by reason on the System page.
+/// </summary>
+public class CapacitySample
+{
+    public int Id { get; set; }
+
+    public DateTime At { get; set; }
+
+    /// <summary><c>@board</c> for this machine, or a worker host's name.</summary>
+    public string Place { get; set; } = "";
+
+    public int Slots { get; set; }
+
+    public int Busy { get; set; }
+
+    /// <summary>
+    /// Why the free berths were free (a <see cref="Services.CapacityReasons"/> key). Null when every
+    /// berth was working.
+    /// </summary>
+    public string? Reason { get; set; }
+
+    /// <summary>
+    /// What the reason was made of, as JSON: the skip counts of the last empty claim, or where the
+    /// tickets were sitting when nothing was ready. For the page's detail line, never for the totals.
+    /// </summary>
+    public string? DetailJson { get; set; }
+}

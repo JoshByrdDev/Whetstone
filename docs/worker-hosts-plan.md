@@ -391,6 +391,18 @@ How slot N chooses its compose project name and ports is the project's own busin
 that project's conventions file or skill, never here. A project turns `parallelStacks` on only once
 it has written that down.
 
+The slot is the one of the lease on the project's **own** resource (`alpha:app-stack`), never simply
+the first lease by name: a machine-wide resource such as `device:emulator` has slots of its own, and
+can sort ahead of it.
+
+A machine-wide resource that only some branches use would undo all of this, since every QA run
+would still queue for it. `resourcePaths` in a project's config names those: `"resourcePaths":
+{ "device:emulator": ["apps/mobile/"] }` takes the resource only for a run whose branch changes a
+file under one of the prefixes (`ResourcePathGate`; any doubt takes it). The prompt's "Stack slot"
+line lists what the run holds, and says anything the skill uses only under a lease that is not in
+that list is another run's, so the skill
+follows the lease instead of deciding again.
+
 ## A ticket's files on both machines
 
 The rule is one sentence: **each machine keeps a ticket's files at the same path under its own data
