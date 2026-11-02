@@ -1,0 +1,55 @@
+version: 2
+
+models:
+  - name: stg_board__cycle_runs
+    description: One worker run. The run-tracking columns are NULL for runs recorded before they existed.
+    columns:
+      - name: run_id
+        tests: [unique, not_null]
+      - name: ticket_id
+        tests: [not_null]
+      - name: started_at
+        tests: [not_null]
+      - name: phase
+        tests: [not_null]
+      - name: outcome
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Completed', 'Timeout', 'Error']
+  - name: stg_board__phase_transitions
+    columns:
+      - name: transition_id
+        tests: [unique, not_null]
+      - name: moved_at
+        tests: [not_null]
+  - name: stg_board__tickets
+    columns:
+      - name: ticket_id
+        tests: [unique, not_null]
+  - name: stg_git__skill_versions
+    columns:
+      - name: valid_from
+        tests: [not_null]
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [project_key, skill, commit_sha]
+  - name: stg_git__prompt_versions
+    columns:
+      - name: commit_sha
+        tests: [unique, not_null]
+  - name: stg_transcripts__tool_uses
+    columns:
+      - name: tool_use_id
+        tests: [unique, not_null]
+      - name: tool_name
+        tests: [not_null]
+  - name: stg_transcripts__tool_results
+    columns:
+      - name: tool_use_id
+        tests: [unique]
+  - name: stg_transcripts__costs
+    columns:
+      - name: session_id
+        tests: [unique]

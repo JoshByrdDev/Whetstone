@@ -1,0 +1,42 @@
+version: 2
+
+# Everything under `raw` is written by refresh.py before dbt runs. Board tables keep the board's
+# own column names; transcript tables are already flattened to one row per line, tool use, tool
+# result and cost summary.
+sources:
+  - name: board
+    schema: raw
+    description: A snapshot of the board's SQLite database, taken through the backup API.
+    tables:
+      - name: CycleRuns
+        description: One worker run. Columns added by later migrations are NULL on an older database.
+        columns:
+          - name: Id
+            tests: [unique, not_null]
+      - name: PhaseTransitions
+        columns:
+          - name: Id
+            tests: [unique, not_null]
+      - name: Tickets
+        columns:
+          - name: Id
+            tests: [unique, not_null]
+
+  - name: git
+    schema: raw
+    description: The history of what each run was told, read from git.
+    tables:
+      - name: skill_versions
+        description: One row per commit that changed a project's skill file.
+      - name: prompt_versions
+        description: One row per commit that changed data/heartbeat-prompt.md.
+
+  - name: transcripts
+    schema: raw
+    description: Claude Code session transcripts of the board's worker runs, loaded incrementally.
+    tables:
+      - name: transcript_files
+      - name: transcript_lines
+      - name: transcript_tool_uses
+      - name: transcript_tool_results
+      - name: transcript_costs

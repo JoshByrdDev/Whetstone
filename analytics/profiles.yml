@@ -1,0 +1,8 @@
+# The warehouse is one machine's, under the board's data root; refresh.py says where.
+whetstone:
+  target: local
+  outputs:
+    local:
+      type: duckdb
+      path: "{{ env_var('WHETSTONE_WAREHOUSE', '../data/analytics/warehouse.duckdb') }}"
+      threads: 4

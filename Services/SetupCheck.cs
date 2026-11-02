@@ -136,6 +136,12 @@ public class SetupCheckService
                 "Walkthroughs play with captions only: " + narrator,
                 "Run npm install once in data/narrator (the first voiced walkthrough also downloads a ~90MB voice model)."));
 
+        // ---- uv: runs the analytics refresh (dbt over DuckDB) behind the Metrics page ----
+        items.Add(Tool(probe, "uv", "uv (Metrics analytics)", required: false,
+            found: "Refreshes the Metrics page's analytics (docs/analytics.md).",
+            missing: "The Metrics page shows only the board's own simple numbers: no time split, rework by cause, tool time or version trends.",
+            "Install uv (winget install astral-sh.uv), restart Whetstone, then open Metrics. The first refresh installs dbt and DuckDB, so it needs internet once."));
+
         // ---- each project folder's own repo: its skills and config exist nowhere else ----
         if (folders is { Count: > 0 }) items.Add(Folders(folders));
 

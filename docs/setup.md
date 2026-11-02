@@ -41,6 +41,7 @@ Long paths: worktrees nest deep. If a checkout fails with "Filename too long", r
 | Slack / ntfy notifications | A webhook URL or topic in `data/config.json` | No notifications. Settings → Notifications has a **Send test** button |
 | Jira / Azure Boards links | A token in that project's `project.json` | The issue picker says the tracker is not configured |
 | Editing the client | `npm ci` in `ClientApp/` | Nothing breaks: the built client is committed in `wwwroot/` |
+| **Metrics page analytics** (phase time split, rework by cause, tool time, skill and prompt versions; `docs/analytics.md`) | `uv` on `PATH` (`winget install astral-sh.uv`). The first refresh installs dbt and DuckDB into `analytics/.venv` from `analytics/uv.lock`, so it needs internet once, and reads every worker transcript, so it takes a few minutes | The Metrics page shows the board's own simple numbers and says the analytics are not set up. Check: `uv --version`, then `uv run --project analytics python analytics/refresh.py` ends with `done` |
 
 ## 3. First run
 

@@ -1,0 +1,151 @@
+version: 2
+
+# Every aggregate mart is cut by the same three scope columns, so the board answers any filter on
+# the Metrics page with a WHERE: window_days (7, 30, 90, or 0 for all history), project_scope (a
+# project key, or '*' for all) and track_scope (a track, or '*').
+
+models:
+  - name: fct_runs
+    description: One worker run - the drill-down, and the source of every run-grain mart.
+    columns:
+      - name: run_id
+        tests: [unique, not_null]
+      - name: ticket_id
+        tests:
+          - not_null
+          - relationships: {arguments: {to: "ref('fct_tickets')", field: ticket_id}}
+      - name: minutes
+        tests: [not_null, at_least]
+      - name: tokens
+        tests: [not_null, at_least]
+
+  - name: fct_tool_calls
+    description: One tool call made by one run.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [run_id, seq]
+    columns:
+      - name: run_id
+        tests:
+          - not_null
+          - relationships: {arguments: {to: "ref('fct_runs')", field: run_id}}
+      - name: tool_name
+        tests: [not_null]
+
+  - name: fct_tickets
+    description: One ticket - first-pass QA over its whole history, and what its runs cost.
+    columns:
+      - name: ticket_id
+        tests: [unique, not_null]
+      - name: rework_minutes
+        tests: [at_least]
+
+  - name: mart_phase_breakdown
+    description: What each phase costs, cut by provider, model, effort, skill and prompt version, entry reason, pass, CLI version and A/B arm.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase, dimension, dim_value]
+    columns:
+      - name: dimension
+        tests:
+          - accepted_values:
+              arguments:
+                values: [all, provider, model, effort, skill_version, prompt_version, entry_reason, pass, cli_version, experiment_arm]
+      - name: rework_share
+        tests: [is_fraction]
+      - name: runs
+        tests: [{at_least: {arguments: {floor: 1}}}]
+
+  - name: mart_time_split
+    description: Where each phase's wall clock went - prep, startup, model, tools, hand-off - and how much is unsplit or unmeasured.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase]
+    columns:
+      - name: total_minutes
+        tests:
+          - sums_to:
+              arguments:
+                parts: [prep_minutes, startup_minutes, model_minutes, tool_minutes, agent_unsplit_minutes, handoff_minutes, overhead_minutes, unmeasured_minutes]
+                tolerance: 0.5
+
+  - name: mart_rework
+    description: Each phase's runs and time by why they happened.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase, entry_reason]
+    columns:
+      - name: share_of_runs
+        tests: [is_fraction]
+      - name: share_of_minutes
+        tests: [is_fraction]
+
+  - name: mart_tool_time
+    description: Each phase's tool time by tool, and by command for shell calls.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase, tool_family, tool_name, tool_detail]
+    columns:
+      - name: share_of_tool_seconds
+        tests: [is_fraction]
+      - name: total_seconds
+        tests: [at_least]
+
+  - name: mart_start_rebase
+    description: What the start rebase costs, by what it found. Runs recorded since it was measured.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase, start_rebase]
+    columns:
+      - name: start_rebase
+        tests:
+          - accepted_values:
+              arguments:
+                values: [rebased, current, conflict, skipped]
+
+  - name: mart_diff_size
+    description: Run duration and tokens by how big a change the branch carried.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase, size_bucket]
+
+  - name: mart_first_pass_qa
+    description: Of the tickets QA looked at, the share it never sent back - by week, and by what built them.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, dimension, dim_value]
+    columns:
+      - name: first_pass_rate
+        tests: [is_fraction]
+
+  - name: mart_version_trend
+    description: Each skill and prompt version in the order it was in force, with what runs under it cost and how often their work came back.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase, kind, version]
+    columns:
+      - name: kind
+        tests:
+          - accepted_values:
+              arguments:
+                values: [skill, prompt]
+      - name: rework_run_share
+        tests: [is_fraction]
+      - name: sent_back_share
+        tests: [is_fraction]
+
+  - name: mart_daily
+    description: Each day's runs, minutes and tokens per phase.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, phase, day]
