@@ -439,6 +439,65 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_check_that_runs_out_of_time_with_no_failures_is_retried_not_sent_back()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "tests", "run": "run-tests", "timeoutMinutes": 45 } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+
+        _git.Check = new CheckRun(false, true, "did not finish within 2700s.", Array.Empty<string>());
+        var first = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("check-timed-out", first.Answer);
+        Assert.Contains("Do not send it back", first.Why);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+        // A later run is owed, so the retry happens without anything else changing on the board.
+        Assert.Contains($"#{id}", (await State())?.DueReason);
+
+        // The retry passes: merged as any other.
+        _git.Check = new CheckRun(true, false, "");
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+    }
+
+    [Fact]
+    public async Task A_check_that_runs_out_of_time_twice_on_the_same_tip_is_the_owners()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "tests", "run": "run-tests", "timeoutMinutes": 45 } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        _git.Check = new CheckRun(false, true, "did not finish within 2700s.", Array.Empty<string>());
+
+        Assert.Equal("check-timed-out", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal("check-could-not-run", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+
+        // A new tip - the branch rebased onto a moved base - starts the count again.
+        _git.Tip = "tip9876543";
+        Assert.Equal("check-timed-out", (await In(s => s.MergeAsync("alpha", id))).Answer);
+    }
+
+    [Fact]
+    public async Task A_check_that_runs_out_of_time_after_printing_failures_is_sent_back()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "tests", "run": "run-tests", "timeoutMinutes": 45 } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+
+        _git.Check = new CheckRun(false, true, "did not finish within 2700s.", new[] { "FAIL src/app.test.ts", "  Expected: 1" });
+        var r = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("check-failed", r.Answer);
+        Assert.Contains("FAIL src/app.test.ts", System.Text.Json.JsonSerializer.Serialize(r.Data));
+    }
+
+    [Fact]
     public async Task Only_a_ticket_at_review_is_merged()
     {
         await using (var ctx = NewCtx())
@@ -1688,6 +1747,8 @@ public partial class StewardServiceTests : IDisposable
         public int Ahead = 1;
         /// <summary>The change as the owner would see it; a new value is the ticket reworked.</summary>
         public string ChangeId = "change-1";
+        /// <summary>The branch's tip; a new value is the branch rebased or reworked.</summary>
+        public string Tip = "tip0123456";
         public CheckRun Check = new(true, false, "");
         public List<string> Merged = new();
 
@@ -1724,7 +1785,7 @@ public partial class StewardServiceTests : IDisposable
             Task.FromResult(InRepo.TryGetValue(path, out var text) ? text : null);
 
         public Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default) =>
-            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, Ahead, "1 file changed", "main", "tip0123456", ChangeId));
+            Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, Ahead, "1 file changed", "main", Tip, ChangeId));
 
         public Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default) =>
             Task.FromResult<(string, bool, int)?>(("diff", false, 4));

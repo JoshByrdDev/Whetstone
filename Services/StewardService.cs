@@ -725,7 +725,8 @@ public partial class StewardService
     /// <para>
     /// Every answer short of "merged" names what to do instead, and none of them is an invitation
     /// to find another way: "owner" is asked about, "not-proved" and "check-failed" are sent back,
-    /// "behind" is rebased, "check-could-not-run" is the machine and waits for its owner.
+    /// "behind" is rebased, "check-timed-out" is left at review and merged again on a later run, and
+    /// "check-could-not-run" is the machine and waits for its owner.
     /// </para>
     /// </summary>
     public async Task<StewardReply> MergeAsync(string projectKey, int ticketId, CancellationToken ct = default)
@@ -794,8 +795,15 @@ public partial class StewardService
                         return Refuse("check-could-not-run",
                             $"'{c.Name}' did not get as far as checking anything, so nothing is proved either way. Leave the ticket at NeedsReview and ask the owner once: this is the machine's to fix, not the ticket's.",
                             new { check = c.Name, output = run.Output });
+                    // Out of time with nothing failing in what it printed: proof of a slow machine, not
+                    // of a broken ticket. A check that is slow because many workers share the machine
+                    // is retried, and only when it runs out again on the same tip is it the owner's.
+                    if (run.TimedOut && (run.Failures?.Count ?? 0) == 0)
+                        return await TimedOutAsync(projectKey, t, change, c, run, ct);
                     return Refuse("check-failed",
-                        run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result. Send it back to NeedsImplementation with this."
+                        run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result, and what it printed before then "
+                                       + "names failures. Send it back to NeedsImplementation with this: 'failing' is every line in the whole output "
+                                       + "that names a failure, 'output' is how it ended."
                                      : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this: "
                                        + "'failing' is every line in the whole output that names a failure, 'output' is how it ended.",
                         new { check = c.Name, failing = run.Failures ?? Array.Empty<string>(), output = run.Output });
@@ -826,6 +834,50 @@ public partial class StewardService
         await _tickets.SetMergedAsync(ticketId, merged.MergeSha);
         await _tickets.TransitionAsync(ticketId, TicketPhase.Done, $"Merged into {merged.BaseBranch} at {sha}", TransitionActor.Steward);
         return new StewardReply("merged", null, new { commit = sha, closed = true });
+    }
+
+    /// <summary>How the board's record of a merge check that ran out of time starts; what finds the last one.</summary>
+    internal const string TimedOutMark = "Merge check timed out";
+
+    /// <summary>
+    /// A merge check ran out of time and printed no failure. The first time on a branch tip it is
+    /// left at review and a later run is owed to merge it again; the second time in a row on the
+    /// same tip it is the owner's, as a check that could not run is. Each one goes on the record,
+    /// which is also how the next one knows it is the second.
+    /// </summary>
+    private async Task<StewardReply> TimedOutAsync(string projectKey, Ticket t, BranchChange change, StewardCheck c,
+        CheckRun run, CancellationToken ct)
+    {
+        var tip = change.Tip ?? change.ChangeId ?? "unknown";
+        tip = tip[..Math.Min(12, tip.Length)];
+        var mark = $"{TimedOutMark} at {tip}:";
+        var last = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Call && e.TicketId == t.Id
+                        && e.Text.StartsWith(TimedOutMark))
+            .OrderByDescending(e => e.Id).Select(e => e.Text).FirstOrDefaultAsync(ct);
+        var again = last is not null && last.StartsWith(mark);
+
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = t.Id,
+            Text = $"{mark} '{c.Name}' did not finish in {c.TimeoutMinutes} minutes and printed no failure. "
+                + (again ? "The second time on this tip, so it waits at NeedsReview for the owner."
+                         : "Left at NeedsReview to merge again on a later run."),
+        });
+        if (!again) await StewardDue.MarkAsync(_db, projectKey, $"a merge check on #{t.Id} ran out of time");
+        await _db.SaveChangesAsync(ct);
+        if (!again) _heartbeat?.Wake();
+
+        var data = new { check = c.Name, minutes = c.TimeoutMinutes, tip, output = run.Output };
+        return again
+            ? Refuse("check-could-not-run",
+                $"'{c.Name}' ran out of time again on the same branch tip, after {c.TimeoutMinutes} minutes, with no failure in what it printed. "
+                + "Nothing is proved either way: a check this slow is the machine, not the ticket. Leave the ticket at NeedsReview "
+                + "and ask the owner once: whether the machine is too busy, or the check's time limit is too short, is theirs.", data)
+            : Refuse("check-timed-out",
+                $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes, and nothing it printed names a failure: that is a busy "
+                + "machine, not proof against the ticket. Do not send it back. Leave it at NeedsReview: a later run is already owed "
+                + "and merges it again then. If it runs out of time again on the same tip, it becomes the owner's.", data);
     }
 
     /// <summary>

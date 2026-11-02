@@ -111,8 +111,10 @@ public class StewardTools
         "review and the diff and are signing the work off. Every answer short of 'merged' names what to do instead: " +
         "'owner' - ask, and leave it unmerged (the owner clears a flag from the board; an answer does not); 'not-proved' - send it back saying what the flags say; 'behind' - rebase, " +
         "'nothing-to-merge' - its answer says what to do (steward_close_unchanged when the work is already on the base); " +
-        "then merge again; 'check-failed' - send it back to NeedsImplementation with the output; 'check-could-not-run' - the " +
-        "machine, not the ticket: leave it at review and ask the owner once; 'conflict' - send it back to NeedsImplementation " +
+        "then merge again; 'check-failed' - send it back to NeedsImplementation with the output; 'check-timed-out' - a check ran " +
+        "out of time with no failure in its output, a busy machine and not the ticket: do not send it back, leave it at review " +
+        "and a later run merges it again; 'check-could-not-run' - the machine, not the ticket (including a second time-out on " +
+        "the same tip): leave it at review and ask the owner once; 'conflict' - send it back to NeedsImplementation " +
         "naming the files; 'not-in-this-mode' - merging is not yours here. None of them means look for another way. " +
         "'checking' is not a refusal: the project's own checks can run for minutes and a call cannot wait that long, so the " +
         "merge carries on without you. Call merge for the same ticket again until it answers with one of the others - each " +
