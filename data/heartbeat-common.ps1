@@ -359,7 +359,7 @@ function Block-Ticket {
     if (-not $DashboardUrl) { return }
     try {
         $body = @{ toPhase = "Blocked"; reason = $Reason } | ConvertTo-Json -Compress
-        Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/transition" -Method Post `
+        Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/tickets/$TicketId/transition" -Method Post `
             -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
     }
     catch { Write-Log "  Could not block ticket #${TicketId}: $($_.Exception.Message)" }
@@ -378,12 +378,14 @@ function Get-TicketPhase {
 
 # Move a ticket to a phase the state machine allows from where it is. Distinct from Block-Ticket:
 # this is the pipeline routing a ticket somewhere it can still be worked, not parking it for a human.
+# Through the heartbeat's own route, which records the move as the System's - the board's route
+# for people would record it as a person's, and the transition log would count it as one.
 function Set-TicketPhase {
     param([string]$TicketId, [string]$Phase, [string]$Reason)
     if (-not $DashboardUrl) { return $false }
     try {
         $body = @{ toPhase = $Phase; reason = $Reason } | ConvertTo-Json -Compress
-        Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/transition" -Method Post `
+        Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/tickets/$TicketId/transition" -Method Post `
             -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
         return $true
     }

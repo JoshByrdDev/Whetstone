@@ -71,7 +71,8 @@ public record CycleReportRequest(
     int? InputTokens = null, int? OutputTokens = null,
     int? CacheReadTokens = null, int? CacheCreationTokens = null,
     int? PeakContextTokens = null, int? ToolResultChars = null,
-    List<MetricsService.ToolResultSize>? LargestToolResults = null);
+    List<MetricsService.ToolResultSize>? LargestToolResults = null,
+    MetricsService.CycleRunDetail? Detail = null);
 
 public static class TicketEndpoints
 {
@@ -376,6 +377,27 @@ public static class TicketEndpoints
             });
         });
 
+        // A phase move the heartbeat's worker script makes itself - not its agent, which moves tickets
+        // through the MCP server - such as sending back a branch that no longer merges. It used to
+        // come through /api/tickets/{id}/transition, which records every move as a person's, so the
+        // transition log counted those send-backs as reviewers asking for changes. Recorded as the
+        // System's: like the board's other automatic moves it is not held to a worker's hand-off
+        // requirements, and it is nobody's judgement.
+        app.MapPost("/api/heartbeat/tickets/{id:int}/transition", async (int id, TransitionRequest req, TicketService svc) =>
+        {
+            if (!Enum.TryParse<TicketPhase>(req.ToPhase, true, out var to))
+                return Results.BadRequest(new { error = $"Unknown phase '{req.ToPhase}'" });
+            try
+            {
+                var t = await svc.TransitionAsync(id, to, req.Reason, TransitionActor.System);
+                return t is null ? Results.NotFound() : Results.Ok(new { id = t.Id, phase = t.Phase.ToString() });
+            }
+            catch (InvalidTransitionException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message, allowed = ex.Allowed.Select(p => p.ToString()) });
+            }
+        });
+
         // What a worker run actually spent, posted by the heartbeat once the run is over. Separate
         // from /api/events on purpose: events are a feed a human reads and are trimmed as they age,
         // while these rows are the arithmetic behind every metric and have to survive.
@@ -395,7 +417,7 @@ public static class TicketEndpoints
                 req.StartedAt ?? DateTime.UtcNow, req.DurationSeconds, req.Mutations, outcome,
                 req.ApiDurationSeconds, req.NumTurns, req.InputTokens, req.OutputTokens,
                 req.CacheReadTokens, req.CacheCreationTokens,
-                req.PeakContextTokens, req.ToolResultChars, req.LargestToolResults));
+                req.PeakContextTokens, req.ToolResultChars, req.LargestToolResults, req.Detail));
 
             return run is null
                 ? Results.Ok(new { recorded = false, reason = "ticket not found" })
