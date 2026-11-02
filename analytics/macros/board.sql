@@ -45,3 +45,9 @@
     where _w.window_days = 0
        or _t.{{ ts_col }} >= {{ as_of() }} - to_days(cast(_w.window_days as integer))
 {%- endmacro %}
+
+{#- log(n choose k), for Fisher's exact test (mart_experiments). -inf outside 0 <= k <= n. -#}
+{% macro lchoose(n, k) -%}
+    (case when {{ k }} < 0 or {{ k }} > {{ n }} then -'infinity'::double
+          else lgamma({{ n }} + 1) - lgamma({{ k }} + 1) - lgamma({{ n }} - {{ k }} + 1) end)
+{%- endmacro %}

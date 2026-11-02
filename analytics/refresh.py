@@ -47,6 +47,7 @@ PUBLISHED = [
     "fct_runs", "fct_tool_calls", "fct_tickets",
     "mart_phase_breakdown", "mart_time_split", "mart_rework", "mart_tool_time",
     "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
+    "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an
@@ -68,8 +69,9 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         "HandoffSeconds": "DOUBLE", "StartRebase": "VARCHAR", "BaseBehind": "INTEGER",
         "FilesChanged": "INTEGER", "LinesAdded": "INTEGER", "LinesRemoved": "INTEGER",
         "RunCommits": "INTEGER", "ChangedFilesJson": "VARCHAR",
-        # Not in any schema yet: the arm of an A/B on a skill or prompt (docs/analytics.md).
-        "ExperimentArm": "VARCHAR",
+        # Added by the bug-tracing and experiments migrations (docs/bugs-and-experiments-plan.md).
+        "CommitRangeJson": "VARCHAR", "RunFilesJson": "VARCHAR",
+        "ExperimentId": "INTEGER", "ExperimentArm": "VARCHAR", "ExperimentApplied": "BOOLEAN",
     },
     "PhaseTransitions": {
         "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR",
@@ -80,7 +82,37 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         "Id": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR", "Phase": "VARCHAR",
         "Title": "VARCHAR", "Priority": "VARCHAR", "CreatedAt": "VARCHAR", "UpdatedAt": "VARCHAR",
         "WorktreePath": "VARCHAR", "Branch": "VARCHAR", "PlanKey": "VARCHAR", "PlanUnit": "VARCHAR",
-        "MergedAt": "VARCHAR", "Walkthrough": "BOOLEAN",
+        "MergedAt": "VARCHAR", "Walkthrough": "BOOLEAN", "IsBug": "BOOLEAN",
+    },
+    # Bug tracing: a bug ticket traced to the tickets whose commits wrote the lines it fixed.
+    "BugLinks": {
+        "Id": "INTEGER", "BugTicketId": "INTEGER", "SourceTicketId": "INTEGER", "ProjectKey": "VARCHAR",
+        "Status": "VARCHAR", "Origin": "VARCHAR", "Lines": "DOUBLE", "Share": "DOUBLE",
+        "CommitsJson": "VARCHAR", "Neighbours": "BOOLEAN", "Escaped": "BOOLEAN", "FoundBy": "VARCHAR",
+        "MissedBy": "VARCHAR", "Note": "VARCHAR", "TracedAt": "VARCHAR", "DecidedAt": "VARCHAR",
+    },
+    "BugTraces": {
+        "TicketId": "INTEGER", "TracedAt": "VARCHAR", "LinesBlamed": "DOUBLE", "RangesJson": "VARCHAR",
+        "Note": "VARCHAR",
+    },
+    "TicketCommits": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Repo": "VARCHAR", "Sha": "VARCHAR",
+        "PatchId": "VARCHAR", "Subject": "VARCHAR", "Source": "VARCHAR", "RecordedAt": "VARCHAR",
+    },
+    # A/B experiments on one phase's skill, model, effort or provider.
+    "Experiments": {
+        "Id": "INTEGER", "ProjectKey": "VARCHAR", "Skill": "VARCHAR", "Name": "VARCHAR",
+        "Hypothesis": "VARCHAR", "Status": "VARCHAR", "MinTicketsPerArm": "INTEGER", "WaitDays": "INTEGER",
+        "StartedAt": "VARCHAR", "StoppedAt": "VARCHAR", "StopKind": "VARCHAR", "StopReason": "VARCHAR",
+        "ConcludedAt": "VARCHAR", "Winner": "VARCHAR", "ConclusionNote": "VARCHAR",
+    },
+    "ExperimentArms": {
+        "Id": "INTEGER", "ExperimentId": "INTEGER", "Key": "VARCHAR", "Name": "VARCHAR",
+        "SkillVariant": "VARCHAR", "Model": "VARCHAR", "Effort": "VARCHAR", "Provider": "VARCHAR",
+    },
+    "ExperimentAssignments": {
+        "Id": "INTEGER", "ExperimentId": "INTEGER", "TicketId": "INTEGER", "ArmKey": "VARCHAR",
+        "Ordinal": "INTEGER", "AssignedAt": "VARCHAR",
     },
 }
 
@@ -160,7 +192,8 @@ def load_board(con: duckdb.DuckDBPyConnection, snap: Path) -> dict[str, int]:
         for table, cols in BOARD_TABLES.items():
             have = {r[1] for r in src.execute(f'PRAGMA table_info("{table}")')}
             select = ", ".join(f'"{c}"' if c in have else "NULL" for c in cols)
-            rows = src.execute(f'SELECT {select} FROM "{table}"').fetchall()
+            # A table a later migration adds is simply empty on a database that predates it.
+            rows = src.execute(f'SELECT {select} FROM "{table}"').fetchall() if have else []
             ddl = ", ".join(f'"{c}" {t}' for c, t in cols.items())
             con.execute(f'CREATE OR REPLACE TABLE raw."{table}" ({ddl})')
             if rows:
@@ -177,7 +210,9 @@ def load_board(con: duckdb.DuckDBPyConnection, snap: Path) -> dict[str, int]:
                 staged.unlink(missing_ok=True)
             counts[table] = len(rows)
             missing = [c for c in cols if c not in have]
-            if missing:
+            if not have:
+                log(f"  {table}: not in this database yet, loaded empty")
+            elif missing:
                 log(f"  {table}: not in this database yet, loaded as NULL: {', '.join(missing)}")
     finally:
         src.close()

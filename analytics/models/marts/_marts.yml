@@ -149,3 +149,66 @@ models:
       - unique_combination:
           arguments:
             columns: [window_days, project_scope, track_scope, phase, day]
+
+  - name: fct_bug_links
+    description: One cause suggested for one bug, with the run that most likely wrote it and the fix's cost. Only is_confirmed counts as a bug.
+    columns:
+      - name: link_id
+        tests: [unique, not_null]
+      - name: run_tier
+        tests:
+          - accepted_values:
+              arguments:
+                values: [likely, none]
+      - name: attributed_fix_minutes
+        tests: [at_least]
+
+  - name: mart_bugs
+    description: Confirmed bugs by the stage that missed them, who found them, and what wrote them. Scoped by when the bug was filed.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, dimension, dim_value]
+    columns:
+      - name: dimension
+        tests:
+          - accepted_values:
+              arguments:
+                values: [all, missed_by, found_by, written_model, written_effort, written_skill_version, written_prompt_version, written_experiment_arm]
+
+  - name: fct_experiment_tickets
+    description: One ticket enrolled in an experiment, measured from its assignment as the board measures it.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [experiment_id, ticket_id]
+    columns:
+      - name: worker_minutes
+        tests: [not_null, at_least]
+
+  - name: mart_experiment_arms
+    description: Each arm's cost per ticket to Done and its three guardrails, as the board computes them, plus cost over tickets that never left the arm.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [experiment_id, arm_key]
+    columns:
+      - name: rework_share
+        tests: [is_fraction]
+
+  - name: mart_experiments
+    description: Each experiment's stage, its guardrails' one-sided Fisher tests, and the verdict the board would suggest.
+    columns:
+      - name: experiment_id
+        tests: [unique, not_null]
+      - name: stage
+        tests:
+          - accepted_values:
+              arguments:
+                values: [enrolling, landing, waiting, ready, stopped, concluded]
+      - name: qa_failure_p
+        tests: [is_fraction]
+      - name: rework_p
+        tests: [is_fraction]
+      - name: escaped_p
+        tests: [is_fraction]

@@ -47,6 +47,22 @@ public static class AnalyticsEndpoints
             Results.Ok(a.Mart("mart_phase_breakdown", AnalyticsService.Scope.Of(days, project, track),
                 Where(("phase", phase), ("dimension", dimension ?? "all")), "runs DESC")));
 
+        // Confirmed bugs by what let them through, and the causes traced in the window.
+        app.MapGet("/api/analytics/bugs", (AnalyticsService a, int? days, string? project, string? track, string? dimension) =>
+        {
+            var s = AnalyticsService.Scope.Of(days, project, track);
+            return Results.Ok(new
+            {
+                summary = a.Mart("mart_bugs", s, Where(("dimension", "all"))).FirstOrDefault(),
+                split = a.Mart("mart_bugs", s, Where(("dimension", dimension ?? "missed_by")), "bugs DESC, links DESC"),
+                links = a.BugLinks(s),
+            });
+        });
+
+        // Every experiment with its arms, read whole rather than by window.
+        app.MapGet("/api/analytics/experiments", (AnalyticsService a, string? project) =>
+            Results.Ok(a.Experiments(project)));
+
         app.MapGet("/api/analytics/tools", (AnalyticsService a, int? days, string? project, string? track, string? phase) =>
             Results.Ok(a.Mart("mart_tool_time", AnalyticsService.Scope.Of(days, project, track),
                 Where(("phase", phase)), "total_seconds DESC")));

@@ -25,6 +25,7 @@ public sealed class AnalyticsService
         "fct_runs", "fct_tool_calls", "fct_tickets",
         "mart_phase_breakdown", "mart_time_split", "mart_rework", "mart_tool_time",
         "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
+        "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
     ];
 
     /// <summary>Marts older than this are refreshed when someone opens the page.</summary>
@@ -328,6 +329,52 @@ public sealed class AnalyticsService
                     new() { ["id"] = runId })
             : [];
         return (row, calls);
+    }
+
+    /// <summary>
+    /// The bugs traced in a window, newest first: each cause suggested for each bug, confirmed or not,
+    /// with the run that most likely wrote it. The window is on when the bug was filed.
+    /// </summary>
+    public List<Dictionary<string, object?>> BugLinks(Scope scope, int limit = 60)
+    {
+        var file = MartPath("fct_bug_links");
+        if (!File.Exists(file)) return [];
+        var clauses = new List<string>();
+        var args = new Dictionary<string, object?>();
+        if (scope.WindowDays > 0)
+        {
+            clauses.Add("bug_created_at >= $since");
+            args["since"] = DateTime.UtcNow.AddDays(-scope.WindowDays);
+        }
+        if (scope.Project != "*") { clauses.Add("project_key = $project"); args["project"] = scope.Project; }
+        if (scope.Track != "*") { clauses.Add("track = $track"); args["track"] = scope.Track; }
+        var where = clauses.Count == 0 ? "" : " WHERE " + string.Join(" AND ", clauses);
+        return Query(
+            "SELECT link_id, bug_ticket_id, bug_title, bug_created_at, project_key, source_ticket_id, source_title, " +
+            "status, origin, share, escaped, found_by, missed_by, days_to_find, written_by_run_id, run_tier, " +
+            "written_phase, written_model, written_effort, written_skill_version, attributed_fix_minutes " +
+            $"FROM {Parquet(file)}{where} ORDER BY bug_created_at DESC, share DESC LIMIT {Math.Clamp(limit, 1, 500)}", args);
+    }
+
+    /// <summary>
+    /// Every experiment (one project's, or all), newest first, each with its arms. Not cut by a window:
+    /// an experiment is read whole, from its first enrolment to its verdict.
+    /// </summary>
+    public List<Dictionary<string, object?>> Experiments(string? project)
+    {
+        var heads = MartPath("mart_experiments");
+        if (!File.Exists(heads)) return [];
+        var args = new Dictionary<string, object?>();
+        var where = "";
+        if (!string.IsNullOrWhiteSpace(project) && project != "*") { where = " WHERE project_key = $project"; args["project"] = project; }
+        var list = Query($"SELECT * FROM {Parquet(heads)}{where} ORDER BY started_at DESC", args);
+        var armsFile = MartPath("mart_experiment_arms");
+        var arms = File.Exists(armsFile)
+            ? Query($"SELECT * FROM {Parquet(armsFile)}{where} ORDER BY experiment_id, arm_key", args)
+            : [];
+        foreach (var e in list)
+            e["arms"] = arms.Where(a => Equals(Convert.ToInt64(a["experimentId"]), Convert.ToInt64(e["experimentId"]))).ToList();
+        return list;
     }
 
     private static bool IsIdentifier(string s) => s.Length > 0 && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');

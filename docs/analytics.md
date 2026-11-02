@@ -119,23 +119,41 @@ a skill is invisible to the git side - one more reason skills are committed.
 | `mart_version_trend` | Each skill and prompt version in order, with what its runs cost and how often their work came back |
 | `mart_daily` | The trend under all of it |
 | `fct_runs`, `fct_tool_calls`, `fct_tickets` | The drill-down: one run, its calls, one ticket |
+| `fct_bug_links`, `mart_bugs` | Bugs traced to their cause: confirmed and escaped bugs by the stage that missed them, who found them, and what wrote them |
+| `fct_experiment_tickets`, `mart_experiment_arms`, `mart_experiments` | A/B experiments: per arm, cost per ticket to Done and the three guardrails; per experiment, its stage, the Fisher tests and the suggested verdict |
 
 "Cost" is tokens and wall clock, as on the rest of the page - the fleet runs on a subscription, so
 headroom is the scarce thing. `fct_runs.list_cost_usd` carries Claude Code's own list-price figure
 for a run whose session served only that run; it is a relative weight, not a bill.
 
-## Room for what comes next
+## Bugs and experiments
 
-- **An A/B arm.** `refresh.py` already asks the board for a `CycleRuns.ExperimentArm` column and
-  loads NULL while there is none; `int_runs.experiment_arm` reads it as `none`, and
-  `mart_phase_breakdown` already has an `experiment_arm` dimension. Adding the column to the board
-  (and having the worker set it) is the whole of the work on this side. For a comparison worth
-  making, give the arm a run-level assignment, not a time window, so the two arms see the same mix
-  of tickets.
-- **Escaped defects.** A defect ticket linked to the ticket (and ideally the run) that shipped it
-  belongs on `fct_tickets` as a count beside `first_pass_qa`, and on `mart_first_pass_qa` as a
-  second rate - QA's pass rate says what QA caught; the escape rate says what it did not. The link
-  is a board table; once it exists, it is one staging model and one join here.
+The board traces a bug ticket to the tickets whose commits wrote the lines it fixed, and runs A/B
+experiments on a phase's skill, model, effort or provider (docs/bugs-and-experiments-plan.md). Its
+tables are the source of truth; the board computes only what it must act on (the auto-stop, and the
+stage and verdict on its own page), and the comparisons over time live here.
+
+- **A table the database does not have yet is loaded empty**, like a missing column, so these models
+  build on a board that predates the migrations and fill in once they have run.
+- **A bug is a confirmed link.** `Escaped` is the board's own flag (`BugTraceService.IsEscaped`),
+  read, never recomputed. `fct_tickets.escaped_bugs` counts them against the ticket that caused
+  them, and `mart_first_pass_qa.escaped_rate` sets that beside QA's pass rate: what QA caught, and
+  what it did not.
+- **The run that wrote a bug is the board's "likely" tier**: among the source ticket's runs whose own
+  commits changed a blamed file (`RunFilesJson`), the latest before the ticket was merged or Done.
+  The "exact" tier asks git whether a commit lies inside a run's recorded range, which is a question
+  for the repository at read time, so `run_tier` says `likely` or `none`, never `exact`.
+- **An experiment is measured as the board measures it.** `fct_experiment_tickets` follows
+  `ExperimentService.MeasureAsync` line for line - every run of every skill from assignment on, the
+  entry reasons as recorded, conflicts not counted as rework - and `mart_experiments` repeats its
+  stages, its one-sided Fisher test (`lchoose` in `macros/board.sql`) and its thresholds. They were
+  checked against the board's `/api/experiments` on the same database, value for value. A change to
+  either side's rules changes both.
+- **A run that ran as configured is in no arm.** A run that named an arm with
+  `ExperimentApplied = false` (the experiment was stopped, or an override was not honoured) reads as
+  `not applied` in `experiment_arm`, so `mart_phase_breakdown` never credits an arm with the other's
+  settings. The board's per-ticket numbers still count those runs; `mart_experiment_arms` gives both,
+  the board's and `applied_*` - the cost over Done tickets that never left their arm.
 
 ## Changing it
 

@@ -156,6 +156,59 @@ public sealed class AnalyticsServiceTests : IDisposable
     }
 
     [Fact]
+    public void Bug_links_are_cut_by_when_the_bug_was_filed_and_by_project()
+    {
+        var a = Service();
+        var recent = DateTime.UtcNow.AddDays(-2).ToString("yyyy-MM-dd HH:mm:ss");
+        var old = DateTime.UtcNow.AddDays(-50).ToString("yyyy-MM-dd HH:mm:ss");
+        Publish(a, "fct_bug_links", $"""
+            SELECT * FROM (VALUES
+                (1, 10, 'Total wrong', TIMESTAMP '{recent}', 'alpha', 'Delivery', 4, 'Confirmed', 0.8::DOUBLE, true),
+                (2, 11, 'Old one', TIMESTAMP '{old}', 'alpha', 'Delivery', 5, 'Confirmed', 1.0::DOUBLE, true),
+                (3, 12, 'Elsewhere', TIMESTAMP '{recent}', 'bravo', 'Delivery', NULL, 'Suggested', 1.0::DOUBLE, false))
+            AS t(link_id, bug_ticket_id, bug_title, bug_created_at, project_key, track, source_ticket_id, status, share, escaped)
+            """.Replace("SELECT * FROM", "SELECT *, NULL::VARCHAR AS source_title, 'Blame' AS origin, 'Owner' AS found_by, " +
+                "'qa-test' AS missed_by, 3.5::DOUBLE AS days_to_find, NULL::INTEGER AS written_by_run_id, 'none' AS run_tier, " +
+                "NULL::VARCHAR AS written_phase, NULL::VARCHAR AS written_model, NULL::VARCHAR AS written_effort, " +
+                "NULL::VARCHAR AS written_skill_version, 0.0::DOUBLE AS attributed_fix_minutes FROM"));
+
+        var month = a.BugLinks(AnalyticsService.Scope.Of(30, null, null));
+        Assert.Equal([3L, 1L], month.Select(r => Convert.ToInt64(r["linkId"])).OrderByDescending(x => x));
+        var alpha = Assert.Single(a.BugLinks(AnalyticsService.Scope.Of(30, "alpha", null)));
+        Assert.Equal("Total wrong", alpha["bugTitle"]);
+        Assert.Equal(3, a.BugLinks(AnalyticsService.Scope.Of(0, null, "*")).Count);
+    }
+
+    [Fact]
+    public void Each_experiment_comes_with_its_own_arms()
+    {
+        var a = Service();
+        Publish(a, "mart_experiments", """
+            SELECT * FROM (VALUES
+                (1, 'alpha', 'implement', 'Terse', 'ready', TIMESTAMP '2026-10-01 00:00:00'),
+                (2, 'bravo', 'qa-test', 'High effort', 'enrolling', TIMESTAMP '2026-10-20 00:00:00'))
+            AS t(experiment_id, project_key, skill, name, stage, started_at)
+            """);
+        Publish(a, "mart_experiment_arms", """
+            SELECT * FROM (VALUES
+                (1, 'alpha', 'control', 12, 82.1::DOUBLE), (1, 'alpha', 'variant', 12, 75.3::DOUBLE),
+                (2, 'bravo', 'control', 3, NULL), (2, 'bravo', 'variant', 2, NULL))
+            AS t(experiment_id, project_key, arm_key, tickets, median_minutes)
+            """);
+
+        var all = a.Experiments(null);
+        Assert.Equal([2L, 1L], all.Select(e => Convert.ToInt64(e["experimentId"])));
+        var arms = Assert.IsType<List<Dictionary<string, object?>>>(all[1]["arms"]);
+        Assert.Equal(["control", "variant"], arms.Select(r => (string)r["armKey"]!));
+        Assert.Equal(75.3, Convert.ToDouble(arms[1]["medianMinutes"]));
+
+        var alpha = Assert.Single(a.Experiments("alpha"));
+        Assert.Equal(2, ((List<Dictionary<string, object?>>)alpha["arms"]!).Count);
+        Assert.Empty(new AnalyticsService(new DashboardPaths(_root + "-none"), new QaIsolation(false),
+            NullLogger<AnalyticsService>.Instance, _ => null).Experiments(null));
+    }
+
+    [Fact]
     public void Snake_case_columns_become_camel_case()
     {
         Assert.Equal("medianPrepS", AnalyticsService.Camel("median_prep_s"));

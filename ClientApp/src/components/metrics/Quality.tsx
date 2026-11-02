@@ -45,13 +45,18 @@ export function FirstPassQa({ rows }: { rows: FirstPassRow[] }) {
           ) : (
             <ul className="space-y-1.5 text-xs">
               {shown.map(r => (
-                <li key={r.dimValue} className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)_3rem_3.5rem] items-center gap-x-3">
+                <li key={r.dimValue} className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)_3rem_3.5rem_3rem] items-center gap-x-3">
                   <span className="min-w-0 truncate text-gray-300" style={by.endsWith('version') ? { fontFamily: MONO } : undefined}>{r.dimValue}</span>
                   <Meter value={r.firstPassRate} max={1} swatch="bg-emerald-500" />
                   <span className="text-right text-gray-100" style={{ fontFamily: MONO }}>{pct(r.firstPassRate)}</span>
                   <span className="text-right text-gray-500" style={{ fontFamily: MONO }} title="tickets QA looked at">of {r.qaAttempted}</span>
+                  <span className={`text-right ${r.escapedBugTickets ? 'text-red-300' : 'text-gray-600'}`} style={{ fontFamily: MONO }}
+                    title={`${r.escapedBugTickets ?? 0} of ${r.done ?? 0} Done tickets had a confirmed bug traced to them after they landed`}>
+                    {r.escapedRate == null ? '—' : pct(r.escapedRate)}
+                  </span>
                 </li>
               ))}
+              <li className="pt-1 text-[10.5px] text-gray-600">Columns: passed first time · tickets QA saw · escaped a bug after landing.</li>
             </ul>
           )}
         </Sheet>

@@ -11,6 +11,8 @@ import { PhaseTable, Rework, TimeSplit } from './Phases';
 import { DiffAndRebase, SplitBy, Tools, Versions, type RunFilter } from './PhaseDetail';
 import { Daily, FirstPassQa } from './Quality';
 import { RunList } from './Runs';
+import { Bugs } from './Bugs';
+import { ExperimentResults } from './ExperimentResults';
 
 /**
  * The Metrics page: what each phase costs, where its time goes, how much of it is redoing work, and
@@ -198,6 +200,9 @@ export function MetricsPanel() {
               <FirstPassQa rows={data.firstPass} />
               <Daily rows={data.daily} phase={shownFocus} />
             </div>
+
+            <Bugs scope={scope} bump={bump} onPick={pick} />
+            <ExperimentResults project={scope.project} bump={bump} onPick={pick} />
 
             <div id="metrics-runs" className="scroll-mt-4">
               <RunList scope={scope} phase={shownFocus} filter={filter} onClearFilter={() => setFilter(null)} bump={bump} />

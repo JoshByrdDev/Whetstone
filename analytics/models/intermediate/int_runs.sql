@@ -158,6 +158,17 @@ select
     end                                                                as size_bucket,
     run_commits,
     changed_files_json,
-    -- An A/B arm, once runs carry one (docs/analytics.md). Every mart already splits by it.
-    coalesce(experiment_arm, 'none')                                   as experiment_arm
+    run_files_json,
+    -- The A/B arm the run was in, named with its experiment because every experiment has a
+    -- control. A run that named an arm but ran as configured (the experiment was stopped, or an
+    -- override could not be honoured) is in no arm: counting it would credit one arm with the
+    -- other's settings (docs/bugs-and-experiments-plan.md, 2.6).
+    experiment_id,
+    case when experiment_applied then experiment_arm end               as experiment_arm_key,
+    coalesce(experiment_applied, false)                                as experiment_applied,
+    case
+        when experiment_id is null then 'none'
+        when not coalesce(experiment_applied, false) then 'not applied'
+        else '#' || experiment_id || ' ' || experiment_arm
+    end                                                                as experiment_arm
 from split

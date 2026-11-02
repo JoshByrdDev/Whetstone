@@ -30,6 +30,12 @@ select
     count(*) filter (where first_pass_qa) / count(*) as first_pass_rate,
     sum(qa_failures)                                as qa_failures,
     avg(qa_failures)                                as mean_qa_failures,
-    sum(rework_minutes)                             as rework_minutes
+    sum(rework_minutes)                             as rework_minutes,
+    -- Quality after release: of these tickets that reached Done, how many a confirmed bug was
+    -- later traced to. It grows for weeks after a ticket lands, so a recent week reads low.
+    count(*) filter (where reached_done)            as done,
+    count(*) filter (where reached_done and escaped_bugs > 0) as escaped_bug_tickets,
+    count(*) filter (where reached_done and escaped_bugs > 0)
+        / nullif(count(*) filter (where reached_done), 0)     as escaped_rate
 from cut
 group by all

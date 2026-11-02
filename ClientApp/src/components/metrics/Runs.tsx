@@ -90,7 +90,7 @@ const MATCH: Record<string, string> = {
 };
 
 /** One run, over the page. Rendered only while open, so its exit is the veil's own. */
-function RunDrawer({ runId, onClose }: { runId: number; onClose: () => void }) {
+export function RunDrawer({ runId, onClose }: { runId: number; onClose: () => void }) {
   const { fx, dismiss } = useVeil(onClose);
   const { data, error } = useJson<{ run: RunDetail; calls: ToolCall[] }>(`/api/analytics/runs/${runId}`);
   const [filter, setFilter] = useState('');

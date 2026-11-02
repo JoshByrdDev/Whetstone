@@ -35,6 +35,7 @@ export interface ReworkRow {
 export interface FirstPassRow {
   dimension: string; dimValue: string; qaAttempted: number; firstPass: number; firstPassRate: number;
   qaFailures: number; meanQaFailures: number; reworkMinutes: number;
+  done: number; escapedBugTickets: number; escapedRate: number | null;
 }
 
 export interface DailyRow {
@@ -111,4 +112,44 @@ export function scopeQuery(s: Scope, extra: Record<string, string | number | nul
   if (s.project) q.set('project', s.project);
   for (const [k, v] of Object.entries(extra)) if (v !== null && v !== undefined && v !== '') q.set(k, String(v));
   return q.toString();
+}
+
+/** mart_bugs: confirmed bugs by what let them through. */
+export interface BugRow {
+  dimension: string; dimValue: string; bugs: number; links: number; escapedBugs: number; sourceTickets: number;
+  unmappedLinks: number; linksWithRun: number; medianDaysToFind: number | null; fixMinutes: number;
+  pendingLinks: number; rejectedLinks: number;
+}
+
+/** fct_bug_links: one cause suggested for one bug. */
+export interface BugLinkRow {
+  linkId: number; bugTicketId: number; bugTitle: string | null; bugCreatedAt: string; projectKey: string;
+  sourceTicketId: number | null; sourceTitle: string | null; status: 'Suggested' | 'Confirmed' | 'Rejected';
+  origin: string; share: number | null; escaped: boolean; foundBy: string; missedBy: string;
+  daysToFind: number | null; writtenByRunId: number | null; runTier: string; writtenPhase: string | null;
+  writtenModel: string | null; writtenEffort: string | null; writtenSkillVersion: string | null;
+  attributedFixMinutes: number;
+}
+
+export interface BugsView { summary: BugRow | null; split: BugRow[]; links: BugLinkRow[] }
+
+/** mart_experiment_arms */
+export interface ArmRow {
+  experimentId: number; armKey: 'control' | 'variant'; armName: string; skillVariant: string | null;
+  model: string | null; effort: string | null; provider: string | null; tickets: number; done: number;
+  medianMinutes: number | null; medianFreshTokens: number | null; medianCacheReadTokens: number | null;
+  qaFailureN: number; qaFailureBad: number; reworkN: number; reworkBad: number; escapedN: number; escapedBad: number;
+  reworkShare: number; ticketsLeftArm: number; appliedDone: number; appliedMedianMinutes: number | null;
+  appliedMedianFreshTokens: number | null;
+}
+
+/** mart_experiments, with its arms */
+export interface ExperimentRow {
+  experimentId: number; projectKey: string; skill: string; name: string; hypothesis: string | null;
+  status: string; stage: string; minTicketsPerArm: number; waitDays: number; startedAt: string;
+  stoppedAt: string | null; stopKind: string | null; stopReason: string | null; winner: string | null;
+  controlTickets: number; variantTickets: number; lastDoneAt: string | null; verdictFrom: string | null;
+  qaFailureP: number; qaFailureBreaks: boolean; reworkP: number; reworkBreaks: boolean;
+  escapedP: number; escapedBreaks: boolean; guardrailBroken: boolean;
+  suggestion: string | null; suggestionWhy: string; arms: ArmRow[];
 }

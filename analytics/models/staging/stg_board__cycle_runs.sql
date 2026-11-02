@@ -40,5 +40,9 @@ select
     "LinesRemoved"                as lines_removed,
     "RunCommits"                  as run_commits,
     "ChangedFilesJson"            as changed_files_json,
-    "ExperimentArm"               as experiment_arm
+    "CommitRangeJson"             as commit_range_json,
+    "RunFilesJson"                as run_files_json,
+    "ExperimentId"                as experiment_id,
+    "ExperimentArm"               as experiment_arm,
+    "ExperimentApplied"           as experiment_applied
 from {{ source('board', 'CycleRuns') }}

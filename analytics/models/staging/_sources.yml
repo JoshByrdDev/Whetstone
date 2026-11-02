@@ -21,6 +21,14 @@ sources:
         columns:
           - name: Id
             tests: [unique, not_null]
+      # Bug tracing and experiments (docs/bugs-and-experiments-plan.md). Empty on a database that
+      # predates their migrations: refresh.py loads a missing table as an empty one.
+      - name: BugLinks
+      - name: BugTraces
+      - name: TicketCommits
+      - name: Experiments
+      - name: ExperimentArms
+      - name: ExperimentAssignments
 
   - name: git
     schema: raw

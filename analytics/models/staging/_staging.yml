@@ -53,3 +53,56 @@ models:
     columns:
       - name: session_id
         tests: [unique]
+  - name: stg_board__bug_links
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [bug_ticket_id, source_ticket_id]
+    columns:
+      - name: link_id
+        tests: [unique, not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: [Suggested, Confirmed, Rejected]
+      - name: share
+        tests: [is_fraction]
+      - name: missed_by
+        tests:
+          - accepted_values:
+              arguments:
+                values: [speculate, implement, qa-test, refine, review]
+  - name: stg_board__bug_traces
+    columns:
+      - name: bug_ticket_id
+        tests: [unique, not_null]
+  - name: stg_board__ticket_commits
+    columns:
+      - name: ticket_commit_id
+        tests: [unique, not_null]
+  - name: stg_board__experiments
+    columns:
+      - name: experiment_id
+        tests: [unique, not_null]
+      - name: status
+        tests:
+          - accepted_values:
+              arguments:
+                values: [Running, Stopped, Concluded]
+  - name: stg_board__experiment_arms
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [experiment_id, arm_key]
+    columns:
+      - name: arm_key
+        tests:
+          - accepted_values:
+              arguments:
+                values: [control, variant]
+  - name: stg_board__experiment_assignments
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [experiment_id, ticket_id]

@@ -13,5 +13,6 @@ select
     "PlanKey"                      as plan_key,
     "PlanUnit"                     as plan_unit,
     {{ board_ts('"MergedAt"') }}   as merged_at,
-    coalesce("Walkthrough", false) as is_walkthrough
+    coalesce("Walkthrough", false) as is_walkthrough,
+    coalesce("IsBug", false)       as is_bug
 from {{ source('board', 'Tickets') }}

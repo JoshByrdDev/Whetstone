@@ -12,6 +12,17 @@ moves as (
 runs as (
     select * from {{ ref('int_runs') }}
 ),
+-- Confirmed bugs this ticket's commits caused, and how many of them escaped: filed after it was
+-- already merged or Done (docs/bugs-and-experiments-plan.md, 1.7).
+caused as (
+    select
+        source_ticket_id                                       as ticket_id,
+        count(distinct bug_ticket_id)                          as bugs_caused,
+        count(distinct bug_ticket_id) filter (where escaped)   as escaped_bugs
+    from {{ ref('stg_board__bug_links') }}
+    where status = 'Confirmed' and source_ticket_id is not null
+    group by source_ticket_id
+),
 
 qa as (
     select
@@ -53,6 +64,7 @@ select
     t.title,
     t.phase,
     t.created_at,
+    t.is_bug,
     qa.first_qa_at,
     qa.first_qa_at is not null                                   as qa_attempted,
     coalesce(qa.qa_failures, 0)                                  as qa_failures,
@@ -72,10 +84,11 @@ select
     fb.provider                                                  as build_provider,
     fb.effort                                                    as build_effort,
     fb.skill_version                                             as build_skill_version,
-    fb.prompt_version                                            as build_prompt_version
-    -- Room for escaped defects (docs/analytics.md): a defect ticket linked to the ticket and run
-    -- that shipped it lands here as a count, beside first_pass_qa.
+    fb.prompt_version                                            as build_prompt_version,
+    coalesce(c.bugs_caused, 0)                                   as bugs_caused,
+    coalesce(c.escaped_bugs, 0)                                  as escaped_bugs
 from t
 left join qa using (ticket_id)
 left join run_totals rt using (ticket_id)
 left join first_build fb using (ticket_id)
+left join caused c using (ticket_id)
