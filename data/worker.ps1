@@ -102,7 +102,8 @@ function Send-CycleReport {
         [string]$Model, [datetime]$StartedAt, [double]$DurationSeconds, [int]$Mutations,
         [string]$Outcome, $ApiDurationSeconds = $null, $NumTurns = $null,
         $InputTokens = $null, $OutputTokens = $null, $CacheReadTokens = $null, $CacheCreationTokens = $null,
-        $PeakContextTokens = $null, $ToolResultChars = $null, $LargestToolResults = $null
+        $PeakContextTokens = $null, $ToolResultChars = $null, $LargestToolResults = $null,
+        [hashtable]$Detail = $null
     )
     if (-not $DashboardUrl -or -not $TicketId) { return }
     try {
@@ -129,12 +130,71 @@ function Send-CycleReport {
         if ($null -ne $PeakContextTokens)   { $payload.peakContextTokens   = $PeakContextTokens }
         if ($null -ne $ToolResultChars)     { $payload.toolResultChars     = $ToolResultChars }
         if ($null -ne $LargestToolResults)  { $payload.largestToolResults  = @($LargestToolResults) }
+        # How the run was set up and what it left (New-RunDetail), the same rule again: only the
+        # parts it learned. A run that ended before its agent started knows its setup and no more.
+        if ($Detail) {
+            $d = @{}
+            foreach ($k in $Detail.Keys) { if ($null -ne $Detail[$k]) { $d[$k] = $Detail[$k] } }
+            if ($d.Count -gt 0) { $payload.detail = $d }
+        }
 
         $body = $payload | ConvertTo-Json -Compress -Depth 4
         Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/cycles" -Method Post `
             -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
     }
     catch { Write-Log "  (metrics) cycle report failed: $($_.Exception.Message)" }
+}
+
+# The part of a cycle report that says how the run was set up and what it left behind (see
+# CycleRun on the board). Made as the cycle starts and filled in as the run learns each part, so a
+# run that ends early still reports what it knew. The keys are the API's names.
+function New-RunDetail {
+    param([string]$Provider, [string]$Effort)
+    return [ordered]@{
+        provider = $(if ($Provider) { $Provider } else { $null }); effort = $(if ($Effort) { $Effort } else { $null })
+        cliVersion = $null; skillHash = $null; promptHash = $null; sessionId = $null
+        prepSeconds = $null; startupSeconds = $null; handoffSeconds = $null
+        startRebase = $null; baseBehind = $null
+        filesChanged = $null; linesAdded = $null; linesRemoved = $null; runCommits = $null; changedFiles = $null
+    }
+}
+
+# The first 12 hex digits of the SHA-256 of some text, as UTF-8: enough to tell two versions of a
+# skill or a prompt apart, short enough to read in a table. $null for no text.
+function Get-TextHash {
+    param([string]$Text)
+    if (-not $Text) { return $null }
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try { $bytes = $sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)) }
+    finally { $sha.Dispose() }
+    return (-join ($bytes[0..5] | ForEach-Object { $_.ToString('x2') }))
+}
+
+# What a branch changes against its base, summed over the places it lives: @{ files; added; removed;
+# paths }. Each place is @{ path; baseRef; dir } - a worktree, the ref it is measured against, and,
+# on a project of several repos, the repo's folder that starts each of its paths. Three dots, so it
+# is the branch's own change and not whatever has landed on the base since. A binary file counts as
+# changed with no lines. $null when no place could be measured.
+function Get-BranchChangeStats {
+    param([object[]]$Places)
+    $files = 0; $added = 0; $removed = 0; $measured = $false
+    $paths = New-Object System.Collections.Generic.List[string]
+    foreach ($p in $Places) {
+        if (-not $p.path -or -not $p.baseRef) { continue }
+        $rows = @(git -C $p.path -c core.quotepath=off diff --numstat --no-renames "$($p.baseRef)...HEAD" 2>$null)
+        if ($LASTEXITCODE -ne 0) { continue }
+        $measured = $true
+        foreach ($row in $rows) {
+            $cols = "$row" -split "`t", 3
+            if ($cols.Count -lt 3) { continue }
+            $files++
+            if ($cols[0] -match '^\d+$') { $added += [int]$cols[0] }
+            if ($cols[1] -match '^\d+$') { $removed += [int]$cols[1] }
+            [void]$paths.Add($(if ($p.dir) { "$($p.dir)/$($cols[2])" } else { $cols[2] }))
+        }
+    }
+    if (-not $measured) { return $null }
+    return @{ files = $files; added = $added; removed = $removed; paths = $paths.ToArray() }
 }
 
 # Does a branch exist locally or on origin? Asked of the hub repo, which shares its refs with
@@ -1583,6 +1643,9 @@ Send-DashboardEvent -Type "cycle_start" -TicketId $ticketId -Phase $phase -Proje
 # sees, and it is real time this agent cannot spend on another ticket.
 $cycleStartedAt = (Get-Date).ToUniversalTime()
 $cycleTimer     = [System.Diagnostics.Stopwatch]::StartNew()
+# What this run will say about how it was set up and what it left, filled in as it goes and sent
+# with every cycle report below, however the run ends.
+$runDetail = New-RunDetail -Provider "$($AgentProvider.Key)" -Effort "$WorkerReasoningEffort"
 
 # The repo this project points at. This is the HUB, and the human's own checkout of it - the
 # worker never runs here. It runs in a worktree hanging off it (resolved just below), so the
@@ -1628,7 +1691,7 @@ function Stop-CycleEarly {
     $cycleTimer.Stop()
     Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
         -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
-        -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error"
+        -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error" -Detail $runDetail
     Send-LeaseRelease -TicketId $ticketId -Reason $Reason
     Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
     exit 0
@@ -1728,7 +1791,7 @@ if ($repoDir) {
         $cycleTimer.Stop()
         Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
             -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
-            -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error"
+            -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error" -Detail $runDetail
         # No work happened, so anything the claim reserved has to go back immediately - a
         # workspace failure must not leave the QA stack held for the rest of the timeout.
         Send-LeaseRelease -TicketId $ticketId -Reason "workspace setup failed"
@@ -1892,6 +1955,13 @@ if ($repoDir -and -not $multiRepo -and -not $readsOnly -and ($skill -in @('imple
         if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the start rebase: $($resync.reason)" }
     }
     $start = Update-BranchAtStart -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally
+    # For the run's record: how far behind the base the branch started, and what became of that.
+    $runDetail.startRebase = if (-not $start) { 'skipped' }
+                             elseif ($start.rebased) { 'rebased' }
+                             elseif ($start.conflicts.Count -gt 0) { 'conflict' }
+                             elseif ($start.reason) { 'skipped' }
+                             else { 'current' }
+    if ($start -and $null -ne $start.behind) { $runDetail.baseBehind = [int]$start.behind }
     if ($start -and $start.rebased) {
         Write-Log "  Rebased onto $($start.base) before this run ($($start.behind) commit(s) behind) -> $($start.sha)."
         Send-TicketComment -TicketId $ticketId -Body "This branch was $($start.behind) commit(s) behind $($start.base), so the heartbeat rebased it before this $skill run. It replayed cleanly and is now $($start.sha)."
@@ -1909,7 +1979,7 @@ if ($repoDir -and -not $multiRepo -and -not $readsOnly -and ($skill -in @('imple
             $cycleTimer.Stop()
             Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
                 -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
-                -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Completed"
+                -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Completed" -Detail $runDetail
             Send-LeaseRelease -TicketId $ticketId -Reason "branch conflicts with the base"
             Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
             exit 0
@@ -1999,7 +2069,14 @@ function Get-SkillText {
     return "(The skill could not be included here. Open ``$($Path -replace '\\', '/')`` with your Read tool and follow it.)"
 }
 
-$prompt = (Get-Content -Path $PromptFile -Raw).
+# The skill and the template are hashed as read, before anything is filled in, so the hash names the
+# version of each - not this ticket's copy of it, which would differ on every run.
+$promptTemplate = Get-Content -Path $PromptFile -Raw
+$skillText = Get-SkillText -Path $skillFile
+$runDetail.promptHash = Get-TextHash $promptTemplate
+$runDetail.skillHash  = Get-TextHash $skillText
+
+$prompt = $promptTemplate.
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
     Replace('{{BASE_REF}}',    $baseRefLine).
     Replace('{{REPOS_NOTE}}',  $reposNote).
@@ -2023,7 +2100,7 @@ $prompt = (Get-Content -Path $PromptFile -Raw).
     Replace('{{STACK_NOTE}}', $stackNote).
     Replace('{{WORKTREE_NOTE}}', $worktreeNote).
     # Last, so nothing the skill happens to say is taken for a placeholder and rewritten.
-    Replace('{{SKILL_TEXT}}', (Get-SkillText -Path $skillFile))
+    Replace('{{SKILL_TEXT}}', $skillText)
 
 $mutations = 0
 $summaryLines = @()
@@ -2076,6 +2153,23 @@ $agentCmd = Get-AgentWorkerCommand -Provider $AgentProvider -Model $phaseModel -
 $agentArgs = $agentCmd.Args
 Write-Log "  Prompt: $($prompt.Length) chars on stdin"
 
+# Where this run's own work will show: each writable repo's worktree, the ref its diff is read
+# against, and the commit it starts from - taken now, after the start rebase, so the commits a
+# rebase replays are never counted as the run's. Prep is everything up to here: the claim, the
+# worktree, the start rebase, the prompt.
+$runPlaces = @()
+if ($repoDir) {
+    if ($multiRepo -and $workMembers) {
+        $runPlaces = @($workMembers | Where-Object { -not $_.readOnly } | ForEach-Object {
+            $ref = Resolve-BaseRef -RepoDir $_.path -BaseBranch $_.baseBranch -MergeLocally $mergeLocally
+            @{ path = $_.path; dir = $_.dir; baseRef = $(if ($ref) { $ref } else { $_.baseBranch }) }
+        })
+    }
+    else { $runPlaces = @(@{ path = $workDir; dir = $null; baseRef = $baseRefNow }) }
+    foreach ($p in $runPlaces) { $p.startHead = "$(git -C $p.path rev-parse --verify --quiet HEAD 2>$null)".Trim() }
+}
+$runDetail.prepSeconds = [math]::Round($cycleTimer.Elapsed.TotalSeconds, 1)
+
 # Up to two launches, and only ever for one reason: a required MCP server that did not come up.
 #
 # The failure this exists for is transient and silent. On 2026-08-25 a QA run was handed a config
@@ -2117,6 +2211,11 @@ try {
                         # The line that says what a run actually HAS is worth more than the line
                         # that says what it was offered, and it is what makes "did this run have a
                         # browser?" answerable afterwards instead of inferable.
+                        # Startup runs from the end of prep to the session the run went on with, so a
+                        # relaunch over a missing server is counted in it rather than lost.
+                        if ($e.SessionId)  { $runDetail.sessionId  = "$($e.SessionId)" }
+                        if ($e.CliVersion) { $runDetail.cliVersion = "$($e.CliVersion)" }
+                        $runDetail.startupSeconds = [math]::Round($cycleTimer.Elapsed.TotalSeconds - $runDetail.prepSeconds, 1)
                         $status = $e.ServerStatus
                         $withTools = $e.ServersWithTools
                         $shown = (($status.Keys | Sort-Object | ForEach-Object { "$_=$($status[$_])" }) -join ', ')
@@ -2255,6 +2354,19 @@ finally { Pop-Location }
 # watchdog - record it on the ticket so it's visible; the attempt cap handles repeat offenders.
 $workerTimer.Stop()
 $watchdogFired = Receive-AgentWatchdog -Job $watchdog -ActivityFile $activityFile
+
+# The agent's part ends here; everything after it is the hand-off. Its commits are counted now,
+# before the nets below commit what it forgot or squash what it made.
+$agentEndSeconds = $cycleTimer.Elapsed.TotalSeconds
+if ($runPlaces.Count -gt 0) {
+    $commits = 0; $counted = $false
+    foreach ($p in $runPlaces) {
+        if (-not $p.startHead) { continue }
+        $n = "$(git -C $p.path rev-list --count "$($p.startHead)..HEAD" 2>$null)".Trim()
+        if ($LASTEXITCODE -eq 0 -and $n -match '^\d+$') { $commits += [int]$n; $counted = $true }
+    }
+    if ($counted) { $runDetail.runCommits = $commits }
+}
 
 # Refused by the account's usage limit rather than failed - see Get-UsageLimitReset. Only an errored
 # or near-silent run qualifies: a real run's summary can quote the phrase (a ticket about rate
@@ -2511,6 +2623,20 @@ $outcome = if ($resultReceived) {
 elseif ($watchdogFired -or $workerTimer.Elapsed.TotalMinutes -ge $WorkerTimeoutMinutes) { "Timeout" }
 else { "Error" }
 
+# How big the branch is as this run leaves it - the whole ticket's change against its base, not
+# only this run's - and how long the hand-off took. Measured after the timer stops, so reading the
+# diff is never counted as part of the run.
+$runDetail.handoffSeconds = [math]::Round([math]::Max(0, $cycleTimer.Elapsed.TotalSeconds - $agentEndSeconds), 1)
+if ($runPlaces.Count -gt 0) {
+    $change = Get-BranchChangeStats -Places $runPlaces
+    if ($change) {
+        $runDetail.filesChanged = $change.files
+        $runDetail.linesAdded   = $change.added
+        $runDetail.linesRemoved = $change.removed
+        $runDetail.changedFiles = @($change.paths)
+    }
+}
+
 # The few results that account for most of what the run carried. Five, because the point is to name
 # what to trim, and past the first handful a run's results are all the same small size. Left $null
 # when the stream reported none (codex, gemini), so "not measured" never reads as "nothing returned".
@@ -2528,7 +2654,7 @@ Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $
     -InputTokens $inputTokens -OutputTokens $outputTokens `
     -CacheReadTokens $cacheReadTokens -CacheCreationTokens $cacheCreateTokens `
     -PeakContextTokens $peakContextTokens -ToolResultChars $toolResultChars `
-    -LargestToolResults $largestToolResults
+    -LargestToolResults $largestToolResults -Detail $runDetail
 
 Write-Log ("  Cycle: {0} in {1}s ({2} turns, {3} in / {4} out tokens)" -f $outcome,
     [math]::Round($cycleTimer.Elapsed.TotalSeconds), $numTurns, $inputTokens, $outputTokens)

@@ -762,7 +762,12 @@ function ConvertFrom-AgentEvent {
                         if ($i -gt 5) { $withTools[$n.Substring(5, $i - 5)] = $true }
                     }
                 }
-                $out += [pscustomobject]@{ Kind = 'session_start'; ServerStatus = $status; ServersWithTools = $withTools }
+                # The session's id and the CLI's version ride along for the run's record: the id is
+                # what the CLI files the session's full transcript under, and a version that changes
+                # is a change in the numbers nobody made on purpose. Null when the CLI leaves them out.
+                $out += [pscustomobject]@{ Kind = 'session_start'; ServerStatus = $status; ServersWithTools = $withTools
+                                           SessionId = $(if ($Event.session_id) { "$($Event.session_id)" } else { $null })
+                                           CliVersion = $(if ($Event.claude_code_version) { "$($Event.claude_code_version)" } else { $null }) }
             }
         }
         'assistant' {

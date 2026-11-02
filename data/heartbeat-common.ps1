@@ -353,14 +353,31 @@ function Set-TicketBranch {
     catch { Write-Log "  Could not record branch '$Branch' on ticket #${TicketId}: $($_.Exception.Message)" }
 }
 
+# POST a phase move through the heartbeat's route, which records it as the System's. A board that
+# predates that route answers 404 - a worker can run on newer scripts than the app it reports to,
+# until that app is restarted - and then the people's route takes it rather than the move being lost.
+function Send-TicketTransition {
+    param([string]$TicketId, [string]$Body)
+    try {
+        Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/tickets/$TicketId/transition" -Method Post `
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $Body) -TimeoutSec 5 | Out-Null
+    }
+    catch {
+        $status = $null
+        try { $status = [int]$_.Exception.Response.StatusCode } catch { }
+        if ($status -ne 404) { throw }
+        Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/transition" -Method Post `
+            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $Body) -TimeoutSec 5 | Out-Null
+    }
+}
+
 # Move a ticket to Blocked with a reason (used when branch enforcement fails before any work runs).
 function Block-Ticket {
     param([string]$TicketId, [string]$Reason)
     if (-not $DashboardUrl) { return }
     try {
         $body = @{ toPhase = "Blocked"; reason = $Reason } | ConvertTo-Json -Compress
-        Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/transition" -Method Post `
-            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
+        Send-TicketTransition -TicketId $TicketId -Body $body
     }
     catch { Write-Log "  Could not block ticket #${TicketId}: $($_.Exception.Message)" }
 }
@@ -378,13 +395,14 @@ function Get-TicketPhase {
 
 # Move a ticket to a phase the state machine allows from where it is. Distinct from Block-Ticket:
 # this is the pipeline routing a ticket somewhere it can still be worked, not parking it for a human.
+# Through the heartbeat's own route, which records the move as the System's - the board's route
+# for people would record it as a person's, and the transition log would count it as one.
 function Set-TicketPhase {
     param([string]$TicketId, [string]$Phase, [string]$Reason)
     if (-not $DashboardUrl) { return $false }
     try {
         $body = @{ toPhase = $Phase; reason = $Reason } | ConvertTo-Json -Compress
-        Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId/transition" -Method Post `
-            -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 5 | Out-Null
+        Send-TicketTransition -TicketId $TicketId -Body $body
         return $true
     }
     catch {

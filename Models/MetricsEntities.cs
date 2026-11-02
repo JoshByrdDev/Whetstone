@@ -317,6 +317,89 @@ public class CycleRun
     /// join against the transition log.
     /// </summary>
     public TicketPhase? PhaseAfter { get; set; }
+
+    // ---- Why the run happened (worked out by the dashboard, like PhaseAfter) ----------
+
+    /// <summary>
+    /// What put the ticket in this run's queue (<see cref="Services.RunEntryReasons"/>): the forward
+    /// hand-off, QA failing it, refinement sending it back, a merge conflict, a reviewer's changes,
+    /// an unblock, or a resumed run. Read off the transition log as the run is recorded, so "how much
+    /// of QA's time is re-testing work it already failed once?" is a group-by, not a reconstruction.
+    /// Null when the log holds nothing before the run.
+    /// </summary>
+    public string? EntryReason { get; set; }
+
+    /// <summary>Which run of this skill on this ticket this was - 1 for the first. Counted as recorded.</summary>
+    public int? Pass { get; set; }
+
+    // ---- What ran it, so a change of model, effort, skill or prompt shows in the numbers ----
+
+    /// <summary>The agent CLI (claude / codex / gemini).</summary>
+    public string? Provider { get; set; }
+
+    /// <summary>The reasoning effort the run was started with, as the role configured it.</summary>
+    public string? Effort { get; set; }
+
+    /// <summary>The CLI's own version, as its stream reported it. Null for a CLI that does not say.</summary>
+    public string? CliVersion { get; set; }
+
+    /// <summary>
+    /// The first 12 hex digits of the SHA-256 of the skill text the run was given. Two runs with the
+    /// same hash were told the same thing; a new hash is the moment a skill changed, which is what
+    /// lets a jump in a phase's numbers be put down to the skill or ruled out.
+    /// </summary>
+    public string? SkillHash { get; set; }
+
+    /// <summary>The same, for the worker prompt template the run was built from.</summary>
+    public string? PromptHash { get; set; }
+
+    /// <summary>
+    /// The CLI's id for the session. Claude Code keeps each session's full transcript - every tool
+    /// call, its result and when each happened - under this id, so it is what joins a run to its own
+    /// per-call timings. Null for a CLI that does not report one.
+    /// </summary>
+    public string? SessionId { get; set; }
+
+    // ---- Where the wall clock went --------------------------------------------------
+
+    /// <summary>Seconds from the start of the cycle until the agent was launched: the worktree, its setup, the start rebase.</summary>
+    public double? PrepSeconds { get; set; }
+
+    /// <summary>Seconds from launching the agent until its session was up - MCP servers connecting, mostly.</summary>
+    public double? StartupSeconds { get; set; }
+
+    /// <summary>Seconds after the agent finished: the leftover commit, the squash, the hand-off rebase, the branch hand-back.</summary>
+    public double? HandoffSeconds { get; set; }
+
+    /// <summary>
+    /// What the start rebase found (implement and QA): <c>rebased</c>, <c>current</c>, <c>conflict</c>
+    /// or <c>skipped</c>. Null where it does not run.
+    /// </summary>
+    public string? StartRebase { get; set; }
+
+    /// <summary>Commits the base had that the branch did not, as the run started. Null where nobody looked.</summary>
+    public int? BaseBehind { get; set; }
+
+    // ---- What the branch looked like when it was over -------------------------------
+
+    /// <summary>Files the branch changes against its base, once the run was over.</summary>
+    public int? FilesChanged { get; set; }
+
+    /// <summary>Lines the branch adds against its base, once the run was over.</summary>
+    public int? LinesAdded { get; set; }
+
+    /// <summary>Lines the branch removes against its base, once the run was over.</summary>
+    public int? LinesRemoved { get; set; }
+
+    /// <summary>Commits the agent itself made during the run, counted before any squash.</summary>
+    public int? RunCommits { get; set; }
+
+    /// <summary>
+    /// The paths the branch changes against its base, as a JSON array, at most 200. Which tickets in
+    /// flight touch the same files is what predicts the next merge conflict - and on a project of
+    /// several repos each path starts with its repo's folder.
+    /// </summary>
+    public string? ChangedFilesJson { get; set; }
 }
 
 /// <summary>

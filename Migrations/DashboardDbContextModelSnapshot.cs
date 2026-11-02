@@ -169,23 +169,50 @@ namespace Whetstone.Migrations
                     b.Property<double?>("ApiDurationSeconds")
                         .HasColumnType("REAL");
 
+                    b.Property<int?>("BaseBehind")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("CacheCreationTokens")
                         .HasColumnType("INTEGER");
 
                     b.Property<int?>("CacheReadTokens")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ChangedFilesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CliVersion")
+                        .HasColumnType("TEXT");
+
                     b.Property<double>("DurationSeconds")
                         .HasColumnType("REAL");
 
+                    b.Property<string>("Effort")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("EndedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("EntryReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("FilesChanged")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double?>("HandoffSeconds")
+                        .HasColumnType("REAL");
 
                     b.Property<int?>("InputTokens")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("LargestToolResultsJson")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("LinesAdded")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("LinesRemoved")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Model")
                         .HasMaxLength(64)
@@ -205,6 +232,9 @@ namespace Whetstone.Migrations
                     b.Property<int?>("OutputTokens")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("Pass")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("PeakContextTokens")
                         .HasColumnType("INTEGER");
 
@@ -217,21 +247,45 @@ namespace Whetstone.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
+                    b.Property<double?>("PrepSeconds")
+                        .HasColumnType("REAL");
+
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("PromptHash")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Provider")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("Resumed")
                         .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RunCommits")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("SessionId")
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("Skill")
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SkillHash")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StartRebase")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<double?>("StartupSeconds")
+                        .HasColumnType("REAL");
 
                     b.Property<int>("TicketId")
                         .HasColumnType("INTEGER");

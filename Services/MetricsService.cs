@@ -42,7 +42,34 @@ public class MetricsService
         int? CacheCreationTokens = null,
         int? PeakContextTokens = null,
         int? ToolResultChars = null,
-        IReadOnlyList<ToolResultSize>? LargestToolResults = null);
+        IReadOnlyList<ToolResultSize>? LargestToolResults = null,
+        CycleRunDetail? Detail = null);
+
+    /// <summary>
+    /// What a run knows about how it was set up and what it left behind, beyond what it spent - every
+    /// part optional, because a run that ended early knows little of it and a CLI that does not say
+    /// its version or session id has none to give. See <see cref="CycleRun"/> for what each is for.
+    /// </summary>
+    public record CycleRunDetail(
+        string? Provider = null,
+        string? Effort = null,
+        string? CliVersion = null,
+        string? SkillHash = null,
+        string? PromptHash = null,
+        string? SessionId = null,
+        double? PrepSeconds = null,
+        double? StartupSeconds = null,
+        double? HandoffSeconds = null,
+        string? StartRebase = null,
+        int? BaseBehind = null,
+        int? FilesChanged = null,
+        int? LinesAdded = null,
+        int? LinesRemoved = null,
+        int? RunCommits = null,
+        IReadOnlyList<string>? ChangedFiles = null);
+
+    /// <summary>The most paths <see cref="CycleRun.ChangedFilesJson"/> keeps.</summary>
+    public const int MaxChangedFiles = 200;
 
     /// <summary>One tool call and how much it returned. <c>Detail</c> is the call's caption from the feed.</summary>
     public record ToolResultSize(string Tool, string? Detail, int Chars, int Images = 0);
@@ -101,10 +128,50 @@ public class MetricsService
             PhaseAfter          = ticket.Phase,
         };
 
+        if (r.Detail is { } d)
+        {
+            run.Provider         = Clip(d.Provider, 32);
+            run.Effort           = Clip(d.Effort, 32);
+            run.CliVersion       = Clip(d.CliVersion, 64);
+            run.SkillHash        = Clip(d.SkillHash, 64);
+            run.PromptHash       = Clip(d.PromptHash, 64);
+            run.SessionId        = Clip(d.SessionId, 128);
+            run.PrepSeconds      = d.PrepSeconds;
+            run.StartupSeconds   = d.StartupSeconds;
+            run.HandoffSeconds   = d.HandoffSeconds;
+            run.StartRebase      = Clip(d.StartRebase, 32);
+            run.BaseBehind       = d.BaseBehind;
+            run.FilesChanged     = d.FilesChanged;
+            run.LinesAdded       = d.LinesAdded;
+            run.LinesRemoved     = d.LinesRemoved;
+            run.RunCommits       = d.RunCommits;
+            run.ChangedFilesJson = d.ChangedFiles is { Count: > 0 } files
+                ? JsonSerializer.Serialize(files.Take(MaxChangedFiles), Json) : null;
+        }
+
+        // Why the run happened, and which time round it is. Both read from what the dashboard already
+        // holds rather than reported: the transition log says what put the ticket in the queue, and
+        // the runs before this one say how many times this skill has been here.
+        run.Pass = 1 + await _db.CycleRuns.CountAsync(c => c.TicketId == r.TicketId && c.Skill == r.Skill);
+        if (r.Resumed) run.EntryReason = RunEntryReasons.Resumed;
+        else
+        {
+            // The move that put the ticket in this run's queue: the last before the run started that
+            // did not land in the run's own phase, which is the claim taking it out of that queue.
+            var entry = await _db.PhaseTransitions
+                .Where(t => t.TicketId == r.TicketId && t.At <= r.StartedAt && t.To != r.Phase)
+                .OrderByDescending(t => t.At).ThenByDescending(t => t.Id)
+                .FirstOrDefaultAsync();
+            run.EntryReason = entry is null ? null : RunEntryReasons.Of(entry);
+        }
+
         _db.CycleRuns.Add(run);
         await _db.SaveChangesAsync();
         return run;
     }
+
+    private static string? Clip(string? s, int max) =>
+        string.IsNullOrWhiteSpace(s) ? null : s.Length <= max ? s.Trim() : s.Trim()[..max];
 
     // ---- Reading the numbers back ------------------------------------------------
 
