@@ -17,7 +17,7 @@ import { HeaderHeartbeat } from './components/HeaderHeartbeat';
 import { HeaderHeartbeatToggle } from './components/HeaderHeartbeatToggle';
 import { HeaderUsage } from './components/ClaudeUsage';
 import { HistoryPanel } from './components/HistoryPanel';
-import { MetricsPanel } from './components/MetricsPanel';
+import { MetricsPanel } from './components/metrics/MetricsPanel';
 import { Classroom } from './components/Classroom';
 import { StewardPanel } from './components/StewardPanel';
 import { Backdrop } from './components/Backdrop';

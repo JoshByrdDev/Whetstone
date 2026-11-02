@@ -63,6 +63,8 @@ data/jira-attachments/
 data/walkthrough-clips/
 data/unit-reports/
 data/narrator/node_modules/
+# The analytics warehouse and its published marts (docs/analytics.md): rebuilt by a refresh, one machine's.
+data/analytics/
 # Files the ticket owner attached to a progress note. Not a cache - there is no upstream to refetch
 # them from - but they are still per-machine runtime data, not source.
 data/ticket-files/

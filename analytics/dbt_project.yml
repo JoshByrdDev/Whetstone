@@ -1,0 +1,30 @@
+# The board's efficiency marts. Built by refresh.py, which loads the `raw` schema first; read by the
+# board as parquet (docs/analytics.md). `dbt build` here runs every model and every test.
+name: whetstone
+version: "1.0.0"
+config-version: 2
+profile: whetstone
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+
+# Nothing about this board leaves the machine, dbt's usage reporting included.
+flags:
+  send_anonymous_usage_stats: false
+
+models:
+  whetstone:
+    staging:
+      +schema: staging
+      +materialized: view
+    intermediate:
+      +schema: intermediate
+      +materialized: table
+    marts:
+      +schema: marts
+      +materialized: table
+
+vars:
+  # The windows every mart is cut by. 0 is the whole history.
+  windows: [7, 30, 90, 0]

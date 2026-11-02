@@ -1,11 +1,16 @@
 import { useEffect, useState } from 'react';
-import { useProjectList, ProjectPicker } from './ProjectPicker';
-import { UsageMeters } from './ClaudeUsage';
-import { CapacityStrip } from './CapacityStrip';
-import { Experiments } from './Experiments';
-import { PageHead, Chip, SectionRule } from './ui';
+import type { ReactNode } from 'react';
+import { useProjectList, ProjectPicker } from '../ProjectPicker';
+import { UsageMeters } from '../ClaudeUsage';
+import { CapacityStrip } from '../CapacityStrip';
+import { Experiments } from '../Experiments';
+import { PageHead, Chip, SectionRule } from '../ui';
 
 /**
+ * The board's own numbers, read straight from its database by MetricsService - what the Metrics
+ * page shows while the analytics marts (docs/analytics.md) are not set up or not built yet. The
+ * `notice` says which, above everything else.
+ *
  * What the pipeline actually costs and how often it has to redo its work.
  *
  * Two independent sources feed this, and they fill up at different speeds. Phase transitions go back
@@ -99,7 +104,7 @@ function Empty({ children }: { children: React.ReactNode }) {
   return <p className="text-xs text-gray-600 leading-relaxed">{children}</p>;
 }
 
-export function MetricsPanel() {
+export function BoardMetrics({ notice }: { notice?: ReactNode }) {
   const [projects, project, setProject] = useProjectList();
   const [days, setDays] = useState(30);
   const [data, setData] = useState<Summary | null>(null);
@@ -156,6 +161,7 @@ export function MetricsPanel() {
         }
       />
       <div className="space-y-6">
+      {notice}
       {/* Account-wide and unfiltered on purpose: the rate limit is one budget shared by every
           project and by the human's own sessions, so the project/day filters above do not apply. */}
       <UsageMeters />
