@@ -131,6 +131,12 @@ builder.Services.AddSingleton<StewardMerges>();
 builder.Services.AddScoped<IClassroomGate, ClassroomGate>();
 // Pipeline metrics (cycle runs, phase-transition history). Read/write-own-tables only.
 builder.Services.AddScoped<MetricsService>();
+// Bug tracing: which commits each ticket delivered, and where a bug's fix came from. The queue blames
+// a landed bug in the background so a merge never waits on it. Reads the project repos only, so it
+// runs on the QA copy too, against its placeholder projects.
+builder.Services.AddScoped<BugTraceService>();
+builder.Services.AddSingleton<BugTraceQueue>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<BugTraceQueue>());
 // What each ticket is waiting on: the tracker's blocking links, refreshed live, with local overrides
 // that outrank them. TicketService takes it so the claim can pass over a ticket that is blocked.
 builder.Services.AddScoped<TicketDependencyService>();
@@ -329,6 +335,7 @@ app.MapUnitReportEndpoints();
 // The owner's filing tags. Separate routes and separate DTOs from the ticket API, so a label can
 // never ride along into a worker's prompt - see Api/LabelEndpoints.cs.
 app.MapLabelEndpoints();
+app.MapBugEndpoints();
 // Whether a project's copies of the skill templates have fallen behind them (the Skills tab's badge).
 app.MapSkillDriftEndpoints();
 app.MapStewardEndpoints();

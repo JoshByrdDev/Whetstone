@@ -60,7 +60,9 @@ public record TicketSummaryDto(
     bool AwaitingAnalysis = false,
     // The repo the branch under review is in, on a project of several: the one the row's checkout
     // puts on their branch. Null on a project of one and on a delivery ticket.
-    string? ReviewRepo = null);
+    string? ReviewRepo = null,
+    // A bug fix, for the card's chip. See Ticket.IsBug.
+    bool IsBug = false);
 
 /// <summary>One thing a ticket is waiting on, resolved as far as it can be.</summary>
 public record BlockerDto(
@@ -283,7 +285,8 @@ public static class TicketMapper
         t.ReviewTarget?.SourceBranch,
         HeldForExpansion(t),
         awaitingAnalysis,
-        t.ReviewTarget?.Repo);
+        t.ReviewTarget?.Repo,
+        t.IsBug);
 
     private static int HeldForExpansion(Ticket t) =>
         WorkItemScopes.HeldForExpansion(t) ? WorkItemScopes.OpenExpansionCount(t) : 0;

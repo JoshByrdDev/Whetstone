@@ -19,7 +19,7 @@ $JsonContentType = 'application/json'
 
 $worker = Join-Path $PSScriptRoot 'worker.ps1'
 $tree = [System.Management.Automation.Language.Parser]::ParseFile($worker, [ref]$null, [ref]$null)
-foreach ($name in @('New-RunDetail', 'Get-TextHash', 'Get-BranchChangeStats', 'Send-CycleReport')) {
+foreach ($name in @('New-RunDetail', 'Get-TextHash', 'Get-BranchChangeStats', 'Get-RunCommitRange', 'Send-CycleReport')) {
     $fn = $tree.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $false)
     if (-not $fn) { throw "$name not found in worker.ps1" }
     . ([scriptblock]::Create($fn.Extent.Text))
@@ -120,6 +120,30 @@ try {
     Send-CycleReport -TicketId '7' -Project 'alpha' -Phase 'Speculating' -Skill 'speculate' -Resumed $false -Model 'm' `
         -StartedAt (Get-Date) -DurationSeconds 1 -Mutations 0 -Outcome 'Error' -Detail (New-RunDetail)
     Check 'a detail with nothing in it is left out' ($null -eq ($script:posted[0].body | ConvertFrom-Json).detail) $true
+
+    Write-Host "== the run's own commits"
+    $own = New-Repo 'own'
+    $start = "$(git -C $own rev-parse HEAD)".Trim()
+    Check 'a run that committed nothing has no range' ($null -eq (Get-RunCommitRange -Places @(@{ path = $own; dir = $null; startHead = $start }))) $true
+    Set-Content -Path (Join-Path $own 'a.cs') -Value 'x' -Encoding ascii
+    git -C $own add -A *> $null; git -C $own commit -m one *> $null
+    Set-Content -Path (Join-Path $own 'b.cs') -Value 'y' -Encoding ascii
+    git -C $own add -A *> $null; git -C $own commit -m two *> $null
+    $end = "$(git -C $own rev-parse HEAD)".Trim()
+    $r = Get-RunCommitRange -Places @(@{ path = $own; dir = $null; startHead = $start })
+    Check 'the range runs from the start head to the end head' "$($r.ranges[0].from) $($r.ranges[0].to)" "$start $end"
+    Check '... with no repo on a project of one' $r.ranges[0].repo ''
+    Check '... and the files its commits changed' (@($r.files) -join ',') 'a.cs,b.cs'
+    $r2 = Get-RunCommitRange -Places @(@{ path = $own; dir = 'alpha-api'; startHead = $start })
+    Check 'a repo of several names itself, and prefixes its files' "$($r2.ranges[0].repo) $(@($r2.files) -join ',')" 'alpha-api alpha-api/a.cs,alpha-api/b.cs'
+    $d = New-RunDetail -Provider 'claude'
+    $d.commitRanges = @($r.ranges); $d.runFiles = @($r.files)
+    $script:posted = @()
+    Send-CycleReport -TicketId '7' -Project 'alpha' -Phase 'Implementing' -Skill 'implement' -Resumed $false -Model 'm' `
+        -StartedAt (Get-Date) -DurationSeconds 1 -Mutations 0 -Outcome 'Completed' -Detail $d
+    $sentRange = ($script:posted[0].body | ConvertFrom-Json).detail
+    Check 'the report carries the range' "$($sentRange.commitRanges[0].from)" $start
+    Check '... and the run files as a list' (@($sentRange.runFiles) -join ',') 'a.cs,b.cs'
 
     Write-Host "== the session, from the stream"
     $claude = Get-AgentProvider -Key 'claude'

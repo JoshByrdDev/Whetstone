@@ -23,7 +23,9 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     string? Repo = null,
     // Absent = the project's default (ProjectConfig.SkipClassroomAnalysisByDefault), so every way a
     // ticket gets created honours it, not only the form that knows to ask.
-    bool? SkipClassroomAnalysis = null);
+    bool? SkipClassroomAnalysis = null,
+    // This ticket fixes a bug: when it lands, its fix is blamed back to the tickets that wrote it.
+    bool? IsBug = null);
 
 /// <summary>Staging one piece of feedback. Everything but the body has a sensible default.</summary>
 public record AddReviewCommentRequest(string Body, string? FilePath = null, int? Line = null,
@@ -676,6 +678,7 @@ public static class TicketEndpoints
                 req.RequiresSpeculationReview ?? false, req.RequiresImplementationReview ?? false, req.MasterNotes,
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault);
+            if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             var r = await resolver.ResolveAsync(t);
             return Results.Created($"/api/tickets/{t.Id}",
                 TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable, tracker: tracker));

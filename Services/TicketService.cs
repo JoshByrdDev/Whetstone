@@ -65,9 +65,15 @@ public class TicketService
 
     public TicketService(DashboardDbContext db, IssueSnapshotService? snapshots = null,
         TicketDependencyService? dependencies = null, ResourceLeaseService? leases = null,
-        IClassroomGate? classroomGate = null, HeartbeatManager? heartbeat = null)
-        => (_db, _snapshots, _dependencies, _leases, _classroomGate, _heartbeat)
-         = (db, snapshots, dependencies, leases, classroomGate, heartbeat);
+        IClassroomGate? classroomGate = null, HeartbeatManager? heartbeat = null, BugTraceQueue? bugTraces = null)
+        => (_db, _snapshots, _dependencies, _leases, _classroomGate, _heartbeat, _bugTraces)
+         = (db, snapshots, dependencies, leases, classroomGate, heartbeat, bugTraces);
+
+    /// <summary>
+    /// Where a ticket that has landed goes to have its delivered commits recorded and, for a bug, its
+    /// fix blamed (docs/bugs-and-experiments-plan.md, 1.2). Null in tests that do not need it.
+    /// </summary>
+    private readonly BugTraceQueue? _bugTraces;
 
     /// <summary>
     /// A ticket has just become something a worker could pick up, has finished and may have freed
@@ -617,6 +623,16 @@ public class TicketService
     /// route and the steward, straight after the merge succeeds and before the move to Done, so a
     /// ticket that is Done by a merge always says which one.
     /// </summary>
+    /// <summary>Mark or unmark a ticket as a bug fix (see <see cref="Ticket.IsBug"/>). The owner's call.</summary>
+    public async Task SetBugAsync(int id, bool isBug)
+    {
+        var t = await _db.Tickets.FindAsync(id);
+        if (t is null) return;
+        t.IsBug = isBug;
+        t.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+    }
+
     public async Task SetMergedAsync(int id, string? mergeSha)
     {
         var t = await _db.Tickets.FindAsync(id);
@@ -625,6 +641,7 @@ public class TicketService
         t.MergedAt = DateTime.UtcNow;
         t.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
+        _bugTraces?.Enqueue(id);
     }
 
     /// <summary>
@@ -885,6 +902,7 @@ public class TicketService
 
         await _db.SaveChangesAsync();
         WakeFor(to);
+        if (to == TicketPhase.Done) _bugTraces?.Enqueue(t.Id);
 
         // Leaving speculation means a plan now exists, built against the linked issue as it stands
         // right now — so this is the moment to record what it was built against. Every later phase

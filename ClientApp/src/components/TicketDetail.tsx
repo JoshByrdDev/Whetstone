@@ -12,6 +12,7 @@ import { TicketPlanLink } from './TicketPlanLink';
 import { LabelEditor } from './LabelEditor';
 import { LearningBrief, Markdown } from './LearningBrief';
 import { StewardOnTicket } from './StewardOnTicket';
+import { BugTrace } from './BugTrace';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { ReviewPanel } from './ReviewPanel';
 import { JourneyChart } from './JourneyChart';
@@ -326,6 +327,10 @@ export function TicketDetail({
                 it waits in review, any flag holding its merge that is the owner's to clear. */}
             {t.phase === 'NeedsReview' && <StewardTicketFlags framed project={t.projectKey} ticketId={t.id} />}
             <StewardOnTicket project={t.projectKey} ticketId={t.id} />
+
+            {/* Whether this fixes a bug, where the bug came from, and the bugs traced back to this
+                ticket. Delivery only: a review ticket owns no code to blame. */}
+            {t.track !== 'Review' && <BugTrace ticketId={t.id} />}
 
             {/* The way out to the deep version. The brief above is the few hundred words refinement
                 owed you; this is the one you go and ask for when those were not enough. */}

@@ -66,7 +66,9 @@ public class MetricsService
         int? LinesAdded = null,
         int? LinesRemoved = null,
         int? RunCommits = null,
-        IReadOnlyList<string>? ChangedFiles = null);
+        IReadOnlyList<string>? ChangedFiles = null,
+        IReadOnlyList<BugTraceService.RunRange>? CommitRanges = null,
+        IReadOnlyList<string>? RunFiles = null);
 
     /// <summary>The most paths <see cref="CycleRun.ChangedFilesJson"/> keeps.</summary>
     public const int MaxChangedFiles = 200;
@@ -147,6 +149,12 @@ public class MetricsService
             run.RunCommits       = d.RunCommits;
             run.ChangedFilesJson = d.ChangedFiles is { Count: > 0 } files
                 ? JsonSerializer.Serialize(files.Take(MaxChangedFiles), Json) : null;
+            // The run's own commits, for tracing a bug back to the run that wrote it. A range whose
+            // ends are the same commit made nothing and is not kept.
+            var ranges = d.CommitRanges?.Where(x => x.From.Length > 0 && x.To.Length > 0 && x.From != x.To).ToList();
+            run.CommitRangeJson = ranges is { Count: > 0 } ? JsonSerializer.Serialize(ranges, Json) : null;
+            run.RunFilesJson = d.RunFiles is { Count: > 0 } own
+                ? JsonSerializer.Serialize(own.Take(MaxChangedFiles), Json) : null;
         }
 
         // Why the run happened, and which time round it is. Both read from what the dashboard already

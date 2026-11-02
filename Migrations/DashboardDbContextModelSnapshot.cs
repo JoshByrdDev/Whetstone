@@ -85,6 +85,97 @@ namespace Whetstone.Migrations
                     b.ToTable("AnalysisWalkthroughs");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.BugLink", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BugTicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CommitsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DecidedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Escaped")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("FoundBy")
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("Lines")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("MissedBy")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Neighbours")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("Share")
+                        .HasColumnType("REAL");
+
+                    b.Property<int?>("SourceTicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("TracedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("SourceTicketId");
+
+                    b.HasIndex("BugTicketId", "SourceTicketId")
+                        .IsUnique();
+
+                    b.ToTable("BugLinks");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.BugTrace", b =>
+                {
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("LinesBlamed")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RangesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("TracedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("TicketId");
+
+                    b.ToTable("BugTraces");
+                });
+
             modelBuilder.Entity("Whetstone.Models.CapacitySample", b =>
                 {
                     b.Property<int>("Id")
@@ -184,6 +275,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("CliVersion")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CommitRangeJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<double>("DurationSeconds")
                         .HasColumnType("REAL");
 
@@ -266,6 +360,9 @@ namespace Whetstone.Migrations
 
                     b.Property<int?>("RunCommits")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("RunFilesJson")
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("SessionId")
                         .HasColumnType("TEXT");
@@ -1338,6 +1435,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("ImplementationSummary")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsBug")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("IssueKey")
                         .HasColumnType("TEXT");
 
@@ -1518,6 +1618,57 @@ namespace Whetstone.Migrations
                     b.HasIndex("TicketId", "GeneratedAt");
 
                     b.ToTable("TicketAnalyses");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.TicketCommit", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("PatchId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Repo")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Sha")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Subject")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "PatchId");
+
+                    b.HasIndex("ProjectKey", "Sha");
+
+                    b.HasIndex("TicketId", "Repo", "Sha")
+                        .IsUnique();
+
+                    b.ToTable("TicketCommits");
                 });
 
             modelBuilder.Entity("Whetstone.Models.TicketDependency", b =>
@@ -1732,6 +1883,31 @@ namespace Whetstone.Migrations
                     b.Navigation("UnitReport");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.BugLink", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "BugTicket")
+                        .WithMany()
+                        .HasForeignKey("BugTicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Whetstone.Models.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("SourceTicketId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("BugTicket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.BugTrace", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Whetstone.Models.Comment", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
@@ -1841,6 +2017,17 @@ namespace Whetstone.Migrations
                 });
 
             modelBuilder.Entity("Whetstone.Models.TicketAnalysis", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.TicketCommit", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithMany()

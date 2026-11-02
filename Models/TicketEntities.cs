@@ -454,6 +454,14 @@ public class Ticket
     public string? MergeSha { get; set; }
     public DateTime? MergedAt { get; set; }
 
+    /// <summary>
+    /// This ticket fixes a bug. When it lands, the board blames the lines its fix changed back to
+    /// the tickets that wrote them (see <see cref="BugLink"/>). A field rather than a label because
+    /// it drives what the board does, and labels are promised never to. The owner's call: no MCP
+    /// tool sets it.
+    /// </summary>
+    public bool IsBug { get; set; }
+
     /// <summary>Set when Phase == Blocked.</summary>
     public string? BlockedReason { get; set; }
 

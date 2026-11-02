@@ -239,6 +239,8 @@ export interface TicketSummary {
   reviewBranch?: string | null;
   // The repo that branch is in, on a project of several repos; null on a project of one.
   reviewRepo?: string | null;
+  // A bug fix: blamed back to its cause when it lands (docs/bugs-and-experiments-plan.md).
+  isBug?: boolean;
   // Expansion work items holding this ticket at NeedsApproval when its own setting would have
   // skipped the gate; 0 otherwise. Said on the row, or the stop reads as the skip having broken.
   heldForExpansion?: number;

@@ -38,6 +38,9 @@ public class DashboardDbContext : DbContext
     public DbSet<StewardInstruction> StewardInstructions => Set<StewardInstruction>();
     public DbSet<StewardFollowUp> StewardFollowUps => Set<StewardFollowUp>();
     public DbSet<CapacitySample> CapacitySamples => Set<CapacitySample>();
+    public DbSet<BugLink> BugLinks => Set<BugLink>();
+    public DbSet<BugTrace> BugTraces => Set<BugTrace>();
+    public DbSet<TicketCommit> TicketCommits => Set<TicketCommit>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -397,6 +400,42 @@ public class DashboardDbContext : DbContext
             e.Property(c => c.Model).HasMaxLength(64);
             e.HasIndex(c => c.StartedAt);
             e.HasIndex(c => new { c.ProjectKey, c.StartedAt });
+            e.HasOne(c => c.Ticket).WithMany().HasForeignKey(c => c.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Bug tracing (docs/bugs-and-experiments-plan.md, section 1). Enums as names, like the run
+        // tables, so the analytics layer reads words rather than ordinals.
+        b.Entity<BugLink>(e =>
+        {
+            e.Property(l => l.Status).HasConversion<string>().HasMaxLength(16);
+            e.Property(l => l.Origin).HasConversion<string>().HasMaxLength(16);
+            e.Property(l => l.FoundBy).HasConversion<string>().HasMaxLength(24);
+            e.Property(l => l.MissedBy).HasMaxLength(32);
+            e.Property(l => l.ProjectKey).HasMaxLength(128);
+            e.HasIndex(l => new { l.BugTicketId, l.SourceTicketId }).IsUnique();
+            e.HasIndex(l => l.SourceTicketId);
+            e.HasOne(l => l.BugTicket).WithMany().HasForeignKey(l => l.BugTicketId).OnDelete(DeleteBehavior.Cascade);
+            // A source ticket deleted later leaves the link pointing at nothing rather than taking
+            // the bug's history with it.
+            e.HasOne<Ticket>().WithMany().HasForeignKey(l => l.SourceTicketId).OnDelete(DeleteBehavior.SetNull);
+        });
+
+        b.Entity<BugTrace>(e =>
+        {
+            e.HasKey(x => x.TicketId);
+            e.HasOne<Ticket>().WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<TicketCommit>(e =>
+        {
+            e.Property(c => c.ProjectKey).HasMaxLength(128);
+            e.Property(c => c.Repo).HasMaxLength(128);
+            e.Property(c => c.Sha).HasMaxLength(64);
+            e.Property(c => c.PatchId).HasMaxLength(64);
+            e.Property(c => c.Source).HasMaxLength(16);
+            e.HasIndex(c => new { c.ProjectKey, c.Sha });
+            e.HasIndex(c => new { c.ProjectKey, c.PatchId });
+            e.HasIndex(c => new { c.TicketId, c.Repo, c.Sha }).IsUnique();
             e.HasOne(c => c.Ticket).WithMany().HasForeignKey(c => c.TicketId).OnDelete(DeleteBehavior.Cascade);
         });
     }

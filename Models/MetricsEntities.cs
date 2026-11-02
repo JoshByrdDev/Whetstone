@@ -400,6 +400,20 @@ public class CycleRun
     /// several repos each path starts with its repo's folder.
     /// </summary>
     public string? ChangedFilesJson { get; set; }
+
+    /// <summary>
+    /// Where the run's own commits are, as JSON: <c>[{repo, from, to}]</c>, each writable repo's HEAD
+    /// when the agent started and when it ended. Null when it made none. Exact while those commits
+    /// exist; a squash rewrites them, which is what <see cref="RunFilesJson"/> outlives.
+    /// </summary>
+    public string? CommitRangeJson { get; set; }
+
+    /// <summary>
+    /// The paths the run's own commits changed, as a JSON array, at most 200 - repo-prefixed on a
+    /// project of several. Unlike <see cref="ChangedFilesJson"/> (the whole branch) this is one run's
+    /// work, and it survives a squash: it is how a bug blamed to a squashed commit finds its run.
+    /// </summary>
+    public string? RunFilesJson { get; set; }
 }
 
 /// <summary>

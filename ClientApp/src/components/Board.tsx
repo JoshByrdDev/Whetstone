@@ -348,6 +348,16 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
 
   const selected = useMemo(() => tickets.find(t => t.id === selectedId) ?? null, [tickets, selectedId]);
 
+  // Another part of the drawer asking for a different ticket - a bug's traced source, say.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const id = (e as CustomEvent<{ ticketId: number }>).detail?.ticketId;
+      if (typeof id === 'number') setSelectedId(id);
+    };
+    window.addEventListener('open-ticket', open);
+    return () => window.removeEventListener('open-ticket', open);
+  }, []);
+
   // Escape closes the inspect panel, the way it closes every other overlay on this board.
   useEffect(() => {
     if (selectedId == null) return;
@@ -1208,6 +1218,15 @@ function OrbitRow({
               ? { font: `600 14.5px/1.25 ${DISPLAY}`, color: 'var(--w-t100)' }
               : { font: `500 13.5px/1.3 ${DISPLAY}`, color: kind === 'terminal' ? 'var(--w-t400)' : 'var(--w-t200)' }}
           >
+            {t.isBug && (
+              <span
+                title="A bug fix: when it lands, its fix is traced back to the ticket that caused it"
+                style={{
+                  font: `600 9px ${DISPLAY}`, letterSpacing: '.08em', textTransform: 'uppercase',
+                  color: 'var(--w-blocked)', marginRight: 6, verticalAlign: '1px',
+                }}
+              >bug</span>
+            )}
             {t.title}
           </div>
           {/* Your filing tags, on their own line and only on the rows that carry any. A line the

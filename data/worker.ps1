@@ -156,6 +156,7 @@ function New-RunDetail {
         prepSeconds = $null; startupSeconds = $null; handoffSeconds = $null
         startRebase = $null; baseBehind = $null
         filesChanged = $null; linesAdded = $null; linesRemoved = $null; runCommits = $null; changedFiles = $null
+        commitRanges = $null; runFiles = $null
     }
 }
 
@@ -195,6 +196,32 @@ function Get-BranchChangeStats {
     }
     if (-not $measured) { return $null }
     return @{ files = $files; added = $added; removed = $removed; paths = $paths.ToArray() }
+}
+
+# What a run's own commits were, summed over its places: @{ ranges; files }. Each range is
+# @{ repo; from; to } - where the place's HEAD was when the agent started and where it is now - and
+# files are the paths those commits changed, repo-prefixed on a project of several. A place whose
+# HEAD did not move contributes nothing. The board derives which run wrote a traced bug from these:
+# the range while its commits exist, the files once a squash has rewritten them. $null for none.
+function Get-RunCommitRange {
+    param([object[]]$Places)
+    $ranges = New-Object System.Collections.Generic.List[object]
+    $files = New-Object System.Collections.Generic.List[string]
+    foreach ($p in $Places) {
+        if (-not $p.path -or -not $p.startHead) { continue }
+        $end = "$(git -C $p.path rev-parse --verify --quiet HEAD 2>$null)".Trim()
+        if (-not $end -or $end -eq $p.startHead) { continue }
+        [void]$ranges.Add(@{ repo = $(if ($p.dir) { "$($p.dir)" } else { '' }); from = $p.startHead; to = $end })
+        $names = @(git -C $p.path -c core.quotepath=off diff --name-only --no-renames "$($p.startHead)..$end" 2>$null)
+        if ($LASTEXITCODE -ne 0) { continue }
+        foreach ($n in $names) {
+            if (-not "$n") { continue }
+            if ($files.Count -ge 200) { break }
+            [void]$files.Add($(if ($p.dir) { "$($p.dir)/$n" } else { "$n" }))
+        }
+    }
+    if ($ranges.Count -eq 0) { return $null }
+    return @{ ranges = $ranges.ToArray(); files = $files.ToArray() }
 }
 
 # Does a branch exist locally or on origin? Asked of the hub repo, which shares its refs with
@@ -2366,6 +2393,12 @@ if ($runPlaces.Count -gt 0) {
         if ($LASTEXITCODE -eq 0 -and $n -match '^\d+$') { $commits += [int]$n; $counted = $true }
     }
     if ($counted) { $runDetail.runCommits = $commits }
+    # Where those commits are and what they touched - read now, before the squash below rewrites them.
+    $own = Get-RunCommitRange -Places $runPlaces
+    if ($own) {
+        $runDetail.commitRanges = @($own.ranges)
+        if ($own.files.Count -gt 0) { $runDetail.runFiles = @($own.files) }
+    }
 }
 
 # Refused by the account's usage limit rather than failed - see Get-UsageLimitReset. Only an errored
