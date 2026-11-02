@@ -453,7 +453,14 @@ function New-AgentToolSetup {
         # playwright via `npx @latest` normally answers in 5 - but on 2026-09-26 it missed that window
         # twice running while another agent was tearing down its stack, and the required-server
         # check blocked a healthy ticket. A slow start costs a minute; a missed one costs the run.
-        Env     = @{ MCP_TIMEOUT = '90000' }
+        #
+        # How long a Bash call may run before claude stops waiting on it, in ms. The default is 2
+        # minutes, which a project's full test suite routinely outlasts: over six weeks 302 commands
+        # were pushed to the background and 193 timed out, and each one became a run polling a log
+        # in a sleep loop - a turn per poll, and a wait rounded up to the next sleep. Ten minutes
+        # lets the suite finish in the call that started it. A hung command still ends there, and
+        # the worker's own timeout still stands behind it.
+        Env     = @{ MCP_TIMEOUT = '90000'; BASH_DEFAULT_TIMEOUT_MS = '600000'; BASH_MAX_TIMEOUT_MS = '600000' }
         Cleanup = $null
         Path    = $path
     }

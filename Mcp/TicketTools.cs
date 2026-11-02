@@ -114,7 +114,7 @@ public class TicketTools
         "stopped the work, or when the ticket itself does not add up (it contradicts itself, or cannot be built without guessing " +
         "at something central). A block must say something - pass 'questions' when you are asking the owner to decide, or 'reason' " +
         "when you are only reporting what stopped you. What you send is what the human answers, and their answer is given to the " +
-        "run that picks the ticket up. Returns the updated ticket, or an error listing the allowed phases.")]
+        "run that picks the ticket up. Returns the phase the ticket ended up in and its next phases (call get_ticket for more), or an error listing the allowed phases.")]
     public static async Task<object> SetPhase(TicketService svc,
         [Description("The local ticket id.")] int ticketId,
         [Description("Target phase name. It must be one of the ticket's own nextPhases (see get_ticket) - do not guess: 'Done' in particular is a human sign-off reachable only from NeedsReview.")] string phase,
@@ -146,7 +146,7 @@ public class TicketTools
             // rather than competing with them for the same field.
             var payload = questions is { Count: > 0 } ? new BlockPayload(reason, questions, needs) : null;
             var t = await svc.TransitionAsync(ticketId, to, reason, TransitionActor.Worker, payload);
-            return t is null ? new { error = $"Ticket {ticketId} not found" } : (object)TicketMapper.ToDetail(t);
+            return t is null ? new { error = $"Ticket {ticketId} not found" } : PhaseAck(t);
         }
         catch (HandoffRequirementException ex)
         {
@@ -187,13 +187,30 @@ public class TicketTools
         try
         {
             var t = await svc.RequestRespeculationAsync(ticketId, reason);
-            return t is null ? new { error = $"Ticket {ticketId} not found" } : (object)TicketMapper.ToDetail(t);
+            return t is null ? new { error = $"Ticket {ticketId} not found" } : PhaseAck(t);
         }
         catch (InvalidTransitionException ex)
         {
             return new { error = ex.Message, allowed = ex.Allowed.Select(p => p.ToString()).ToArray() };
         }
     }
+
+    /// <summary>
+    /// What a phase move hands back: where the ticket ended up, and where it can go from there.
+    /// <para>
+    /// It used to be the whole ticket, comments and all - a median of 40k characters, and a move is
+    /// nearly always a run's last call, so none of it was ever read. The phase here is the one the
+    /// ticket settled in, which is not always the one asked for: a skipped review gate moves it on.
+    /// get_ticket is still there for anything more.
+    /// </para>
+    /// </summary>
+    internal static object PhaseAck(Ticket t) => new
+    {
+        id = t.Id,
+        phase = t.Phase.ToString(),
+        blockedReason = t.Phase == TicketPhase.Blocked ? t.BlockedReason : null,
+        nextPhases = PhaseMachine.NextPhasesFor(t).Select(p => p.ToString()).ToArray(),
+    };
 
     [McpServerTool, Description(
         "Add one or more work items to a ticket (the implementation checklist). Typically used by the speculate phase. "

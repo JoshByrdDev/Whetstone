@@ -234,6 +234,20 @@ function Get-WorktreeMap {
     return $map
 }
 
+# Package install scripts assume a POSIX toolbox: @shopify/react-native-skia's postinstall runs
+# `rm -rf` and `cp -R` through npm's cmd.exe, and fails on 'rm is not recognized'. A human's
+# install works because their shell has Git's usr\bin on PATH; the worker's does not. Setup puts it
+# on PATH APPENDED, not prepended - usr\bin also carries find.exe and sort.exe, which must not
+# shadow Windows' own. $null when git has no usr\bin beside it.
+function Get-GitUsrBin {
+    $execPath = git --exec-path 2>$null
+    if (-not $execPath) { return $null }
+    # <git>\mingw64\libexec\git-core -> <git>\usr\bin
+    $candidate = Join-Path (Split-Path (Split-Path (Split-Path $execPath -Parent) -Parent) -Parent) 'usr\bin'
+    if (Test-Path (Join-Path $candidate 'rm.exe')) { return $candidate }
+    return $null
+}
+
 # Prepare a freshly created worktree so it can actually build. A worktree carries only TRACKED
 # files, which is exactly right for source and exactly wrong for everything a build needs and
 # gitignores: node_modules, restored packages, .env, appsettings.Development.json. Without this a
@@ -254,18 +268,7 @@ function Initialize-Worktree {
         catch { return "could not copy '$rel' into the worktree: $($_.Exception.Message)" }
     }
 
-    # Package install scripts assume a POSIX toolbox: @shopify/react-native-skia's postinstall runs
-    # `rm -rf` and `cp -R` through npm's cmd.exe, and fails on 'rm is not recognized'. A human's
-    # install works because their shell has Git's usr\bin on PATH; the worker's does not. APPENDED,
-    # not prepended - usr\bin also carries find.exe and sort.exe, which must not shadow Windows' own.
-    $gitUsrBin = $null
-    $execPath = git --exec-path 2>$null
-    if ($execPath) {
-        # <git>\mingw64\libexec\git-core -> <git>\usr\bin
-        $candidate = Join-Path (Split-Path (Split-Path (Split-Path $execPath -Parent) -Parent) -Parent) 'usr\bin'
-        if (Test-Path (Join-Path $candidate 'rm.exe')) { $gitUsrBin = $candidate }
-    }
-
+    $gitUsrBin = Get-GitUsrBin
     $failedMarker = Get-SetupFailedMarker -Path $Path
     $savedPath = $env:PATH
     if ($gitUsrBin -and ($env:PATH -split ';') -notcontains $gitUsrBin) { $env:PATH = "$env:PATH;$gitUsrBin" }
@@ -370,6 +373,106 @@ function Get-SetupFailedMarker {
     return Join-Path $gitDir 'whetstone-setup-failed'
 }
 
+# Speculation reads code and writes a plan; it almost never runs anything that needs the worktree's
+# dependencies installed. Yet it is the phase that creates the worktree, so it paid for the install
+# up front - a median of a minute and a half on every ticket, before its agent said a word. So on
+# speculate the install runs beside the agent instead of before it, and the worker waits for it once
+# the agent is done (Wait-BackgroundSetup), by which time it has nearly always finished.
+#
+# The setup-failed marker is what makes that safe. It is written BEFORE the install starts and
+# removed only when it succeeds, so a run that dies half-way, or an install that fails, leaves a
+# worktree the next phase sets up again - exactly the path an interrupted install already takes. It
+# names the install's process, so that next phase can wait for one still running rather than start
+# a second install over it (Wait-OrphanSetup).
+#
+# Files are copied first and synchronously: they are quick, and the agent may want them. Returns
+# the handle Wait-BackgroundSetup takes, or $null when there is nothing to install or it could not
+# be started - in which case the caller sets up in the foreground as before.
+function Start-BackgroundSetup {
+    param([string]$Path, [string]$RepoDir, [string[]]$CopyFiles, [string[]]$Setup)
+    $commands = @($Setup | Where-Object { "$_".Trim() })
+    $copyError = Initialize-Worktree -Path $Path -RepoDir $RepoDir -CopyFiles $CopyFiles -Setup @()
+    if ($copyError) { return @{ error = $copyError } }
+    if ($commands.Count -eq 0) { return $null }
+    $marker = Get-SetupFailedMarker -Path $Path
+    if (-not $marker) { return $null }
+
+    $base = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-setup-" + [guid]::NewGuid().ToString('N'))
+    [IO.File]::WriteAllText("$base.in", '')
+    # One cmd running each command in turn and stopping at the first that fails, as the foreground
+    # loop does. /d skips AutoRun; each command's 2>&1 is inside its own parentheses.
+    $chain = ($commands | ForEach-Object { "( $_ ) 2>&1" }) -join ' && '
+    $gitUsrBin = Get-GitUsrBin
+    $savedPath = $env:PATH
+    try {
+        Set-Content -Path $marker -Value "starting: $($commands -join ' && ')" -Encoding ascii
+        if ($gitUsrBin -and ($env:PATH -split ';') -notcontains $gitUsrBin) { $env:PATH = "$env:PATH;$gitUsrBin" }
+        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/d /s /c `"$chain`"" -WorkingDirectory $Path `
+            -RedirectStandardOutput "$base.out" -RedirectStandardInput "$base.in" -NoNewWindow -PassThru
+        try { $null = $p.Handle } catch { }
+        Set-Content -Path $marker -Value "background pid=$($p.Id): $($commands -join ' && ')" -Encoding ascii
+    }
+    catch {
+        Remove-Item "$base.in", "$base.out" -Force -ErrorAction SilentlyContinue
+        Write-Log "    could not start setup in the background ($($_.Exception.Message)) - running it now instead"
+        return $null
+    }
+    finally { $env:PATH = $savedPath }
+    foreach ($cmd in $commands) { Write-Log "    setup (in the background): $cmd" }
+    return @{ process = $p; marker = $marker; base = $base; commands = $commands; started = Get-Date }
+}
+
+# Wait for the install Start-BackgroundSetup began, for at most the setup timeout from when it
+# started. Success removes the marker. Failure leaves it, naming what failed, so the next phase runs
+# setup again in the foreground - and blocks the ticket with the output if it fails there too, which
+# is where a failure that is not a fluke gets its proper report. Returns $true when it succeeded.
+function Wait-BackgroundSetup {
+    param($Job, [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 }))
+    if (-not $Job -or -not $Job.process) { return $true }
+    $p = $Job.process
+    $left = $Job.started.AddMinutes($TimeoutMinutes) - (Get-Date)
+    $waited = Get-Date
+    $done = $p.WaitForExit([int][math]::Max(0, $left.TotalMilliseconds))
+    $waitSec = [math]::Round(((Get-Date) - $waited).TotalSeconds)
+    $tookSec = [math]::Round(((Get-Date) - $Job.started).TotalSeconds)
+    try {
+        if (-not $done) {
+            & taskkill /PID $p.Id /T /F *> $null
+            $null = $p.WaitForExit(15000)
+            Set-Content -Path $Job.marker -Value ($Job.commands -join ' && ') -Encoding ascii
+            Write-Log "  Background setup still running after $TimeoutMinutes min - stopped it; the next phase sets the worktree up again."
+            return $false
+        }
+        if ($p.ExitCode -eq 0) {
+            Remove-Item $Job.marker -Force -ErrorAction SilentlyContinue
+            Write-Log "  Background setup finished in ${tookSec}s (waited ${waitSec}s for it after the agent)."
+            return $true
+        }
+        Set-Content -Path $Job.marker -Value ($Job.commands -join ' && ') -Encoding ascii
+        $tail = @()
+        if (Test-Path "$($Job.base).out") { $tail = @(Get-Content "$($Job.base).out" -Tail 15 -ErrorAction SilentlyContinue) }
+        Write-Log "  Background setup failed (exit $($p.ExitCode)) after ${tookSec}s; the next phase sets the worktree up again."
+        foreach ($line in $tail) { if ("$line".Trim()) { Write-Log "      $line" } }
+        return $false
+    }
+    finally { Remove-Item "$($Job.base).in", "$($Job.base).out" -Force -ErrorAction SilentlyContinue }
+}
+
+# A marker left by a background install that may still be going - its run exited early, before it
+# could wait (a required server that never came up, say), and this phase was claimed straight after.
+# Wait for that install to end before setting up again, or two package managers would be writing
+# the same node_modules at once. A pid reused by something else is told apart by its name.
+function Wait-OrphanSetup {
+    param([string]$Marker, [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 }))
+    if (-not $Marker -or -not (Test-Path $Marker)) { return }
+    $m = [regex]::Match("$(Get-Content $Marker -Raw -ErrorAction SilentlyContinue)", 'background pid=(\d+)')
+    if (-not $m.Success) { return }
+    $p = Get-Process -Id ([int]$m.Groups[1].Value) -ErrorAction SilentlyContinue
+    if (-not $p -or $p.ProcessName -ne 'cmd') { return }
+    Write-Log "  A background setup from an earlier run is still going (pid $($p.Id)) - waiting for it before setting up again"
+    if (-not $p.WaitForExit([int]($TimeoutMinutes * 60000))) { & taskkill /PID $p.Id /T /F *> $null }
+}
+
 # The name of the branch a ticket owns: the one it already has, else one from its linked issue, else
 # one from its own id. Every repo of a project of several gets the same one.
 function Get-TicketBranchName {
@@ -402,12 +505,15 @@ function Get-TicketBranchName {
 #                  not touched has nothing on its branch to lose
 #   -NoSetup       hand the worktree back unprepared, with needsSetup = $true where setup would
 #                  have run, so the workspace can set every repo up at once
+#
+# And one for speculate on a project of one: -BackgroundSetup starts the setup commands beside the
+# agent rather than before it, and hands back setupJob for Wait-BackgroundSetup (see Start-BackgroundSetup).
 function Resolve-Worktree {
     param(
         [string]$RepoDir, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
         [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BaseBranch, [string]$BranchPrefix,
         [string[]]$CopyFiles, [string[]]$Setup, [string]$ReviewBranch, [bool]$MergeLocally, [bool]$OnBase,
-        [string]$WorktreeName, [switch]$MayCreate, [switch]$NoSetup
+        [string]$WorktreeName, [switch]$MayCreate, [switch]$NoSetup, [switch]$BackgroundSetup
     )
 
     # git writes normal progress to stderr; keep that from turning into a terminating error if the
@@ -637,10 +743,16 @@ function Resolve-Worktree {
     elseif (-not $res.created) {
         $marker = Get-SetupFailedMarker -Path $res.path
         if (-not ($marker -and (Test-Path $marker))) { return $res }
+        Wait-OrphanSetup -Marker $marker
         Write-Log "  Worktree at $($res.path) never finished setup - running it again"
     }
     else { Write-Log "  Prepared a new worktree at $($res.path)" }
     if ($NoSetup) { $res.needsSetup = $true; return $res }
+    if ($BackgroundSetup) {
+        $job = Start-BackgroundSetup -Path $res.path -RepoDir $RepoDir -CopyFiles $CopyFiles -Setup $Setup
+        if ($job -and $job.error) { return @{ ok = $false; reason = $job.error } }
+        if ($job) { $res.setupJob = $job; return $res }
+    }
     $prepError = Initialize-Worktree -Path $res.path -RepoDir $RepoDir -CopyFiles $CopyFiles -Setup $Setup
     if ($prepError) { return @{ ok = $false; reason = $prepError } }
     return $res
@@ -869,6 +981,45 @@ function Update-BranchFromBase {
         }
     }
     finally { Pop-Location }
+}
+
+# The files the branch as a whole conflicts on with $BaseRef, judged on its final state: a three-way
+# merge of the tip with the base, written nowhere. That is the same answer the hand-off rebase gets
+# after refinement has squashed the branch to one commit, and a different one from rebasing a branch
+# of several commits, which can stop on an intermediate state the later commits already put right.
+# Returns @{ ok; conflicts } - ok is $false only when git could not answer.
+function Get-MergeConflicts {
+    param([string]$WorkDir, [string]$BaseRef)
+    $out = @(git -C $WorkDir merge-tree --write-tree --name-only --no-messages HEAD $BaseRef 2>$null)
+    $code = $LASTEXITCODE
+    if ($code -eq 0) { return @{ ok = $true; conflicts = @() } }
+    if ($code -ne 1) { return @{ ok = $false; conflicts = @() } }
+    # The first line is the tree it would have written; the rest name the conflicted files.
+    return @{ ok = $true; conflicts = @($out | Select-Object -Skip 1 | Where-Object { "$_".Trim() } | Select-Object -Unique) }
+}
+
+# Bring the branch up to date with the base as an implement or QA run starts, rather than only once
+# refinement is done. The hand-off rebase finds a conflict at the very end, when the only way back is
+# a whole implement - QA - refine loop: over six weeks that was 78 loops and about a tenth of all the
+# fleet's worker time, and a third of the tickets that reached review went back once for it. Found
+# here, a conflict costs much less: an implement run resolves it as part of the pass it is making
+# anyway, and a QA run sends the ticket back before it spends its own run testing code that cannot
+# merge. A clean rebase also means QA tests what will actually land.
+#
+# Returns $null when there was nothing to do, or @{ rebased; base; behind; sha; conflicts } - with
+# conflicts set only when the branch's final state does not merge (Get-MergeConflicts). A rebase that
+# stops on an intermediate commit while the whole merges cleanly leaves the branch as it was, and the
+# hand-off rebase takes it after the squash, as it always has.
+function Update-BranchAtStart {
+    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally)
+    $r = Update-BranchFromBase -WorkDir $WorkDir -BaseBranch $BaseBranch -RepoDir $RepoDir -MergeLocally $MergeLocally
+    if (-not $r) { return $null }
+    if ($r.ok) { return @{ rebased = [bool]$r.rebased; base = $r.base; behind = $r.behind; sha = $r.sha; conflicts = @() } }
+    if (-not $r.conflicts) { return @{ rebased = $false; base = $r.base; reason = $r.reason; conflicts = @() } }
+    $whole = Get-MergeConflicts -WorkDir $WorkDir -BaseRef $r.base
+    $files = if ($whole.ok) { @($whole.conflicts) } else { @($r.conflicts) }
+    return @{ rebased = $false; base = $r.base; behind = $r.behind; conflicts = $files
+              reason = $(if ($files.Count -eq 0) { "an intermediate commit conflicts, the branch as a whole does not" } else { $r.reason }) }
 }
 
 # Collapse a refined ticket's branch to one commit. Refinement is meant to do this itself (its skill
@@ -1558,7 +1709,8 @@ if ($repoDir) {
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BaseBranch $effectiveBase -BranchPrefix $effectivePrefix `
             -CopyFiles @($Claim.project.worktreeCopyFiles) -Setup @($Claim.project.worktreeSetup) `
-            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase $isWalkthrough
+            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase $isWalkthrough `
+            -BackgroundSetup:($skill -eq 'speculate')
     }
 
     if (-not $wt.ok) {
@@ -1585,6 +1737,9 @@ if ($repoDir) {
     }
     if ($wt.path) {
         $workDir = $wt.path
+        # The install speculate left running beside its agent (Start-BackgroundSetup). Waited for
+        # after the agent, and named in the prompt so the agent knows not to lean on it.
+        $setupJob = $wt.setupJob
         if ($multiRepo) {
             $workMembers = @($wt.members)
             # What the project keeps for its workspace's root - a conventions file that maps its
@@ -1726,6 +1881,48 @@ if ($onHost) {
     try { $boardUri = [Uri]$DashboardUrl; $env:WHETSTONE_BOARD_HOST = "$($boardUri.Host):$($boardUri.Port)" } catch { }
 }
 
+# Implement and QA start on a branch brought up to date with the base (Update-BranchAtStart), so a
+# conflict is found while a run that can deal with it is starting rather than after refinement. A
+# project of one only: a workspace's repos each have their own base and are rebased at hand-off.
+# On a worker host the mirrored base is refreshed first, as the hand-off rebase does.
+$startRebaseNote = ''
+if ($repoDir -and -not $multiRepo -and -not $readsOnly -and ($skill -in @('implement', 'qa-test')) -and $wt.path) {
+    if ($onHost) {
+        $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+        if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the start rebase: $($resync.reason)" }
+    }
+    $start = Update-BranchAtStart -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally
+    if ($start -and $start.rebased) {
+        Write-Log "  Rebased onto $($start.base) before this run ($($start.behind) commit(s) behind) -> $($start.sha)."
+        Send-TicketComment -TicketId $ticketId -Body "This branch was $($start.behind) commit(s) behind $($start.base), so the heartbeat rebased it before this $skill run. It replayed cleanly and is now $($start.sha)."
+    }
+    elseif ($start -and $start.conflicts.Count -gt 0) {
+        $files = ($start.conflicts | ForEach-Object { "- $_" }) -join "`n"
+        if ($skill -eq 'qa-test') {
+            # Nothing QA proves on this branch would survive the conflict being resolved, so the
+            # run is not spent: back to implementation now, as the hand-off rebase would have sent
+            # it after QA and refinement had both run.
+            Write-Log "  Branch conflicts with $($start.base) ($($start.conflicts.Count) file(s)) - sending back to implementation before QA runs."
+            Send-TicketComment -TicketId $ticketId -Body "This branch is $($start.behind) commit(s) behind $($start.base) and no longer merges cleanly, so it is going back for implementation before QA spends a run on it. The branch is exactly as implementation left it. Conflicting files:`n`n$files`n`nResolve these against the current base; the ticket comes back through QA automatically."
+            $null = Set-TicketPhase -TicketId $ticketId -Phase "NeedsImplementation" `
+                -Reason "Branch conflicts with $($start.base) and cannot be merged as it stands."
+            $cycleTimer.Stop()
+            Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
+                -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
+                -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Completed"
+            Send-LeaseRelease -TicketId $ticketId -Reason "branch conflicts with the base"
+            Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
+            exit 0
+        }
+        Write-Log "  Branch conflicts with $($start.base) ($($start.conflicts.Count) file(s)) - this implement run is told to resolve it."
+        $startRebaseNote = " This branch no longer merges cleanly with ``$($start.base)``: what landed there since it was cut conflicts with it in " +
+            (($start.conflicts | ForEach-Object { "``$_``" }) -join ', ') + ". Resolving that is part of this run: bring the branch onto the base ref and settle each conflict so both this ticket's change and what landed on the base survive, then run the tests that cover those files, before you hand off. A ``git rebase`` that stops on a conflict continues with ``GIT_EDITOR=true git rebase --continue`` - without it, git waits for an editor nobody will close."
+    }
+    elseif ($start -and $start.reason) {
+        Write-Log "  Start rebase skipped: $($start.reason)."
+    }
+}
+
 # Which file this run is told holds the repo's code conventions. Resolved against the worktree, not
 # assumed from the provider - see Get-ConventionsFile. The skills defer to whatever this names
 # rather than spelling out a filename of their own, so there is one answer per run and the prompt
@@ -1753,6 +1950,15 @@ else {
     $baseRefLine = "``$baseRefNow``"
 }
 
+# What this run should know about the state of its worktree, on the working-directory line: that
+# speculate's install is still going beside it (Start-BackgroundSetup), or that implement starts on
+# a branch that conflicts with the base (Update-BranchAtStart). Empty otherwise, so every other run's
+# prompt reads as it always has.
+$worktreeNote = $startRebaseNote
+if ($setupJob) {
+    $worktreeNote += " Its dependencies are still being installed in the background (``$($setupJob.commands -join ' && ')``) while you work, so they may be missing or half-written for the first minute or two. Reading code does not need them. Do not run the install yourself; if you truly need to run something that depends on them, wait and retry rather than concluding it is broken."
+}
+
 # Which machine this is, for the paths the ticket tools hand out (see HostDataMirror).
 $hostNote = if ($onHost) {
     $boardRoot = "$($Claim.boardDataRoot)".Trim() -replace '\\', '/'
@@ -1778,6 +1984,21 @@ if ($heldResources.Count -gt 0) {
         ". Anything your skill uses only under a lease that is not in that list belongs to another run right now - do not touch it."
 }
 
+# The skill's own text, for the end of the prompt. Every run used to open the file itself as its
+# first act, and a skill is 20-36k characters - more than one shell call hands back - so the read
+# spilled to a temp file and took two or three more turns to page through, on every run of every
+# phase. In the prompt it costs no turn at all. Read as UTF-8 explicitly: Get-Content in 5.1 reads
+# a file without a BOM as the ANSI codepage and would mangle every dash and arrow in it. A skill
+# that cannot be read is not fatal here - the prompt still names the file, and says to open it.
+function Get-SkillText {
+    param([string]$Path)
+    if ($Path -and (Test-Path -LiteralPath $Path)) {
+        try { return [IO.File]::ReadAllText($Path, [Text.Encoding]::UTF8).Trim() }
+        catch { }
+    }
+    return "(The skill could not be included here. Open ``$($Path -replace '\\', '/')`` with your Read tool and follow it.)"
+}
+
 $prompt = (Get-Content -Path $PromptFile -Raw).
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
     Replace('{{BASE_REF}}',    $baseRefLine).
@@ -1799,7 +2020,10 @@ $prompt = (Get-Content -Path $PromptFile -Raw).
     Replace('{{OWNER_NOTES}}', $ownerNotes).
     Replace('{{TRACK_RULES}}', $trackRules).
     Replace('{{HOST_NOTE}}', $hostNote).
-    Replace('{{STACK_NOTE}}', $stackNote)
+    Replace('{{STACK_NOTE}}', $stackNote).
+    Replace('{{WORKTREE_NOTE}}', $worktreeNote).
+    # Last, so nothing the skill happens to say is taken for a placeholder and rewritten.
+    Replace('{{SKILL_TEXT}}', (Get-SkillText -Path $skillFile))
 
 $mutations = 0
 $summaryLines = @()
@@ -2073,6 +2297,12 @@ elseif (-not $resultReceived) {
     Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Worker did not complete (elapsed ${elapsedMin}min, timeout ${WorkerTimeoutMinutes}min)"
     Send-TicketComment -TicketId $ticketId -Body "Heartbeat worker did not finish this run (elapsed ${elapsedMin} min, timeout ${WorkerTimeoutMinutes} min) and was terminated. Ticket left in ${phase}; the dashboard blocks it after repeated no-progress attempts."
 }
+
+# Speculate's install, which ran beside the agent. Waited for here, however the run ended, so the
+# worker never exits with it still writing - and before the leftover check, which must not see a
+# half-written tree. A failure is not this run's to report: the marker stays, and the next phase
+# sets the worktree up again in the foreground, blocking the ticket with the output if it fails there.
+if ($setupJob) { $null = Wait-BackgroundSetup -Job $setupJob }
 
 # A review run must leave the branch EXACTLY as it found it, so none of the tidying below applies to
 # one - and the leftover commit in particular would be actively destructive here. On every other

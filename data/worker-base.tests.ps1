@@ -198,6 +198,38 @@ try {
     Check 'conflict with local main is reported' "$($rebase.ok) $($rebase.conflicts -join ',')" 'False README.md'
     Check 'conflict: branch left as it was' (Get-Sha $wt.path HEAD) $before
 
+    # ---- The rebase as an implement or QA run starts -----------------------------
+    Write-Host "== Update-BranchAtStart"
+    $start = Update-BranchAtStart -WorkDir $wt.path -BaseBranch 'main' -RepoDir $conflict.hub -MergeLocally $true
+    Check 'a real conflict names its files' "$($start.rebased) $($start.conflicts -join ',')" 'False README.md'
+    Check '... and leaves the branch as it was' (Get-Sha $wt.path HEAD) $before
+
+    $clean = New-Hub 'start-clean'
+    $wt = New-TicketWorktree -Repo $clean -Branch 't-5' -MergeLocally $true
+    Add-Commit -Dir $wt.path -File 'mine.txt' -Subject 'T5: its own file'
+    Add-Commit -Dir $clean.hub -File 'theirs.txt' -Subject 'landed meanwhile'
+    $start = Update-BranchAtStart -WorkDir $wt.path -BaseBranch 'main' -RepoDir $clean.hub -MergeLocally $true
+    Check 'a clean branch is rebased' "$($start.rebased) $($start.behind) $($start.conflicts.Count)" 'True 1 0'
+    Check '... and now has what landed' (Test-Path (Join-Path $wt.path 'theirs.txt')) $true
+    $start = Update-BranchAtStart -WorkDir $wt.path -BaseBranch 'main' -RepoDir $clean.hub -MergeLocally $true
+    Check 'up to date: nothing to do' "$($start.rebased) $($start.conflicts.Count)" 'False 0'
+
+    # A first commit that conflicts and a second that takes it back: rebasing stops on the first,
+    # but the branch as a whole merges cleanly, so it is no reason to send anything back.
+    $mid = New-Hub 'start-intermediate'
+    $wt = New-TicketWorktree -Repo $mid -Branch 't-6' -MergeLocally $true
+    $cut = Get-Sha $wt.path HEAD
+    Add-Commit -Dir $wt.path -File 'README.md' -Subject 'T6: a readme edit it later drops'
+    git -C $wt.path checkout $cut -- README.md *> $null
+    Add-Commit -Dir $wt.path -File 'kept.txt' -Subject 'T6: the change it keeps'
+    $before = Get-Sha $wt.path HEAD
+    Add-Commit -Dir $mid.hub -File 'README.md' -Subject 'a readme edit that landed'
+    $start = Update-BranchAtStart -WorkDir $wt.path -BaseBranch 'main' -RepoDir $mid.hub -MergeLocally $true
+    Check 'an intermediate-only conflict is not a conflict' "$($start.rebased) $($start.conflicts.Count)" 'False 0'
+    Check '... says why it did not rebase' ($start.reason -match 'intermediate') $true
+    Check '... and leaves the branch as it was' (Get-Sha $wt.path HEAD) $before
+    Check 'Get-MergeConflicts agrees: the whole merges' "$((Get-MergeConflicts -WorkDir $wt.path -BaseRef 'main').conflicts.Count)" '0'
+
     # ---- Two repos, two bases (docs/multi-repo-plan.md) -------------------------
     # A project of several repos asks Resolve-BaseRef once per repo, and each answer is that repo's
     # alone. A works off main and has a human's unpushed commit on it; B works off develop. A also
@@ -302,6 +334,56 @@ try {
     Check 'a fence in the output cannot close the block early' ([regex]::Matches($tail, '```').Count) 2
     Check 'a very long line is cut' ($tail -match ('x' * 300 + ' \.\.\.')) $true
     Check 'no output, no block' (Format-OutputTail -Lines (New-Object System.Collections.Generic.List[string])) ''
+
+    # ---- Speculate installs beside its agent -------------------------------------
+    Write-Host "== speculate's setup runs in the background"
+    function Resolve-Bg {
+        param($Repo, [string]$Id, [string]$Skill, [string[]]$Setup, [switch]$Background)
+        return Resolve-Worktree -RepoDir $Repo.hub -WorktreeRoot $Repo.wt -Skill $Skill -TicketId $Id `
+            -RecordedBranch "t-$Id" -IssueBranchToken '' -BaseBranch 'main' -BranchPrefix '' `
+            -CopyFiles @() -Setup $Setup -ReviewBranch '' -MergeLocally $true -BackgroundSetup:$Background
+    }
+    $bg = New-Hub 'setup-bg'
+    $res = Resolve-Bg $bg '9' 'speculate' @('ping -n 8 127.0.0.1 >nul', 'echo done> installed.txt') -Background
+    Check 'the worktree is handed back before the install ends' ($res.setupJob -and -not $res.setupJob.process.HasExited) $true
+    Check '... with the install to wait for' ([bool]$res.setupJob) $true
+    $bgMarker = Get-SetupFailedMarker -Path $res.path
+    Check '... and the marker up while it runs, naming its process' ((Get-Content $bgMarker -Raw) -match 'background pid=\d+') $true
+    Check 'waiting for it succeeds' (Wait-BackgroundSetup -Job $res.setupJob) $true
+    Check '... every command ran, in order' (Test-Path (Join-Path $res.path 'installed.txt')) $true
+    Check '... and the marker is gone' (Test-Path $bgMarker) $false
+    $again = Resolve-Bg $bg '9' 'implement' @('exit /b 5')
+    Check 'the next phase finds it set up and runs nothing' "$($again.ok)" 'True'
+
+    $bf = New-Hub 'setup-bg-fail'
+    $res = Resolve-Bg $bf '10' 'speculate' @('exit /b 6', 'echo never> second.txt') -Background
+    Check 'a failed background install reports false' (Wait-BackgroundSetup -Job $res.setupJob) $false
+    Check '... stops at the failing command' (Test-Path (Join-Path $res.path 'second.txt')) $false
+    Check '... and leaves the marker for the next phase' (Test-Path (Get-SetupFailedMarker -Path $res.path)) $true
+    $retry = Resolve-Bg $bf '10' 'implement' @('echo ok> retried.txt')
+    Check 'the next phase sets it up again, in the foreground' "$($retry.ok) $(Test-Path (Join-Path $retry.path 'retried.txt'))" 'True True'
+
+    $bo = New-Hub 'setup-bg-orphan'
+    $null = Resolve-Bg $bo '11' 'speculate' @('ping -n 5 127.0.0.1 >nul', 'echo first> orphan.txt') -Background
+    # Its run exits without waiting, and the next phase is claimed at once.
+    $next = Resolve-Bg $bo '11' 'implement' @('if not exist orphan.txt exit /b 8')
+    Check 'an install left running is waited for before setting up again' "$($next.ok)" 'True'
+
+    $bn = New-Hub 'setup-bg-none'
+    $none = Resolve-Bg $bn '12' 'speculate' @() -Background
+    Check 'nothing to install, nothing to wait for' "$($none.ok) $([bool]$none.setupJob)" 'True False'
+
+    # ---- The skill rides in the prompt --------------------------------------------
+    Write-Host "== the skill's text"
+    $skillPath = Join-Path $root 'skill.md'
+    [IO.File]::WriteAllText($skillPath, "# Skill`n`nUse <base-ref> - not {{TICKET_ID}} " + [char]0x2014 + " ever.`n", (New-Object System.Text.UTF8Encoding($false)))
+    $text = Get-SkillText -Path $skillPath
+    Check 'read as UTF-8, dashes intact' ($text.Contains([string][char]0x2014)) $true
+    Check '... trimmed' ($text.EndsWith('ever.')) $true
+    Check 'a missing skill says to open the file' ((Get-SkillText -Path (Join-Path $root 'nope.md')) -match 'could not be included.*nope\.md') $true
+    $template = Get-Content -Path (Join-Path $PSScriptRoot 'heartbeat-prompt.md') -Raw
+    Check 'the template ends with the skill' ($template.TrimEnd().EndsWith('{{SKILL_TEXT}}')) $true
+    Check '... and the worktree note sits on the working-directory line' ($template -match 'git switch` here\.\{\{WORKTREE_NOTE\}\}\r?\n') $true
 }
 finally {
     # Worktree .git files are read-only on Windows; -Force is what removes them.

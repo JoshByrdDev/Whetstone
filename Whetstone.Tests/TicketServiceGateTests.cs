@@ -73,6 +73,31 @@ public class TicketServiceGateTests : IDisposable
         Assert.Equal(TicketPhase.NeedsApproval, t!.Phase);
     }
 
+    // ---- What set_phase hands back ----
+
+    [Fact]
+    public async Task Set_phase_answers_with_where_the_ticket_went_not_the_whole_ticket()
+    {
+        // A move is nearly always a run's last call, so the full ticket it used to return - comments
+        // and all - was read by nobody. What is left is the phase it settled in and where it goes next.
+        var id = await Seed(TicketPhase.QaTesting);
+        await using (var seed = NewCtx())
+        {
+            seed.Comments.Add(new Comment { TicketId = id, Author = AuthorKind.Claude, Body = new string('x', 5000) });
+            await seed.SaveChangesAsync();
+        }
+
+        await using var ctx = NewCtx();
+        var json = JsonSerializer.Serialize(await TicketTools.SetPhase(new TicketService(ctx), id, "NeedsImplementation", "QA item 1 failed"));
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.Equal("NeedsImplementation", doc.RootElement.GetProperty("phase").GetString());
+        Assert.Equal(id, doc.RootElement.GetProperty("id").GetInt32());
+        Assert.True(doc.RootElement.GetProperty("nextPhases").GetArrayLength() > 0);
+        Assert.False(doc.RootElement.TryGetProperty("comments", out _));
+        Assert.True(json.Length < 1000, $"expected a short answer, got {json.Length} characters");
+    }
+
     // ---- Expansion items hold the speculation gate ----
 
     private async Task AddItems(int id, params (string Text, WorkItemScope Scope, bool Done)[] items)

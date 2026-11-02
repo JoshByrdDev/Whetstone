@@ -163,7 +163,7 @@ function Invoke-WorkspaceSetup {
     }
 
     # What a job needs from worker.ps1, sent as text: a job is another process and has none of it.
-    $defs = @('Initialize-Worktree', 'Invoke-SetupCommand', 'Format-OutputTail', 'Get-SetupFailedMarker' | ForEach-Object {
+    $defs = @('Initialize-Worktree', 'Get-GitUsrBin', 'Invoke-SetupCommand', 'Format-OutputTail', 'Get-SetupFailedMarker' | ForEach-Object {
         "function $_ {`n$((Get-Command $_ -CommandType Function).ScriptBlock)`n}"
     })
     $block = {

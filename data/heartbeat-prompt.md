@@ -7,7 +7,7 @@ You are running in **heartbeat mode** - an unattended, automated worker. No huma
 - **Ticket:** #{{TICKET_ID}} - "{{TITLE}}"
 - **Project:** {{PROJECT_NAME}} (`{{PROJECT_KEY}}`)
 - **Current phase:** {{PHASE}}  (resumed: {{RESUMED}})
-- **Working directory:** a git **worktree** of this project's repo, checked out on this ticket's own branch - your cwd. The worktree is yours alone: the human owner has their own checkout of the same repo, and other tickets have their own worktrees, so never `git checkout` or `git switch` here.
+- **Working directory:** a git **worktree** of this project's repo, checked out on this ticket's own branch - your cwd. The worktree is yours alone: the human owner has their own checkout of the same repo, and other tickets have their own worktrees, so never `git checkout` or `git switch` here.{{WORKTREE_NOTE}}
 - **Base ref:** {{BASE_REF}} - the ref this branch was cut from and will be measured against, and what your skill means by "the base ref". Use it exactly as written wherever a skill's git commands say `<base-ref>` - do not swap in `origin/...` or the bare branch name on your own judgement. On a project that delivers by pull request it is origin's copy of the base branch; on one that merges finished tickets locally it is the local base branch, which holds merged work origin has never seen. The heartbeat squashes and rebases against this same ref after you finish.{{REPOS_NOTE}}
 - **Conventions file:** `{{CONVENTIONS_FILE}}` in the working directory. It governs code conventions for this repo, and it is the file the skills mean whenever they say "the conventions file" - they never name one themselves, because which file it is depends on the repo and on which agent CLI is running you.
 - **Screenshot directory (QA only):** `{{QA_SHOT_DIR}}` - where the browser writes captures. It is outside the repo on purpose; never save screenshots into the working tree.
@@ -92,7 +92,7 @@ Comments on the linked issue are **context**, an extension of the description - 
 ## Steps
 
 1. **Re-read the master notes and the owner's unanswered notes above.** If there are any, restate to yourself what they require of *this* phase before you do anything else, and keep them in mind at every decision point. Open any file an owner's note attached - that file is normally the specific thing the note is about, and a note acted on without reading it is a guess.
-2. **Read the skill:** `{{SKILL_FILE}}`. It contains the exact workflow for this phase ({{SKILL}}) in this project.
+2. **Read the skill.** It is the exact workflow for this phase ({{SKILL}}) in this project, and it is printed in full at the end of this prompt, under *The skill* - read all of it now. It is the text of `{{SKILL_FILE}}`, so there is no need to open that file; open it only if the end of this prompt says the skill could not be included.
 3. **Read the ticket:** call `get_ticket` for #{{TICKET_ID}} to load its description, work items, QA items, comments and any linked `issueKey`. In the comments, the ones with author `Human` are the owner speaking to you - each carries `acknowledged`, any `attachments` with a `localPath` to open, and the `acknowledgement` a previous run left. The unanswered ones are reproduced in full above; this is where you get their **ids**, which `acknowledge_note` needs.
 4. **Load what this repo already knows.** Read `{{MEMORY_INDEX}}` - one line per durable fact recorded about this project - then open the notes beside it in `{{MEMORY_DIR}}` that bear on this ticket. These are facts earlier runs and interactive sessions paid real time to learn: which command hangs, which column is never written, which convention CI enforces, which failure is a known dead end. **Read them before probing to find out.** The store sits in the main repo, outside your worktree, and is read-only to you - you have no tool that writes it, and nothing you learn is recorded by editing it. The working directory's `{{CONVENTIONS_FILE}}` governs code conventions - your CLI may already have loaded it, but read it if not.
 5. **Answer the owner's notes**, if there are any: do what each asks as part of the work below, then `acknowledge_note` for each with what you actually changed. The hand-off in the next step is refused until you have.
@@ -154,3 +154,9 @@ Output a one-line summary:
 ```
 Ticket {{TICKET_ID}} ({{PROJECT_KEY}}): {ACTION} - {brief result}
 ```
+
+---
+
+## The skill
+
+{{SKILL_TEXT}}
