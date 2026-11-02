@@ -414,6 +414,20 @@ public class CycleRun
     /// work, and it survives a squash: it is how a bug blamed to a squashed commit finds its run.
     /// </summary>
     public string? RunFilesJson { get; set; }
+
+    // ---- Which experiment arm it ran in (docs/bugs-and-experiments-plan.md, 2.2) -------------
+
+    /// <summary>The experiment the ticket is enrolled in for this run's skill, or null.</summary>
+    public int? ExperimentId { get; set; }
+
+    /// <summary>The arm the ticket is assigned: <c>control</c> or <c>variant</c>.</summary>
+    public string? ExperimentArm { get; set; }
+
+    /// <summary>
+    /// Whether the arm's overrides were actually applied. False after a stop, or when the variant file
+    /// was missing or a model was not the provider's: a run that fell back is never counted as the arm's.
+    /// </summary>
+    public bool? ExperimentApplied { get; set; }
 }
 
 /// <summary>

@@ -167,7 +167,7 @@ public static class TicketEndpoints
         // Atomically claim the next ticket for the one global heartbeat: most-progressed
         // workable ticket across all projects (or the given subset). Locks it into its "-ing"
         // phase and returns everything the orchestrator needs to launch the worker.
-        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths) =>
+        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments) =>
         {
             bool SkillExists(string projectKey, string skill) => File.Exists(paths.SkillFile(projectKey, skill));
 
@@ -316,10 +316,22 @@ public static class TicketEndpoints
             var ownerNotes = TicketService.RenderOwnerNotes(outstanding, ticketFiles);
             await svc.MarkOwnerNotesDeliveredAsync(outstanding);
 
+            // The experiment arm this run is in, when the ticket is in one for this skill (2.3 and
+            // 2.4 of docs/bugs-and-experiments-plan.md). Decided here, never by the worker, which
+            // only applies it - and the variant file is named, not handed over as a path, because
+            // a worker host reads the skills from its own copy of the project's folder.
+            var arm = await experiments.ForClaimAsync(result.Ticket, result.Skill,
+                (skill, name) => File.Exists(ExperimentEndpoints.VariantPath(paths, key, skill, name)));
+
             return Results.Ok(new
             {
                 claimed = new
                 {
+                    experiment = arm is null ? null : new
+                    {
+                        id = arm.Id, arm = arm.Arm, applied = arm.Applied, skillVariant = arm.SkillVariant,
+                        model = arm.Model, effort = arm.Effort, provider = arm.Provider, note = arm.Note,
+                    },
                     ticket = TicketMapper.ToDetail(result.Ticket, r.Title, r.Description, r.Unavailable,
                         files: ticketFiles, tracker: tracker),
                     skill = result.Skill,
@@ -407,7 +419,7 @@ public static class TicketEndpoints
         // Fire-and-forget from the heartbeat's side, so this never fails a cycle: an unparseable
         // phase or a ticket that has since been deleted is dropped with a 200-shaped answer rather
         // than reported as an error nobody is listening for.
-        app.MapPost("/api/heartbeat/cycles", async (CycleReportRequest req, MetricsService metrics) =>
+        app.MapPost("/api/heartbeat/cycles", async (CycleReportRequest req, MetricsService metrics, ExperimentService experiments) =>
         {
             if (!Enum.TryParse<TicketPhase>(req.Phase, true, out var phase))
                 return Results.BadRequest(new { error = $"Unknown phase '{req.Phase}'" });
@@ -420,6 +432,14 @@ public static class TicketEndpoints
                 req.ApiDurationSeconds, req.NumTurns, req.InputTokens, req.OutputTokens,
                 req.CacheReadTokens, req.CacheCreationTokens,
                 req.PeakContextTokens, req.ToolResultChars, req.LargestToolResults, req.Detail));
+
+            // Every recorded run is a new fact an experiment's guardrail may break on. Never fails
+            // the report: the run is already stored, and the next one checks again.
+            if (run is not null)
+            {
+                try { await experiments.CheckGuardrailsAsync(run.ProjectKey); }
+                catch { /* advisory */ }
+            }
 
             return run is null
                 ? Results.Ok(new { recorded = false, reason = "ticket not found" })

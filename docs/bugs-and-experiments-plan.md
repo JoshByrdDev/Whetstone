@@ -91,7 +91,7 @@ commits on a base each ticket delivered:
 | `TicketId`, `ProjectKey` | The ticket that delivered the commit |
 | `Repo` | The repo's folder on a project of several; empty on a project of one |
 | `Sha` | The commit |
-| `PatchId` | `git patch-id --stable` of it, so a cherry-pick or rebase-merge still matches |
+| `PatchId` | A hash of its changed lines with whitespace stripped (`TicketGitService.PatchIdOf`, the same idea as `git patch-id --stable`, without a second git call per commit), so a cherry-pick or rebase-merge still matches |
 | `Source` | `merge` (read from a board merge), `branch` (the branch's commits at Done) |
 | `RecordedAt` | When it was recorded |
 
@@ -295,8 +295,10 @@ board, never in the worker:
 2. Does the ticket already have an assignment in it? Then use that arm. This is the stickiness:
    every later pass of the phase (a QA failure back to implement, a resume, a review's changes) runs
    the same arm, so rework counts against the arm that caused it.
-3. Otherwise, if enrolment is open (some arm is below `MinTicketsPerArm`), enrol it: the next
-   ordinal, and the arm the sequence says (below).
+3. Otherwise, if enrolment is open (some arm is below `MinTicketsPerArm`) and the ticket has not
+   already run this skill, enrol it: the next ordinal, and the arm the sequence says (below). A ticket
+   already part-way through the phase when the experiment started is never enrolled, because half
+   of its work would belong to neither arm.
 4. Otherwise, run without an experiment.
 
 A ticket is only ever enrolled from a claim into the tested skill. Speculation tickets are never
@@ -368,7 +370,8 @@ The page shows medians of time and tokens over Done tickets, and rates of the th
 over tickets with an outcome.
 
 A ticket has an outcome for QA failure and rework once it is Done. It has an outcome for escaped
-bugs once it has been Done for `WaitDays`.
+bugs once it has been Done for `WaitDays`, or as soon as an escaped bug is confirmed against it -
+a bad outcome does not need to wait to be known.
 
 ### 2.6 Guardrails and auto-stop
 

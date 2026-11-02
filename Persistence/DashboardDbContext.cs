@@ -41,6 +41,9 @@ public class DashboardDbContext : DbContext
     public DbSet<BugLink> BugLinks => Set<BugLink>();
     public DbSet<BugTrace> BugTraces => Set<BugTrace>();
     public DbSet<TicketCommit> TicketCommits => Set<TicketCommit>();
+    public DbSet<Experiment> Experiments => Set<Experiment>();
+    public DbSet<ExperimentArm> ExperimentArms => Set<ExperimentArm>();
+    public DbSet<ExperimentAssignment> ExperimentAssignments => Set<ExperimentAssignment>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -398,6 +401,8 @@ public class DashboardDbContext : DbContext
             e.Property(c => c.Track).HasConversion<string>().HasMaxLength(16);
             e.Property(c => c.Skill).HasMaxLength(64);
             e.Property(c => c.Model).HasMaxLength(64);
+            e.Property(c => c.ExperimentArm).HasMaxLength(16);
+            e.HasIndex(c => c.ExperimentId);
             e.HasIndex(c => c.StartedAt);
             e.HasIndex(c => new { c.ProjectKey, c.StartedAt });
             e.HasOne(c => c.Ticket).WithMany().HasForeignKey(c => c.TicketId).OnDelete(DeleteBehavior.Cascade);
@@ -437,6 +442,39 @@ public class DashboardDbContext : DbContext
             e.HasIndex(c => new { c.ProjectKey, c.PatchId });
             e.HasIndex(c => new { c.TicketId, c.Repo, c.Sha }).IsUnique();
             e.HasOne(c => c.Ticket).WithMany().HasForeignKey(c => c.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // Experiments (docs/bugs-and-experiments-plan.md, section 2).
+        b.Entity<Experiment>(e =>
+        {
+            e.Property(x => x.ProjectKey).HasMaxLength(128);
+            e.Property(x => x.Skill).HasMaxLength(64);
+            e.Property(x => x.Name).HasMaxLength(200);
+            e.Property(x => x.Status).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.StopKind).HasConversion<string>().HasMaxLength(16);
+            e.Property(x => x.Winner).HasMaxLength(16);
+            e.HasIndex(x => new { x.ProjectKey, x.Skill, x.Status });
+            e.HasMany(x => x.Arms).WithOne(a => a.Experiment!).HasForeignKey(a => a.ExperimentId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<ExperimentArm>(e =>
+        {
+            e.Property(x => x.Key).HasMaxLength(16);
+            e.Property(x => x.Name).HasMaxLength(200);
+            e.Property(x => x.SkillVariant).HasMaxLength(64);
+            e.Property(x => x.Model).HasMaxLength(64);
+            e.Property(x => x.Effort).HasMaxLength(16);
+            e.Property(x => x.Provider).HasMaxLength(16);
+            e.HasIndex(x => new { x.ExperimentId, x.Key }).IsUnique();
+        });
+
+        b.Entity<ExperimentAssignment>(e =>
+        {
+            e.Property(x => x.ArmKey).HasMaxLength(16);
+            e.HasIndex(x => new { x.ExperimentId, x.TicketId }).IsUnique();
+            e.HasIndex(x => x.TicketId);
+            e.HasOne(x => x.Experiment).WithMany().HasForeignKey(x => x.ExperimentId).OnDelete(DeleteBehavior.Cascade);
+            e.HasOne<Ticket>().WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

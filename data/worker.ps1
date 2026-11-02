@@ -157,6 +157,7 @@ function New-RunDetail {
         startRebase = $null; baseBehind = $null
         filesChanged = $null; linesAdded = $null; linesRemoved = $null; runCommits = $null; changedFiles = $null
         commitRanges = $null; runFiles = $null
+        experimentId = $null; experimentArm = $null; experimentApplied = $null
     }
 }
 
@@ -196,6 +197,53 @@ function Get-BranchChangeStats {
     }
     if (-not $measured) { return $null }
     return @{ files = $files; added = $added; removed = $removed; paths = $paths.ToArray() }
+}
+
+# What an experiment arm makes of this run's role and skill (docs/bugs-and-experiments-plan.md,
+# 2.4). The board decides the arm and whether it applies; this only applies it. All or nothing: an
+# override that cannot be honoured - a provider this machine does not know, a model that is not the
+# provider's, a variant file that is not there - runs the whole arm as configured and says so, so a
+# run that fell back is never counted as the arm's. Returns @{ Provider; Model; Effort; SkillFile;
+# Id; Arm; Applied; Note }. Id is $null when the claim carries no experiment.
+function Set-ExperimentArm {
+    param($Role, $Experiment, [string]$SkillsDir, [string]$Skill, [string]$SkillFile)
+
+    $plain = @{ Provider = $Role.Provider; Model = $Role.Model; Effort = $Role.Effort; SkillFile = $SkillFile
+                Id = $null; Arm = $null; Applied = $false; Note = $null }
+    if (-not $Experiment -or -not $Experiment.id) { return $plain }
+    $plain.Id = [int]$Experiment.id
+    $plain.Arm = "$($Experiment.arm)"
+    if (-not $Experiment.applied) {
+        $plain.Note = $(if ("$($Experiment.note)") { "$($Experiment.note)" } else { 'arm not applied by the board' })
+        return $plain
+    }
+
+    $provider = $Role.Provider
+    $model = $Role.Model
+    $effort = $Role.Effort
+    $wantProvider = "$($Experiment.provider)".Trim().ToLowerInvariant()
+    if ($wantProvider) {
+        $provider = Get-AgentProvider -Name $wantProvider
+        if ($provider.Key -ne $wantProvider) { $plain.Note = "provider '$wantProvider' is not known here"; return $plain }
+        if ($provider.Key -ne $Role.Provider.Key) { $model = $provider.DefaultWorkerModel }
+    }
+    $wantModel = "$($Experiment.model)".Trim()
+    if ($wantModel) {
+        if (-not (Test-AgentModelBelongsTo -ProviderKey $provider.Key -Model $wantModel)) {
+            $plain.Note = "model '$wantModel' is not a $($provider.Key) model"; return $plain
+        }
+        $model = $wantModel
+    }
+    $wantEffort = "$($Experiment.effort)".Trim()
+    if ($wantEffort) { $effort = $wantEffort }
+    $file = $SkillFile
+    $variant = "$($Experiment.skillVariant)".Trim()
+    if ($variant) {
+        $file = [IO.Path]::Combine($SkillsDir, $Skill, 'variants', "$variant.md")
+        if (-not (Test-Path -LiteralPath $file)) { $plain.Note = "variant file '$variant.md' is not here"; return $plain }
+    }
+    return @{ Provider = $provider; Model = $model; Effort = $effort; SkillFile = $file
+              Id = $plain.Id; Arm = $plain.Arm; Applied = $true; Note = $null }
 }
 
 # What a run's own commits were, summed over its places: @{ ranges; files }. Each range is
@@ -1590,6 +1638,18 @@ $ReflectProvider = $reflectRole.Provider
 $ReflectionModel = $reflectRole.Model
 $ReflectEffort   = $reflectRole.Effort
 $skillFile   = "$($Claim.project.skillFile)"
+# An experiment arm, when the board put this ticket in one for this skill: its provider, model,
+# effort and skill file replace the role's above, before anything is built from them.
+$armRun = Set-ExperimentArm -Role $phaseRole -Experiment $Claim.experiment -SkillsDir "$($Claim.project.skillsDir)" `
+    -Skill $skill -SkillFile $skillFile
+if ($armRun.Id) {
+    $AgentProvider = $armRun.Provider
+    $phaseModel = $armRun.Model
+    $WorkerReasoningEffort = $armRun.Effort
+    $skillFile = $armRun.SkillFile
+    $how = if ($armRun.Applied) { 'applied' } else { "not applied: $($armRun.Note)" }
+    Write-Log "  Experiment $($armRun.Id), arm '$($armRun.Arm)' ($how): $($AgentProvider.Key) $phaseModel effort $WorkerReasoningEffort, skill $(Split-Path -Leaf $skillFile)"
+}
 $memoryDir   = "$($Claim.project.memoryDir)"
 $memoryIndex = "$($Claim.project.memoryIndex)"
 $resumed     = if ($Claim.resumed) { "yes" } else { "no" }
@@ -1673,6 +1733,11 @@ $cycleTimer     = [System.Diagnostics.Stopwatch]::StartNew()
 # What this run will say about how it was set up and what it left, filled in as it goes and sent
 # with every cycle report below, however the run ends.
 $runDetail = New-RunDetail -Provider "$($AgentProvider.Key)" -Effort "$WorkerReasoningEffort"
+if ($armRun.Id) {
+    $runDetail.experimentId = $armRun.Id
+    $runDetail.experimentArm = $armRun.Arm
+    $runDetail.experimentApplied = [bool]$armRun.Applied
+}
 
 # The repo this project points at. This is the HUB, and the human's own checkout of it - the
 # worker never runs here. It runs in a worktree hanging off it (resolved just below), so the

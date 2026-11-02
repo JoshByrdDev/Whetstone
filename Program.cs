@@ -134,6 +134,8 @@ builder.Services.AddScoped<MetricsService>();
 // Bug tracing: which commits each ticket delivered, and where a bug's fix came from. The queue blames
 // a landed bug in the background so a merge never waits on it. Reads the project repos only, so it
 // runs on the QA copy too, against its placeholder projects.
+// A/B experiments on a phase's skill or agent settings: assigned at the claim, judged per ticket.
+builder.Services.AddScoped<ExperimentService>(sp => new ExperimentService(sp.GetRequiredService<DashboardDbContext>()));
 builder.Services.AddScoped<BugTraceService>();
 builder.Services.AddSingleton<BugTraceQueue>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<BugTraceQueue>());
@@ -336,6 +338,7 @@ app.MapUnitReportEndpoints();
 // never ride along into a worker's prompt - see Api/LabelEndpoints.cs.
 app.MapLabelEndpoints();
 app.MapBugEndpoints();
+app.MapExperimentEndpoints();
 // Whether a project's copies of the skill templates have fallen behind them (the Skills tab's badge).
 app.MapSkillDriftEndpoints();
 app.MapStewardEndpoints();

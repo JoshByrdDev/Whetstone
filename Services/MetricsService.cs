@@ -68,7 +68,10 @@ public class MetricsService
         int? RunCommits = null,
         IReadOnlyList<string>? ChangedFiles = null,
         IReadOnlyList<BugTraceService.RunRange>? CommitRanges = null,
-        IReadOnlyList<string>? RunFiles = null);
+        IReadOnlyList<string>? RunFiles = null,
+        int? ExperimentId = null,
+        string? ExperimentArm = null,
+        bool? ExperimentApplied = null);
 
     /// <summary>The most paths <see cref="CycleRun.ChangedFilesJson"/> keeps.</summary>
     public const int MaxChangedFiles = 200;
@@ -155,6 +158,13 @@ public class MetricsService
             run.CommitRangeJson = ranges is { Count: > 0 } ? JsonSerializer.Serialize(ranges, Json) : null;
             run.RunFilesJson = d.RunFiles is { Count: > 0 } own
                 ? JsonSerializer.Serialize(own.Take(MaxChangedFiles), Json) : null;
+            // The arm the worker ran, as it reports it: only the worker knows whether it could apply it.
+            if (d.ExperimentId is int expId && expId > 0)
+            {
+                run.ExperimentId = expId;
+                run.ExperimentArm = Clip(d.ExperimentArm, 16);
+                run.ExperimentApplied = d.ExperimentApplied ?? false;
+            }
         }
 
         // Why the run happened, and which time round it is. Both read from what the dashboard already

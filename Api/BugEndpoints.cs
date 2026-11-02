@@ -11,7 +11,7 @@ public record AddBugLinkRequest(int SourceTicketId, string? FoundBy, string? Mis
 /// <summary>
 /// Bug tracing's routes (docs/bugs-and-experiments-plan.md, 1.6). Every verdict - confirm, reject,
 /// reopen, name a source - is here and only here: no MCP tool writes a bug link, so neither a worker
-/// nor a steward can clear a bug traced to its own work. <c>HumanOnlyLimitTests</c> holds that.
+/// nor a steward can clear a bug traced to its own work. <c>ExperimentTests.No_tool_can_confirm_a_bug_link_or_steer_an_experiment</c> holds that.
 /// </summary>
 public static class BugEndpoints
 {

@@ -11,7 +11,7 @@ namespace Whetstone.Services;
 /// <para>
 /// The board suggests; only a person decides. Every method that changes a link's status is called
 /// from a REST route and from nothing else - no MCP tool reaches this service, and
-/// <c>HumanOnlyLimitTests</c> holds that true.
+/// <c>ExperimentTests.No_tool_can_confirm_a_bug_link_or_steer_an_experiment</c> holds that true.
 /// </para>
 /// </summary>
 public class BugTraceService
@@ -24,7 +24,11 @@ public class BugTraceService
     private readonly DashboardDbContext _db;
     private readonly TicketGitService _git;
 
-    public BugTraceService(DashboardDbContext db, TicketGitService git) => (_db, _git) = (db, git);
+    private readonly ExperimentService? _experiments;
+
+    /// <param name="experiments">Told when a link is confirmed, since an escaped bug is one of its guardrails.</param>
+    public BugTraceService(DashboardDbContext db, TicketGitService git, ExperimentService? experiments = null)
+        => (_db, _git, _experiments) = (db, git, experiments);
 
     /// <summary>One introducing commit of a link, as stored in <see cref="BugLink.CommitsJson"/>.</summary>
     public record LinkCommit(string Repo, string Sha, string Subject, double Lines, IReadOnlyList<string> Files);
@@ -231,6 +235,7 @@ public class BugTraceService
         link.DecidedAt = DateTime.UtcNow;
         link.Escaped = bug is not null && await IsEscapedAsync(link.SourceTicketId.Value, bug.CreatedAt, default);
         await _db.SaveChangesAsync();
+        if (_experiments is not null) await _experiments.CheckGuardrailsAsync(link.ProjectKey);
         return link;
     }
 
@@ -278,6 +283,7 @@ public class BugTraceService
         link.DecidedAt = DateTime.UtcNow;
         link.Escaped = await IsEscapedAsync(sourceTicketId, bug.CreatedAt, default);
         await _db.SaveChangesAsync();
+        if (_experiments is not null) await _experiments.CheckGuardrailsAsync(link.ProjectKey);
         return link;
     }
 

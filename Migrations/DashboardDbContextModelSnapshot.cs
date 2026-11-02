@@ -290,6 +290,16 @@ namespace Whetstone.Migrations
                     b.Property<string>("EntryReason")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool?>("ExperimentApplied")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ExperimentArm")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("ExperimentId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("FilesChanged")
                         .HasColumnType("INTEGER");
 
@@ -397,6 +407,8 @@ namespace Whetstone.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ExperimentId");
+
                     b.HasIndex("StartedAt");
 
                     b.HasIndex("TicketId");
@@ -404,6 +416,147 @@ namespace Whetstone.Migrations
                     b.HasIndex("ProjectKey", "StartedAt");
 
                     b.ToTable("CycleRuns");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.Experiment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("ConcludedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ConclusionNote")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Hypothesis")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("MinTicketsPerArm")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Skill")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StopKind")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("StopReason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("StoppedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("WaitDays")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Winner")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Skill", "Status");
+
+                    b.ToTable("Experiments");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.ExperimentArm", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Effort")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ExperimentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Provider")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SkillVariant")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExperimentId", "Key")
+                        .IsUnique();
+
+                    b.ToTable("ExperimentArms");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.ExperimentAssignment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ArmKey")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("AssignedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ExperimentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Ordinal")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("ExperimentId", "TicketId")
+                        .IsUnique();
+
+                    b.ToTable("ExperimentAssignments");
                 });
 
             modelBuilder.Entity("Whetstone.Models.GateFinding", b =>
@@ -1930,6 +2083,34 @@ namespace Whetstone.Migrations
                     b.Navigation("Ticket");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.ExperimentArm", b =>
+                {
+                    b.HasOne("Whetstone.Models.Experiment", "Experiment")
+                        .WithMany("Arms")
+                        .HasForeignKey("ExperimentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Experiment");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.ExperimentAssignment", b =>
+                {
+                    b.HasOne("Whetstone.Models.Experiment", "Experiment")
+                        .WithMany()
+                        .HasForeignKey("ExperimentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Whetstone.Models.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Experiment");
+                });
+
             modelBuilder.Entity("Whetstone.Models.GateFinding", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
@@ -2082,6 +2263,11 @@ namespace Whetstone.Migrations
             modelBuilder.Entity("Whetstone.Models.Comment", b =>
                 {
                     b.Navigation("Attachments");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.Experiment", b =>
+                {
+                    b.Navigation("Arms");
                 });
 
             modelBuilder.Entity("Whetstone.Models.Label", b =>

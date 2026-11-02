@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { UsageMeters } from './ClaudeUsage';
 import { CapacityStrip } from './CapacityStrip';
+import { Experiments } from './Experiments';
 import { PageHead, Chip, SectionRule } from './ui';
 
 /**
@@ -351,6 +352,8 @@ export function MetricsPanel() {
           </div>
         )}
       </div>
+
+      <Experiments project={project} />
       </div>
     </div>
   );
