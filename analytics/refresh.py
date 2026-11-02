@@ -211,8 +211,33 @@ def history_of(repo: Path, pathspec: str) -> list[tuple[str, str, str, str]]:
     return rows
 
 
-def blob_text(repo: Path, sha: str, rel: str, eol: str) -> str | None:
-    raw = git_bytes(repo, "show", f"{sha}:{rel}")
+def blobs(repo: Path, specs: list[str]) -> dict[str, bytes | None]:
+    """Many `<sha>:<path>` blobs through one `git cat-file --batch`, rather than a git per version."""
+    if not specs:
+        return {}
+    try:
+        out = subprocess.run(["git", "-C", str(repo), "cat-file", "--batch"],
+                             input=("\n".join(specs) + "\n").encode("utf-8"), capture_output=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return {s: None for s in specs}
+    data, pos, found = out.stdout, 0, {}
+    for spec in specs:
+        nl = data.find(b"\n", pos)
+        if nl < 0:
+            found[spec] = None
+            continue
+        header = data[pos:nl].decode("utf-8", errors="replace").split()
+        pos = nl + 1
+        if len(header) == 3 and header[1] == "blob":
+            size = int(header[2])
+            found[spec] = data[pos:pos + size]
+            pos += size + 1  # the blob, then its newline
+        else:
+            found[spec] = None  # "<spec> missing": deleted in that commit
+    return found
+
+
+def as_text(raw: bytes | None, eol: str) -> str | None:
     if raw is None:
         return None
     text = raw.decode("utf-8-sig", errors="replace")
@@ -224,24 +249,26 @@ def load_versions(con: duckdb.DuckDBPyConnection, data_root: Path) -> dict[str, 
     projects = data_root / "projects"
     if projects.is_dir():
         for proj in sorted(p for p in projects.iterdir() if (p / ".git").exists()):
+            history = [(sha, at, subject, rel, m.group(1)) for sha, at, subject, rel in history_of(proj, "skills")
+                       if (m := re.fullmatch(r"skills/([^/]+)/skill\.md", rel))]
+            found = blobs(proj, [f"{sha}:{rel}" for sha, _, _, rel, _ in history])
             eols: dict[str, str] = {}
-            for sha, at, subject, rel in history_of(proj, "skills"):
-                m = re.fullmatch(r"skills/([^/]+)/skill\.md", rel)
-                if not m:
-                    continue
-                eol = eols.setdefault(rel, eol_of(proj, rel))
-                text = blob_text(proj, sha, rel, eol)
+            for sha, at, subject, rel, skill in history:
+                if rel not in eols:
+                    eols[rel] = eol_of(proj, rel)
+                eol = eols[rel]
+                text = as_text(found.get(f"{sha}:{rel}"), eol)
                 # The worker reads the skill as UTF-8 and trims it (Get-SkillText).
-                skills.append((proj.name, m.group(1), sha, at, subject[:200],
+                skills.append((proj.name, skill, sha, at, subject[:200],
                                text_hash(text.strip()) if text is not None else None))
 
     prompts: list[tuple] = []
     rel = "data/heartbeat-prompt.md"
     eol = eol_of(REPO, rel)
-    for sha, at, subject, path in history_of(REPO, rel):
-        if path != rel:
-            continue
-        text = blob_text(REPO, sha, rel, eol)
+    history = [h for h in history_of(REPO, rel) if h[3] == rel]
+    found = blobs(REPO, [f"{sha}:{rel}" for sha, _, _, _ in history])
+    for sha, at, subject, _ in history:
+        text = as_text(found.get(f"{sha}:{rel}"), eol)
         # The template is read whole (Get-Content -Raw) and hashed untrimmed.
         prompts.append((sha, at, subject[:200], text_hash(text) if text is not None else None))
 
@@ -396,16 +423,17 @@ def load_transcript_batch(con: duckdb.DuckDBPyConnection, paths: list[str]) -> N
 # ---- 4. dbt, then publishing -----------------------------------------------------------------
 
 def run_dbt(warehouse: Path) -> None:
-    from dbt.cli.main import dbtRunner
-
-    os.environ["WHETSTONE_WAREHOUSE"] = str(warehouse)
-    os.environ["DO_NOT_TRACK"] = "1"
-    args = ["build", "--project-dir", str(HERE), "--profiles-dir", str(HERE),
+    """`dbt build`, in a process of its own: dbt-duckdb keeps its connection for the life of the
+    process, and publishing has to open the warehouse after it."""
+    env = dict(os.environ, WHETSTONE_WAREHOUSE=str(warehouse), DO_NOT_TRACK="1")
+    exe = Path(sys.executable).parent / ("dbt.exe" if os.name == "nt" else "dbt")
+    cmd = [str(exe)] if exe.exists() else [sys.executable, "-c", "from dbt.cli.main import cli; cli()"]
+    cmd += ["build", "--project-dir", str(HERE), "--profiles-dir", str(HERE),
             "--target-path", str(warehouse.parent / "dbt-target"),
             "--log-path", str(warehouse.parent / "dbt-logs")]
-    res = dbtRunner().invoke(args)
-    if not res.success:
-        raise RuntimeError(f"dbt build failed: {res.exception or 'a model or test failed (see refresh.log)'}")
+    res = subprocess.run(cmd, env=env, cwd=str(HERE))
+    if res.returncode != 0:
+        raise RuntimeError("dbt build failed: a model or test failed (the dbt output above says which)")
 
 
 def publish(warehouse: Path, out_dir: Path) -> dict[str, int]:

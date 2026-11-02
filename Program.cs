@@ -131,6 +131,8 @@ builder.Services.AddSingleton<StewardMerges>();
 builder.Services.AddScoped<IClassroomGate, ClassroomGate>();
 // Pipeline metrics (cycle runs, phase-transition history). Read/write-own-tables only.
 builder.Services.AddScoped<MetricsService>();
+// The Metrics page's analytics: reads the dbt marts, starts their refresh (docs/analytics.md).
+builder.Services.AddSingleton<AnalyticsService>();
 // What each ticket is waiting on: the tracker's blocking links, refreshed live, with local overrides
 // that outrank them. TicketService takes it so the claim can pass over a ticket that is blocked.
 builder.Services.AddScoped<TicketDependencyService>();
@@ -558,6 +560,7 @@ app.MapGitEndpoints();
 
 // Subscription rate-limit headroom (session + weekly windows) for the app bar.
 app.MapUsageEndpoints();
+app.MapAnalyticsEndpoints();
 
 // === Improvement Suggestions (per-project, scoped via ?project=) ===
 
