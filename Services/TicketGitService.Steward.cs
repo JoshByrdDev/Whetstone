@@ -36,6 +36,9 @@ public record SyncFromResult(string Answer, int Commits, IReadOnlyList<string> F
 /// </param>
 public record CheckRun(bool Ok, bool TimedOut, string Output, IReadOnlyList<string>? Failures = null);
 
+/// <summary>A worktree the board made to run a merge's checks in, and how to give it back. <c>Dir</c> is null with <c>Error</c> when it could not be made.</summary>
+public record CheckTree(string? Dir, Func<Task> Release, string? Error);
+
 /// <summary>Picks out of a check's whole output the lines that say what failed.</summary>
 public static class CheckFailures
 {
@@ -394,6 +397,82 @@ public partial class TicketGitService
         var tip = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
         var at = await GitAsync(worktree, ct, "rev-parse", "HEAD");
         return tip.Ok && at.Ok && tip.Stdout.Trim() == at.Stdout.Trim();
+    }
+
+    /// <summary>
+    /// A worktree of the board's own at the tip of <paramref name="branch"/>, made ready the way a
+    /// worker's is (the project's <c>worktreeCopyFiles</c>, then its <c>worktreeSetup</c>), for a
+    /// merge's checks when the ticket has no worktree here to run them in. That is every ticket a
+    /// worker host built - its worktree is on another machine, and by design the board is never told
+    /// where - and any whose worktree was removed by hand.
+    /// <para>
+    /// Detached, so it never holds the branch; under the worktree root, beside the tickets' own; and
+    /// given back by <c>Release</c>, which the caller runs once the checks are over.
+    /// </para>
+    /// </summary>
+    public async Task<CheckTree> CheckTreeAsync(string projectKey, string branch, CancellationToken ct = default)
+    {
+        static Task None() => Task.CompletedTask;
+        var (cfg, repo, _) = HubOf(projectKey);
+        if (!IsGitRepo(repo)) return new(null, None, $"There is no git repo at '{repo}'.");
+        var root = cfg.ResolvedWorktreeRoot;
+        if (string.IsNullOrWhiteSpace(root)) return new(null, None, $"{cfg.DisplayName} has no worktree root.");
+        var tip = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}^{{commit}}");
+        if (!tip.Ok) return new(null, None, $"There is no branch '{branch}' in {repo}.");
+        var sha = tip.Stdout.Trim();
+
+        var dir = Path.Combine(root, "merge-check-" + Regex.Replace(branch, @"[^A-Za-z0-9._-]", "-"));
+        // One left by a run that never got to give it back.
+        await Task.Run(() => DropCheckTree(repo, dir), ct);
+        Directory.CreateDirectory(root);
+        if (await Task.Run(() => _worktrees.AddDetached(repo, dir, sha), ct) is { } refused)
+            return new(null, None, $"Could not check out {branch} to check it: {refused}");
+
+        Task Release() => Task.Run(() => DropCheckTree(repo, dir));
+
+        foreach (var rel in cfg.WorktreeCopyFiles.Where(f => !string.IsNullOrWhiteSpace(f)))
+        {
+            try { CopyInto(Path.Combine(repo, rel.Trim()), Path.Combine(dir, rel.Trim())); }
+            catch (Exception ex) { _log.LogWarning(ex, "Could not copy {File} into the check tree {Dir}", rel, dir); }
+        }
+
+        var minutes = _registry.GetGlobalConfig().TryGetValue("worktreeSetupTimeoutMinutes", out var m)
+            && m.ValueKind == System.Text.Json.JsonValueKind.Number && m.TryGetDouble(out var mm) && mm > 0 ? mm : 20;
+        foreach (var cmd in cfg.WorktreeSetup.Where(c => !string.IsNullOrWhiteSpace(c)))
+        {
+            var run = await RunCheckAsync(dir, cmd, TimeSpan.FromMinutes(minutes), ct);
+            if (run.Ok) continue;
+            await Release();
+            return new(null, None, $"'{cmd}' failed setting up the check tree{(run.TimedOut ? $" (did not finish in {minutes} minutes)" : "")}:\n{run.Output}");
+        }
+        return new(dir, Release, null);
+    }
+
+    private void DropCheckTree(string repo, string dir)
+    {
+        if (!Directory.Exists(dir)) return;
+        var r = _worktrees.Remove(repo, dir, force: true);
+        // Not a worktree git knows of (it pruned it): what is left is only the board's own scratch.
+        if (!r.Removed && Directory.Exists(dir))
+            try { Directory.Delete(dir, recursive: true); }
+            catch (Exception ex) { _log.LogWarning(ex, "Could not remove the check tree {Dir}", dir); }
+    }
+
+    private static void CopyInto(string from, string to)
+    {
+        if (File.Exists(from))
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(to)!);
+            File.Copy(from, to, overwrite: true);
+            return;
+        }
+        if (!Directory.Exists(from)) return;
+        foreach (var f in Directory.EnumerateFiles(from, "*", SearchOption.AllDirectories))
+        {
+            var target = Path.Combine(to, Path.GetRelativePath(from, f));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(f, target, overwrite: true);
+        }
     }
 
     /// <summary>

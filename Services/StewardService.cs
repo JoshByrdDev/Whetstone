@@ -767,26 +767,43 @@ public partial class StewardService
                 f.StartsWith(p.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)))).ToList();
         if (checks.Count > 0)
         {
+            // In the ticket's own worktree when it is here and on the tip. Otherwise in one the board
+            // makes at the tip: a ticket a worker host built has no worktree on this machine at all,
+            // and one off the tip may be somebody's by hand - so it is left alone, not checked.
             var wt = t.WorktreePath;
-            if (string.IsNullOrWhiteSpace(wt) || !Directory.Exists(wt))
-                return Refuse("no-worktree", $"Ticket {ticketId}'s worktree is gone, so the merged result cannot be checked. This one is the owner's.");
-            if (!await _git.WorktreeAtTipAsync(projectKey, wt, t.Branch!, ct))
-                return Refuse("worktree-elsewhere", $"Ticket {ticketId}'s worktree is not on the tip of {t.Branch}. This one is the owner's.");
-
-            foreach (var c in checks)
+            CheckTree? tree = null;
+            if (string.IsNullOrWhiteSpace(wt) || !Directory.Exists(wt) || !await _git.WorktreeAtTipAsync(projectKey, wt, t.Branch!, ct))
             {
-                var run = await _git.RunCheckAsync(wt, c.Run, TimeSpan.FromMinutes(c.TimeoutMinutes), ct);
-                if (run.Ok) continue;
-                // The command never got as far as checking anything. That is the machine, not the ticket.
-                if (c.MachineFault.Length > 0 && Regex.IsMatch(run.Output, c.MachineFault, RegexOptions.IgnoreCase))
+                tree = await _git.CheckTreeAsync(projectKey, t.Branch!, ct);
+                if (tree.Dir is null)
                     return Refuse("check-could-not-run",
-                        $"'{c.Name}' did not get as far as checking anything, so nothing is proved either way. Leave the ticket at NeedsReview and ask the owner once: this is the machine's to fix, not the ticket's.",
-                        new { check = c.Name, output = run.Output });
-                return Refuse("check-failed",
-                    run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result. Send it back to NeedsImplementation with this."
-                                 : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this: "
-                                   + "'failing' is every line in the whole output that names a failure, 'output' is how it ended.",
-                    new { check = c.Name, failing = run.Failures ?? Array.Empty<string>(), output = run.Output });
+                        $"Ticket {ticketId} has no worktree on this machine at the tip of {t.Branch}, and one could not be made to check it in, "
+                        + "so nothing is proved either way. Leave the ticket at NeedsReview and ask the owner once: this is the machine's to fix, not the ticket's.",
+                        new { output = tree.Error });
+                wt = tree.Dir;
+            }
+
+            try
+            {
+                foreach (var c in checks)
+                {
+                    var run = await _git.RunCheckAsync(wt, c.Run, TimeSpan.FromMinutes(c.TimeoutMinutes), ct);
+                    if (run.Ok) continue;
+                    // The command never got as far as checking anything. That is the machine, not the ticket.
+                    if (c.MachineFault.Length > 0 && Regex.IsMatch(run.Output, c.MachineFault, RegexOptions.IgnoreCase))
+                        return Refuse("check-could-not-run",
+                            $"'{c.Name}' did not get as far as checking anything, so nothing is proved either way. Leave the ticket at NeedsReview and ask the owner once: this is the machine's to fix, not the ticket's.",
+                            new { check = c.Name, output = run.Output });
+                    return Refuse("check-failed",
+                        run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result. Send it back to NeedsImplementation with this."
+                                     : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this: "
+                                       + "'failing' is every line in the whole output that names a failure, 'output' is how it ended.",
+                        new { check = c.Name, failing = run.Failures ?? Array.Empty<string>(), output = run.Output });
+                }
+            }
+            finally
+            {
+                if (tree is not null) await tree.Release();
             }
         }
 

@@ -74,7 +74,39 @@ public class GitWorktreeService
     /// The branch is kept. It costs nothing, it is the record of what was merged, and re-creating a
     /// worktree from it later is one command.
     /// </summary>
-    public WorktreeRemoval Remove(string repoDir, string worktreePath)
+    public WorktreeRemoval Remove(string repoDir, string worktreePath) => Remove(repoDir, worktreePath, force: false);
+
+    /// <summary>
+    /// Check <paramref name="sha"/> out, detached, at <paramref name="path"/> - a worktree that holds
+    /// no branch, so it never stands in the way of a branch being moved or handed back. Under the
+    /// hub lock, as a worker's <c>worktree add</c> is. Null when it was made, else why not.
+    /// </summary>
+    public string? AddDetached(string repoDir, string path, string sha)
+    {
+        if (!IsGitRepo(repoDir)) return $"There is no git repo at '{repoDir}'.";
+        using var hub = new Mutex(false, HubMutexName(repoDir));
+        var held = false;
+        try
+        {
+            try { held = hub.WaitOne(HubWait); }
+            catch (AbandonedMutexException) { held = true; }
+            if (!held) return "the hub repo was busy for 15 minutes";
+            Run(repoDir, "worktree", "prune");
+            var (ok, _, stderr) = Run(repoDir, RemoveTimeout, "worktree", "add", "--detach", path, sha);
+            return ok ? null : string.IsNullOrWhiteSpace(stderr) ? "git refused to add it" : stderr.Trim();
+        }
+        finally
+        {
+            if (held) hub.ReleaseMutex();
+        }
+    }
+
+    /// <summary>
+    /// As <see cref="Remove(string, string)"/>, and with <paramref name="force"/> it goes even with
+    /// changes in it. Only for a scratch worktree the board made itself and nobody works in, such as
+    /// a merge's check tree: a ticket's own worktree is never forced.
+    /// </summary>
+    public WorktreeRemoval Remove(string repoDir, string worktreePath, bool force)
     {
         if (!IsGitRepo(repoDir)) return new WorktreeRemoval(false);
         if (string.IsNullOrWhiteSpace(worktreePath)) return new WorktreeRemoval(false);
@@ -105,7 +137,9 @@ public class GitWorktreeService
 
             // Not a metadata operation like the rest: this deletes the directory, installed
             // packages and all, and on a real worktree that is a gigabyte of small files.
-            (ok, _, stderr) = Run(repoDir, RemoveTimeout, "worktree", "remove", known.Path);
+            (ok, _, stderr) = force
+                ? Run(repoDir, RemoveTimeout, "worktree", "remove", "--force", known.Path)
+                : Run(repoDir, RemoveTimeout, "worktree", "remove", known.Path);
         }
         finally
         {

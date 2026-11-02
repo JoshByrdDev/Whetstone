@@ -409,7 +409,9 @@ discoverable from the code:
   `Resolve-BaseRef` stays the same on both machines.
 - **A worker host's worktree path never reaches the board.** The board reads a ticket's worktree
   path as one of its own (analysis, the steward's checks, the reaper), so a worker host reports the
-  branch and nothing else.
+  branch and nothing else. Anything here that needs that branch's files makes its own detached
+  worktree from the branch, as the steward's merge does for its checks (`CheckTreeAsync`), rather
+  than asking a person to restore one that was never on this machine.
 - **The project kit is an allowlist**: skills, `guard.ps1`, a read-only copy of the notes. Never
   `project.json`. Its missing `reflect-prompt.md` is part of what keeps reflection off a worker host.
 - **A worker host's resources are its own.** Its claim takes `alpha:app-stack@bravo-host`, never the

@@ -328,6 +328,96 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal("behind", (await In(s => s.MergeAsync("alpha", id))).Answer);
     }
 
+    private void WithACheck() => Configure("full", """
+        "plan": { "units": "docs/units" },
+        "mergeChecks": [ { "name": "tests", "run": "run-tests" } ]
+        """);
+
+    [Fact]
+    public async Task A_ticket_with_no_worktree_here_is_checked_in_one_the_board_makes_and_gives_back()
+    {
+        // A worker host's ticket: the board is told its branch and never a worktree.
+        WithACheck();
+        int id;
+        await using (var ctx = NewCtx())
+        {
+            var t = new Ticket { ProjectKey = "alpha", Title = "Built elsewhere", Phase = TicketPhase.NeedsReview, Branch = "ticket-9" };
+            ctx.Tickets.Add(t);
+            await ctx.SaveChangesAsync();
+            id = t.Id;
+        }
+        await Begin();
+
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal(new[] { "check-tree-ticket-9" }, _git.CheckTreesMade);
+        Assert.Equal(new[] { "check-tree-ticket-9" }, _git.CheckedIn);
+        Assert.Equal(1, _git.CheckTreesReleased);
+    }
+
+    [Fact]
+    public async Task A_check_tree_is_given_back_when_its_check_fails_too()
+    {
+        WithACheck();
+        int id;
+        await using (var ctx = NewCtx())
+        {
+            var t = new Ticket { ProjectKey = "alpha", Title = "Built elsewhere", Phase = TicketPhase.NeedsReview, Branch = "ticket-9", WorktreePath = Path.Combine(_dataRoot, "gone") };
+            ctx.Tickets.Add(t);
+            await ctx.SaveChangesAsync();
+            id = t.Id;
+        }
+        await Begin();
+
+        _git.Check = new CheckRun(false, false, "2 tests failed");
+        Assert.Equal("check-failed", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal(1, _git.CheckTreesReleased);
+    }
+
+    [Fact]
+    public async Task A_worktree_off_the_tip_is_left_alone_and_the_tip_is_checked_elsewhere()
+    {
+        WithACheck();
+        var id = await AtReview();
+        await Begin();
+
+        _git.AtTip = false;
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.DoesNotContain(_dataRoot, _git.CheckedIn);
+        Assert.Single(_git.CheckTreesMade);
+    }
+
+    [Fact]
+    public async Task A_ticket_whose_own_worktree_is_on_the_tip_is_checked_there()
+    {
+        WithACheck();
+        var id = await AtReview();
+        await Begin();
+
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal(new[] { _dataRoot }, _git.CheckedIn);
+        Assert.Empty(_git.CheckTreesMade);
+    }
+
+    [Fact]
+    public async Task A_check_tree_that_cannot_be_made_is_the_machines_not_the_tickets()
+    {
+        WithACheck();
+        int id;
+        await using (var ctx = NewCtx())
+        {
+            var t = new Ticket { ProjectKey = "alpha", Title = "Built elsewhere", Phase = TicketPhase.NeedsReview, Branch = "ticket-9" };
+            ctx.Tickets.Add(t);
+            await ctx.SaveChangesAsync();
+            id = t.Id;
+        }
+        await Begin();
+
+        _git.CheckTreeRefusal = "'pnpm install' failed";
+        Assert.Equal("check-could-not-run", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Empty(_git.CheckedIn);
+        Assert.Empty(_git.Merged);
+    }
+
     [Fact]
     public async Task A_failing_check_stops_the_merge_and_a_machine_fault_is_not_the_tickets()
     {
@@ -1652,13 +1742,31 @@ public partial class StewardServiceTests : IDisposable
             return Task.FromResult<(string?, bool, string?)>(("def", false, null));
         }
 
-        public Task<bool> WorktreeAtTipAsync(string projectKey, string worktree, string branch, CancellationToken ct = default) => Task.FromResult(true);
+        /// <summary>Whether a ticket's own worktree is at its branch's tip.</summary>
+        public bool AtTip = true;
+
+        public Task<bool> WorktreeAtTipAsync(string projectKey, string worktree, string branch, CancellationToken ct = default) => Task.FromResult(AtTip);
+
+        /// <summary>Why a check tree cannot be made; null makes one.</summary>
+        public string? CheckTreeRefusal;
+        public List<string> CheckTreesMade = new();
+        public int CheckTreesReleased;
+        public List<string> CheckedIn = new();
+
+        public Task<CheckTree> CheckTreeAsync(string projectKey, string branch, CancellationToken ct = default)
+        {
+            if (CheckTreeRefusal is not null) return Task.FromResult(new CheckTree(null, () => Task.CompletedTask, CheckTreeRefusal));
+            var dir = "check-tree-" + branch;
+            CheckTreesMade.Add(dir);
+            return Task.FromResult(new CheckTree(dir, () => { CheckTreesReleased++; return Task.CompletedTask; }, null));
+        }
 
         /// <summary>Something that happens while a check runs, for what a slow check lets change under it.</summary>
         public Func<Task>? DuringCheck;
 
         public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, CancellationToken ct = default)
         {
+            CheckedIn.Add(dir);
             if (DuringCheck is not null) await DuringCheck();
             return Check;
         }
