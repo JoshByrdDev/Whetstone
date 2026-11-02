@@ -121,6 +121,42 @@ public class TicketDependencyService
         return blocked;
     }
 
+    /// <summary>
+    /// Of these tickets, the ones another ticket is waiting on: a ticket the fleet would run now,
+    /// but for an effective dependency on this one. The claim puts them first, because nothing
+    /// behind them can start until they are Done.
+    /// <para>
+    /// A dependent counts only while it is in a workable phase. One in the backlog, blocked, or done
+    /// would not run even with this ticket out of the way, so finishing this one first frees nothing.
+    /// </para>
+    /// </summary>
+    public async Task<HashSet<int>> WaitedOnTicketIdsAsync(IReadOnlyCollection<Ticket> candidates)
+    {
+        var waitedOn = new HashSet<int>();
+        if (candidates.Count == 0) return waitedOn;
+
+        var ids = candidates.Select(t => t.Id).ToList();
+        var keys = candidates.Where(t => t.IssueKey != null).Select(t => t.IssueKey!).ToList();
+        var deps = await _db.TicketDependencies
+            .Where(d => d.Override != false)
+            .Where(d => (d.BlockerTicketId != null && ids.Contains(d.BlockerTicketId.Value))
+                     || (d.BlockerTicketId == null && d.BlockerIssueKey != null && keys.Contains(d.BlockerIssueKey)))
+            .Join(_db.Tickets.Where(w => PhaseMachine.WorkablePhases.Contains(w.Phase)),
+                d => d.TicketId, w => w.Id, (d, _) => new { d.BlockerTicketId, d.BlockerIssueKey })
+            .ToListAsync();
+        if (deps.Count == 0) return waitedOn;
+
+        var idsByKey = candidates.Where(t => t.IssueKey != null)
+            .GroupBy(t => t.IssueKey!).ToDictionary(g => g.Key, g => g.Select(t => t.Id).ToList());
+        foreach (var d in deps)
+        {
+            if (d.BlockerTicketId is int bid) waitedOn.Add(bid);
+            else if (d.BlockerIssueKey is string bk && idsByKey.TryGetValue(bk, out var matched))
+                waitedOn.UnionWith(matched);
+        }
+        return waitedOn;
+    }
+
     // ---- Local edits (the half the tracker never touches) -----------------------
 
     /// <summary>Record a block a person found. Idempotent on the same blocker.</summary>

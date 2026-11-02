@@ -149,7 +149,8 @@ public class TicketService
     /// <summary>
     /// Claim the single most urgent workable ticket across all projects (or a filtered
     /// subset) for the heartbeat: highest <see cref="Ticket.Priority"/> band first, then within that
-    /// band most-progressed first (<see cref="PhaseMachine.ProgressRank"/>), then oldest-updated.
+    /// band tickets that others are waiting on first, then most-progressed first
+    /// (<see cref="PhaseMachine.ProgressRank"/>), then oldest-updated.
     /// <paramref name="projectFilter"/> and <paramref name="priorityFilter"/> narrow what is
     /// eligible at all; null or empty means that axis restricts nothing.
     /// A "Needs*" ticket is locked by transitioning it to its "-ing" phase;
@@ -206,20 +207,32 @@ public class TicketService
         // that impossible to express. The tie it breaks is a real one and not an accident: the Review
         // track's working phases are deliberately ranked alongside implementation's, so this line is
         // reached constantly rather than never (see PhaseMachine.ProgressRank).
-        var candidates = (await q.ToListAsync())
-            .OrderByDescending(t => t.Priority)
-            .ThenByDescending(t => PhaseMachine.ProgressRank(t.Phase))
-            .ThenBy(t => t.Track)
-            .ThenBy(t => t.UpdatedAt)
-            .ToList();
-        if (trace is not null) trace.Workable = candidates.Count;
+        //
+        // Within a band, a ticket another ticket is waiting on goes ahead of progress. Its dependents
+        // cannot start until it is Done, so every pass it waits is a pass they wait too - and a
+        // blocker sent back from review (most often for a mechanical rebase conflict) would otherwise
+        // re-enter at the back of each queue it passes through on its way round. It sits below
+        // priority for the same reason Track does: a band the owner chose still wins.
+        var workable = await q.ToListAsync();
 
         // Tickets waiting on something else are passed over, not blocked: the wait is a fact about
         // the world, not a fault in the ticket, and it clears on its own when the blocker finishes.
         // Blocking them would need a human to unblock every one of them by hand afterwards.
         var waiting = _dependencies is null
             ? new HashSet<int>()
-            : await _dependencies.BlockedTicketIdsAsync(candidates.Select(t => t.Id).ToList());
+            : await _dependencies.BlockedTicketIdsAsync(workable.Select(t => t.Id).ToList());
+        var waitedOn = _dependencies is null
+            ? new HashSet<int>()
+            : await _dependencies.WaitedOnTicketIdsAsync(workable);
+
+        var candidates = workable
+            .OrderByDescending(t => t.Priority)
+            .ThenByDescending(t => waitedOn.Contains(t.Id))
+            .ThenByDescending(t => PhaseMachine.ProgressRank(t.Phase))
+            .ThenBy(t => t.Track)
+            .ThenBy(t => t.UpdatedAt)
+            .ToList();
+        if (trace is not null) trace.Workable = candidates.Count;
 
         foreach (var t in candidates)
         {

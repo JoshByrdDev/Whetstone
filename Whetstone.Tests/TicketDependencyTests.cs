@@ -257,4 +257,87 @@ public class TicketDependencyTests : IDisposable
         Assert.NotNull(claim);
         Assert.Equal(TicketPhase.Implementing, claim!.Ticket.Phase);
     }
+
+    // ---- What is waited on goes first ---------------------------------------------
+
+    private async Task<int?> ClaimedId()
+    {
+        await using var ctx = NewCtx();
+        var claim = await new TicketService(ctx, dependencies: new TicketDependencyService(ctx))
+            .ClaimNextAsync(null, AllSkillsExist);
+        return claim?.Ticket.Id;
+    }
+
+    private static void Older(Ticket t, DashboardDbContext ctx)
+    {
+        t.UpdatedAt = DateTime.UtcNow.AddHours(-1);
+        ctx.SaveChanges();
+    }
+
+    [Fact]
+    public async Task A_ticket_others_wait_on_is_claimed_ahead_of_one_further_along()
+    {
+        int blockerId;
+        await using (var ctx = NewCtx())
+        {
+            // Further along, and older: without the boost this is what the claim takes.
+            var ahead = await Seed(ctx, TicketPhase.NeedsQa, "ALPHA-5");
+            Older(ahead, ctx);
+            blockerId = (await Seed(ctx, TicketPhase.NeedsImplementation, "ALPHA-1")).Id;
+            var waiting = await Seed(ctx, TicketPhase.NeedsImplementation, "ALPHA-2");
+            await Dep(ctx, waiting.Id, issueKey: "ALPHA-1");
+        }
+        Assert.Equal(blockerId, await ClaimedId());
+    }
+
+    [Fact]
+    public async Task A_local_blocker_named_by_id_is_waited_on_too()
+    {
+        int blockerId;
+        await using (var ctx = NewCtx())
+        {
+            var ahead = await Seed(ctx, TicketPhase.NeedsQa);
+            Older(ahead, ctx);
+            blockerId = (await Seed(ctx, TicketPhase.NeedsImplementation)).Id;
+            var waiting = await Seed(ctx, TicketPhase.NeedsSpeculation);
+            await Dep(ctx, waiting.Id, blockerTicketId: blockerId, origin: DependencyOrigin.Local);
+        }
+        Assert.Equal(blockerId, await ClaimedId());
+    }
+
+    [Fact]
+    public async Task Priority_still_beats_being_waited_on()
+    {
+        int highId;
+        await using (var ctx = NewCtx())
+        {
+            var high = await Seed(ctx, TicketPhase.NeedsImplementation, "ALPHA-5");
+            high.Priority = TicketPriority.High;
+            await ctx.SaveChangesAsync();
+            highId = high.Id;
+            await Seed(ctx, TicketPhase.NeedsImplementation, "ALPHA-1");
+            var waiting = await Seed(ctx, TicketPhase.NeedsImplementation, "ALPHA-2");
+            await Dep(ctx, waiting.Id, issueKey: "ALPHA-1");
+        }
+        Assert.Equal(highId, await ClaimedId());
+    }
+
+    [Theory]
+    [InlineData(TicketPhase.Backlog, null)]
+    [InlineData(TicketPhase.Blocked, null)]
+    [InlineData(TicketPhase.NeedsImplementation, false)]
+    public async Task A_dependent_that_would_not_run_anyway_boosts_nothing(TicketPhase dependentPhase, bool? over)
+    {
+        int aheadId;
+        await using (var ctx = NewCtx())
+        {
+            var ahead = await Seed(ctx, TicketPhase.NeedsQa, "ALPHA-5");
+            Older(ahead, ctx);
+            aheadId = ahead.Id;
+            await Seed(ctx, TicketPhase.NeedsImplementation, "ALPHA-1");
+            var dependent = await Seed(ctx, dependentPhase, "ALPHA-2");
+            await Dep(ctx, dependent.Id, issueKey: "ALPHA-1", over: over);
+        }
+        Assert.Equal(aheadId, await ClaimedId());
+    }
 }
