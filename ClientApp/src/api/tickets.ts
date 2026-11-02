@@ -1,6 +1,6 @@
 import type {
   Phase, PhaseInfo, ProjectInfo, TicketSummary, TicketDetail,
-  WorkItem, QaItem, Comment, QaStatusName, JourneyLeg, Priority,
+  WorkItem, QaItem, Comment, QaStatusName, JourneyLeg, RunContext, Priority,
   Track, ReviewSeverity, ReviewCommentStatus, ReviewVerdict,
 } from '../types/tickets';
 
@@ -34,6 +34,10 @@ export const getTicket = (id: number) => fetch(`/api/tickets/${id}`).then(json<T
 // every worker receives over MCP, and transition history is context none of them has a use for.
 export const getTicketJourney = (id: number) =>
   fetch(`/api/tickets/${id}/journey`).then(json<JourneyLeg[]>);
+
+// How full each of the ticket's runs got. Apart from getTicket for the same reason as the journey.
+export const getTicketRunContext = (id: number) =>
+  fetch(`/api/tickets/${id}/run-context`).then(json<RunContext[]>);
 
 export const createTicket = (body: {
   // title is required only for standalone tickets; a linked ticket pulls it from the tracker.

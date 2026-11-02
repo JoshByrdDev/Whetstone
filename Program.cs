@@ -348,6 +348,7 @@ app.MapStewardEndpoints();
 // A ticket's trip through the phases. Its own endpoint rather than a field on the ticket detail,
 // which is also what every worker receives through MCP — see TicketJourney.
 app.MapJourneyEndpoint();
+app.MapRunContextEndpoint();
 
 // Local ticketing MCP endpoint (JSON-RPC over Streamable HTTP).
 app.MapMcp("/mcp");

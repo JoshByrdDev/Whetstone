@@ -154,6 +154,34 @@ try {
     $bare = '{"type":"system","subtype":"init","mcp_servers":[],"tools":[]}' | ConvertFrom-Json
     $ev2 = @(ConvertFrom-AgentEvent -Provider $claude -Event $bare -State @{}) | Where-Object { $_.Kind -eq 'session_start' }
     Check 'a CLI that leaves them out leaves them unknown' "$($null -eq $ev2.SessionId) $($null -eq $ev2.CliVersion)" 'True True'
+
+    Write-Host "== the context window and compactions, from the stream"
+    $compact = '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto","pre_tokens":178067}}' | ConvertFrom-Json
+    $c = @(ConvertFrom-AgentEvent -Provider $claude -Event $compact -State @{}) | Where-Object { $_.Kind -eq 'compaction' }
+    Check 'a compact boundary is a compaction' @($c).Count 1
+    Check '... with the size it compacted at' $c.PreTokens 178067
+    $subCompact = '{"type":"system","subtype":"compact_boundary","parent_tool_use_id":"toolu_1","compact_metadata":{"pre_tokens":9}}' | ConvertFrom-Json
+    Check "a sub-agent's compaction is not the run's" @(@(ConvertFrom-AgentEvent -Provider $claude -Event $subCompact -State @{}) | Where-Object { $_.Kind -eq 'compaction' }).Count 0
+    # The main model read the most; the small one on the side has a smaller window and must not win.
+    $result = '{"type":"result","num_turns":3,"usage":{},"modelUsage":{"small-model":{"inputTokens":10,"cacheReadInputTokens":0,"cacheCreationInputTokens":900,"contextWindow":200000},"main-model":{"inputTokens":5,"cacheReadInputTokens":800000,"cacheCreationInputTokens":40000,"contextWindow":1000000}}}' | ConvertFrom-Json
+    $r = @(ConvertFrom-AgentEvent -Provider $claude -Event $result -State @{}) | Where-Object { $_.Kind -eq 'result' }
+    Check "the window is the model that read the most" $r.ContextWindow 1000000
+    $noUsage = '{"type":"result","num_turns":1,"usage":{}}' | ConvertFrom-Json
+    $r2 = @(ConvertFrom-AgentEvent -Provider $claude -Event $noUsage -State @{}) | Where-Object { $_.Kind -eq 'result' }
+    Check 'a result without modelUsage leaves the window unknown' ($null -eq $r2.ContextWindow) $true
+
+    $script:posted = @()
+    Send-CycleReport -TicketId '7' -Project 'alpha' -Phase 'QaTesting' -Skill 'qa-test' -Resumed $false -Model 'm' `
+        -StartedAt (Get-Date) -DurationSeconds 1 -Mutations 0 -Outcome 'Completed' `
+        -PeakContextTokens 486000 -ContextWindowTokens 1000000 -Compactions 0
+    $sent = $script:posted[0].body | ConvertFrom-Json
+    Check 'the report carries the window' $sent.contextWindowTokens 1000000
+    Check '... and a zero compaction count, which is a fact' $sent.compactions 0
+    $script:posted = @()
+    Send-CycleReport -TicketId '7' -Project 'alpha' -Phase 'QaTesting' -Skill 'qa-test' -Resumed $false -Model 'm' `
+        -StartedAt (Get-Date) -DurationSeconds 1 -Mutations 0 -Outcome 'Completed'
+    $sent2 = $script:posted[0].body | ConvertFrom-Json
+    Check 'a run that knows neither sends neither' "$($null -eq $sent2.PSObject.Properties['contextWindowTokens']) $($null -eq $sent2.PSObject.Properties['compactions'])" 'True True'
 }
 finally {
     Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue

@@ -1,3 +1,4 @@
+using Whetstone.Api;
 using Whetstone.Models;
 using Whetstone.Persistence;
 using Whetstone.Services;
@@ -213,6 +214,33 @@ public class MetricsTests : IDisposable
             Assert.Equal(["Bash", "mcp__playwright__browser_snapshot"], top.Select(t => t.Tool));
             Assert.Equal("pnpm check", top[0].Detail);
             Assert.Equal(1, top[1].Images);
+        }
+    }
+
+    [Fact]
+    public async Task Cycle_keeps_its_window_and_compactions_and_the_drawer_reads_them_back()
+    {
+        int id;
+        await using (var ctx = NewCtx()) id = (await Seed(ctx, TicketPhase.QaTesting)).Id;
+
+        await using (var ctx = NewCtx())
+        {
+            var m = new MetricsService(ctx);
+            await m.RecordCycleAsync(Report(id, TicketPhase.QaTesting) with
+                { PeakContextTokens = 486_000, ContextWindowTokens = 1_000_000, Compactions = 0 });
+            // A provider that reports no window: unknown, not zero. A nonsense window is not kept.
+            await m.RecordCycleAsync(Report(id, TicketPhase.QaTesting) with
+                { PeakContextTokens = 90_000, ContextWindowTokens = 0, Compactions = -1 });
+        }
+
+        await using (var ctx = NewCtx())
+        {
+            var runs = await TicketRunContext.ForTicketAsync(ctx, id);
+            Assert.Equal(2, runs.Count);
+            Assert.Equal((486_000, 1_000_000, 0), (runs[0].Peak!.Value, runs[0].Window!.Value, runs[0].Compactions!.Value));
+            Assert.Equal("QaTesting", runs[0].Phase);
+            Assert.Null(runs[1].Window);
+            Assert.Null(runs[1].Compactions);
         }
     }
 

@@ -115,7 +115,7 @@ select
     -- What a run spent against the rate limit: everything but cache reads, which are a different,
     -- far cheaper kind of token and two orders of magnitude more numerous.
     coalesce(input_tokens, 0) + coalesce(output_tokens, 0) + coalesce(cache_creation_tokens, 0) as tokens,
-    peak_context_tokens, tool_result_chars, mutations,
+    peak_context_tokens, context_window_tokens, compactions, tool_result_chars, mutations,
     case when runs_in_session = 1 then session_list_cost_usd end       as list_cost_usd,
 
     -- Where the wall clock went. The parts add up to duration_s; unmeasured_s is the remainder.

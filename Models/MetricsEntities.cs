@@ -295,6 +295,20 @@ public class CycleRun
     /// </summary>
     public int? PeakContextTokens { get; set; }
 
+    /// <summary>
+    /// The context window the run's model had, as its CLI reported it - what
+    /// <see cref="PeakContextTokens"/> is measured against. Null for a provider that does not say;
+    /// the board then shows the peak alone rather than a share of a guessed window.
+    /// </summary>
+    public int? ContextWindowTokens { get; set; }
+
+    /// <summary>
+    /// How many times the CLI compacted the conversation to fit its window. A run's peak can look
+    /// ordinary after one, so this is what says the run actually ran out of room. Null when the
+    /// provider has no such event to count.
+    /// </summary>
+    public int? Compactions { get; set; }
+
     /// <summary>Characters every tool call handed back, in all. Text only; images are counted per result.</summary>
     public int? ToolResultChars { get; set; }
 

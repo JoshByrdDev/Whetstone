@@ -43,7 +43,9 @@ public class MetricsService
         int? PeakContextTokens = null,
         int? ToolResultChars = null,
         IReadOnlyList<ToolResultSize>? LargestToolResults = null,
-        CycleRunDetail? Detail = null);
+        CycleRunDetail? Detail = null,
+        int? ContextWindowTokens = null,
+        int? Compactions = null);
 
     /// <summary>
     /// What a run knows about how it was set up and what it left behind, beyond what it spent - every
@@ -125,6 +127,8 @@ public class MetricsService
             CacheReadTokens     = r.CacheReadTokens,
             CacheCreationTokens = r.CacheCreationTokens,
             PeakContextTokens   = r.PeakContextTokens,
+            ContextWindowTokens = r.ContextWindowTokens is > 0 ? r.ContextWindowTokens : null,
+            Compactions         = r.Compactions is >= 0 ? r.Compactions : null,
             ToolResultChars     = r.ToolResultChars,
             LargestToolResultsJson = r.LargestToolResults is { Count: > 0 } top
                 ? JsonSerializer.Serialize(top, Json) : null,

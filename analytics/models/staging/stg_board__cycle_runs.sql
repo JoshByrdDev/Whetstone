@@ -18,6 +18,8 @@ select
     "CacheReadTokens"             as cache_read_tokens,
     "CacheCreationTokens"         as cache_creation_tokens,
     "PeakContextTokens"           as peak_context_tokens,
+    "ContextWindowTokens"         as context_window_tokens,
+    "Compactions"                 as compactions,
     "ToolResultChars"             as tool_result_chars,
     "Mutations"                   as mutations,
     "Outcome"                     as outcome,

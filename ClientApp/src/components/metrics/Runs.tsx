@@ -6,6 +6,7 @@ import { useVeil } from '../../hooks/useVeil';
 import type { RunDetail, RunListRow, Scope, ToolCall } from './types';
 import { scopeQuery } from './types';
 import type { RunFilter } from './PhaseDetail';
+import { CONTEXT_TONE, contextLevel, describeContext } from './contextLevel';
 import {
   Empty, FilterChip, NUM, SegBar, Section, Sheet, Swatch, TD, TH, TIME_PARTS, compact, day, mins, phaseName, reasonOf,
   secs, useJson,
@@ -102,7 +103,8 @@ export function RunDrawer({ runId, onClose }: { runId: number; onClose: () => vo
   }, [dismiss]);
 
   const run = data?.run;
-  const calls = (data?.calls ?? []).filter(c => !filter || `${c.toolShort} ${c.toolDetail ?? ''} ${c.inputSummary ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
+  const ctxLevel = contextLevel(run?.peakContextTokens, run?.contextWindowTokens, run?.compactions);
+  const calls =(data?.calls ?? []).filter(c => !filter || `${c.toolShort} ${c.toolDetail ?? ''} ${c.inputSummary ?? ''}`.toLowerCase().includes(filter.toLowerCase()));
   const span = Math.max(1, run?.durationS ?? 1, ...(data?.calls ?? []).map(c => c.offsetS + (c.seconds ?? 0)));
   const parts = run ? TIME_PARTS.map(p => {
     const s = (run as unknown as Record<string, number | null>)[`${p.key}S`] ?? 0;
@@ -149,7 +151,10 @@ export function RunDrawer({ runId, onClose }: { runId: number; onClose: () => vo
               <Fact k="Tokens" v={`${compact(run.tokens)} · ${compact(run.cacheReadTokens)} cached`} />
               <Fact k="Turns" v={run.numTurns ?? '—'} />
               <Fact k="Tool calls" v={run.splitSource === 'none' ? '—' : `${run.toolCalls}${run.toolErrors ? `, ${run.toolErrors} errors` : ''}`} />
-              <Fact k="Peak context" v={compact(run.peakContextTokens)} />
+              <Fact k="Peak context" v={<span className={CONTEXT_TONE[ctxLevel]}>{describeContext(run.peakContextTokens, run.contextWindowTokens, run.compactions)}</span>}
+                sub={ctxLevel === 'high' ? (run.compactions ? 'ran out of room and was summarised' : 'near the window')
+                  : ctxLevel === 'warn' ? 'over half the window'
+                  : ctxLevel === 'unknown' && run.peakContextTokens ? 'no window reported' : null} />
               <Fact k="Change" v={run.linesAdded === null ? 'not recorded' : `+${run.linesAdded} −${run.linesRemoved} in ${run.filesChanged} files`} />
               <Fact k="Skill" v={run.skillVersion ?? '—'} sub={run.skillVersionLabel} mono />
               <Fact k="Prompt" v={run.promptVersion ?? '—'} sub={run.promptVersionLabel} mono />

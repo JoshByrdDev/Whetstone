@@ -74,7 +74,8 @@ public record CycleReportRequest(
     int? CacheReadTokens = null, int? CacheCreationTokens = null,
     int? PeakContextTokens = null, int? ToolResultChars = null,
     List<MetricsService.ToolResultSize>? LargestToolResults = null,
-    MetricsService.CycleRunDetail? Detail = null);
+    MetricsService.CycleRunDetail? Detail = null,
+    int? ContextWindowTokens = null, int? Compactions = null);
 
 public static class TicketEndpoints
 {
@@ -431,7 +432,8 @@ public static class TicketEndpoints
                 req.StartedAt ?? DateTime.UtcNow, req.DurationSeconds, req.Mutations, outcome,
                 req.ApiDurationSeconds, req.NumTurns, req.InputTokens, req.OutputTokens,
                 req.CacheReadTokens, req.CacheCreationTokens,
-                req.PeakContextTokens, req.ToolResultChars, req.LargestToolResults, req.Detail));
+                req.PeakContextTokens, req.ToolResultChars, req.LargestToolResults, req.Detail,
+                req.ContextWindowTokens, req.Compactions));
 
             // Every recorded run is a new fact an experiment's guardrail may break on. Never fails
             // the report: the run is already stored, and the next one checks again.
@@ -516,7 +518,7 @@ public static class TicketEndpoints
                 c.Id, c.TicketId, c.ProjectKey, Phase = c.Phase.ToString(), c.Skill, c.Resumed, c.Model,
                 c.StartedAt, c.DurationSeconds, c.ApiDurationSeconds, c.NumTurns,
                 c.InputTokens, c.OutputTokens, c.CacheReadTokens, c.CacheCreationTokens,
-                c.PeakContextTokens, c.ToolResultChars,
+                c.PeakContextTokens, c.ContextWindowTokens, c.Compactions, c.ToolResultChars,
                 LargestToolResults = MetricsService.LargestToolResultsOf(c),
                 c.Mutations, Outcome = c.Outcome.ToString(), PhaseAfter = c.PhaseAfter?.ToString(),
             })));

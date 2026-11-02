@@ -769,6 +769,13 @@ function ConvertFrom-AgentEvent {
                                            SessionId = $(if ($Event.session_id) { "$($Event.session_id)" } else { $null })
                                            CliVersion = $(if ($Event.claude_code_version) { "$($Event.claude_code_version)" } else { $null }) }
             }
+            # The CLI summarised the conversation to make room: everything before this point is now
+            # a summary the model wrote of it. A run's peak can look ordinary after one, so the count
+            # is what says the run actually ran out of room. Main thread only, as with context.
+            elseif ("$($Event.subtype)" -eq 'compact_boundary' -and -not $Event.parent_tool_use_id) {
+                $meta = $Event.compact_metadata
+                $out += [pscustomobject]@{ Kind = 'compaction'; PreTokens = (Get-JsonNumber $meta 'pre_tokens') }
+            }
         }
         'assistant' {
             # How much this one model call was sent: everything the session has accumulated, which
@@ -826,6 +833,22 @@ function ConvertFrom-AgentEvent {
         'result' {
             $u = $Event.usage
             $ms = Get-JsonNumber $Event 'duration_ms'
+            # The window the run's model had, as the CLI reports it per model. A run can use more than
+            # one (a sub-agent, a small model for side calls), so the one that read the most is taken
+            # as the run's own - it is the conversation the peak was measured on.
+            $window = $null
+            $mostRead = [long]-1
+            if ($Event.modelUsage) {
+                foreach ($m in $Event.modelUsage.PSObject.Properties) {
+                    $read = [long]0
+                    foreach ($k in 'inputTokens', 'cacheReadInputTokens', 'cacheCreationInputTokens') {
+                        $n = Get-JsonNumber $m.Value $k
+                        if ($null -ne $n) { $read += [long]$n }
+                    }
+                    $w = Get-JsonNumber $m.Value 'contextWindow'
+                    if ($null -ne $w -and $w -gt 0 -and $read -gt $mostRead) { $window = $w; $mostRead = $read }
+                }
+            }
             $out += [pscustomobject]@{
                 Kind              = 'result'
                 Text              = $Event.result
@@ -836,6 +859,7 @@ function ConvertFrom-AgentEvent {
                 OutputTokens      = (Get-JsonNumber $u 'output_tokens')
                 CacheReadTokens   = (Get-JsonNumber $u 'cache_read_input_tokens')
                 CacheCreateTokens = (Get-JsonNumber $u 'cache_creation_input_tokens')
+                ContextWindow     = $window
             }
         }
     }

@@ -84,6 +84,19 @@ export interface JourneyLeg {
   actor: string;
   backward: boolean;
 }
+
+/** How full one of a ticket's runs got (`/api/tickets/{id}/run-context`), for the drawer's warning. */
+export interface RunContext {
+  runId: number;
+  phase: string;
+  startedAt: string;
+  model: string | null;
+  peak: number | null;
+  /** Null when the provider reported no window. */
+  window: number | null;
+  compactions: number | null;
+  largest: { tool: string; detail: string | null; chars: number; images: number }[];
+}
 export type QaStatusName = 'Todo' | 'Passed' | 'Failed' | 'Blocked';
 // Steward: the project's stand-in for the owner. Its notes bind a worker exactly as the owner's do.
 export type AuthorName = 'Human' | 'Claude' | 'System' | 'Steward';

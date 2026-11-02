@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import type { ReactNode } from 'react';
-import type { Phase, PhaseInfo, TicketDetail as TDetail, QaStatusName, BlockPayload, BlockQuestion, JourneyLeg, NoteAttachment, Priority, TrackerKind } from '../types/tickets';
+import type { Phase, PhaseInfo, TicketDetail as TDetail, QaStatusName, BlockPayload, BlockQuestion, JourneyLeg, RunContext, NoteAttachment, Priority, TrackerKind } from '../types/tickets';
 import { PHASE_LABEL, DEFAULT_PRIORITY } from '../types/tickets';
 import type { AgentState } from '../types/events';
 import * as api from '../api/tickets';
@@ -16,6 +16,9 @@ import { BugTrace } from './BugTrace';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { ReviewPanel } from './ReviewPanel';
 import { JourneyChart } from './JourneyChart';
+import { MONO } from './orbit';
+import { compact } from './metrics/parts';
+import { CONTEXT_RANK, CONTEXT_TONE, contextLevel, describeContext } from './metrics/contextLevel';
 import { AgentMascot, agentAccent } from './AgentMascot';
 import { useShotLightbox } from './ShotLightbox';
 import { usePop } from '../hooks/usePop';
@@ -80,6 +83,7 @@ export function TicketDetail({
   const move = usePop(moveOpen);
   const [showAllProgress, setShowAllProgress] = useState(false);
   const [journey, setJourney] = useState<JourneyLeg[]>([]);
+  const [runContext, setRunContext] = useState<RunContext[]>([]);
 
   const reload = useCallback(async () => {
     try { setT(await api.getTicket(id)); }
@@ -95,6 +99,8 @@ export function TicketDetail({
     if (!t) return;
     let live = true;
     api.getTicketJourney(id).then(j => { if (live) setJourney(j); }).catch(() => {});
+    // A run is recorded as it ends, which is the moment the phase moves - so the same trigger.
+    api.getTicketRunContext(id).then(r => { if (live) setRunContext(r); }).catch(() => {});
     return () => { live = false; };
   }, [id, t?.phase]);
 
@@ -622,6 +628,8 @@ export function TicketDetail({
             {/* The trip, last because it is the only thing here that is about the ticket's history
                 rather than its present. Straight up and to the right means it went through cleanly;
                 a saw-tooth means the pipeline had to redo its own work, once per tooth. */}
+            <RunContextWarning runs={runContext} />
+
             {journey.length > 0 && (
               <div>
                 <SectionLabel>The trip it took</SectionLabel>
@@ -917,6 +925,45 @@ function WorkingMarker({ agent, since, verb = 'started' }: { agent: AgentState; 
       <AgentMascot mood="running" size={18} agent={agent.slot} />
     </span>
   );
+}
+
+// Said only when a run got past half its window or was compacted: a health note, not a running
+// tally, so a ticket whose runs all fit says nothing. It names the fullest run and what filled it -
+// the largest tool results are what a skill or a prompt would have to trim - and how many others
+// also crossed the line, which is what tells one heavy run from a ticket that is getting heavier.
+function RunContextWarning({ runs }: { runs: RunContext[] }) {
+  const leveled = runs.map(r => ({ r, level: contextLevel(r.peak, r.window, r.compactions) }));
+  const flagged = leveled.filter(x => x.level === 'warn' || x.level === 'high');
+  if (flagged.length === 0) return null;
+  const worst = flagged.reduce((a, b) =>
+    CONTEXT_RANK[b.level] > CONTEXT_RANK[a.level]
+      || (CONTEXT_RANK[b.level] === CONTEXT_RANK[a.level] && (b.r.peak ?? 0) / (b.r.window ?? 1) > (a.r.peak ?? 0) / (a.r.window ?? 1))
+      ? b : a);
+  const { r, level } = worst;
+  const others = flagged.length - 1;
+  return (
+    <div className="min-w-0">
+      <SectionLabel>Context</SectionLabel>
+      <p className="text-xs text-gray-300 break-words">
+        Fullest run:{' '}
+        <span className={CONTEXT_TONE[level]} style={{ fontFamily: MONO }}>{describeContext(r.peak, r.window, r.compactions)}</span>
+        {' '}in {PHASE_LABEL[r.phase as Phase] ?? r.phase}, {formatShortDate(r.startedAt)}
+        {others > 0 && <span className="text-gray-500"> · {others} other run{others === 1 ? '' : 's'} past half the window</span>}
+      </p>
+      {r.largest.length > 0 && (
+        <p className="mt-1 text-[11px] text-gray-500 break-words">
+          Largest results:{' '}
+          {r.largest.map((x, i) => (
+            <span key={i}>{i > 0 ? ', ' : ''}{x.tool.replace(/^mcp__\w+?__/, '')}{x.detail ? ` ${x.detail}` : ''} <span style={{ fontFamily: MONO }}>{compact(x.chars)}</span> chars</span>
+          ))}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function formatShortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function SectionLabel({ children, inline }: { children: ReactNode; inline?: boolean }) {

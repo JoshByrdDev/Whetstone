@@ -103,6 +103,7 @@ function Send-CycleReport {
         [string]$Outcome, $ApiDurationSeconds = $null, $NumTurns = $null,
         $InputTokens = $null, $OutputTokens = $null, $CacheReadTokens = $null, $CacheCreationTokens = $null,
         $PeakContextTokens = $null, $ToolResultChars = $null, $LargestToolResults = $null,
+        $ContextWindowTokens = $null, $Compactions = $null,
         [hashtable]$Detail = $null
     )
     if (-not $DashboardUrl -or -not $TicketId) { return }
@@ -130,6 +131,8 @@ function Send-CycleReport {
         if ($null -ne $PeakContextTokens)   { $payload.peakContextTokens   = $PeakContextTokens }
         if ($null -ne $ToolResultChars)     { $payload.toolResultChars     = $ToolResultChars }
         if ($null -ne $LargestToolResults)  { $payload.largestToolResults  = @($LargestToolResults) }
+        if ($null -ne $ContextWindowTokens) { $payload.contextWindowTokens = $ContextWindowTokens }
+        if ($null -ne $Compactions)         { $payload.compactions         = $Compactions }
         # How the run was set up and what it left (New-RunDetail), the same rule again: only the
         # parts it learned. A run that ended before its agent started knows its setup and no more.
         if ($Detail) {
@@ -2214,6 +2217,12 @@ $resultIsError      = $false
 # goes by rather than off the result event, so a run killed at the timeout still reports them -
 # and that is the run most worth understanding.
 $peakContextTokens = $null
+# What the peak is measured against, and whether the run ran out of it: the window the CLI says its
+# model had (claude only - the others report none, and a guessed window would warn wrongly), and how
+# many times it compacted the conversation to fit. Zero is a fact a claude run knows; codex and gemini
+# leave it unknown.
+$contextWindow     = $null
+$compactions       = if ($AgentProvider.Key -eq 'claude') { 0 } else { $null }
 $toolCalls         = @{}
 $toolResults       = New-Object System.Collections.Generic.List[object]
 
@@ -2374,6 +2383,11 @@ try {
                     "context" {
                         if ($null -eq $peakContextTokens -or $e.Tokens -gt $peakContextTokens) { $peakContextTokens = [int]$e.Tokens }
                     }
+                    "compaction" {
+                        $compactions = 1 + [int]$compactions
+                        Write-Log ("  ! Context compacted ({0} so far){1}" -f $compactions,
+                            $(if ($null -ne $e.PreTokens) { (" at {0:N0} tokens" -f [long]$e.PreTokens) } else { '' }))
+                    }
                     "tool_result" {
                         $call = $toolCalls[$e.ToolUseId]
                         $toolResults.Add([pscustomobject]@{
@@ -2416,6 +2430,7 @@ try {
                         if ($null -ne $e.OutputTokens)      { $outputTokens      = [int]$e.OutputTokens }
                         if ($null -ne $e.CacheReadTokens)   { $cacheReadTokens   = [int]$e.CacheReadTokens }
                         if ($null -ne $e.CacheCreateTokens) { $cacheCreateTokens = [int]$e.CacheCreateTokens }
+                        if ($null -ne $e.ContextWindow)     { $contextWindow     = [int]$e.ContextWindow }
 
                         if ($e.Text) {
                             $e.Text -split "`n" | ForEach-Object {
@@ -2752,13 +2767,15 @@ Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $
     -InputTokens $inputTokens -OutputTokens $outputTokens `
     -CacheReadTokens $cacheReadTokens -CacheCreationTokens $cacheCreateTokens `
     -PeakContextTokens $peakContextTokens -ToolResultChars $toolResultChars `
-    -LargestToolResults $largestToolResults -Detail $runDetail
+    -LargestToolResults $largestToolResults -ContextWindowTokens $contextWindow -Compactions $compactions `
+    -Detail $runDetail
 
 Write-Log ("  Cycle: {0} in {1}s ({2} turns, {3} in / {4} out tokens)" -f $outcome,
     [math]::Round($cycleTimer.Elapsed.TotalSeconds), $numTurns, $inputTokens, $outputTokens)
 if ($null -ne $peakContextTokens) {
-    Write-Log ("  Context: peak {0:N0} tokens in one turn; {1} tool results, {2:N0} chars in all" -f $peakContextTokens,
-        $toolResults.Count, $toolResultChars)
+    Write-Log ("  Context: peak {0:N0} tokens in one turn{3}; {1} tool results, {2:N0} chars in all" -f $peakContextTokens,
+        $toolResults.Count, $toolResultChars,
+        $(if ($contextWindow) { (" of {0:N0} ({1:P0}), compacted {2}x" -f $contextWindow, ($peakContextTokens / $contextWindow), [int]$compactions) } else { '' }))
     foreach ($r in $largestToolResults) {
         $img = if ($r.images -gt 0) { " + $($r.images) image(s)" } else { "" }
         Write-Log ("    {0,9:N0} chars{1}  {2} {3}" -f $r.chars, $img, $r.tool, $r.detail)

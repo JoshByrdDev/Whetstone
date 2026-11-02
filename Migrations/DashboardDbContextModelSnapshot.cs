@@ -278,6 +278,12 @@ namespace Whetstone.Migrations
                     b.Property<string>("CommitRangeJson")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("Compactions")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("ContextWindowTokens")
+                        .HasColumnType("INTEGER");
+
                     b.Property<double>("DurationSeconds")
                         .HasColumnType("REAL");
 

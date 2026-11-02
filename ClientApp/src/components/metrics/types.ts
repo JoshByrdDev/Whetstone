@@ -81,6 +81,8 @@ export interface RunListRow {
 export interface RunDetail extends RunListRow {
   endedAt: string; durationS: number; inputTokens: number | null; outputTokens: number | null;
   cacheReadTokens: number | null; cacheCreationTokens: number | null; peakContextTokens: number | null;
+  /** Null when the provider reported no window, or for a run recorded before it was kept. */
+  contextWindowTokens: number | null; compactions: number | null;
   mutations: number; listCostUsd: number | null; cliVersion: string | null; entryReasonSource: string;
   prepS: number | null; startupS: number | null; modelS: number | null; toolS: number | null;
   agentUnsplitS: number | null; handoffS: number | null; overheadS: number | null; unmeasuredS: number | null;
