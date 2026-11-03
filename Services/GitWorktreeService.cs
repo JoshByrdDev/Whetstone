@@ -92,7 +92,18 @@ public class GitWorktreeService
             catch (AbandonedMutexException) { held = true; }
             if (!held) return "the hub repo was busy for 15 minutes";
             Run(repoDir, "worktree", "prune");
-            var (ok, _, stderr) = Run(repoDir, RemoveTimeout, "worktree", "add", "--detach", path, sha);
+            var (ok, _, stderr) = Run(repoDir, AddTimeout, out var timedOut, "worktree", "add", "--detach", path, sha);
+            if (timedOut)
+            {
+                // Killed mid-checkout, git never got to roll back: what is left is a registration it
+                // locked while writing and a folder half full. Both are ours - nobody else adds a
+                // worktree at this path - and left there, every later check of this branch fails on them.
+                Run(repoDir, "worktree", "remove", "--force", "--force", path);
+                try { if (Directory.Exists(path)) Directory.Delete(path, recursive: true); }
+                catch (Exception ex) { _log.LogWarning(ex, "Could not remove the half-made worktree {Path}", path); }
+                Run(repoDir, "worktree", "prune");
+                return $"git worktree add did not finish in {AddTimeout.TotalMinutes:0} minutes and was stopped (something on this machine held a file it was writing: antivirus, an editor, another process)";
+            }
             return ok ? null : string.IsNullOrWhiteSpace(stderr) ? "git refused to add it" : stderr.Trim();
         }
         finally
@@ -169,6 +180,12 @@ public class GitWorktreeService
     private static readonly TimeSpan HubWait = TimeSpan.FromMinutes(15);
     private static readonly TimeSpan RemoveTimeout = TimeSpan.FromMinutes(10);
 
+    /// <summary>
+    /// How long a detached checkout may take. A few seconds is normal; it runs under the hub lock,
+    /// so while it hangs every worker's own <c>worktree add</c> on the repo waits behind it.
+    /// </summary>
+    public TimeSpan AddTimeout { get; init; } = TimeSpan.FromMinutes(5);
+
     /// <summary>The name <c>Invoke-WithMutex -Name "hub-$RepoDir"</c> resolves to in heartbeat-common.ps1.</summary>
     private static string HubMutexName(string repoDir) =>
         @"Local\CDH-" + System.Text.RegularExpressions.Regex.Replace("hub-" + repoDir, "[^A-Za-z0-9_-]", "-");
@@ -177,8 +194,18 @@ public class GitWorktreeService
     private (bool Ok, string Stdout, string Stderr) Run(string workingDir, params string[] args) =>
         Run(workingDir, TimeSpan.FromSeconds(30), args);
 
-    private (bool Ok, string Stdout, string Stderr) Run(string workingDir, TimeSpan timeout, params string[] args)
+    private (bool Ok, string Stdout, string Stderr) Run(string workingDir, TimeSpan timeout, params string[] args) =>
+        Run(workingDir, timeout, out _, args);
+
+    /// <summary>
+    /// Run git, and stop it - its whole tree, filters and hooks included - once <paramref name="timeout"/>
+    /// is up. Its output is read while it runs: read to the end first, as it once was, a git that never
+    /// finished never closed its output, and the limit was never reached. One check-tree checkout
+    /// held a merge, and the hub lock with it, for most of an hour that way.
+    /// </summary>
+    private (bool Ok, string Stdout, string Stderr) Run(string workingDir, TimeSpan timeout, out bool timedOut, params string[] args)
     {
+        timedOut = false;
         var psi = new ProcessStartInfo("git")
         {
             WorkingDirectory = workingDir,
@@ -195,10 +222,17 @@ public class GitWorktreeService
         {
             using var p = Process.Start(psi);
             if (p is null) return (false, "", "could not start git");
-            var stdout = p.StandardOutput.ReadToEnd();
-            var stderr = p.StandardError.ReadToEnd();
-            if (!p.WaitForExit(timeout)) { try { p.Kill(true); } catch { } return (false, stdout, "git timed out"); }
-            return (p.ExitCode == 0, stdout, stderr);
+            var stdout = p.StandardOutput.ReadToEndAsync();
+            var stderr = p.StandardError.ReadToEndAsync();
+            if (!p.WaitForExit(timeout))
+            {
+                try { p.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                timedOut = true;
+                _log.LogWarning("git {Args} did not finish in {Timeout} in {Dir} and was stopped", string.Join(' ', args), timeout, workingDir);
+                return (false, "", "git timed out");
+            }
+            p.WaitForExit(); // the streams' last bytes
+            return (p.ExitCode == 0, stdout.Result, stderr.Result);
         }
         catch (Exception ex)
         {

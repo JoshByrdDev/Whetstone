@@ -139,6 +139,35 @@ public class GitWorktreeServiceTests : IDisposable
     public void List_on_a_directory_that_is_not_a_repo_is_empty_rather_than_a_throw()
         => Assert.Empty(_svc.List(Path.Combine(_root, "nope")));
 
+    [Fact]
+    public void A_detached_checkout_that_hangs_is_stopped_and_leaves_nothing_behind()
+    {
+        // A checkout filter that never finishes stands in for whatever held a file the checkout was
+        // writing: git sits there with its output open, which is what once defeated the time limit.
+        Git(_repo, "config", "filter.hang.clean", "cat");
+        Git(_repo, "config", "filter.hang.smudge", "sleep 120");
+        File.WriteAllText(Path.Combine(_repo, ".gitattributes"), "*.hang filter=hang\n");
+        File.WriteAllText(Path.Combine(_repo, "x.hang"), "x\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "a file whose checkout hangs");
+        var sha = Git(_repo, "rev-parse", "HEAD").Trim();
+        var path = Path.Combine(_root, "wt", "check");
+        var svc = new GitWorktreeService(NullLogger<GitWorktreeService>.Instance) { AddTimeout = TimeSpan.FromSeconds(3) };
+
+        var clock = Stopwatch.StartNew();
+        var refused = svc.AddDetached(_repo, path, sha);
+
+        Assert.True(clock.Elapsed < TimeSpan.FromSeconds(60), $"took {clock.Elapsed}");
+        Assert.Contains("did not finish", refused);
+        Assert.Single(svc.List(_repo));
+        Assert.False(Directory.Exists(path));
+
+        // And the same path takes a checkout again once nothing holds it up.
+        Git(_repo, "config", "filter.hang.smudge", "cat");
+        Assert.Null(svc.AddDetached(_repo, path, sha));
+        Assert.Equal(2, svc.List(_repo).Count);
+    }
+
     private static string Git(string dir, params string[] args)
     {
         var psi = new ProcessStartInfo("git")
