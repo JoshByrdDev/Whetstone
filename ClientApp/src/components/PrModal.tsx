@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useVeil } from '../hooks/useVeil';
-import { getPrPreflight, getPrBaseCheck, createPr, mergeTicket, rebaseTicket, forcePushTicket } from '../api/git';
+import { getPrPreflight, getPrBaseCheck, createPr, mergeTicket, rebaseTicket, forcePushTicket, copyLeftOutDescription } from '../api/git';
 import type { PrPreflight, PrBaseCheck, PrCreateResult, MergeResult } from '../api/git';
 import { DiffReviewList } from './DiffReviewList';
 
@@ -47,6 +47,8 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<PrCreateResult | null>(null);
+  // Whether the description the form's link left out made it onto the clipboard as the form opened.
+  const [copied, setCopied] = useState(false);
   // Set from the preflight: this project merges into its base rather than raising a PR.
   const [merge, setMerge] = useState(false);
   const [merged, setMerged] = useState<MergeResult | null>(null);
@@ -143,8 +145,12 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
       setResult(r);
       if (!r.ok) setError(r.error ?? 'Could not raise the PR.');
       // The host's own form is where the PR is actually confirmed. Opening it is the natural end of
-      // the flow; the link stays on screen because a popup blocker gets a vote here.
-      else if (r.url && r.mode === 'web') window.open(r.url, '_blank', 'noopener');
+      // the flow; the link stays on screen because a popup blocker gets a vote here. A description
+      // the link could not carry is copied first, while this page still has the focus.
+      else if (r.url && r.mode === 'web') {
+        if (r.descriptionLeftOut) setCopied(await copyLeftOutDescription(description));
+        window.open(r.url, '_blank', 'noopener');
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not raise the PR.');
     } finally {
@@ -496,6 +502,7 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
                   {result.url}
                 </a>
               )}
+              {result.descriptionLeftOut && <LeftOutDescription description={description} copied={copied} />}
             </div>
           )}
           {result && result.output.length > 0 && (
@@ -604,6 +611,30 @@ const TONES = {
   // thing it must not do.
   wait: 'border-hair bg-gray-900/40 text-gray-400',
 };
+
+/**
+ * A create-PR form that opened without its description, because the host's link could not carry
+ * one that long. Says what to do, and copies it again - the copy made as the form opened is best
+ * effort, and a second repo's description replaces the first on the clipboard anyway.
+ */
+export function LeftOutDescription({ description, copied }: { description: string; copied: boolean }) {
+  const [again, setAgain] = useState<boolean | null>(null);
+  const onClip = again ?? copied;
+  return (
+    <div className="flex items-start gap-2 text-amber-200">
+      <span className="flex-1 min-w-0">
+        The description is too long for the form's link, so the form opens without it.{' '}
+        {onClip ? 'It is on your clipboard - paste it into the Description box.' : 'Copy it and paste it into the Description box.'}
+      </span>
+      <button
+        onClick={async () => setAgain(await copyLeftOutDescription(description))}
+        className="orbit-tap shrink-0 text-[11px] font-semibold text-amber-100 px-2 py-0.5 rounded border border-amber-700"
+      >
+        {again ? 'Copied' : 'Copy description'}
+      </button>
+    </div>
+  );
+}
 
 export function Banner({ tone, children }: { tone: keyof typeof TONES; children: React.ReactNode }) {
   return <div className={`text-xs leading-relaxed rounded border px-3 py-2 ${TONES[tone]}`}>{children}</div>;

@@ -1052,6 +1052,33 @@ public class PrUrlTests
     }
 
     [Fact]
+    public void Azure_devops_leaves_out_a_description_too_long_for_the_link_and_says_so()
+    {
+        // A generated multi-repo description escapes to several KB; Azure DevOps 404s a query
+        // string that long, so the form would not open at all.
+        var description = string.Join("\n", Enumerable.Repeat("- The new wizard replaces the old dialogs and opens from the list page.", 60));
+        var url = TicketGitService.AzureDevOpsPrUrl(
+            "https://dev.azure.com/org/proj/_git/repo", "main", "jb/ALPHA-1", "ALPHA-1: Do the thing", description,
+            out var leftOut)!;
+
+        Assert.True(leftOut);
+        Assert.True(url.Length <= TicketGitService.MaxPrUrlLength);
+        Assert.DoesNotContain("description=", url);
+        Assert.Contains("sourceRef=jb%2FALPHA-1", url);
+        Assert.Contains("title=ALPHA-1%3A%20Do%20the%20thing", url);
+    }
+
+    [Fact]
+    public void Azure_devops_keeps_a_description_that_fits()
+    {
+        var url = TicketGitService.AzureDevOpsPrUrl(
+            "https://dev.azure.com/org/proj/_git/repo", "main", "feature", "Title", "Short and sweet.", out var leftOut)!;
+
+        Assert.False(leftOut);
+        Assert.Contains("description=Short%20and%20sweet.", url);
+    }
+
+    [Fact]
     public void A_url_with_no_git_segment_yields_nothing_rather_than_a_guess()
         => Assert.Null(TicketGitService.AzureDevOpsPrUrl("https://dev.azure.com/org", "main", "feature", null, null));
 

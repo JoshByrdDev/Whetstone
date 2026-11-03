@@ -158,6 +158,22 @@ export interface PrCreateResult {
   /** "gh" — the PR exists. "web" — pushed, and url is the prefilled form to finish on. */
   mode: 'gh' | 'web' | 'none';
   output: string[];
+  /** The form's link could not carry the description (too long for the host), so it must be pasted in. */
+  descriptionLeftOut?: boolean;
+}
+
+/**
+ * Put a description the form's link left out onto the clipboard. Best effort: a browser can refuse
+ * once the click that started the push is too far behind, which is why the dialogs also keep a
+ * button that copies it again.
+ */
+export async function copyLeftOutDescription(description: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(description);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

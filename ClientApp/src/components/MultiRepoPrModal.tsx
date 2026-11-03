@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useVeil } from '../hooks/useVeil';
-import { getPrPreflight, getPrBaseCheck, createPr, rebaseTicket, forcePushTicket } from '../api/git';
+import { getPrPreflight, getPrBaseCheck, createPr, rebaseTicket, forcePushTicket, copyLeftOutDescription } from '../api/git';
 import type { PrPreflight, PrCreateResult, RepoPreflight } from '../api/git';
 import { DiffReviewList } from './DiffReviewList';
-import { Action, Banner, Cmd, Tab, providerLabel, withBase } from './PrModal';
+import { Action, Banner, Cmd, LeftOutDescription, Tab, providerLabel, withBase } from './PrModal';
 
 /**
  * Raise the pull requests for a ticket on a project of several repos (docs/multi-repo-plan.md).
@@ -130,9 +130,21 @@ export function MultiRepoPrModal({ ticketId, onClose }: { ticketId: number; onCl
     }
   }
 
+  /**
+   * Open a repo's form. A description its link could not carry goes on the clipboard first, while
+   * this page still has the focus to write it.
+   */
+  async function openForm(dir: string, r: PrCreateResult) {
+    if (r.descriptionLeftOut) {
+      const description = sections[dir]?.description ?? '';
+      patch(dir, { copied: await copyLeftOutDescription(description) });
+    }
+    window.open(r.url!, '_blank', 'noopener');
+  }
+
   async function createOne(dir: string) {
     const r = await create(dir);
-    if (r?.ok && r.url && r.mode === 'web') window.open(r.url, '_blank', 'noopener');
+    if (r?.ok && r.url && r.mode === 'web') await openForm(dir, r);
   }
 
   /**
@@ -147,7 +159,7 @@ export function MultiRepoPrModal({ ticketId, onClose }: { ticketId: number; onCl
       const s = sections[repo.dir];
       if (!s || !canCreate(s)) continue;
       const r = await create(repo.dir);
-      if (!opened && r?.ok && r.url && r.mode === 'web') { window.open(r.url, '_blank', 'noopener'); opened = true; }
+      if (!opened && r?.ok && r.url && r.mode === 'web') { await openForm(repo.dir, r); opened = true; }
     }
     setCreatingAll(false);
   }
@@ -341,6 +353,8 @@ interface Section {
   busy: boolean;
   result: PrCreateResult | null;
   error: string | null;
+  /** The description the form's link left out was copied as the form opened. Only the opened one is. */
+  copied?: boolean;
 }
 
 /** PrModal's own gate, per repo: origin has answered, there is something to raise, and nothing says stop. */
@@ -534,6 +548,7 @@ function RepoSection({
                 {s.result.url}
               </a>
             )}
+            {s.result.descriptionLeftOut && <LeftOutDescription description={s.description} copied={!!s.copied} />}
           </div>
         )}
         {s.result && (s.result.output?.length ?? 0) > 0 && (

@@ -157,6 +157,8 @@ public record PrBaseCheck(
 /// <summary>
 /// Outcome of raising the PR. <paramref name="Mode"/> is "gh" when the PR now exists, "web" when
 /// the branch is pushed and <paramref name="Url"/> is the prefilled create-PR page to finish on.
+/// <paramref name="DescriptionLeftOut"/> is true when that page's link could not carry the
+/// description, so the person finishing it has to paste it in.
 /// </summary>
 public record PrCreateResult(
     bool Ok,
@@ -164,7 +166,8 @@ public record PrCreateResult(
     bool Pushed,
     string? Url,
     string Mode,
-    IReadOnlyList<string> Output);
+    IReadOnlyList<string> Output,
+    bool DescriptionLeftOut = false);
 
 /// <summary>
 /// Outcome of replaying a branch onto the latest base.
@@ -1090,9 +1093,10 @@ public partial class TicketGitService
 
         if (provider == "azure-devops")
         {
-            var web = AzureDevOpsPrUrl(remoteUrl, baseBranch, branch, title, description);
+            var web = AzureDevOpsPrUrl(remoteUrl, baseBranch, branch, title, description, out var leftOut);
             if (web is null) return Fail("Could not work out the Azure DevOps URL for this remote.", pushed: true);
-            return new PrCreateResult(true, null, true, web, "web", output);
+            if (leftOut) output.Add("[dashboard] The description is too long for the form's link, so it was left out - paste it in.");
+            return new PrCreateResult(true, null, true, web, "web", output, leftOut);
         }
 
         return new PrCreateResult(true, null, true, null, "none", output);
@@ -1373,7 +1377,25 @@ public partial class TicketGitService
     /// dev.azure.com, which serves either.
     /// </summary>
     public static string? AzureDevOpsPrUrl(string remoteUrl, string baseBranch, string branch, string? title, string? description)
+        => AzureDevOpsPrUrl(remoteUrl, baseBranch, branch, title, description, out _);
+
+    /// <summary>
+    /// The longest create-PR link handed out. Azure DevOps answers a query string past about 2KB
+    /// with a bare 404 - the browser's "page can't be found", with nothing saying why - and a
+    /// generated description escapes to several times that.
+    /// </summary>
+    public const int MaxPrUrlLength = 2000;
+
+    /// <summary>
+    /// The prefilled create-PR page. The description goes in the link only while the link stays
+    /// within <see cref="MaxPrUrlLength"/>; past that it is left out and
+    /// <paramref name="descriptionLeftOut"/> says so, because a form missing its description still
+    /// opens, and one that carries it does not open at all.
+    /// </summary>
+    public static string? AzureDevOpsPrUrl(string remoteUrl, string baseBranch, string branch, string? title,
+        string? description, out bool descriptionLeftOut)
     {
+        descriptionLeftOut = false;
         if (!Uri.TryCreate(remoteUrl.Trim(), UriKind.Absolute, out var uri)) return null;
 
         var seg = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries)
@@ -1415,8 +1437,13 @@ public partial class TicketGitService
             $"targetRef={Uri.EscapeDataString(baseBranch)}",
         };
         if (!string.IsNullOrWhiteSpace(title)) query.Add($"title={Uri.EscapeDataString(title)}");
-        if (!string.IsNullOrWhiteSpace(description)) query.Add($"description={Uri.EscapeDataString(description)}");
-        return $"{path}?{string.Join('&', query)}";
+        var url = $"{path}?{string.Join('&', query)}";
+        if (string.IsNullOrWhiteSpace(description)) return url;
+
+        var withDescription = $"{url}&description={Uri.EscapeDataString(description)}";
+        if (withDescription.Length <= MaxPrUrlLength) return withDescription;
+        descriptionLeftOut = true;
+        return url;
 
         // Path segments, so a project name with a space survives the round trip.
         static string Esc(string s) => Uri.EscapeDataString(s).Replace("%2F", "/");
