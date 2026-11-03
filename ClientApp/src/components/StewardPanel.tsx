@@ -205,7 +205,14 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                   <div className="flex flex-col gap-3">
                     {page.waiting.map(q => (
                       <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
-                        onAnswer={async (a, replaces, story) => { await answerStewardQuestion(page.project, q.key, a, replaces, story); await load(); }} />
+                        onAnswer={async (a, replaces, story) => {
+                          await answerStewardQuestion(page.project, q.key, a, replaces, story);
+                          // Recorded: the card goes now, and the rest of the page catches up behind it.
+                          // Re-reading the whole page is seconds on a busy machine, and "Answering..."
+                          // was waiting on that rather than on the answer.
+                          setPage(p => p && { ...p, waiting: p.waiting.filter(x => x.key !== q.key) });
+                          void load();
+                        }} />
                     ))}
                     {inReview.map(t => (
                       <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />

@@ -483,7 +483,9 @@ public static class TicketEndpoints
             TicketDependencyService deps, AnalysisQueue analyses, string? project, string? phase) =>
         {
             TicketPhase? ph = Enum.TryParse<TicketPhase>(phase, true, out var p) ? p : null;
-            var tickets = await svc.ListAsync(project, ph);
+            // Each card's fields only, and its notes counted rather than read: see ListForBoardAsync.
+            var rows = await svc.ListForBoardAsync(project, ph);
+            var tickets = rows.Select(r => r.Ticket).ToList();
             var resolved = await resolver.ResolveManyAsync(tickets);
             // One query for the whole board's blockers, not one per card. Same for the rework
             // bounces, which is what dates each ticket's QA evidence.
@@ -497,13 +499,15 @@ public static class TicketEndpoints
             var analysing = pending.Where(q => q.WalkthroughOf is null).Select(q => q.TicketId)
                 .Concat(running is { WalkthroughOf: null } c ? new[] { c.TicketId } : Array.Empty<int>())
                 .ToHashSet();
-            return Results.Ok(tickets.Select(t =>
+            return Results.Ok(rows.Select(row =>
             {
+                var t = row.Ticket;
                 var r = resolved[t.Id];
                 var b = blockers.TryGetValue(t.Id, out var list) ? TicketMapper.ToBlockers(list) : null;
                 return TicketMapper.ToSummary(t, r.Title, r.Unavailable, b,
                     bounces.TryGetValue(t.Id, out var at) ? at : null,
-                    awaitingAnalysis: ClassroomGate.Applies(t) && analysing.Contains(t.Id));
+                    awaitingAnalysis: ClassroomGate.Applies(t) && analysing.Contains(t.Id),
+                    notes: (row.Comments, row.UnansweredNotes));
             }));
         });
 

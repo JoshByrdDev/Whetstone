@@ -123,6 +123,91 @@ public class TicketService
         return await q.OrderBy(t => t.BoardOrder).ThenByDescending(t => t.UpdatedAt).ToListAsync();
     }
 
+    /// <summary>
+    /// Each ticket's place and nothing under it: its phase, its title, and where it sits in a plan.
+    /// For the plan's views, which place tickets against slices and outcomes and read no note,
+    /// checklist or description - and are opened often enough that loading those cost seconds.
+    /// The text fields are left null, so this is not a list to render a ticket from.
+    /// </summary>
+    public Task<List<Ticket>> ListPlacesAsync(string projectKey) =>
+        _db.Tickets.AsNoTracking().Where(t => t.ProjectKey == projectKey)
+            .OrderBy(t => t.BoardOrder).ThenByDescending(t => t.UpdatedAt)
+            .Select(t => new Ticket
+            {
+                Id = t.Id, ProjectKey = t.ProjectKey, Title = t.Title, IssueKey = t.IssueKey, Phase = t.Phase,
+                PhaseBeforeBlock = t.PhaseBeforeBlock, Track = t.Track, Walkthrough = t.Walkthrough,
+                PlanKey = t.PlanKey, PlanUnit = t.PlanUnit, PlanOutcomes = t.PlanOutcomes, Branch = t.Branch,
+                MergeSha = t.MergeSha, MergedAt = t.MergedAt, IsBug = t.IsBug, BoardOrder = t.BoardOrder,
+                CreatedAt = t.CreatedAt, UpdatedAt = t.UpdatedAt,
+            }).ToListAsync();
+
+    /// <summary>A board card's ticket, and the two counts it shows of the notes it was not loaded with.</summary>
+    public sealed record BoardRow(Ticket Ticket, int Comments, int UnansweredNotes);
+
+    /// <summary>
+    /// The board's list: each ticket with only what its card shows. The board asks for this every
+    /// few seconds while the fleet runs, and the whole tickets - every note, description, learning
+    /// brief and checklist note - are tens of megabytes, read and thrown away each time, on the
+    /// machine the fleet is busiest on. So this is the one second loading path the comment on
+    /// <see cref="WithChildren"/> warns about, and it is safe for the reason that warning is not:
+    /// what it returns is fit for <see cref="Api.TicketMapper.ToSummary"/> and nothing else -
+    /// no description, no notes, no shots, and checklist text only on the item a run has started.
+    /// </summary>
+    public async Task<List<BoardRow>> ListForBoardAsync(string? project, TicketPhase? phase)
+    {
+        var q = _db.Tickets.AsNoTracking();
+        if (!string.IsNullOrEmpty(project)) q = q.Where(t => t.ProjectKey == project);
+        if (phase is not null) q = q.Where(t => t.Phase == phase);
+        var ids = q.Select(t => t.Id);
+
+        var tickets = await q.OrderBy(t => t.BoardOrder).ThenByDescending(t => t.UpdatedAt).Select(t => new Ticket
+        {
+            Id = t.Id, ProjectKey = t.ProjectKey, Title = t.Title, Phase = t.Phase, Track = t.Track,
+            IssueKey = t.IssueKey, IssueUrl = t.IssueUrl, Branch = t.Branch, BoardOrder = t.BoardOrder,
+            Priority = t.Priority, RequiresSpeculationReview = t.RequiresSpeculationReview,
+            SkipQaTesting = t.SkipQaTesting, Walkthrough = t.Walkthrough, SkipClassroomAnalysis = t.SkipClassroomAnalysis,
+            GateAnalysisId = t.GateAnalysisId, PlanUnit = t.PlanUnit, PlanKey = t.PlanKey, IsBug = t.IsBug,
+            BlockedReason = t.BlockedReason, PhaseBeforeBlock = t.PhaseBeforeBlock,
+            CreatedAt = t.CreatedAt, UpdatedAt = t.UpdatedAt,
+        }).ToListAsync();
+
+        // The card's "now working on" is the one started item, so only that text is read.
+        var work = await _db.WorkItems.AsNoTracking().Where(w => ids.Contains(w.TicketId)).Select(w => new WorkItem
+        {
+            Id = w.Id, TicketId = w.TicketId, Done = w.Done, Order = w.Order, Scope = w.Scope, StartedAt = w.StartedAt,
+            Text = w.StartedAt != null && !w.Done ? w.Text : "",
+        }).ToListAsync();
+        var qa = await _db.QaItems.AsNoTracking().Where(x => ids.Contains(x.TicketId)).Select(x => new QaItem
+        {
+            Id = x.Id, TicketId = x.TicketId, Status = x.Status, Order = x.Order, StartedAt = x.StartedAt, VerifiedAt = x.VerifiedAt,
+            Text = x.StartedAt != null && x.Status == QaStatus.Todo ? x.Text : "",
+        }).ToListAsync();
+        var review = await _db.ReviewComments.AsNoTracking().Where(c => ids.Contains(c.TicketId))
+            .Select(c => new ReviewComment { Id = c.Id, TicketId = c.TicketId, Status = c.Status }).ToListAsync();
+        var targets = await _db.ReviewTargets.AsNoTracking().Where(r => ids.Contains(r.TicketId))
+            .Select(r => new ReviewTarget { TicketId = r.TicketId, SubmittedAt = r.SubmittedAt, SourceBranch = r.SourceBranch, Repo = r.Repo })
+            .ToDictionaryAsync(r => r.TicketId);
+        // Notes are counted where they are kept. Which authors leave a note that wants an answer is
+        // HandoffRequirements' rule, applied to the counts rather than said again here in SQL.
+        var notes = await _db.Comments.Where(c => ids.Contains(c.TicketId))
+            .GroupBy(c => new { c.TicketId, c.Author, Open = c.AcknowledgedAt == null })
+            .Select(g => new { g.Key.TicketId, g.Key.Author, g.Key.Open, N = g.Count() }).ToListAsync();
+
+        var workOf = work.ToLookup(w => w.TicketId);
+        var qaOf = qa.ToLookup(x => x.TicketId);
+        var reviewOf = review.ToLookup(c => c.TicketId);
+        var notesOf = notes.ToLookup(n => n.TicketId);
+        return tickets.Select(t =>
+        {
+            t.WorkItems = workOf[t.Id].ToList();
+            t.QaItems = qaOf[t.Id].ToList();
+            t.ReviewComments = reviewOf[t.Id].ToList();
+            t.ReviewTarget = targets.GetValueOrDefault(t.Id);
+            var n = notesOf[t.Id].ToList();
+            return new BoardRow(t, n.Sum(x => x.N), n.Where(x => x.Open && AuthorKinds.IsDirective(x.Author)).Sum(x => x.N));
+        }).ToList();
+    }
+
     /// <summary>Tickets sitting in a "Needs*" queue phase — what the heartbeat pulls from.</summary>
     public async Task<List<Ticket>> ListActionableAsync(string? project)
     {

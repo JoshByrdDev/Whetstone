@@ -91,16 +91,39 @@ public partial class TicketGitService
     private async Task<string?> HubNotWritableAsync(string repo, string baseBranch, CancellationToken ct)
     {
         if (!IsGitRepo(repo)) return $"There is no git repo at '{repo}'.";
-        var head = (await GitAsync(repo, ct, "symbolic-ref", "--quiet", "--short", "HEAD")).Stdout.Trim();
+        // One git process for the branch and the changes - each costs most of a second on a busy
+        // machine, and an owner's answer waits on two of these checks - and the merge read off disk.
+        var status = await GitAsync(repo, ct, "status", "--porcelain=v2", "--branch", "--untracked-files=no");
+        if (!status.Ok) return Explain(status, $"could not read {repo}'s status");
+        var lines = status.Stdout.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0).ToList();
+        var head = lines.FirstOrDefault(l => l.StartsWith("# branch.head "))?["# branch.head ".Length..].Trim() ?? "";
         if (head != baseBranch)
-            return $"{repo} is on '{(head.Length > 0 ? head : "a detached HEAD")}', not '{baseBranch}'.";
-        if ((await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).Ok)
+            return $"{repo} is on '{(head.Length > 0 && head != "(detached)" ? head : "a detached HEAD")}', not '{baseBranch}'.";
+        if (await GitDirAsync(repo, ct) is { } gitDir && File.Exists(Path.Combine(gitDir, "MERGE_HEAD")))
             return $"A merge is in progress in {repo}.";
-        var dirty = (await GitAsync(repo, ct, "status", "--porcelain", "--untracked-files=no")).Stdout
-            .Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0).ToList();
+        // v2's entries end in the path, after a fixed number of fields per kind (1 changed, 2 renamed, u unmerged).
+        var dirty = lines.Where(l => !l.StartsWith('#')).Select(l => l[0] switch
+        {
+            '1' => l.Split(' ', 9).Last(),
+            '2' => l.Split(' ', 10).Last().Split('\t')[0],
+            'u' => l.Split(' ', 11).Last(),
+            _ => l,
+        }).ToList();
         return dirty.Count > 0
-            ? $"{repo} has uncommitted changes: {string.Join(", ", dirty.Take(8).Select(l => l.Length > 3 ? l[3..] : l))}"
+            ? $"{repo} has uncommitted changes: {string.Join(", ", dirty.Take(8))}"
             : null;
+    }
+
+    // A repo's git directory does not move, so it is asked for once. Worktrees and submodules keep
+    // theirs somewhere other than <repo>/.git, which is why it is asked rather than assumed.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> GitDirs = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task<string?> GitDirAsync(string repo, CancellationToken ct)
+    {
+        if (GitDirs.TryGetValue(repo, out var known)) return known;
+        var r = await GitAsync(repo, ct, "rev-parse", "--absolute-git-dir");
+        if (!r.Ok || r.Stdout.Trim() is not { Length: > 0 } dir) return null;
+        return GitDirs[repo] = dir;
     }
 
     /// <summary>The base branch's head in the hub, or null when it cannot be read.</summary>
@@ -127,16 +150,17 @@ public partial class TicketGitService
         var (_, repo, baseBranch) = HubOf(projectKey);
         if (!plan.Configured || !IsGitRepo(repo)) return Array.Empty<PlanUnit>();
 
-        // A plan is read as committed, so the base's commit names its whole text: read once per
-        // commit, not once per caller. The Steward page alone asks for it a dozen times on opening,
-        // and each read is a git process per slice.
-        var head = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{baseBranch}");
-        if (!head.Ok) return Array.Empty<PlanUnit>();
-        var sha = head.Stdout.Trim();
-        var key = string.Join('\n', repo, sha, plan.UnitsDir, plan.UnitFile, plan.Agreed, plan.Draft, plan.Outcome, plan.Idea);
+        // A plan is read as committed, and the listing of its folder on the base names every file's
+        // content by its blob id: one git process says whether anything in the plan changed. Keyed
+        // on that rather than on the base's commit, because on a busy board the base moves with
+        // every merge and almost none of those touch a slice - and on a loaded machine a git process
+        // costs most of a second. The Steward page alone asks for the plan a dozen times on opening.
+        var ls = await GitAsync(repo, ct, "ls-tree", $"refs/heads/{baseBranch}", $"{plan.UnitsDir}/");
+        if (!ls.Ok) return Array.Empty<PlanUnit>();
+        var key = string.Join('\n', repo, ls.Stdout, plan.UnitsDir, plan.UnitFile, plan.Agreed, plan.Draft, plan.Outcome, plan.Idea);
         if (PlanCache.TryGetValue(key, out var known)) return known;
 
-        var (units, whole) = await ReadPlanAtAsync(repo, sha, plan, ct);
+        var (units, whole) = await ReadPlanAsync(repo, ls.Stdout, plan, ct);
         // A read that missed a file is answered as it stands but not kept: the next one tries again.
         if (whole)
         {
@@ -148,22 +172,34 @@ public partial class TicketGitService
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<PlanUnit>> PlanCache = new();
 
-    /// <summary>The plan's units at one commit, and whether every file in it could be read.</summary>
-    private async Task<(IReadOnlyList<PlanUnit> Units, bool Whole)> ReadPlanAtAsync(string repo, string sha, StewardPlan plan, CancellationToken ct)
-    {
-        var ls = await GitAsync(repo, ct, "ls-tree", "--name-only", sha, $"{plan.UnitsDir}/");
-        if (!ls.Ok) return (Array.Empty<PlanUnit>(), false);
-        var whole = true;
+    // A blob's text never changes, so a slice is read again only when its content does.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> BlobCache = new();
 
+    /// <summary>
+    /// The plan's units from a listing of its folder (<c>ls-tree</c>: mode, type, blob id, tab,
+    /// path), and whether every file in it could be read.
+    /// </summary>
+    private async Task<(IReadOnlyList<PlanUnit> Units, bool Whole)> ReadPlanAsync(string repo, string listing, StewardPlan plan, CancellationToken ct)
+    {
+        var whole = true;
         var unitFile = new Regex(plan.UnitFile, RegexOptions.IgnoreCase);
         var units = new List<PlanUnit>();
-        foreach (var path in ls.Stdout.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0))
+        foreach (var line in listing.Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0))
         {
+            var tab = line.IndexOf('\t');
+            var head = tab < 0 ? Array.Empty<string>() : line[..tab].Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (head.Length < 3 || head[1] != "blob") continue;
+            var (blob, path) = (head[2], line[(tab + 1)..]);
             var m = unitFile.Match(path[(path.LastIndexOf('/') + 1)..]);
             if (!m.Success || m.Groups.Count < 2 || !int.TryParse(m.Groups[1].Value, out var number)) continue;
-            var show = await GitAsync(repo, ct, "show", $"{sha}:{path}");
-            if (!show.Ok) { whole = false; continue; }
-            units.Add(ReadUnit(plan, number, path, show.Stdout));
+            if (!BlobCache.TryGetValue(blob, out var text))
+            {
+                var show = await GitAsync(repo, ct, "cat-file", "blob", blob);
+                if (!show.Ok) { whole = false; continue; }
+                if (BlobCache.Count > 512) BlobCache.Clear();
+                BlobCache[blob] = text = show.Stdout;
+            }
+            units.Add(ReadUnit(plan, number, path, text));
         }
         return (units.OrderBy(u => u.Number).ToList(), whole);
     }
@@ -378,7 +414,7 @@ public partial class TicketGitService
         await GitAsync(repo, ct, "add", "--", rel);
         if ((await GitAsync(repo, ct, "diff", "--cached", "--quiet", "--", rel)).Ok) return (null, true, null);
 
-        var commit = await GitAsync(repo, ct, "commit", "--quiet", "-m", message, "--", rel);
+        var commit = await GitAsync(repo, ct, "commit", "-m", message, "--", rel);
         if (!commit.Ok)
         {
             // Leave nothing staged or half-written behind: the hub was clean when this began.
@@ -386,7 +422,10 @@ public partial class TicketGitService
             await GitAsync(repo, ct, "checkout", "--", rel);
             return (null, false, Explain(commit, "could not commit the file"));
         }
-        return ((await GitAsync(repo, ct, "rev-parse", "--short", "HEAD")).Stdout.Trim(), false, null);
+        // The commit says its own id ("[main 1a2b3c4] message"), which saves a process; asked for
+        // only when the line is not there to read.
+        var said = Regex.Match(commit.Stdout, @"^\[\S+(?: \([^)]*\))? ([0-9a-f]{7,40})\]", RegexOptions.Multiline);
+        return (said.Success ? said.Groups[1].Value : (await GitAsync(repo, ct, "rev-parse", "--short", "HEAD")).Stdout.Trim(), false, null);
     }
 
     /// <summary>Whether <paramref name="worktree"/> is checked out at the tip of <paramref name="branch"/>.</summary>

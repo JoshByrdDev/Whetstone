@@ -1898,7 +1898,7 @@ public partial class StewardService
         var p = cfg.Steward.Plan;
         var plan = await _git.PlanAsync(projectKey, ct);
         var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == p.Key).ToListAsync(ct);
-        var notes = await UnitNotesAsync(projectKey, p, working: true, plan, rows, await _tickets.ListAsync(projectKey, null), track: false, ct);
+        var notes = await UnitNotesAsync(projectKey, p, working: true, plan, rows, await _tickets.ListPlacesAsync(projectKey), track: false, ct);
         return notes.ByUnit.SelectMany(kv => kv.Value.Select(n => (n.Id, Unit: kv.Key))).ToDictionary(x => x.Id, x => x.Unit);
     }
 
@@ -1926,7 +1926,7 @@ public partial class StewardService
 
         var isWorking = ReferenceEquals(which, working);
         var plan = await _git.PlanOfAsync(projectKey, which, ct);
-        var all = await _tickets.ListAsync(projectKey, null);
+        var all = await _tickets.ListPlacesAsync(projectKey);
         var mine = all.Where(t => (t.PlanKey ?? "") == which.Key).ToList();
         var states = await StatesAsync(projectKey, which.Key, ct);
         var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == which.Key).ToListAsync(ct);

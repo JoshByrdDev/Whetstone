@@ -264,17 +264,18 @@ public static class TicketMapper
     /// reading "3/3 passed" about evidence from three bounces ago is the exact signal this exists to
     /// stop showing.</param>
     public static TicketSummaryDto ToSummary(Ticket t, string? effectiveTitle = null, bool issueUnavailable = false,
-        IReadOnlyList<BlockerDto>? blockers = null, DateTime? lastBackwardAt = null, bool awaitingAnalysis = false) => new(
+        IReadOnlyList<BlockerDto>? blockers = null, DateTime? lastBackwardAt = null, bool awaitingAnalysis = false,
+        (int All, int Unanswered)? notes = null) => new(
         t.Id, t.ProjectKey, t.IssueKey != null ? (effectiveTitle ?? t.IssueKey) : (effectiveTitle ?? t.Title ?? ""), t.Phase.ToString(),
         t.IssueKey, t.IssueUrl, issueUnavailable, t.Branch, t.BoardOrder,
         t.WorkItems.Count, t.WorkItems.Count(w => w.Done),
         t.QaItems.Count, t.QaItems.Count(q => HandoffRequirements.IsVerified(q, lastBackwardAt)),
-        t.Comments.Count, t.BlockedReason, t.PhaseBeforeBlock?.ToString(), t.UpdatedAt,
+        notes?.All ?? t.Comments.Count, t.BlockedReason, t.PhaseBeforeBlock?.ToString(), t.UpdatedAt,
         blockers?.Any(b => !b.Satisfied && b.Override != false) == true,
         blockers?.Where(b => !b.Satisfied && b.Override != false).Select(b => b.Label).ToList(),
         CurrentItem(t), t.SkipQaTesting,
         PhaseMachine.ResumeAfterBlock(t.Phase == TicketPhase.Blocked ? t.PhaseBeforeBlock : null)?.ToString(),
-        HandoffRequirements.UnansweredOwnerNotes(t).Count,
+        notes?.Unanswered ?? HandoffRequirements.UnansweredOwnerNotes(t).Count,
         t.Priority.ToString(),
         t.Track.ToString(),
         // Dismissed comments are excluded from the count: the owner has already decided about those,

@@ -67,7 +67,7 @@ public partial class StewardService
         var working = ReferenceEquals(which, cfg.Steward.Plan);
         var plan = await _git.PlanOfAsync(projectKey, which, ct);
         var states = await StatesAsync(projectKey, which.Key, ct);
-        var mine = (await _tickets.ListAsync(projectKey, null)).Where(t => (t.PlanKey ?? "") == which.Key).ToList();
+        var mine = (await _tickets.ListPlacesAsync(projectKey)).Where(t => (t.PlanKey ?? "") == which.Key).ToList();
         var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == which.Key).ToListAsync(ct);
         var current = working ? StewardProgress.Current(plan, states)?.Number : null;
 
