@@ -1752,7 +1752,12 @@ public partial class TicketGitService
         return RunAsync("git", dir, timeout, ct, full.ToArray());
     }
 
-    private async Task<RunResult> RunAsync(string exe, string dir, TimeSpan timeout, CancellationToken ct, params string[] args)
+    private Task<RunResult> RunAsync(string exe, string dir, TimeSpan timeout, CancellationToken ct, params string[] args) =>
+        RunAsync(exe, dir, timeout, null, ct, args);
+
+    /// <param name="env">Added to the process's environment, for a merge check told what it is checking against.</param>
+    private async Task<RunResult> RunAsync(string exe, string dir, TimeSpan timeout, IReadOnlyDictionary<string, string>? env,
+        CancellationToken ct, params string[] args)
     {
         var psi = new ProcessStartInfo(exe)
         {
@@ -1769,6 +1774,8 @@ public partial class TicketGitService
         // HTTP request, so a prompt is just a hang. Fail instead, and say so.
         psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
         if (exe == "git" && RetryAnswerer.Value is { } yes) psi.Environment["GIT_ASK_YESNO"] = yes;
+        if (env is not null)
+            foreach (var (k, v) in env) psi.Environment[k] = v;
 
         using var proc = new Process { StartInfo = psi };
         try

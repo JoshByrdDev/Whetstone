@@ -784,29 +784,64 @@ public partial class StewardService
                 wt = tree.Dir;
             }
 
+            // What the check is checking against, so a project's check can narrow itself to what the
+            // ticket changed (a test runner's "--changed"). The base as a ref, not a commit: compared
+            // three-dot from the tip, a base that moves while the check runs changes nothing.
+            var env = new Dictionary<string, string> { [BaseRefVariable] = change.BaseRef };
+
+            async Task<StewardReply?> VerdictAsync(StewardCheck c, CheckRun run)
+            {
+                if (run.Ok) return null;
+                // The command never got as far as checking anything. That is the machine, not the ticket.
+                if (c.MachineFault.Length > 0 && Regex.IsMatch(run.Output, c.MachineFault, RegexOptions.IgnoreCase))
+                    return Refuse("check-could-not-run",
+                        $"'{c.Name}' did not get as far as checking anything, so nothing is proved either way. Leave the ticket at NeedsReview and ask the owner once: this is the machine's to fix, not the ticket's.",
+                        new { check = c.Name, output = run.Output });
+                // Out of time with nothing failing in what it printed: proof of a slow machine, not
+                // of a broken ticket. A check that is slow because many workers share the machine
+                // is retried, and only when it runs out again on the same tip is it the owner's.
+                if (run.TimedOut && (run.Failures?.Count ?? 0) == 0)
+                    return await TimedOutAsync(projectKey, t, change, c, run, ct);
+                return Refuse("check-failed",
+                    run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result, and what it printed before then "
+                                   + "names failures. Send it back to NeedsImplementation with this: 'failing' is every line in the whole output "
+                                   + "that names a failure, 'output' is how it ended."
+                                 : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this: "
+                                   + "'failing' is every line in the whole output that names a failure, 'output' is how it ended.",
+                    new { check = c.Name, failing = run.Failures ?? Array.Empty<string>(), output = run.Output });
+            }
+
             try
             {
-                foreach (var c in checks)
+                if (cfg.Steward.ParallelChecks && checks.Count > 1)
                 {
-                    var run = await _git.RunCheckAsync(wt, c.Run, TimeSpan.FromMinutes(c.TimeoutMinutes), ct);
-                    if (run.Ok) continue;
-                    // The command never got as far as checking anything. That is the machine, not the ticket.
-                    if (c.MachineFault.Length > 0 && Regex.IsMatch(run.Output, c.MachineFault, RegexOptions.IgnoreCase))
-                        return Refuse("check-could-not-run",
-                            $"'{c.Name}' did not get as far as checking anything, so nothing is proved either way. Leave the ticket at NeedsReview and ask the owner once: this is the machine's to fix, not the ticket's.",
-                            new { check = c.Name, output = run.Output });
-                    // Out of time with nothing failing in what it printed: proof of a slow machine, not
-                    // of a broken ticket. A check that is slow because many workers share the machine
-                    // is retried, and only when it runs out again on the same tip is it the owner's.
-                    if (run.TimedOut && (run.Failures?.Count ?? 0) == 0)
-                        return await TimedOutAsync(projectKey, t, change, c, run, ct);
-                    return Refuse("check-failed",
-                        run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result, and what it printed before then "
-                                       + "names failures. Send it back to NeedsImplementation with this: 'failing' is every line in the whole output "
-                                       + "that names a failure, 'output' is how it ended."
-                                     : $"'{c.Name}' fails on the merged result. Send it back to NeedsImplementation with this: "
-                                       + "'failing' is every line in the whole output that names a failure, 'output' is how it ended.",
-                        new { check = c.Name, failing = run.Failures ?? Array.Empty<string>(), output = run.Output });
+                    // All at once, answered by whichever settles it first. The first one that does
+                    // stops the rest: a ticket already going back gains nothing from them, and a
+                    // database suite left running is a machine kept busy for every other run.
+                    using var stop = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    var running = checks.ToDictionary(
+                        c => _git.RunCheckAsync(wt, c.Run, TimeSpan.FromMinutes(c.TimeoutMinutes), env, stop.Token), c => c);
+                    StewardReply? verdict = null;
+                    while (running.Count > 0 && verdict is null)
+                    {
+                        var done = await Task.WhenAny(running.Keys);
+                        var c = running[done];
+                        running.Remove(done);
+                        verdict = await VerdictAsync(c, await done);
+                    }
+                    if (verdict is not null)
+                    {
+                        stop.Cancel();
+                        // Wait for the ones stopped to be gone before the tree they run in is given back.
+                        try { await Task.WhenAll(running.Keys); } catch { /* stopped: their answer is not wanted */ }
+                        return verdict;
+                    }
+                }
+                else
+                {
+                    foreach (var c in checks)
+                        if (await VerdictAsync(c, await _git.RunCheckAsync(wt, c.Run, TimeSpan.FromMinutes(c.TimeoutMinutes), env, ct)) is { } verdict)
+                            return verdict;
                 }
             }
             finally
@@ -835,6 +870,13 @@ public partial class StewardService
         await _tickets.TransitionAsync(ticketId, TicketPhase.Done, $"Merged into {merged.BaseBranch} at {sha}", TransitionActor.Steward);
         return new StewardReply("merged", null, new { commit = sha, closed = true });
     }
+
+    /// <summary>
+    /// The environment variable a merge check is handed the base ref in: what the ticket's branch is
+    /// measured against (<see cref="BranchChange.BaseRef"/>), for a check that runs only what the
+    /// change can reach. A check run any other way does not have it, and should run everything.
+    /// </summary>
+    public const string BaseRefVariable = "WHETSTONE_BASE_REF";
 
     /// <summary>How the board's record of a merge check that ran out of time starts; what finds the last one.</summary>
     internal const string TimedOutMark = "Merge check timed out";

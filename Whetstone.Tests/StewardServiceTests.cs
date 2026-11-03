@@ -498,6 +498,74 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_merge_check_is_told_the_base_it_checks_against()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "tests", "run": "run-tests" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        var (command, env) = Assert.Single(_git.Ran);
+        Assert.Equal("run-tests", command);
+        Assert.Equal("main", env![StewardService.BaseRefVariable]);
+    }
+
+    [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 2)]
+    public async Task Checks_run_one_after_another_unless_the_project_says_they_may_run_together(bool together, int mostAtOnce)
+    {
+        Configure("full", $$"""
+            "plan": { "units": "docs/units" },
+            "parallelChecks": {{(together ? "true" : "false")}},
+            "mergeChecks": [ { "name": "lint", "run": "lint" }, { "name": "db", "run": "db" } ]
+            """);
+        _git.ChecksByCommand["lint"] = (new CheckRun(true, false, ""), TimeSpan.FromMilliseconds(150));
+        _git.ChecksByCommand["db"] = (new CheckRun(true, false, ""), TimeSpan.FromMilliseconds(150));
+        var id = await AtReview();
+        await Begin();
+
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal(mostAtOnce, _git.MostAtOnce);
+        Assert.Equal(2, _git.Ran.Count);
+    }
+
+    [Fact]
+    public async Task Checks_run_together_stop_at_the_first_failure_and_answer_with_it()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "parallelChecks": true,
+            "mergeChecks": [ { "name": "db", "run": "db" }, { "name": "lint", "run": "lint" } ]
+            """);
+        // The slow one is first in the list: the fast failure still answers, and the slow one is stopped.
+        _git.ChecksByCommand["db"] = (new CheckRun(true, false, ""), TimeSpan.FromSeconds(30));
+        _git.ChecksByCommand["lint"] = (new CheckRun(false, false, "1 failed", new[] { "FAIL lint" }), TimeSpan.FromMilliseconds(50));
+        var id = await AtReview();
+        await Begin();
+
+        var started = DateTime.UtcNow;
+        var r = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("check-failed", r.Answer);
+        Assert.Contains("'lint'", r.Why);
+        Assert.Contains("db", _git.Stopped);
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(10));
+        Assert.Equal(0, _git.Running);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public void A_merge_call_waits_longer_for_a_client_that_listens_longer()
+    {
+        Assert.Equal(TimeSpan.FromMinutes(4), StewardMerges.WaitFor("claude"));
+        Assert.Equal(TimeSpan.FromSeconds(45), StewardMerges.WaitFor("codex"));
+        Assert.Equal(TimeSpan.FromSeconds(45), StewardMerges.WaitFor("gemini"));
+    }
+
+    [Fact]
     public async Task Only_a_ticket_at_review_is_merged()
     {
         await using (var ctx = NewCtx())
@@ -1825,11 +1893,33 @@ public partial class StewardServiceTests : IDisposable
         /// <summary>Something that happens while a check runs, for what a slow check lets change under it.</summary>
         public Func<Task>? DuringCheck;
 
-        public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, CancellationToken ct = default)
+        /// <summary>A check's own answer, by its command, and how long it takes to give it; any other command answers <see cref="Check"/> at once.</summary>
+        public Dictionary<string, (CheckRun Run, TimeSpan Takes)> ChecksByCommand = new();
+        /// <summary>Each command run, with the environment it was handed and whether it was stopped before it finished.</summary>
+        public System.Collections.Concurrent.ConcurrentBag<(string Command, IReadOnlyDictionary<string, string>? Env)> Ran = new();
+        public System.Collections.Concurrent.ConcurrentBag<string> Stopped = new();
+        public int Running, MostAtOnce;
+
+        public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout,
+            IReadOnlyDictionary<string, string>? env = null, CancellationToken ct = default)
         {
-            CheckedIn.Add(dir);
+            lock (CheckedIn) CheckedIn.Add(dir);
+            Ran.Add((command, env));
             if (DuringCheck is not null) await DuringCheck();
-            return Check;
+            if (!ChecksByCommand.TryGetValue(command, out var own)) return Check;
+            var now = Interlocked.Increment(ref Running);
+            lock (Ran) MostAtOnce = Math.Max(MostAtOnce, now);
+            try
+            {
+                await Task.Delay(own.Takes, ct);
+                return own.Run;
+            }
+            catch (OperationCanceledException)
+            {
+                Stopped.Add(command);
+                return new CheckRun(false, true, "did not finish");
+            }
+            finally { Interlocked.Decrement(ref Running); }
         }
 
         public Task<MergeResult> MergeAsync(string projectKey, string branch, string? title, string? description, CancellationToken ct = default)

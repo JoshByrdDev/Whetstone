@@ -27,8 +27,23 @@ namespace Whetstone.Services;
 /// </summary>
 public class StewardMerges
 {
-    /// <summary>How long one call waits. Short enough for the least patient client to still be listening.</summary>
-    public TimeSpan Wait { get; set; } = TimeSpan.FromSeconds(45);
+    /// <summary>How long one call waits when nothing says which client is calling: short enough for the least patient one.</summary>
+    public TimeSpan Wait { get; set; } = ShortWait;
+
+    /// <summary>
+    /// Codex ends a tool call at 60 seconds by default, so a call it makes waits 45 and answers
+    /// "checking". Claude's client drops a call only after five minutes of silence, so a call from
+    /// it waits four: every "checking" is another turn of the model reading the whole run so far,
+    /// and a 20-minute database suite was costing a steward twenty-odd of them per merge. Gemini's
+    /// limit has not been measured here, so it keeps the short wait until it is.
+    /// </summary>
+    public static TimeSpan WaitFor(string provider) =>
+        provider == "claude" ? TimeSpan.FromMinutes(4) : ShortWait;
+
+    private static readonly TimeSpan ShortWait = TimeSpan.FromSeconds(45);
+
+    /// <summary>The wait for the client calling, read each call; null uses <see cref="Wait"/>.</summary>
+    private readonly Func<TimeSpan>? _waitFor;
 
     /// <summary>
     /// How long an answer nobody collected is still the answer. Past this the ticket may no longer
@@ -54,7 +69,16 @@ public class StewardMerges
         await using var scope = scopes.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<StewardService>().MergeStampAsync(project, ticketId, CancellationToken.None);
     })
-    { }
+    {
+        // The steward's provider as the settings name it now. Read each call rather than once, so
+        // a provider changed in Settings is the one the next run's calls are waited on for.
+        _waitFor = () =>
+        {
+            using var scope = scopes.CreateScope();
+            var registry = scope.ServiceProvider.GetRequiredService<ProjectRegistry>();
+            return WaitFor(AgentRoles.Resolve(registry.GetGlobalConfig(), AgentRoles.Steward).Provider);
+        };
+    }
 
     /// <param name="merge">The merge itself.</param>
     /// <param name="stamp">What the ticket is right now, as far as a merge's answer depends on it; null keeps any answer for <see cref="KeepFor"/>.</param>
@@ -87,7 +111,7 @@ public class StewardMerges
             return started;
         });
 
-        if (await Task.WhenAny(merge.Task, Task.Delay(Wait, ct)) != merge.Task)
+        if (await Task.WhenAny(merge.Task, Task.Delay(_waitFor?.Invoke() ?? Wait, ct)) != merge.Task)
         {
             ct.ThrowIfCancellationRequested();
             var minutes = (DateTime.UtcNow - merge.StartedAt).TotalMinutes;

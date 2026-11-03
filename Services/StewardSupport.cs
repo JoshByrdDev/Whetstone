@@ -22,7 +22,7 @@ public interface IStewardGit
     Task<SyncFromResult> SyncFromAsync(string projectKey, string from, bool dryRun, CancellationToken ct = default);
     Task<(string? Sha, bool Unchanged, string? Refusal)> CommitFileAsync(string projectKey, string relativePath, string content, string message, CancellationToken ct = default);
     Task<bool> WorktreeAtTipAsync(string projectKey, string worktree, string branch, CancellationToken ct = default);
-    Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, CancellationToken ct = default);
+    Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, IReadOnlyDictionary<string, string>? env = null, CancellationToken ct = default);
     Task<CheckTree> CheckTreeAsync(string projectKey, string branch, CancellationToken ct = default);
     Task<MergeResult> MergeAsync(string projectKey, string branch, string? title, string? description, CancellationToken ct = default);
     Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default);

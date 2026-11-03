@@ -149,6 +149,14 @@ public class StewardConfig
 
     public StewardCheck[] MergeChecks { get; init; } = Array.Empty<StewardCheck>();
 
+    /// <summary>
+    /// Run a merge's checks all at once rather than one after another, the first failure stopping
+    /// the rest. Off unless a project says so: two checks that build into the same output folder
+    /// (a build and a test of the same solution) break each other when run together, and only the
+    /// project knows whether its checks do.
+    /// </summary>
+    public bool ParallelChecks { get; init; }
+
     /// <summary>Whether <paramref name="path"/> is one the steward may not merge a change to.</summary>
     public bool IsNeverMerged(string path)
     {
@@ -205,6 +213,7 @@ public class StewardConfig
                 : Array.Empty<StewardPlan>(),
             NeverMerge = StrArray(s, "neverMerge"),
             MergeChecks = Checks(s),
+            ParallelChecks = s.TryGetProperty("parallelChecks", out var par) && par.ValueKind == JsonValueKind.True,
         };
     }
 

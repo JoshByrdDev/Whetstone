@@ -479,7 +479,7 @@ public partial class TicketGitService
             && m.ValueKind == System.Text.Json.JsonValueKind.Number && m.TryGetDouble(out var mm) && mm > 0 ? mm : 20;
         foreach (var cmd in cfg.WorktreeSetup.Where(c => !string.IsNullOrWhiteSpace(c)))
         {
-            var run = await RunCheckAsync(dir, cmd, TimeSpan.FromMinutes(minutes), ct);
+            var run = await RunCheckAsync(dir, cmd, TimeSpan.FromMinutes(minutes), ct: ct);
             if (run.Ok) continue;
             await Release();
             return new(null, None, $"'{cmd}' failed setting up the check tree{(run.TimedOut ? $" (did not finish in {minutes} minutes)" : "")}:\n{run.Output}");
@@ -518,9 +518,11 @@ public partial class TicketGitService
     /// Run one of a project's merge checks in <paramref name="dir"/>. The output is the tail of
     /// both streams, which is where a failing test run says what failed.
     /// </summary>
-    public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, CancellationToken ct = default)
+    /// <param name="env">Added to the check's environment: a merge names the base it checks against (<see cref="StewardService.BaseRefVariable"/>).</param>
+    public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout,
+        IReadOnlyDictionary<string, string>? env = null, CancellationToken ct = default)
     {
-        var r = await RunAsync("cmd.exe", dir, timeout, ct, "/d", "/c", command);
+        var r = await RunAsync("cmd.exe", dir, timeout, env, ct, "/d", "/c", command);
         var lines = $"{r.Stdout}\n{r.Stderr}".Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0).ToList();
         return new CheckRun(r.Ok, r.ExitCode == -1 && r.Stderr.Contains("did not finish"),
             string.Join("\n", lines.Skip(Math.Max(0, lines.Count - 40))),
