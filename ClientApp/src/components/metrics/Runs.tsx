@@ -9,7 +9,7 @@ import type { RunFilter } from './PhaseDetail';
 import { CONTEXT_TONE, contextLevel, describeContext } from './contextLevel';
 import {
   Empty, FilterChip, NUM, SegBar, Section, Sheet, Swatch, TD, TH, TIME_PARTS, compact, day, mins, phaseName, reasonOf,
-  secs, useJson,
+  machineName, secs, useJson,
 } from './parts';
 
 /**
@@ -150,6 +150,9 @@ export function RunDrawer({ runId, onClose }: { runId: number; onClose: () => vo
               <Fact k="Model" v={`${run.model ?? '—'}${run.effort !== 'not recorded' ? ` · ${run.effort}` : ''}`} />
               <Fact k="Tokens" v={`${compact(run.tokens)} · ${compact(run.cacheReadTokens)} cached`} />
               <Fact k="Turns" v={run.numTurns ?? '—'} />
+              <Fact k="Machine" v={`${machineName(run.machine)}${run.slot ? ` · slot ${run.slot}` : ''}`}
+                sub={run.machineRuns ? `${run.machineRuns} run${run.machineRuns === 1 ? '' : 's'} going there at the start`
+                  : run.machineSource === 'none' ? 'not recorded for this run' : null} />
               <Fact k="Tool calls" v={run.splitSource === 'none' ? '—' : `${run.toolCalls}${run.toolErrors ? `, ${run.toolErrors} errors` : ''}`} />
               <Fact k="Peak context" v={<span className={CONTEXT_TONE[ctxLevel]}>{describeContext(run.peakContextTokens, run.contextWindowTokens, run.compactions)}</span>}
                 sub={ctxLevel === 'high' ? (run.compactions ? 'ran out of room and was summarised' : 'near the window')

@@ -72,6 +72,8 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         # Added by the bug-tracing and experiments migrations (docs/bugs-and-experiments-plan.md).
         "CommitRangeJson": "VARCHAR", "RunFilesJson": "VARCHAR",
         "ExperimentId": "INTEGER", "ExperimentArm": "VARCHAR", "ExperimentApplied": "BOOLEAN",
+        # Added by AddRunHost: the machine and berth a run ran in.
+        "Host": "VARCHAR", "Slot": "INTEGER",
         # Added by AddRunContextWindow: what the peak is measured against, and whether it overflowed.
         "ContextWindowTokens": "BIGINT", "Compactions": "INTEGER",
     },

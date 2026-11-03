@@ -86,6 +86,14 @@ split as (
 
 select
     run_id, ticket_id, project_key, track, phase, skill, resumed, model,
+    -- The machine it ran on. Recorded since AddRunHost, and placed from the leases before it; a run
+    -- with neither but a transcript on this machine ran here, because a worker host keeps its
+    -- transcripts to itself. Anything else is unknown, never assumed to be either.
+    coalesce(host, case when matched_session_id is not null then '@board' end, 'unknown') as machine,
+    case when host is not null then 'recorded'
+         when matched_session_id is not null then 'transcript'
+         else 'none' end                                               as machine_source,
+    slot,
     coalesce(provider, case
         when model ilike 'claude%' then 'claude'
         when model ilike 'gemini%' then 'gemini'

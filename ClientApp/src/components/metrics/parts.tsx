@@ -104,7 +104,13 @@ export const DIMENSIONS: { key: string; label: string; filter: string }[] = [
   { key: 'pass', label: 'Pass', filter: 'pass' },
   { key: 'cli_version', label: 'CLI version', filter: 'cli_version' },
   { key: 'experiment_arm', label: 'A/B arm', filter: 'experiment_arm' },
+  { key: 'machine', label: 'Machine', filter: 'machine' },
+  { key: 'machine_load', label: 'Machine, by load', filter: 'machine_load' },
 ];
+
+/** A machine as a person calls it: the dispatch order's `@board` is this computer. */
+export const machineName = (m: string | null | undefined) =>
+  !m || m === 'unknown' ? 'Unknown' : m === '@board' ? 'This machine' : m;
 
 // ---- marks ------------------------------------------------------------------------------
 

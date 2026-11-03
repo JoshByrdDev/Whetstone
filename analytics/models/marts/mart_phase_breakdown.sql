@@ -1,5 +1,6 @@
 -- What a phase costs, cut by whatever might explain it: the provider, model, effort, skill version,
--- prompt version, why the run happened, which time round it was, the CLI version, an A/B arm.
+-- prompt version, why the run happened, which time round it was, the CLI version, an A/B arm, the
+-- machine it ran on and how busy that machine was.
 --
 -- One row per scope, phase, dimension and value. `dimension = 'all'` is the phase as a whole.
 -- Medians rather than means, as on the board: one timed-out run would drag a mean somewhere useless.
@@ -19,6 +20,8 @@ cut as (
         'pass': "pass_bucket",
         'cli_version': "coalesce(cli_version, 'unknown')",
         'experiment_arm': "experiment_arm",
+        'machine': "machine",
+        'machine_load': "machine_load",
     } %}
     {%- for name, expr in dims.items() %}
     select *, '{{ name }}' as dimension, {{ expr }} as dim_value from s

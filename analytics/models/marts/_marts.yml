@@ -42,7 +42,7 @@ models:
         tests: [at_least]
 
   - name: mart_phase_breakdown
-    description: What each phase costs, cut by provider, model, effort, skill and prompt version, entry reason, pass, CLI version and A/B arm.
+    description: What each phase costs, cut by provider, model, effort, skill and prompt version, entry reason, pass, CLI version, A/B arm, machine and the machine's load.
     tests:
       - unique_combination:
           arguments:
@@ -52,7 +52,7 @@ models:
         tests:
           - accepted_values:
               arguments:
-                values: [all, provider, model, effort, skill_version, prompt_version, entry_reason, pass, cli_version, experiment_arm]
+                values: [all, provider, model, effort, skill_version, prompt_version, entry_reason, pass, cli_version, experiment_arm, machine, machine_load]
       - name: rework_share
         tests: [is_fraction]
       - name: runs

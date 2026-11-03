@@ -152,9 +152,11 @@ function Send-CycleReport {
 # CycleRun on the board). Made as the cycle starts and filled in as the run learns each part, so a
 # run that ends early still reports what it knew. The keys are the API's names.
 function New-RunDetail {
-    param([string]$Provider, [string]$Effort)
+    param([string]$Provider, [string]$Effort, [string]$RunHost = '', [int]$Slot = 0)
     return [ordered]@{
         provider = $(if ($Provider) { $Provider } else { $null }); effort = $(if ($Effort) { $Effort } else { $null })
+        # Where it ran: a worker host's name, or the dispatch order's name for the board host.
+        host = $(if ($RunHost) { $RunHost } else { '@board' }); slot = $(if ($Slot -gt 0) { $Slot } else { $null })
         cliVersion = $null; skillHash = $null; promptHash = $null; sessionId = $null
         prepSeconds = $null; startupSeconds = $null; handoffSeconds = $null
         startRebase = $null; baseBehind = $null
@@ -1735,7 +1737,7 @@ $cycleStartedAt = (Get-Date).ToUniversalTime()
 $cycleTimer     = [System.Diagnostics.Stopwatch]::StartNew()
 # What this run will say about how it was set up and what it left, filled in as it goes and sent
 # with every cycle report below, however the run ends.
-$runDetail = New-RunDetail -Provider "$($AgentProvider.Key)" -Effort "$WorkerReasoningEffort"
+$runDetail = New-RunDetail -Provider "$($AgentProvider.Key)" -Effort "$WorkerReasoningEffort" -RunHost $runHost -Slot $Agent
 if ($armRun.Id) {
     $runDetail.experimentId = $armRun.Id
     $runDetail.experimentArm = $armRun.Arm

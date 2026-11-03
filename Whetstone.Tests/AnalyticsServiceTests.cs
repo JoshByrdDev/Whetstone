@@ -112,7 +112,8 @@ public sealed class AnalyticsServiceTests : IDisposable
             AS t(run_id, ticket_id, ticket_title, project_key, track, phase, entry_reason, skill_version, started_at, minutes)
             """.Replace("SELECT * FROM", "SELECT *, 'm' AS model, 'claude' AS provider, 'high' AS effort, 'Completed' AS outcome, " +
                 "NULL AS phase_after, 'rework' AS rework_class, 1 AS pass, 10 AS tokens, 3 AS num_turns, 2 AS tool_calls, " +
-                "0 AS tool_errors, 'transcript' AS split_source, 0 AS lines_changed, NULL AS prompt_version FROM"));
+                "0 AS tool_errors, 'transcript' AS split_source, 0 AS lines_changed, NULL AS prompt_version, " +
+                "'@board' AS machine, 1 AS machine_runs, '@board / 1 running' AS machine_load FROM"));
 
         List<int> Ids(Dictionary<string, string> f, int days = 30, string? sort = null) =>
             a.Runs(new AnalyticsService.RunQuery(days, null, null, f, sort, 50))

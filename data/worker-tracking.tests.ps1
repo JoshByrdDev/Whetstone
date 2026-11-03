@@ -105,6 +105,9 @@ try {
     $detail = New-RunDetail -Provider 'claude' -Effort ''
     Check 'a new detail knows its provider' $detail.provider 'claude'
     Check '... and an unset effort is unknown, not empty' ($null -eq $detail.effort) $true
+    Check 'a run with no worker host ran on the board host' "$($detail.host) $($null -eq $detail.slot)" '@board True'
+    $remote = New-RunDetail -Provider 'claude' -Effort 'high' -RunHost 'bravo-host' -Slot 12
+    Check '... and one on a worker host names it, with its berth' "$($remote.host) $($remote.slot)" 'bravo-host 12'
     $detail.skillHash = 'abc123abc123'; $detail.prepSeconds = 12.5; $detail.filesChanged = 0; $detail.changedFiles = @('a.cs', 'b.cs')
     $script:posted = @()
     Send-CycleReport -TicketId '7' -Project 'alpha' -Phase 'Speculating' -Skill 'speculate' -Resumed $false -Model 'm' `
@@ -117,8 +120,9 @@ try {
     Check '... the parts it never learned are not' (@($sent.detail.PSObject.Properties.Name | Where-Object { $_ -in 'effort', 'sessionId', 'startupSeconds' }).Count) 0
 
     $script:posted = @()
+    $empty = New-RunDetail; $empty.host = $null
     Send-CycleReport -TicketId '7' -Project 'alpha' -Phase 'Speculating' -Skill 'speculate' -Resumed $false -Model 'm' `
-        -StartedAt (Get-Date) -DurationSeconds 1 -Mutations 0 -Outcome 'Error' -Detail (New-RunDetail)
+        -StartedAt (Get-Date) -DurationSeconds 1 -Mutations 0 -Outcome 'Error' -Detail $empty
     Check 'a detail with nothing in it is left out' ($null -eq ($script:posted[0].body | ConvertFrom-Json).detail) $true
 
     Write-Host "== the run's own commits"

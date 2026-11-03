@@ -312,6 +312,9 @@ namespace Whetstone.Migrations
                     b.Property<double?>("HandoffSeconds")
                         .HasColumnType("REAL");
 
+                    b.Property<string>("Host")
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("InputTokens")
                         .HasColumnType("INTEGER");
 
@@ -390,6 +393,9 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("SkillHash")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("Slot")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("StartRebase")
                         .HasColumnType("TEXT");

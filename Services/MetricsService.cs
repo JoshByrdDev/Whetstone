@@ -73,7 +73,9 @@ public class MetricsService
         IReadOnlyList<string>? RunFiles = null,
         int? ExperimentId = null,
         string? ExperimentArm = null,
-        bool? ExperimentApplied = null);
+        bool? ExperimentApplied = null,
+        string? Host = null,
+        int? Slot = null);
 
     /// <summary>The most paths <see cref="CycleRun.ChangedFilesJson"/> keeps.</summary>
     public const int MaxChangedFiles = 200;
@@ -169,6 +171,9 @@ public class MetricsService
                 run.ExperimentArm = Clip(d.ExperimentArm, 16);
                 run.ExperimentApplied = d.ExperimentApplied ?? false;
             }
+            // Where it ran, so a machine can be compared with another doing the same work.
+            run.Host = Clip(d.Host, 64);
+            run.Slot = d.Slot is > 0 ? d.Slot : null;
         }
 
         // Why the run happened, and which time round it is. Both read from what the dashboard already

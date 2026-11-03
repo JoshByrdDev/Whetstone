@@ -45,6 +45,7 @@ public sealed class AnalyticsService
         ["entry_reason"] = "entry_reason", ["rework_class"] = "rework_class", ["pass"] = "pass_bucket",
         ["cli_version"] = "cli_version", ["experiment_arm"] = "experiment_arm", ["size_bucket"] = "size_bucket",
         ["start_rebase"] = "start_rebase", ["outcome"] = "outcome",
+        ["machine"] = "machine", ["machine_load"] = "machine_load",
     };
 
     private readonly DashboardPaths _paths;
@@ -311,7 +312,7 @@ public sealed class AnalyticsService
         return Query(
             "SELECT run_id, ticket_id, ticket_title, project_key, phase, model, provider, effort, started_at, outcome, " +
             "phase_after, entry_reason, rework_class, pass, minutes, tokens, num_turns, tool_calls, tool_errors, " +
-            "split_source, lines_changed, skill_version, prompt_version " +
+            "split_source, lines_changed, skill_version, prompt_version, machine, machine_runs " +
             $"FROM {Parquet(file)}{where} ORDER BY {order} LIMIT {Math.Clamp(q.Limit, 1, 500)}", args);
     }
 

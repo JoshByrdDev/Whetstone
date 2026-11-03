@@ -75,6 +75,8 @@ export interface RunListRow {
   phaseAfter: string | null; entryReason: string; reworkClass: string; pass: number | null;
   minutes: number; tokens: number; numTurns: number | null; toolCalls: number | null; toolErrors: number | null;
   splitSource: string; linesChanged: number; skillVersion: string | null; promptVersion: string | null;
+  /** `@board`, a worker host's name, or `unknown`; and how many runs it had going when this one started. */
+  machine: string; machineRuns: number | null;
 }
 
 /** Every column of fct_runs. Only what the drawer reads is named; the rest arrive too. */
@@ -91,6 +93,7 @@ export interface RunDetail extends RunListRow {
   promptVersionLabel: string | null; promptVersionAt: string | null; promptVersionSource: string | null;
   startRebase: string | null; baseBehind: number | null; filesChanged: number | null;
   linesAdded: number | null; linesRemoved: number | null; runCommits: number | null; experimentArm: string;
+  machineSource: string; slot: number | null;
 }
 
 export interface ToolCall {

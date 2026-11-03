@@ -46,5 +46,7 @@ select
     "RunFilesJson"                as run_files_json,
     "ExperimentId"                as experiment_id,
     "ExperimentArm"               as experiment_arm,
-    "ExperimentApplied"           as experiment_applied
+    "ExperimentApplied"           as experiment_applied,
+    "Host"                        as host,
+    "Slot"                        as slot
 from {{ source('board', 'CycleRuns') }}

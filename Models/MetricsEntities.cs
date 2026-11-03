@@ -442,6 +442,20 @@ public class CycleRun
     /// was missing or a model was not the provider's: a run that fell back is never counted as the arm's.
     /// </summary>
     public bool? ExperimentApplied { get; set; }
+
+    /// <summary>
+    /// The machine the run ran on: <c>@board</c> for this one (the dispatch order's name for it), or
+    /// a worker host's name. Null for a run from before it was recorded that nothing could place - not
+    /// the board, because a worker host's speculate or implement run left no trace of where it was.
+    /// </summary>
+    public string? Host { get; set; }
+
+    /// <summary>
+    /// The berth it ran in. A worker host's are numbered in its own block after the board host's (see
+    /// "Worker hosts" in CLAUDE.md), so the slot says the machine too, and with the other runs out at
+    /// the time, how loaded that machine was.
+    /// </summary>
+    public int? Slot { get; set; }
 }
 
 /// <summary>

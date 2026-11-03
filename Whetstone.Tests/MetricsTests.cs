@@ -383,6 +383,24 @@ public class MetricsTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("@board", 3, "@board", 3)]
+    [InlineData("bravo-host", 12, "bravo-host", 12)]
+    [InlineData(null, 0, null, null)]   // an older worker, or a slot it could not name
+    public async Task A_run_keeps_the_machine_and_berth_it_ran_in(string? host, int slot, string? wantHost, int? wantSlot)
+    {
+        int id;
+        await using (var ctx = NewCtx()) id = (await Seed(ctx, TicketPhase.QaTesting)).Id;
+        await using (var ctx = NewCtx())
+            await new MetricsService(ctx).RecordCycleAsync(Report(id, TicketPhase.QaTesting) with
+            {
+                Detail = new MetricsService.CycleRunDetail(Host: host, Slot: slot),
+            });
+        await using var read = NewCtx();
+        var run = await read.CycleRuns.SingleAsync(c => c.TicketId == id);
+        Assert.Equal((wantHost, wantSlot), (run.Host, run.Slot));
+    }
+
     [Fact]
     public async Task A_run_that_sent_no_detail_has_none()
     {

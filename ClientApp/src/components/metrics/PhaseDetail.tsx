@@ -4,7 +4,7 @@ import { MONO } from '../orbit';
 import type { DiffSizeRow, PhaseRow, Scope, StartRebaseRow, ToolRow, VersionRow } from './types';
 import { scopeQuery } from './types';
 import {
-  DIMENSIONS, Empty, Meter, NUM, Section, Sheet, TD, TH, compact, day, mins, pct, phaseName, reasonOf, secs, useJson,
+  DIMENSIONS, Empty, Meter, machineName, NUM, Section, Sheet, TD, TH, compact, day, mins, pct, phaseName, reasonOf, secs, useJson,
 } from './parts';
 
 /**
@@ -18,6 +18,11 @@ export type RunFilter = { name: string; value: string; label: string };
 /** A value as the page writes it: a version hash short, a reason by its name. */
 function valueLabel(dimension: string, value: string): string {
   if (dimension === 'entry_reason') return reasonOf(value).label;
+  if (dimension === 'machine') return machineName(value);
+  if (dimension === 'machine_load') {
+    const [m, load] = value.split(' / ');
+    return load ? `${machineName(m)}, ${load}` : machineName(m);
+  }
   if (dimension === 'pass') return value === '3+' ? 'Third or later' : value === '1' ? 'First' : value === '2' ? 'Second' : value;
   return value;
 }
