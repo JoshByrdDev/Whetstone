@@ -853,11 +853,43 @@ public partial class StewardService
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"merge ticket {ticketId} into the base ({change.Stat}) and close it");
 
-        // The checks can outlast the call that started them (see StewardMerges), and so can outlast
-        // the run. A change needs a run: one that has ended since gets no merge.
-        if (!await RunOpenAsync(projectKey))
-            return Refuse("no-run", $"The run ended while ticket {ticketId} was being checked, so it was not merged. Begin a run and merge it again.");
+        // One merge at a time per project, from here to the merge commit: two tickets checked side by
+        // side would otherwise each find the base where it was and both merge, the second carrying a
+        // result no check ever saw - its tree with the first ticket's change in it.
+        var gate = MergeGates.GetOrAdd(projectKey, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            // The checks can outlast the call that started them (see StewardMerges), and so can outlast
+            // the run. A change needs a run: one that has ended since gets no merge.
+            if (!await RunOpenAsync(projectKey))
+                return Refuse("no-run", $"The run ended while ticket {ticketId} was being checked, so it was not merged. Begin a run and merge it again.");
 
+            // What was checked is the merge's result only while the base and the branch are where they
+            // were when the checks started. Another merge landing in the meantime moved the base.
+            if (checks.Count > 0)
+            {
+                var now = await _git.BranchChangeAsync(projectKey, t.Branch!, ct);
+                if (now is null || now.Behind > 0 || now.Tip != change.Tip)
+                    return Refuse("behind", now is { Behind: > 0 }
+                        ? $"The base moved by {now.Behind} commit(s) while ticket {ticketId}'s checks ran - another merge landed - so what was checked is not what this merge would make. Rebase it, then merge again."
+                        : $"Ticket {ticketId}'s branch moved while its checks ran, so what was checked is not what this merge would make. Merge it again.");
+            }
+
+            return await MergeCheckedAsync(projectKey, t, ct);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>Per project: one merge between its last look at the base and its merge commit. See <see cref="MergeAsync"/>.</summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> MergeGates = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task<StewardReply> MergeCheckedAsync(string projectKey, Ticket t, CancellationToken ct)
+    {
+        var ticketId = t.Id;
         // The merge commit is named for the ticket, as it is when a person merges one from the board.
         var merged = await _git.MergeAsync(projectKey, t.Branch!, $"{t.Title} (#{t.Id})", null, ct);
         if (!merged.Ok)

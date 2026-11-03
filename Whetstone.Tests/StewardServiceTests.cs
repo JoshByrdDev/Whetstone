@@ -1280,6 +1280,40 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_base_that_moved_while_the_checks_ran_gets_no_merge()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "tests", "run": "run-tests" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        // Another ticket merged while this one was being checked.
+        _git.DuringCheck = () => { _git.Behind = 1; return Task.CompletedTask; };
+
+        var r = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("behind", r.Answer);
+        Assert.Contains("while ticket", r.Why);
+        Assert.Empty(_git.Merged);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+    }
+
+    [Fact]
+    public async Task A_branch_that_moved_while_the_checks_ran_gets_no_merge()
+    {
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "tests", "run": "run-tests" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        _git.DuringCheck = () => { _git.Tip = "reworked1234"; return Task.CompletedTask; };
+
+        Assert.Equal("behind", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
     public async Task A_run_that_ended_during_the_checks_gets_no_merge()
     {
         Configure("full", """
