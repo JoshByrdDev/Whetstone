@@ -222,6 +222,7 @@ function Start-Run {
         catch { $why = "could not fetch the project kit: $($_.Exception.Message)" }
         finally { Remove-Item $zip -Force -ErrorAction SilentlyContinue }
     }
+    if (-not $why) { $why = Set-ClaimClaudeAccount -Claim $claim -Order $Order -Logins $script:ClaudeLogins }
     if ($why) {
         Write-Log "  Cannot start ticket #$ticket in slot ${slot}: $why - giving the claim back."
         Send-LeaseRelease -TicketId $ticket -Reason "worker host $($HostCfg.name) could not start it: $why"
@@ -251,18 +252,75 @@ function Start-Run {
     Write-Log "Slot $slot -> ticket #$ticket [$key] $($claim.ticket.phase) / $($claim.skill) (run $($Order.runId), pid $($proc.Id))"
 }
 
-# Read the usage-limit pauses a worker here wrote, if any is still in force. A worker writes one per
-# provider into this machine's run/ - the accounts it hit are this machine's - and the board host is
-# told on the next check-in, which pauses this host's berths and no others. The board keeps one pause
-# per host, not one per provider, so a host with any provider paused reports the latest reset: coarser
-# than the board host's own per-provider pause, and wrong only in the safe direction.
-function Get-HostUsageLimit {
-    $latest = $null
+# The usage-limit pauses a worker here wrote that are still in force, one per provider, as the
+# check-in reports them. A Claude pause names the account that hit it: a limit is the account's,
+# not the machine's, and while the board chooses which account this host spends it marks that
+# account full - for its own fleet too - and moves this host to another, rather than holding the
+# whole machine. Any other pause, or one naming no account the board knows, holds the host.
+function Get-HostUsageLimits {
+    param($Logins)
+    $limits = @()
     foreach ($p in $AgentProvidersInUse) {
         $until = Get-UsageLimitPause -Provider $p.Key
-        if ($until -and (-not $latest -or $until -gt $latest)) { $latest = $until }
+        if (-not $until) { continue }
+        $accountId = $null
+        if ($p.Key -eq 'claude') {
+            $dir = $null
+            try { $dir = "$((Get-Content -Path (Get-UsageLimitFile 'claude') -Raw | ConvertFrom-Json).configDir)" } catch { }
+            $accountId = Find-LoginAccountId -Logins $Logins -ConfigDir $dir
+        }
+        $limits += @{ provider = $p.Key; until = $until.ToUniversalTime().ToString('o'); accountId = $accountId }
     }
-    if ($latest) { return $latest.ToUniversalTime().ToString('o') }
+    return ,@($limits)
+}
+
+# The account a login folder is signed in as, among this machine's logins - or $null. An empty
+# folder is the CLI's own login, which is whatever CLAUDE_CONFIG_DIR this process has, if any.
+function Find-LoginAccountId {
+    param($Logins, [string]$ConfigDir)
+    $want = Get-NormalDir $ConfigDir
+    foreach ($l in @($Logins)) {
+        if (-not $l) { continue }
+        $dir = if ("$($l.configDir)") { "$($l.configDir)" } else { "$env:CLAUDE_CONFIG_DIR" }
+        if ((Get-NormalDir $dir) -eq $want) { return "$($l.uuid)" }
+    }
+    return $null
+}
+
+function Get-NormalDir {
+    param([string]$Dir)
+    if (-not "$Dir".Trim()) { return '' }
+    try { return [IO.Path]::GetFullPath("$Dir".Trim()).TrimEnd('\', '/').ToLowerInvariant() }
+    catch { return "$Dir".Trim().TrimEnd('\', '/').ToLowerInvariant() }
+}
+
+# Put the account the board chose for this run into its claim, as one of this machine's login
+# folders - worker.ps1 reads it as "claudeAccount". The board names an account by its id, because
+# its names for its accounts are its own; this machine's folder for it is found here.
+#
+#   order.claude absent, or not gated   the board does not choose: nothing is added, and the worker
+#                                       spends this machine's own claudeAccount, as it always did
+#   gated, with an account              that login's folder ('' for the CLI's own)
+#   gated, with none                    no folder, and the board's reason - the worker turns the
+#                                       run down if its phase runs on Claude
+#
+# Returns why the run cannot start, or $null. The one refusal: an account this machine has no login
+# for any more, signed out since its last check-in.
+function Set-ClaimClaudeAccount {
+    param($Claim, $Order, $Logins)
+    $c = $Order.claude
+    if (-not $c -or -not $c.gated) { return $null }
+
+    $entry = [ordered]@{ gated = $true; account = "$($c.account)"; configDir = ''; refused = $null }
+    if ("$($c.accountId)") {
+        $login = @(@($Logins) | Where-Object { $_ -and "$($_.uuid)" -ieq "$($c.accountId)" })[0]
+        if (-not $login) { return "the board chose Claude account $($c.account), which this computer has no login for" }
+        $entry.configDir = if ("$($login.configDir)") { "$($login.configDir)" } else { "$env:CLAUDE_CONFIG_DIR" }
+    }
+    else {
+        $entry.refused = if ("$($c.reason)") { "$($c.reason)" } else { 'no Claude account this computer has is under its limits' }
+    }
+    $Claim | Add-Member -NotePropertyName claudeAccount -NotePropertyValue ([pscustomobject]$entry) -Force
     return $null
 }
 
@@ -394,10 +452,13 @@ while ($true) {
         break
     }
 
+    # Read afresh each time: a login signed in or out here reaches the board on the next check-in.
+    $script:ClaudeLogins = @(Get-ClaudeLogins)
     $body = @{
         commit = $commit
         runs = (Get-RunReport -Runs $Runs)
-        usageLimitUntil = (Get-HostUsageLimit)
+        claudeLogins = @($script:ClaudeLogins | ForEach-Object { @{ uuid = $_.uuid; email = $_.email; name = $_.name } })
+        usageLimits = (Get-HostUsageLimits -Logins $script:ClaudeLogins)
         waitSeconds = $(if ($Once) { 0 } else { 20 })
         dataRoot = $DataRoot
     } | ConvertTo-Json -Depth 6 -Compress

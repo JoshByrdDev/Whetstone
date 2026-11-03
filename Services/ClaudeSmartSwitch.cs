@@ -24,6 +24,25 @@ public sealed record AccountReading(
 /// <summary>Where the fleet should be. <see cref="SwitchTo"/> is null when it should stay where it is.</summary>
 public sealed record SmartSwitchDecision(string? SwitchTo, string Reason);
 
+/// <summary>A Claude login a worker host says it has: who it is signed in as, and that machine's name for it.</summary>
+public sealed record HostClaudeLogin(string Uuid, string? Email = null, string? Name = null);
+
+/// <summary>
+/// Which account a worker host's next Claude run spends. <see cref="Gated"/> is false when the board
+/// does not choose (the smart switch is off) and the host spends whatever its own config says, as it
+/// always did. Gated with no <see cref="AccountId"/> is "no Claude work there": every account the
+/// host could spend is over its limits, or it has none the board can read.
+/// </summary>
+/// <param name="AccountId">The account's id, which the host's runner turns back into a login of its own.</param>
+/// <param name="Account">The board's name for that account, for a person to read.</param>
+public sealed record HostAccountChoice(bool Gated, string? AccountId, string? Account, string Reason)
+{
+    public static HostAccountChoice Free(string reason) => new(false, null, null, reason);
+
+    /// <summary>Whether a Claude phase may be sent there now.</summary>
+    public bool ClaudeOpen => !Gated || AccountId is not null;
+}
+
 /// <summary>
 /// Which Claude account the fleet should be spending, given how full each one is.
 ///
@@ -160,6 +179,70 @@ public static class ClaudeSmartSwitch
                 : $"{account.Name} is the first account on the list under its limits");
         }
         return new(null, "Every account on the list is at its limit; staying put.");
+    }
+
+    /// <summary>
+    /// The account a worker host's next Claude run should spend: the same rule as
+    /// <see cref="Decide"/>, over the accounts on the list that host has a login for.
+    ///
+    /// <para>
+    /// A limit belongs to the account, not to the machine, so the board's reading of an account
+    /// already counts what every machine spent on it. That is the whole reason a host can be held
+    /// to the board's limits without reading anything itself. It also means an account the board
+    /// cannot identify - never signed in here - has no reading anyone trusts, and is passed over:
+    /// a host whose only login is one of those gets no Claude work while the switch is on.
+    /// </para>
+    ///
+    /// <para>
+    /// With the switch off the board chooses nothing, and the host spends its own config's login,
+    /// as it did before hosts could be held to anything.
+    /// </para>
+    /// </summary>
+    public static HostAccountChoice ChooseForHost(
+        SmartSwitchSettings settings,
+        IReadOnlyList<ClaudeAccount> accounts,
+        Func<ClaudeAccount, ClaudeIdentity?> identityOf,
+        IReadOnlyDictionary<string, AccountReading> readings,
+        IReadOnlyList<HostClaudeLogin> hostLogins,
+        DateTimeOffset now)
+    {
+        if (!settings.Enabled || settings.Chain.Count == 0)
+            return HostAccountChoice.Free("Smart switch is off: the host spends its own login.");
+        if (hostLogins.Count == 0)
+            return new(true, null, null, "this computer reported no Claude login");
+
+        var full = new List<string>();
+        var missing = new List<string>();
+        var unknown = new List<string>();
+        foreach (var rung in settings.Chain)
+        {
+            if (ClaudeAccounts.Find(accounts, rung.Account) is not { } account) continue;
+            if (identityOf(account) is not { } id)
+            {
+                unknown.Add(account.Name);
+                continue;
+            }
+            if (!hostLogins.Any(l => l.Uuid.Equals(id.Uuid, StringComparison.OrdinalIgnoreCase)))
+            {
+                missing.Add(account.Name);
+                continue;
+            }
+            readings.TryGetValue(account.Name, out var reading);
+            if (Over(rung, reading, now) is { } why)
+            {
+                full.Add($"{account.Name} {why}");
+                continue;
+            }
+            return new(true, id.Uuid, account.Name, full.Count == 0
+                ? $"{account.Name} is the first account on the list this computer has, under its limits"
+                : $"{string.Join("; ", full)} - on to {account.Name}");
+        }
+
+        var parts = new List<string>(full);
+        if (missing.Count > 0) parts.Add($"this computer has no login for {string.Join(" or ", missing)}");
+        if (unknown.Count > 0) parts.Add($"the board cannot tell which account {string.Join(" or ", unknown)} is (never signed in here)");
+        if (parts.Count == 0) parts.Add("the smart switch's list names no account");
+        return new(true, null, null, string.Join("; ", parts));
     }
 
     private static double Percent(JsonElement obj, string name, double fallback) =>

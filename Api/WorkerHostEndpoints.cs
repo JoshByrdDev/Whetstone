@@ -6,7 +6,11 @@ namespace Whetstone.Api;
 /// <summary>What a runner reports on every check-in: everything it is holding, every time.</summary>
 /// <param name="WaitSeconds">How long the check-in may wait for an order when none is queued (0..25).</param>
 /// <param name="DataRoot">The runner's own data root - where that machine keeps a ticket's files (see HostDataMirror).</param>
-public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null);
+/// <param name="UsageLimitUntil">One pause for the whole host. Runners before per-account limits sent only this.</param>
+/// <param name="ClaudeLogins">Who each Claude login on that machine is signed in as - identity only, never a folder or a token.</param>
+/// <param name="UsageLimits">Each provider's pause there, naming the Claude account that hit one.</param>
+public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null,
+    HostClaudeLogin[]? ClaudeLogins = null, HostUsageLimit[]? UsageLimits = null);
 
 /// <summary>The switch for all remote work, as the Heartbeat page sets it.</summary>
 public record HostSwitchRequest(bool Enabled);
@@ -126,7 +130,8 @@ public static class WorkerHostEndpoints
             var revoked = runs.Where(r => !r.Exited && !live.Contains(r.RunId)).Select(r => r.RunId).ToArray();
 
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
-            var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot);
+            var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot,
+                req.ClaudeLogins, req.UsageLimits);
             return CheckinResult(name, orders, revoked, commit.Get());
         });
 
@@ -140,7 +145,11 @@ public static class WorkerHostEndpoints
                 return Results.BadRequest(new { error = $"Slot {req.Slot} is not one of {name}'s ({host.FirstSlot}..{host.FirstSlot + host.Slots - 1})." });
             if (req.Kind == "start" && req.Claim is null)
                 return Results.BadRequest(new { error = "A start order carries the claim." });
-            hosts.Enqueue(name, new HostOrder(req.Kind, req.Slot, req.RunId, req.Claim));
+            // The account is chosen as the order is placed, not when the run was claimed: the latest
+            // reading decides. A start that names none while the board chooses is one the worker
+            // turns down if its phase runs on Claude - see "claudeAccount" in data/worker.ps1.
+            var claude = req.Kind == "start" ? hosts.ClaudeChoice(name) : null;
+            hosts.Enqueue(name, new HostOrder(req.Kind, req.Slot, req.RunId, req.Claim, claude));
             return Results.Accepted();
         });
 

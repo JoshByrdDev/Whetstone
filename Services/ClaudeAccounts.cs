@@ -10,6 +10,9 @@ namespace Whetstone.Services;
 /// </summary>
 public sealed record ClaudeAccount(string Name, string? ConfigDir);
 
+/// <summary>Who a login is signed in as: the account's id, and its email for a person to read.</summary>
+public sealed record ClaudeIdentity(string Uuid, string? Email);
+
 /// <summary>
 /// Which Claude login every <c>claude</c> process the dashboard starts should run as.
 ///
@@ -88,6 +91,68 @@ public static class ClaudeAccounts
     /// <summary>Whether the CLI has ever signed in there. Says nothing about whether the login still works.</summary>
     public static bool HasLogin(ClaudeAccount account) =>
         File.Exists(Path.Combine(DirOf(account), ".credentials.json"));
+
+    /// <summary>
+    /// The file the CLI keeps a login's profile in - who it is signed in as. Beside the credentials
+    /// for a login of its own; for the CLI's own login it is <c>~/.claude.json</c>, one level up from
+    /// the credentials, unless a <c>CLAUDE_CONFIG_DIR</c> of the user's moves both.
+    /// <para>
+    /// Written twice and the two must agree: here, and <c>Get-ClaudeProfilePath</c> in
+    /// <c>data/heartbeat-common.ps1</c>, which is how a worker host names the logins it has.
+    /// </para>
+    /// </summary>
+    public static string ProfileOf(ClaudeAccount account)
+    {
+        if (account.ConfigDir is not null) return Path.Combine(account.ConfigDir, ".claude.json");
+        var own = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+        return !string.IsNullOrWhiteSpace(own)
+            ? Path.Combine(own, ".claude.json")
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude.json");
+    }
+
+    /// <summary>
+    /// Who a login is signed in as, or null when it has never been signed in. The account's id is
+    /// what says two logins on two machines are the same subscription - their names are each
+    /// machine's own, and "Default" on one can be anything on the other.
+    /// </summary>
+    public static ClaudeIdentity? IdentityOf(ClaudeAccount account) => ReadIdentity(ProfileOf(account));
+
+    private static readonly Dictionary<string, (DateTime Stamp, ClaudeIdentity? Id)> IdentityCache =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The <c>oauthAccount</c> a profile file names. Cached by the file's time, because the board asks
+    /// on every read of its worker hosts and the CLI rewrites the file far less often than that. A
+    /// file caught mid-write keeps the last answer rather than losing the account for a pass.
+    /// </summary>
+    public static ClaudeIdentity? ReadIdentity(string path)
+    {
+        DateTime stamp;
+        try
+        {
+            if (!File.Exists(path)) return null;
+            stamp = File.GetLastWriteTimeUtc(path);
+        }
+        catch { return null; }
+
+        lock (IdentityCache)
+            if (IdentityCache.TryGetValue(path, out var hit) && hit.Stamp == stamp) return hit.Id;
+
+        ClaudeIdentity? id;
+        try
+        {
+            var account = JsonNode.Parse(File.ReadAllText(path))?["oauthAccount"];
+            var uuid = (account?["accountUuid"] as JsonValue)?.TryGetValue<string>(out var u) == true ? u.Trim() : "";
+            var email = (account?["emailAddress"] as JsonValue)?.TryGetValue<string>(out var e) == true ? e.Trim() : null;
+            id = uuid.Length > 0 ? new ClaudeIdentity(uuid, string.IsNullOrEmpty(email) ? null : email) : null;
+        }
+        catch
+        {
+            lock (IdentityCache) return IdentityCache.TryGetValue(path, out var last) ? last.Id : null;
+        }
+        lock (IdentityCache) IdentityCache[path] = (stamp, id);
+        return id;
+    }
 
     /// <summary>
     /// The list as it should be stored, from whatever the Settings form sent. This is the one place

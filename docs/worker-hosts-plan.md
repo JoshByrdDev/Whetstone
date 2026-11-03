@@ -217,6 +217,18 @@ The worker host's own `data/config.json` sets `dashboardUrl` (which `heartbeat-c
 reads, so workers and their MCP config point at the board host with no further change) and
 `claudeAccount` for the worker host's login.
 
+*Later:* with the smart switch on, `claudeAccount` there is only the fallback. The runner reports
+who each of its logins is (`claudeLogins` on the check-in: account id, email, its own name), and
+the board picks the account for every start order it places (`HostOrder.Claude`, from
+`ClaudeSmartSwitch.ChooseForHost`): the first account on the switch's list that the host has a
+login for and that is under its limits, judged on the board's own readings - a limit is the
+account's, so those already count every machine. The runner turns the account's id back into one
+of its login folders and writes it into the claim as `claudeAccount`, which `worker.ps1` prefers
+to the host's own setting. When no account fits, the host claims only phases on other providers,
+and a worker sent a Claude phase anyway (the account filled between claim and order) gives it back
+with its attempt refunded. A Claude pause a host reports names its account (`usageLimits`), which
+marks that account full for the board as well, rather than pausing the whole machine.
+
 ### 4. Worker (`data/worker.ps1`)
 
 When the claim carries a host (`$Claim.host`), and only then:

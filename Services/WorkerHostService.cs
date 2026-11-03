@@ -117,20 +117,37 @@ public record HostRun(int Slot, int TicketId, int RunId, string? Project, int? P
 /// Something the orchestrator wants a runner to do. <c>start</c> carries the claim exactly as
 /// claim-next returned it, which the runner rewrites to its own paths; <c>kill</c> names a run.
 /// </summary>
-public record HostOrder(string Kind, int Slot, int RunId, JsonElement? Claim);
+/// <param name="Claude">
+/// For a start: which Claude account the run spends, chosen when the order is placed. Null, or not
+/// <see cref="HostAccountChoice.Gated"/>, leaves the host on its own config's login.
+/// </param>
+public record HostOrder(string Kind, int Slot, int RunId, JsonElement? Claim, HostAccountChoice? Claude = null);
+
+/// <summary>
+/// A usage-limit pause a runner reports: which provider, until when, and - for Claude - which
+/// account hit it, so the board can tell an account that is full from a machine that is.
+/// </summary>
+public record HostUsageLimit(string Provider, DateTime Until, string? AccountId = null);
 
 /// <summary>A worker host as the orchestrator and the fleet view see it.</summary>
 public record WorkerHostView(
     string Name, bool Enabled, int Slots, int FirstSlot, string[] Skills, string[] Projects,
     bool Online, DateTime? LastCheckin, string? Commit, bool CommitMatches,
     IReadOnlyList<HostRun> Runs, int PendingOrders, DateTime? UsageLimitUntil,
-    int QaLeases = 1, bool RemoteOn = true)
+    int QaLeases = 1, bool RemoteOn = true,
+    HostAccountChoice? Claude = null, IReadOnlyList<HostClaudeLogin>? ClaudeLogins = null)
 {
     /// <summary>
     /// Whether the orchestrator may give it new work: remote work switched on, this host switched on,
     /// answering, and on this board's commit.
     /// </summary>
     public bool Dispatchable => RemoteOn && Enabled && Online && CommitMatches && UsageLimitUntil is null;
+
+    /// <summary>
+    /// Whether it may be given a Claude phase. False is narrower than not dispatchable: a phase
+    /// that runs on another provider still goes there - the heartbeat claims only those for it.
+    /// </summary>
+    public bool ClaudeOpen => Claude?.ClaudeOpen ?? true;
 }
 
 /// <summary>
@@ -158,6 +175,8 @@ public class WorkerHostService
         public List<HostRun> Runs = new();
         public readonly Queue<HostOrder> Orders = new();
         public DateTime? UsageLimitUntil;
+        public List<HostUsageLimit> Limits = new();
+        public List<HostClaudeLogin> Logins = new();
         public string? DataRoot;
         public TaskCompletionSource Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -168,6 +187,8 @@ public class WorkerHostService
     private readonly Func<string?> _boardCommit;
     private readonly Func<DateTime> _now;
     private readonly Func<bool> _remoteOn;
+    private readonly Func<IReadOnlyList<HostClaudeLogin>, HostAccountChoice>? _chooseAccount;
+    private readonly Func<string, DateTimeOffset, bool>? _accountLimit;
 
     /// <summary>
     /// Machines that checked in under a name the config does not have: a runner set up and started
@@ -176,13 +197,21 @@ public class WorkerHostService
     /// </summary>
     private readonly Dictionary<string, (DateTime At, string? Commit)> _seen = new(StringComparer.OrdinalIgnoreCase);
 
-    public WorkerHostService(ProjectRegistry registry, BoardCommit commit)
+    public WorkerHostService(ProjectRegistry registry, BoardCommit commit, ClaudeAccountSwitcher accounts)
         : this(() => WorkerHostConfig.Read(registry.GetGlobalConfig()), commit.Get, () => DateTime.UtcNow,
-               () => WorkerHostConfig.RemoteEnabled(registry.GetGlobalConfig())) { }
+               () => WorkerHostConfig.RemoteEnabled(registry.GetGlobalConfig()),
+               accounts.ChooseForHost, accounts.NoteHostLimit) { }
 
+    /// <param name="chooseAccount">Which Claude account a host with these logins spends - see <see cref="ClaudeAccountSwitcher.ChooseForHost"/>. Null: hosts choose their own.</param>
+    /// <param name="accountLimit">Told of a Claude account a host's run found full; true when it is one of the board's accounts.</param>
     public WorkerHostService(Func<IReadOnlyList<WorkerHostConfig>> config, Func<string?> boardCommit, Func<DateTime> now,
-        Func<bool>? remoteOn = null)
-        => (_config, _boardCommit, _now, _remoteOn) = (config, boardCommit, now, remoteOn ?? (() => true));
+        Func<bool>? remoteOn = null,
+        Func<IReadOnlyList<HostClaudeLogin>, HostAccountChoice>? chooseAccount = null,
+        Func<string, DateTimeOffset, bool>? accountLimit = null)
+    {
+        (_config, _boardCommit, _now, _remoteOn) = (config, boardCommit, now, remoteOn ?? (() => true));
+        (_chooseAccount, _accountLimit) = (chooseAccount, accountLimit);
+    }
 
     /// <summary>Whether remote work is switched on at all.</summary>
     public bool RemoteOn => _remoteOn();
@@ -217,7 +246,8 @@ public class WorkerHostService
     /// </summary>
     public async Task<IReadOnlyList<HostOrder>?> CheckInAsync(
         string name, string? commit, IReadOnlyList<HostRun> runs, DateTime? usageLimitUntil, TimeSpan wait,
-        CancellationToken ct = default, string? dataRoot = null)
+        CancellationToken ct = default, string? dataRoot = null,
+        IReadOnlyList<HostClaudeLogin>? logins = null, IReadOnlyList<HostUsageLimit>? limits = null)
     {
         if (Find(name) is null)
         {
@@ -227,6 +257,12 @@ public class WorkerHostService
         }
         if (wait > MaxWait) wait = MaxWait;
 
+        // A Claude account a run here found full is full on every machine - the board's own
+        // fleet included - so it is told to the one place that keeps accounts' readings.
+        foreach (var l in limits ?? Array.Empty<HostUsageLimit>())
+            if (l.Provider == "claude" && !string.IsNullOrWhiteSpace(l.AccountId) && l.Until > _now())
+                _accountLimit?.Invoke(l.AccountId!, new DateTimeOffset(DateTime.SpecifyKind(l.Until, DateTimeKind.Utc)));
+
         Task signal;
         lock (_lock)
         {
@@ -235,6 +271,10 @@ public class WorkerHostService
             s.Commit = string.IsNullOrWhiteSpace(commit) ? null : commit.Trim();
             s.Runs = runs.ToList();
             s.UsageLimitUntil = usageLimitUntil is { } u && u > _now() ? u : null;
+            s.Limits = (limits ?? Array.Empty<HostUsageLimit>())
+                .Where(l => l.Until > _now() && !string.IsNullOrWhiteSpace(l.Provider)).ToList();
+            s.Logins = (logins ?? Array.Empty<HostClaudeLogin>())
+                .Where(l => !string.IsNullOrWhiteSpace(l.Uuid)).ToList();
             if (!string.IsNullOrWhiteSpace(dataRoot)) s.DataRoot = dataRoot.Trim();
             if (s.Orders.Count > 0 || wait <= TimeSpan.Zero) return Drain(s);
             if (s.Signal.Task.IsCompleted) s.Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -253,6 +293,37 @@ public class WorkerHostService
         var list = s.Orders.ToList();
         s.Orders.Clear();
         return list;
+    }
+
+    /// <summary>Which Claude account a host's next run spends, from what it last reported.</summary>
+    public HostAccountChoice ClaudeChoice(string name)
+    {
+        List<HostClaudeLogin> logins;
+        lock (_lock) logins = _hosts.TryGetValue(name, out var s) ? s.Logins.ToList() : new();
+        return ChoiceFor(logins);
+    }
+
+    private HostAccountChoice ChoiceFor(IReadOnlyList<HostClaudeLogin> logins) =>
+        _chooseAccount?.Invoke(logins) ?? HostAccountChoice.Free("The board does not choose this computer's account.");
+
+    /// <summary>
+    /// When the host as a whole may take work again, or null. While the board chooses the host's
+    /// account, a Claude limit naming an account is that account's, not the machine's: the board
+    /// has marked it full (or never sends a run to it, if it cannot tell who it is), so it does not
+    /// hold the host's other accounts and providers too. Anything else - another provider, a limit
+    /// naming no account, the switch off - holds the host, as every limit did before.
+    /// </summary>
+    private static DateTime? Pause(State? s, HostAccountChoice claude, DateTime now)
+    {
+        if (s is null) return null;
+        DateTime? latest = s.UsageLimitUntil is { } u && u > now ? u : null;
+        foreach (var l in s.Limits)
+        {
+            if (l.Until <= now) continue;
+            if (claude.Gated && l.Provider == "claude" && !string.IsNullOrWhiteSpace(l.AccountId)) continue;
+            if (latest is null || l.Until > latest) latest = l.Until;
+        }
+        return latest;
     }
 
     /// <summary>Queue an order for a host. False for a host the config does not name.</summary>
@@ -314,10 +385,13 @@ public class WorkerHostService
                 _hosts.TryGetValue(h.Name, out var s);
                 var online = s?.LastCheckin is { } t && now - t < OfflineAfter;
                 var matches = s?.Commit is { } c && board is not null && c.Equals(board, StringComparison.OrdinalIgnoreCase);
-                var pause = s?.UsageLimitUntil is { } u && u > now ? u : (DateTime?)null;
+                var logins = s?.Logins.ToList() ?? new List<HostClaudeLogin>();
+                var claude = ChoiceFor(logins);
+                var pause = Pause(s, claude, now);
                 result.Add(new WorkerHostView(h.Name, h.Enabled, h.Slots, h.FirstSlot, h.Skills, h.Projects,
                     online, s?.LastCheckin, s?.Commit, matches,
-                    s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.QaLeases, remoteOn));
+                    s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.QaLeases, remoteOn,
+                    claude, logins));
             }
         }
         return result;

@@ -418,6 +418,14 @@ discoverable from the code:
   board host's `alpha:app-stack`. More than one at once needs both the host's `qaLeases` and the
   project's `parallelStacks`, and what stack slot N means in ports is written in the project's
   folder, never here.
+- **With the smart switch on, the board chooses a worker host's Claude account.** A usage limit is
+  the account's, not the machine's, so the board's reading of an account already counts every
+  machine spending it. A host reports who its logins are, by account id, never a folder or a token;
+  each start order names the first account on the switch's list that the host has and that is
+  under its limits (`ClaudeSmartSwitch.ChooseForHost`), and with none it takes no Claude phase.
+  Accounts are matched by id because each machine's names are its own. Where a login's profile
+  lives (`~/.claude.json` for the CLI's own, beside the credentials otherwise) is written twice and
+  the two must agree: `ClaudeAccounts.ProfileOf` and `Get-ClaudeProfilePath` in `heartbeat-common.ps1`.
 - **A ticket's files sit at the same path under each machine's data root** (`HostDataMirror`).
   Attachments go to the worker host when a run starts, and QA captures come back as they land. A
   route or tool that hands an agent a path under the data root has to keep to that, or a worker
@@ -436,7 +444,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
 ```
 
 ```bash
-dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~WorkerHost|FullyQualifiedName~WorkerBranch|FullyQualifiedName~HostDataMirror"
+dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~WorkerHost|FullyQualifiedName~WorkerBranch|FullyQualifiedName~HostDataMirror|FullyQualifiedName~HostClaudeAccount"
 ```
 
 ## Knowledge

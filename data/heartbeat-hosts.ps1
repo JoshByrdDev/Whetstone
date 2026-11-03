@@ -65,8 +65,18 @@ function Get-RemoteFreeSlot {
 
 function Invoke-HostClaim {
     param($HostView)
+    $req = @{ host = "$($HostView.name)" }
+    # Every Claude account that host could spend is over the smart switch's limits (the board's
+    # reason is on the host's card). It may still take a phase that runs on another provider, so
+    # the claim names only those - the API keeps them within the host's own skills. None at all is
+    # nothing to claim, never "every skill", which is what an empty list means to claim-next.
+    if ($HostView.claudeOpen -eq $false) {
+        $open = @(Get-OpenSkills -Paused @{ claude = $true })
+        if ($open.Count -eq 0) { return $null }
+        $req.skills = $open
+    }
     try {
-        $body = @{ host = "$($HostView.name)" } | ConvertTo-Json -Compress
+        $body = $req | ConvertTo-Json -Compress
         $resp = Invoke-RestMethod -Uri "$DashboardUrl/api/heartbeat/claim-next" -Method Post `
             -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 15
         return $resp.claimed

@@ -57,6 +57,8 @@ public static class CapacityReasons
     public const string Stopped = "stopped";
     public const string OffHours = "off-hours";
     public const string UsageLimit = "usage-limit";
+    /// <summary>A worker host whose every Claude account is over the smart switch's limits.</summary>
+    public const string AccountFull = "account-full";
     public const string HostOff = "host-off";
     public const string HostOffline = "host-offline";
     public const string HostBehind = "host-behind";
@@ -208,6 +210,7 @@ public class CapacitySnapshot
             var hostState = !h.RemoteOn || !h.Enabled ? CapacityReasons.HostOff
                 : !h.Online ? CapacityReasons.HostOffline
                 : h.UsageLimitUntil is not null ? CapacityReasons.UsageLimit
+                : !h.ClaudeOpen ? CapacityReasons.AccountFull
                 : !h.CommitMatches ? CapacityReasons.HostBehind
                 : null;
             list.Add(new(h.Name, h.Slots, h.Runs.Count(r => !r.Exited), running, state, sleep, paused, hostState,

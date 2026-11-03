@@ -143,6 +143,78 @@ function Get-ClaudeAccountDir {
     return $null
 }
 
+# The file the CLI keeps a login's profile in - who it is signed in as. Beside the credentials for
+# a login of its own; for the CLI's own login it is ~/.claude.json, one level up from them, unless a
+# CLAUDE_CONFIG_DIR of the user's moves both. Written twice and the two must agree: here, and
+# ClaudeAccounts.ProfileOf on the board.
+function Get-ClaudeProfilePath {
+    param([string]$ConfigDir)
+    if ($ConfigDir) { return [IO.Path]::Combine($ConfigDir, '.claude.json') }
+    if ($env:CLAUDE_CONFIG_DIR) { return [IO.Path]::Combine($env:CLAUDE_CONFIG_DIR, '.claude.json') }
+    return [IO.Path]::Combine($env:USERPROFILE, '.claude.json')
+}
+
+# Where a login's credentials are: the same folder as its profile, except for the CLI's own login,
+# whose credentials are in ~/.claude while its profile is beside that folder.
+function Get-ClaudeCredentialsPath {
+    param([string]$ConfigDir)
+    if ($ConfigDir) { return [IO.Path]::Combine($ConfigDir, '.credentials.json') }
+    if ($env:CLAUDE_CONFIG_DIR) { return [IO.Path]::Combine($env:CLAUDE_CONFIG_DIR, '.credentials.json') }
+    return [IO.Path]::Combine($env:USERPROFILE, '.claude', '.credentials.json')
+}
+
+# Who a profile file says its login is, as @{ uuid; email }, or $null. Cached by the file's time:
+# a runner asks on every check-in, and the CLI rewrites the file far less often than that.
+$script:ClaudeIdentityCache = @{}
+function Read-ClaudeIdentity {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
+    $stamp = (Get-Item -LiteralPath $Path).LastWriteTimeUtc
+    $hit = $script:ClaudeIdentityCache[$Path]
+    if ($hit -and $hit.Stamp -eq $stamp) { return $hit.Id }
+    $id = $null
+    try {
+        $acct = (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json).oauthAccount
+        $uuid = "$($acct.accountUuid)".Trim()
+        if ($uuid) {
+            $email = "$($acct.emailAddress)".Trim()
+            $id = @{ uuid = $uuid; email = $(if ($email) { $email } else { $null }) }
+        }
+    }
+    catch {
+        # Caught mid-write: keep the last answer rather than losing the account for a check-in.
+        if ($hit) { return $hit.Id }
+        return $null
+    }
+    $script:ClaudeIdentityCache[$Path] = @{ Stamp = $stamp; Id = $id }
+    return $id
+}
+
+# Every Claude login this machine has signed in, and the account each is: the CLI's own, then each
+# of claudeAccounts, skipped exactly as Get-ClaudeAccountDir skips them. A worker host reports these
+# (identity only - never a folder or a token) so the board can tell which of its accounts this
+# machine can spend, and an order naming an account is turned back into a folder here.
+function Get-ClaudeLogins {
+    $logins = New-Object System.Collections.ArrayList
+    $seen = @{}
+    $entries = @([pscustomobject]@{ name = 'Default'; configDir = $null })
+    foreach ($a in @(Get-Global 'claudeAccounts')) {
+        if (-not $a) { continue }
+        $n = "$($a.name)".Trim(); $d = "$($a.configDir)".Trim()
+        if ($n -and $d) { $entries += [pscustomobject]@{ name = $n; configDir = $d } }
+    }
+    foreach ($e in $entries) {
+        if ($seen.ContainsKey($e.name.ToLowerInvariant())) { continue }
+        $seen[$e.name.ToLowerInvariant()] = $true
+        if (-not (Test-Path -LiteralPath (Get-ClaudeCredentialsPath -ConfigDir $e.configDir))) { continue }
+        $id = Read-ClaudeIdentity -Path (Get-ClaudeProfilePath -ConfigDir $e.configDir)
+        if (-not $id) { continue }
+        $null = $logins.Add([pscustomobject]@{ name = $e.name; configDir = $e.configDir; uuid = $id.uuid; email = $id.email })
+    }
+    # Unrolled: callers take it as @(Get-ClaudeLogins), which makes none an empty list.
+    return $logins.ToArray()
+}
+
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 if (-not (Test-Path $RunDir)) { New-Item -ItemType Directory -Path $RunDir -Force | Out-Null }
 

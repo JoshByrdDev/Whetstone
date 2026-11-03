@@ -254,6 +254,85 @@ exit 3
         Check 'a supervisor that has gone' (Test-SupervisorAlive -SupervisorPid $sup.Id) $false
     }
     finally { foreach ($p in $sup, $other) { try { $p.Kill() } catch { } } }
+
+    # ---- The Claude account the board chose -------------------------------------------
+    # Which logins this machine has is heartbeat-common.ps1's, which cannot be dot-sourced here
+    # (it reads the config and starts a provider), so those functions are lifted out of it too.
+    Write-Host "== Get-ClaudeLogins"
+    $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
+    foreach ($lifted in 'Get-ClaudeProfilePath', 'Get-ClaudeCredentialsPath', 'Read-ClaudeIdentity', 'Get-ClaudeLogins') {
+        . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq $lifted }, $false) | Select-Object -First 1).Extent.Text))
+    }
+    $script:ClaudeIdentityCache = @{}
+    $home1 = Join-Path $root 'home'
+    $second = Join-Path $root 'logins\second'
+    $third = Join-Path $root 'logins\third'
+    foreach ($d in (Join-Path $home1 '.claude'), $second, $third) { New-Item -ItemType Directory -Path $d -Force | Out-Null }
+    # The CLI's own login: profile beside ~/.claude, credentials inside it.
+    Write-Json (Join-Path $home1 '.claude.json') '{ "oauthAccount": { "accountUuid": "uuid-a", "emailAddress": "a@example.com" } }'
+    Write-Json (Join-Path $home1 '.claude\.credentials.json') '{}'
+    Write-Json (Join-Path $second '.claude.json') '{ "oauthAccount": { "accountUuid": "uuid-b" } }'
+    Write-Json (Join-Path $second '.credentials.json') '{}'
+    # Signed in once and signed out: a profile, no credentials.
+    Write-Json (Join-Path $third '.claude.json') '{ "oauthAccount": { "accountUuid": "uuid-c" } }'
+    $script:Accounts = @(
+        [pscustomobject]@{ name = 'Second'; configDir = $second },
+        [pscustomobject]@{ name = 'second'; configDir = $third },
+        [pscustomobject]@{ name = 'Third'; configDir = $third },
+        [pscustomobject]@{ name = 'NoDir'; configDir = '' })
+    function Get-Global { param([string]$Key) if ($Key -eq 'claudeAccounts') { return $script:Accounts } return $null }
+    $savedProfile = $env:USERPROFILE; $savedDir = $env:CLAUDE_CONFIG_DIR
+    try {
+        $env:USERPROFILE = $home1
+        Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+        $logins = @(Get-ClaudeLogins)
+        Check 'signed-in logins only, the CLI''s own first' (($logins | ForEach-Object { "$($_.name)=$($_.uuid)" }) -join ',') 'Default=uuid-a,Second=uuid-b'
+        Check 'the CLI''s own login has no folder of its own' "$($logins[0].configDir)" ''
+        Check 'an email when the profile has one' "$($logins[0].email)" 'a@example.com'
+
+        Write-Host "== Find-LoginAccountId"
+        Check 'a pause from a login folder names its account' (Find-LoginAccountId -Logins $logins -ConfigDir "$second\") 'uuid-b'
+        Check 'a pause with no folder is the CLI''s own' (Find-LoginAccountId -Logins $logins -ConfigDir '') 'uuid-a'
+        Check 'a folder that is no login here names none' "$(Find-LoginAccountId -Logins $logins -ConfigDir $third)" ''
+    }
+    finally {
+        $env:USERPROFILE = $savedProfile
+        if ($savedDir) { $env:CLAUDE_CONFIG_DIR = $savedDir } else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+    }
+
+    Write-Host "== Set-ClaimClaudeAccount"
+    $claim = New-Claim
+    $order = [pscustomobject]@{ kind = 'start'; claude = $null }
+    Check 'no choice from the board: nothing added' "$(Set-ClaimClaudeAccount -Claim $claim -Order $order -Logins $logins)" ''
+    Check '... and the claim carries no account' ($null -eq $claim.claudeAccount) $true
+    $order = [pscustomobject]@{ claude = [pscustomobject]@{ gated = $false; reason = 'Smart switch is off' } }
+    $null = Set-ClaimClaudeAccount -Claim $claim -Order $order -Logins $logins
+    Check 'the switch off: nothing added' ($null -eq $claim.claudeAccount) $true
+
+    $claim = New-Claim
+    $order = [pscustomobject]@{ claude = [pscustomobject]@{ gated = $true; accountId = 'UUID-B'; account = 'Work'; reason = 'x' } }
+    Check 'an account this machine has: no refusal' "$(Set-ClaimClaudeAccount -Claim $claim -Order $order -Logins $logins)" ''
+    Check '... its folder, by id whatever the case' $claim.claudeAccount.configDir $second
+    Check '... and the board''s name for it' $claim.claudeAccount.account 'Work'
+
+    $claim = New-Claim
+    $savedDir = $env:CLAUDE_CONFIG_DIR
+    Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue
+    $order = [pscustomobject]@{ claude = [pscustomobject]@{ gated = $true; accountId = 'uuid-a'; account = 'A' } }
+    $null = Set-ClaimClaudeAccount -Claim $claim -Order $order -Logins $logins
+    Check 'the CLI''s own login: an empty folder' "$($claim.claudeAccount.configDir)" ''
+    Check '... gated, not refused' "$($claim.claudeAccount.gated) $($claim.claudeAccount.refused)" 'True '
+    if ($savedDir) { $env:CLAUDE_CONFIG_DIR = $savedDir }
+
+    $claim = New-Claim
+    $order = [pscustomobject]@{ claude = [pscustomobject]@{ gated = $true; accountId = 'uuid-z'; account = 'Gone' } }
+    Check 'an account signed out since the check-in refuses the run' (Set-ClaimClaudeAccount -Claim $claim -Order $order -Logins $logins) 'the board chose Claude account Gone, which this computer has no login for'
+
+    $claim = New-Claim
+    $order = [pscustomobject]@{ claude = [pscustomobject]@{ gated = $true; accountId = $null; reason = 'A weekly 85% >= 80%' } }
+    Check 'no account under its limits: the run is not refused here' "$(Set-ClaimClaudeAccount -Claim $claim -Order $order -Logins $logins)" ''
+    Check '... the worker is told why, to turn a Claude phase down' $claim.claudeAccount.refused 'A weekly 85% >= 80%'
+    Check '... with no folder' "$($claim.claudeAccount.configDir)" ''
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.

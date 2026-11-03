@@ -85,6 +85,17 @@ catch {
     exit 1
 }
 
+# On a worker host the board may choose the account instead (the smart switch, held across
+# machines): its runner puts that account's login folder here, '' for the CLI's own. It outranks
+# this machine's claudeAccount above, which is what the board is holding this host back from.
+# With no account at all ("refused") the run is turned down below, once its provider is known.
+$claudeChoice = $Claim.claudeAccount
+if ($claudeChoice -and $claudeChoice.gated -and -not "$($claudeChoice.refused)") {
+    if ("$($claudeChoice.configDir)") { $env:CLAUDE_CONFIG_DIR = "$($claudeChoice.configDir)" }
+    else { Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue }
+    Write-Log "  Claude account $($claudeChoice.account), as the board chose for this computer."
+}
+
 # --- Helpers this agent alone needs ---
 #
 # Get-Prop and Format-ToolCall used to live here. They moved to providers.ps1 (dot-sourced through
@@ -1790,6 +1801,19 @@ function Stop-CycleEarly {
         -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
         -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error" -Detail $runDetail
     Send-LeaseRelease -TicketId $ticketId -Reason $Reason
+    Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
+    exit 0
+}
+
+# Sent to this worker host when no Claude account it has was under its limits, and this phase runs
+# on Claude after all (the account filled between the claim and the order, or an experiment arm
+# moved the phase onto Claude). Nothing has been touched yet, so it is given back quietly with its
+# attempt refunded - the ticket is not at fault, and it goes to whichever machine has room.
+if ($claudeChoice -and $claudeChoice.gated -and "$($claudeChoice.refused)" -and $AgentProvider.Key -eq 'claude') {
+    $why = "no Claude account on this computer is under its limits ($($claudeChoice.refused))"
+    Write-Log "  $why - giving ticket #$ticketId back."
+    Send-AttemptRefund -TicketId $ticketId -Reason "it was sent to a worker host with $why"
+    Send-LeaseRelease -TicketId $ticketId -Reason $why
     Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
     exit 0
 }

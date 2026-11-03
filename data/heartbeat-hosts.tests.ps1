@@ -45,6 +45,10 @@ $script:Released = @()
 $script:Refunded = @()
 $script:Idle = @()
 
+$script:ClaimSkills = @()
+# What Get-OpenSkills (heartbeat-common.ps1) would say with Claude paused: the roles on another provider.
+$script:NonClaudeSkills = @()
+function Get-OpenSkills { param([hashtable]$Paused) if ($Paused.ContainsKey('claude')) { return @($script:NonClaudeSkills) } return @('speculate', 'implement') }
 $script:Placed = @()
 $script:Refuse = @()
 $script:DispatchView = $null
@@ -97,8 +101,10 @@ function Invoke-RestMethod {
         return $script:Hosts
     }
     if ($path -eq '/api/heartbeat/claim-next') {
-        $claimHost = ($Body | ConvertFrom-Json).host
+        $claimReq = $Body | ConvertFrom-Json
+        $claimHost = $claimReq.host
         $script:ClaimHosts += $claimHost
+        $script:ClaimSkills += ,@(@($claimReq.skills) | Where-Object { $_ })
         $next = if ($script:Refuse -contains $claimHost) { $null }
                 elseif ($script:Claims.Count -gt 0) { $script:Claims.Dequeue() } else { $null }
         return [pscustomobject]@{ claimed = $next }
@@ -457,6 +463,37 @@ try {
 catch { $script:fail++; $script:total++; Write-Host "FAIL  stopped by an exception: $($_.Exception.Message)" -ForegroundColor Red }
 finally { $listener.Stop(); $listener.Close() }
 Check 'no response at all gives none' "$(try { throw 'connection refused' } catch { Get-ApiError $_ })" ''
+
+Write-Host "== A host with no Claude account under its limits"
+Reset-Board
+$script:ClaimSkills = @()
+$open = New-HostView
+$open | Add-Member -NotePropertyName claudeOpen -NotePropertyValue $true
+$script:Hosts = @($open)
+$script:Claims.Enqueue((New-Claim 31))
+$null = Get-WorkerHosts
+$null = Start-Fill -LocalOpen $false
+Check 'a host with an account claims every skill it has' "$(@($script:ClaimSkills[0]).Count)" '0'
+
+Reset-Board
+$script:ClaimSkills = @()
+$script:NonClaudeSkills = @()
+$full = New-HostView
+$full | Add-Member -NotePropertyName claudeOpen -NotePropertyValue $false
+$script:Hosts = @($full)
+$script:Claims.Enqueue((New-Claim 32))
+$null = Get-WorkerHosts
+Check 'with every phase on Claude, nothing is claimed for it' (Start-Fill -LocalOpen $false) 0
+Check '... and claim-next is not asked' $script:ClaimHosts.Count 0
+
+Reset-Board
+$script:ClaimSkills = @()
+$script:NonClaudeSkills = @('review-pr')
+$script:Hosts = @($full)
+$script:Claims.Enqueue((New-Claim 33))
+$null = Get-WorkerHosts
+$null = Start-Fill -LocalOpen $false
+Check 'otherwise the claim names only the phases on another provider' (@($script:ClaimSkills[0]) -join ',') 'review-pr'
 
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "ALL $($script:total) CHECKS PASSED" -ForegroundColor Green }

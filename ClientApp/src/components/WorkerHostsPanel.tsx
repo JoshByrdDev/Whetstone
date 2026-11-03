@@ -75,6 +75,7 @@ function stateOf(h: Settings['hosts'][number]): { text: string; colour: string }
   if (!h.online) return { text: h.lastCheckin ? 'offline' : 'never checked in', colour: 'rgb(var(--w-blocked-rgb))' };
   if (!h.commitMatches) return { text: 'on another commit', colour: 'rgb(var(--w-gate-rgb))' };
   if (h.usageLimitUntil) return { text: 'at its usage limit', colour: 'rgb(var(--w-gate-rgb))' };
+  if (h.claudeOpen === false && live === 0) return { text: 'Claude accounts full', colour: 'rgb(var(--w-gate-rgb))' };
   return { text: live > 0 ? `working · ${live}` : 'ready', colour: 'rgb(var(--w-done-rgb))' };
 }
 
@@ -278,6 +279,13 @@ function HostCard({ h, s, busy, onEdit, onRemove }: {
         <span>berths {h.slots === 1 ? h.firstSlot : `${h.firstSlot}–${lastBerth}`}</span>
         {h.usageLimitUntil && <span>paused until {new Date(h.usageLimitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
       </div>
+
+      {h.claude?.gated && (
+        <div className="mt-0.5" style={{ font: `400 10.5px ${BODY}`, color: h.claude.account ? MUTED : 'rgb(var(--w-gate-rgb))' }}
+          title="The smart switch chooses this computer's Claude account, from the logins it has, by the same limits as this machine's.">
+          {h.claude.account ? <>Claude: {h.claude.account}</> : <>No Claude work: {h.claude.reason}</>}
+        </div>
+      )}
 
       {live.length > 0 && (
         <div className="mt-1" style={{ font: `400 10.5px ${BODY}`, color: BRIGHT }}>

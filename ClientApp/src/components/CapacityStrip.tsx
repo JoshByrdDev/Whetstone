@@ -26,6 +26,7 @@ const LABEL: Record<string, string> = {
   'host-offline': 'Machine not answering',
   'host-behind': "Catching up to the board's commit",
   'usage-limit': 'Usage limit',
+  'account-full': 'Claude accounts over their limits',
   'nothing-ready': 'Nothing ready to work',
   dependency: 'Waiting on another ticket',
   resource: 'Waiting for a QA stack or emulator',
@@ -43,7 +44,7 @@ const FAMILIES: { key: string; label: string; swatch: string; reasons: string[] 
   { key: 'busy', label: 'Working', swatch: 'bg-emerald-500', reasons: [] },
   { key: 'waiting', label: 'Work waiting on something', swatch: 'bg-amber-500', reasons: ['resource', 'dependency', 'analysis'] },
   { key: 'empty', label: 'Nothing ready', swatch: 'bg-sky-500', reasons: ['nothing-ready'] },
-  { key: 'machine', label: "Machine couldn't take it", swatch: 'bg-violet-500', reasons: ['usage-limit', 'host-behind', 'host-offline', 'not-here'] },
+  { key: 'machine', label: "Machine couldn't take it", swatch: 'bg-violet-500', reasons: ['usage-limit', 'account-full', 'host-behind', 'host-offline', 'not-here'] },
   { key: 'other', label: 'Other', swatch: 'bg-gray-500', reasons: ['filling', 'unknown'] },
   // Outlined: it is the empty part of the bar, and a fill this dark vanishes on the panel.
   { key: 'off', label: 'Off duty', swatch: 'bg-gray-700 ring-1 ring-inset ring-gray-500', reasons: ['stopped', 'off-hours', 'host-off'] },

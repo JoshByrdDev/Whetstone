@@ -24,7 +24,22 @@ export interface WorkerHost {
   commitMatches: boolean;
   usageLimitUntil?: string | null;
   dispatchable: boolean;
+  /** Whether a Claude phase may go there: false when the smart switch has no account for it under its limits. */
+  claudeOpen?: boolean;
+  /** Which Claude account its next run spends, when the board chooses (the smart switch is on). */
+  claude?: WorkerHostClaude | null;
   runs: WorkerHostRun[];
+}
+
+/**
+ * The board's choice of Claude account for a worker host. `gated` false: the smart switch is off and
+ * the host spends its own login. Gated with no `account`: no account it has is under its limits.
+ */
+export interface WorkerHostClaude {
+  gated: boolean;
+  accountId?: string | null;
+  account?: string | null;
+  reason: string;
 }
 
 /** What a host's berths say when it is not taking work, or null when it is. */
@@ -33,6 +48,7 @@ export function hostHold(h: WorkerHost): string | null {
   if (!h.online) return 'offline';
   if (!h.commitMatches) return 'on another commit';
   if (h.usageLimitUntil) return 'at its usage limit';
+  if (h.claudeOpen === false) return 'no Claude account under its limits';
   return null;
 }
 

@@ -133,6 +133,26 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
 
    Add `claudeAccount` and `claudeAccounts` only if this machine has more than one login.
 
+   **With the smart switch on, the board chooses the account.** A limit belongs to the account, not
+   to the machine, so the board's reading of an account already counts what this machine spent on
+   it. Each check-in reports who every login here is signed in as (the account's id and email from
+   its `.claude.json` - never a folder or a token), and the board sends each run with the first
+   account on its smart-switch list that this machine has and that is under its limits. When there
+   is none, this machine takes no Claude work until one resets, and its card on the Heartbeat page
+   says why. An account the board host was never signed in to has no reading the board can trust,
+   so it is never chosen.
+
+   To let this machine follow the switch onto a second account, sign that account in here as well,
+   in its own folder, and list it in `claudeAccounts`:
+
+   ```powershell
+   $env:CLAUDE_CONFIG_DIR = "$env:USERPROFILE\.claude-second"; claude    # then /login as that account
+   ```
+
+   Sign in here; never copy a `.credentials.json` across. Each machine renews its own token, and a
+   copied refresh token is spent by whichever machine renews first, leaving the other signed out.
+   The names in `claudeAccounts` are this machine's own - the board matches accounts by id.
+
 10. **A clone per project:**
 
     ```powershell

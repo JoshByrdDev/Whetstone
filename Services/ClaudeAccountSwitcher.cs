@@ -112,6 +112,45 @@ public class ClaudeAccountSwitcher
     }
 
     /// <summary>
+    /// The account a worker host's next Claude run should spend, from the logins it reported. See
+    /// <see cref="ClaudeSmartSwitch.ChooseForHost"/>. Reads only: the readings it judges by are the
+    /// ones this switcher already keeps for its own decision, peeks of accounts not in force included.
+    /// </summary>
+    public HostAccountChoice ChooseForHost(IReadOnlyList<HostClaudeLogin> logins)
+    {
+        var config = _registry.GetGlobalConfig();
+        Dictionary<string, AccountReading> readings;
+        lock (_gate) readings = new(Load(), StringComparer.OrdinalIgnoreCase);
+        return ClaudeSmartSwitch.ChooseForHost(ClaudeSmartSwitch.Read(config), ClaudeAccounts.All(config),
+            ClaudeAccounts.IdentityOf, readings, logins, DateTimeOffset.UtcNow);
+    }
+
+    /// <summary>
+    /// A run on a worker host hit an account's limit. It is the same account wherever it was spent,
+    /// so it is full here too until the reset - which moves this machine on as well as that one. An
+    /// account this board cannot identify is that host's alone, and its pause stays the host's.
+    /// Returns whether the account was one of this board's.
+    /// </summary>
+    public bool NoteHostLimit(string accountId, DateTimeOffset until)
+    {
+        if (until <= DateTimeOffset.UtcNow) return false;
+        var account = ClaudeAccounts.All(_registry.GetGlobalConfig())
+            .FirstOrDefault(a => ClaudeAccounts.IdentityOf(a)?.Uuid.Equals(accountId, StringComparison.OrdinalIgnoreCase) == true);
+        if (account is null) return false;
+        lock (_gate)
+        {
+            var all = Load();
+            all.TryGetValue(account.Name, out var was);
+            if (was?.BlockedUntil is { } b && b >= until) return true;
+            all[account.Name] = (was ?? new AccountReading(null, Array.Empty<UsageLimit>())) with { BlockedUntil = until };
+            _dirty = true;
+        }
+        _log.LogInformation("Claude account {Account} hit its limit on a worker host; full until {Until}", account.Name, until);
+        Save();
+        return true;
+    }
+
+    /// <summary>
     /// Points the next run at <paramref name="name"/>. A switch by hand while the smart switch is on
     /// turns the smart switch off - otherwise its next pass would quietly undo the person's choice.
     /// </summary>
