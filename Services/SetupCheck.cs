@@ -28,7 +28,8 @@ public class SetupCheckService
         Func<string, string?> FindOnUserPath,
         Func<string?, string, string?> GitConfig,
         Func<string?> NarratorUnavailable,
-        Func<string?> HeartbeatStartupError);
+        Func<string?> HeartbeatStartupError,
+        Func<bool> PlaywrightInstalled);
 
     private static readonly Dictionary<string, (string Name, string Install)> Clis = new()
     {
@@ -47,7 +48,8 @@ public class SetupCheckService
             name => FindOnPath(name, UserPath()),
             RunGitConfig,
             narrator.Unavailable,
-            () => heartbeat.StartupError))
+            () => heartbeat.StartupError,
+            () => File.Exists(paths.PlaywrightMcpCli)))
     { }
 
     public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Probe probe) =>
@@ -115,17 +117,26 @@ public class SetupCheckService
 
         // ---- Node: QA's browser, and the narrator's runtime ----
         var node = Tool(probe, "node", "Node.js", required: true,
-            found: "QA and PR review drive a browser through npx.",
+            found: "QA and PR review drive a browser on it.",
             missing: "QA and PR review cannot open a browser, so QA tickets go to Blocked. Walkthroughs cannot be voiced.",
             "Install Node.js LTS: https://nodejs.org");
         items.Add(node);
         if (node.State == "ok")
         {
             var npx = Tool(probe, "npx", "npx", required: true,
-                found: "Fetches the Playwright browser server (@playwright/mcp) on first use.",
+                found: "Fetches the Playwright browser server (@playwright/mcp) when data/playwright-mcp is not installed.",
                 missing: "Node is here but npx is not, so QA cannot start its browser.",
                 "Reinstall Node.js with npm included.");
             if (npx.State != "ok") items.Add(npx);
+
+            // Installed once, so a QA run starts its browser in seconds. Through `npx @latest` every
+            // launch asks the npm registry first, which took long enough on a busy machine to miss
+            // the 90s connect timeout and block QA tickets on a healthy browser.
+            items.Add(probe.PlaywrightInstalled()
+                ? new SetupItem("playwright", "QA browser (Playwright)", "ok", false, "Installed in data/playwright-mcp; QA starts it directly.", null)
+                : new SetupItem("playwright", "QA browser (Playwright)", "warn", false,
+                    "QA fetches its browser through npx at every launch, which can take over a minute and block QA tickets when it times out.",
+                    "Run npm install once in data/playwright-mcp."));
         }
 
         // ---- the narrator ----

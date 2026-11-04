@@ -1,0 +1,8 @@
+{
+  "name": "whetstone-playwright-mcp",
+  "private": true,
+  "description": "The browser QA and PR review drive, installed once so a run starts it in seconds instead of asking the npm registry every launch. Run `npm install` here once per machine.",
+  "dependencies": {
+    "@playwright/mcp": "0.0.84"
+  }
+}

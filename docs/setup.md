@@ -7,7 +7,7 @@ install: every step says how to check it worked, because several of the things b
 Whetstone runs on Windows only.
 
 Once it is running, **System → Setup check** checks most of this list for you: the agent CLIs your
-roles use, git and its identity in each project's repo, Node and npx, the narrator, and why the
+roles use, git and its identity in each project's repo, Node and npx, QA's browser server, the narrator, and why the
 heartbeat last refused to start, and whether each project folder has a remote. Press **Check again** after installing something, and restart Whetstone
 first, because neither it nor the heartbeat sees a program installed after it started.
 
@@ -20,7 +20,7 @@ first, because neither it nor the heartbeat sees a program installed after it st
 | **Git for Windows** | Worktrees, branches, diffs | `git --version` |
 | **A git identity** | Workers commit in their worktrees. Nothing checks this up front: without it the first implement run fails with git's "tell me who you are" | `git config --global user.name` and `user.email` both print something |
 | **At least one agent CLI, signed in**: `claude` (the default for every role), `codex` or `gemini` | Every pipeline phase, the steward, Classroom analyses | `claude --version`, then `claude auth login` once |
-| **Node.js (with `npx`)** | QA and PR review drive a browser through `npx @playwright/mcp`, which fetches itself and its browser on first use. Without Node, QA tickets go to **Blocked** after two failed tries, and nothing warns you sooner | `node --version`, `npx --version` |
+| **Node.js (with `npx`)** | QA and PR review drive a browser through `@playwright/mcp`. Without Node, QA tickets go to **Blocked** after two failed tries, and nothing warns you sooner | `node --version`, `npx --version` |
 
 The PowerShell scripts are all started with `-ExecutionPolicy Bypass`, so you do not need to change the
 execution policy, unless Group Policy enforces one on this machine.
@@ -32,6 +32,7 @@ Long paths: worktrees nest deep. If a checkout fails with "Filename too long", r
 
 | Feature | Needs | Without it |
 |---|---|---|
+| **QA browser server** | `npm install` once in `data/playwright-mcp/`. QA then starts its browser in seconds | QA falls back to `npx @playwright/mcp@latest`, which asks the npm registry at every launch - 25-70s on a quiet machine, and past the 90s connect timeout on a busy one, which blocks QA tickets on a healthy browser |
 | **Classroom walkthrough voice-over** | `npm install` once in `data/narrator/`. The first voiced walkthrough also downloads a ~90MB voice model (Kokoro), so the first one is slow and needs internet | Walkthroughs play with captions only. The Classroom shows a "Voice-over is not set up" notice above each walkthrough. Walkthroughs written before the install stay silent until you press **rewrite** |
 | Semantic code search for workers | `auggie` (Augment CLI) on `PATH`, signed in | Workers fall back to grep. Nothing is logged |
 | Codex or Gemini as an agent | That CLI on `PATH` and signed in (`~/.codex/auth.json`; gemini login or `GEMINI_API_KEY`) | The heartbeat refuses to start (see §5). A missing login only shows up in the heartbeat log |

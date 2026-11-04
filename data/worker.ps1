@@ -2017,10 +2017,22 @@ if ($skill -in $browserSkills -and $skipQaTesting) {
 if ($skill -in $browserSkills -and -not $skipQaTesting) {
     $qaShotDir = Join-Path $DataRoot "qa-captures\$ticketId"
     New-Item -ItemType Directory -Path $qaShotDir -Force | Out-Null
-    $mcpServers.playwright = @{
-        type    = "stdio"
-        command = "cmd"
-        args    = @("/c", "npx", "--yes", "@playwright/mcp@latest", "--headless", "--isolated", "--output-dir", $qaShotDir)
+    # The installed copy in data/playwright-mcp starts in a few seconds. `npx @latest` asks the npm
+    # registry on every launch and, run from a worktree, also walks that project's own packages:
+    # it took 25-70s on a quiet machine, so a busy one tipped past the 90s connect timeout and QA
+    # tickets blocked on a healthy browser. npx stays as the fallback for a machine without the
+    # install, which the Setup check flags.
+    $pwCli = Join-Path $DataRoot "playwright-mcp\node_modules\@playwright\mcp\cli.js"
+    $pwArgs = @("--headless", "--isolated", "--output-dir", $qaShotDir)
+    if (Test-Path -LiteralPath $pwCli) {
+        $mcpServers.playwright = @{ type = "stdio"; command = "node"; args = @($pwCli) + $pwArgs }
+    } else {
+        Write-Log "  Playwright not installed in data/playwright-mcp - falling back to npx, which can be slow to start"
+        $mcpServers.playwright = @{
+            type    = "stdio"
+            command = "cmd"
+            args    = @("/c", "npx", "--yes", "@playwright/mcp@latest") + $pwArgs
+        }
     }
     # Required, not optional: Part B of qa-test is browser work and the skill blocks the ticket
     # when the browser is missing. That is the right call for the skill and the wrong place to

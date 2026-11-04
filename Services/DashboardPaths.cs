@@ -71,6 +71,8 @@ public class DashboardPaths
     /// package.json are tracked; node_modules and models/ are not).
     /// </summary>
     public string NarratorDir => Path.Combine(DataRoot, "narrator");
+    /// <summary>QA's browser server as installed by <c>npm install</c> in data/playwright-mcp; worker.ps1 runs the same file.</summary>
+    public string PlaywrightMcpCli => Path.Combine(DataRoot, "playwright-mcp", "node_modules", "@playwright", "mcp", "cli.js");
 
     /// <summary>
     /// Every voiced walkthrough line, named by a hash of voice and spoken text - so a line two decks

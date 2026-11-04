@@ -10,7 +10,7 @@ public class SetupCheckTests
     /// <summary>A machine with everything, unless a test says otherwise.</summary>
     private static SetupCheckService.Probe Machine(
         string[]? missing = null, string[]? installedLater = null,
-        Func<string?, string, string?>? git = null, string? narrator = null, string? refused = null)
+        Func<string?, string, string?>? git = null, string? narrator = null, string? refused = null, bool browser = true)
     {
         missing ??= Array.Empty<string>();
         installedLater ??= Array.Empty<string>();
@@ -19,7 +19,8 @@ public class SetupCheckTests
             exe => installedLater.Contains(exe) ? $@"C:\new\{exe}.exe" : null,
             git ?? ((_, key) => key == "user.name" ? "Pat" : "pat@example.com"),
             () => narrator,
-            () => refused);
+            () => refused,
+            () => browser);
     }
 
     private static SetupItem Item(IReadOnlyList<SetupItem> items, string key) => Assert.Single(items, i => i.Key == key);
@@ -31,6 +32,16 @@ public class SetupCheckTests
         Assert.All(items, i => Assert.Equal("ok", i.State));
         Assert.DoesNotContain(items, i => i.Key == "heartbeat");
         Assert.DoesNotContain(items, i => i.Key == "npx"); // only listed when Node is there without it
+    }
+
+    [Fact]
+    public void A_browser_not_installed_warns_that_qa_falls_back_to_npx()
+    {
+        var items = SetupCheckService.Evaluate(Machine(browser: false), AllClaude, Array.Empty<(string, string)>());
+        var pw = Item(items, "playwright");
+        Assert.Equal("warn", pw.State);
+        Assert.False(pw.Required);
+        Assert.Contains("data/playwright-mcp", pw.Fix);
     }
 
     [Fact]
