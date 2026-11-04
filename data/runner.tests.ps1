@@ -273,6 +273,22 @@ try {
     }
     finally { foreach ($p in $p1, $p2) { try { $p.Kill() } catch { } } }
     Check 'no scheduled task runs a stand-in: none found' ($null -eq (Find-RunnerTask)) $true
+    Check 'a task''s -HostFile is read, quoted' (Get-HostFileArg '-File C:\W\data\runner.ps1 -HostFile "D:\cfg\my host.json"') 'D:\cfg\my host.json'
+    Check '... or bare' (Get-HostFileArg '-File C:\W\data\runner.ps1 -HostFile D:\cfg\host.json') 'D:\cfg\host.json'
+    Check '... and none is none' (Get-HostFileArg '-File C:\W\data\runner.ps1') ''
+    $otherCheckout = Join-Path $root 'other-checkout'
+    $otherRunner = Join-Path $otherCheckout 'data\runner.ps1'
+    New-Item -ItemType Directory -Path (Split-Path $otherRunner) -Force | Out-Null
+    Set-Content -Path $otherRunner -Value 'Start-Sleep 30' -Encoding ascii
+    $p3 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherRunner) -PassThru -WindowStyle Hidden
+    $p4 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 800
+        $others = @(Find-OtherRunners)
+        Check 'a runner running from another checkout is named by its folder' ($others -contains [IO.Path]::GetFullPath($otherCheckout)) $true
+        Check '... and this checkout''s own is not' ($others -contains [IO.Path]::GetFullPath((Split-Path -Parent $standIn))) $false
+    }
+    finally { foreach ($p in $p3, $p4) { try { $p.Kill() } catch { } } }
 
     Write-Host "== Read-HostConfig followRewrites\"
     $hf = Join-Path $root 'host-follow.json'

@@ -22,10 +22,14 @@
 
 param(
     # How long to wait for runs in progress here to finish before giving up and leaving it running.
-    [int]$WaitMinutes = 60
+    [int]$WaitMinutes = 60,
+    # The runner's host file, when it is not data\host.json. Read from the scheduled task when not given.
+    [string]$HostFile = ''
 )
 
+# Copied before runner.ps1 is dot-sourced: its own param block resets $HostFile.
 $UpdaterWait = $WaitMinutes
+$UpdaterHostFile = $HostFile
 $RunnerScript = Join-Path $PSScriptRoot 'runner.ps1'
 # The runner's functions and settings, without its loop: it returns when dot-sourced.
 . $RunnerScript
@@ -48,11 +52,59 @@ function Find-RunnerTask {
     return $null
 }
 
-$hostCfg = Read-HostConfig -Path (Join-Path $DataRoot 'host.json')
+# The -HostFile a command line passes runner.ps1, or ''.
+function Get-HostFileArg {
+    param([string]$CommandLine)
+    if ("$CommandLine" -match '-HostFile\s+(?:"([^"]+)"|(\S+))') { return $(if ($Matches[1]) { $Matches[1] } else { $Matches[2] }) }
+    return ''
+}
+
+# Every runner.ps1 on this computer that is not this checkout's - a scheduled task's or a running
+# one's - as the folder of the checkout it is in. A machine that also runs a board of its own keeps
+# the runner in a checkout of its own (docs/worker-host-setup.md, step 8), and double-clicking this
+# in the other one is the easy mistake.
+function Find-OtherRunners {
+    $mine = [IO.Path]::GetFullPath($RunnerScript)
+    $lines = @()
+    foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+        foreach ($a in @($t.Actions)) { $lines += "$($a.Execute) $($a.Arguments)" }
+    }
+    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)) { $lines += "$($p.CommandLine)" }
+    $found = @()
+    foreach ($l in $lines) {
+        if ($l -notmatch '-File\s+(?:"([^"]+\\data\\runner\.ps1)"|(\S+\\data\\runner\.ps1))') { continue }
+        $file = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
+        try { $file = [IO.Path]::GetFullPath($file) } catch { continue }
+        if ($file -ieq $mine) { continue }
+        $found += (Split-Path -Parent (Split-Path -Parent $file))
+    }
+    return @($found | Sort-Object -Unique)
+}
+
+# Which host file the runner reads: the one given, else the one its scheduled task passes, else
+# data\host.json - the same default as the runner's own.
+$task = Find-RunnerTask
+$hostFile = $UpdaterHostFile
+if (-not $hostFile -and $task) {
+    foreach ($a in @($task.Actions)) { $arg = Get-HostFileArg "$($a.Arguments)"; if ($arg) { $hostFile = $arg } }
+}
+if (-not $hostFile) { $hostFile = Join-Path $DataRoot 'host.json' }
+$hostCfg = Read-HostConfig -Path $hostFile
 if (-not $hostCfg.ok) {
-    Write-Host "This does not look like a worker host: $($hostCfg.reason). Nothing was changed." -ForegroundColor Yellow
+    Write-Host "This checkout ($(Split-Path -Parent $DataRoot)) is not a worker host's: $($hostCfg.reason). Nothing was changed." -ForegroundColor Yellow
+    $others = @(Find-OtherRunners)
+    if ($others.Count -gt 0) {
+        Write-Host ""
+        Write-Host "The runner on this computer runs from another checkout:" -ForegroundColor Yellow
+        foreach ($o in $others) { Write-Host "  $o  - double-click $o\Update-Runner.bat there" }
+    }
+    else {
+        Write-Host "No scheduled task or running process on this computer runs a runner.ps1 either. If its host file is elsewhere, pass it: Update-Runner.bat -HostFile <path>"
+    }
     exit 1
 }
+Write-Log "Host file: $hostFile"
+
 $repo = Split-Path -Parent $DataRoot
 Write-Log "Updating worker host '$($hostCfg.name)' by hand (update-runner.ps1)."
 
@@ -113,14 +165,15 @@ else {
 }
 
 # ---- 3. Start the runner again ----
-$task = Find-RunnerTask
 if ($task) {
     if ($task.State -eq 'Running') { Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue }
     Start-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath
     Write-Log "Started the scheduled task '$($task.TaskName)'."
 }
 else {
-    Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -WindowStyle Hidden | Out-Null
+    $runArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript)
+    if ($hostFile -ine (Join-Path $DataRoot 'host.json')) { $runArgs += @('-HostFile', $hostFile) }
+    Start-Process -FilePath 'powershell' -ArgumentList $runArgs -WindowStyle Hidden | Out-Null
     Write-Log "No scheduled task runs $RunnerScript, so the runner was started directly. It will not come back after a logoff - see docs/worker-host-setup.md, step 12."
 }
 
