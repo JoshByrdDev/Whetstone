@@ -745,7 +745,19 @@ namespace Whetstone.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("CarriedOverAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CarryOverNote")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ExpiredAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ExpiryNote")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Note")
@@ -773,6 +785,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime?>("VerifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VerifiedOn")
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -1587,6 +1602,9 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("FullQaRequired")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int?>("GateAnalysisId")
                         .HasColumnType("INTEGER");

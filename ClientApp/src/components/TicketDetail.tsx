@@ -184,8 +184,8 @@ export function TicketDetail({
                 busy={busy}
                 priority={t.priority ?? DEFAULT_PRIORITY}
                 canReplan={t.nextPhases.includes('NeedsSpeculation')}
-                onSubmit={(body, items, shortLoop, replan, files, priority) =>
-                  run(() => api.requestChanges(t.id, { body, changeItems: items, shortLoop, replan, files, priority }))}
+                onSubmit={(body, items, shortLoop, replan, files, priority, fullQa) =>
+                  run(() => api.requestChanges(t.id, { body, changeItems: items, shortLoop, replan, files, priority, fullQa }))}
               />
             )}
 
@@ -216,6 +216,34 @@ export function TicketDetail({
                   {t.shortLoopReview
                     ? 'The next implementation returns straight to review — QA and refinement are being skipped for this change.'
                     : 'Off — the next implementation goes on to QA and refinement as usual. Tick to send it straight back to review instead.'}
+                </span>
+              </label>
+            )}
+
+            {/* The owner's full QA re-run, editable on the same leg and for the same reason as the
+                short loop: granted at the gate, spent by a QA pass that has not happened yet. Shown
+                wherever that pass is still ahead, and always while it is set. */}
+            {!t.skipQaTesting && !t.shortLoopReview && (t.fullQaRequired
+              || ['NeedsImplementation', 'Implementing', 'NeedsQa'].includes(t.phase)) && (
+              <label
+                className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-[12px] leading-snug cursor-pointer ${
+                  t.fullQaRequired
+                    ? 'border-amber-900/50 bg-amber-950/10 text-amber-200/80'
+                    : 'border-hair bg-black/20 text-gray-500'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={!!t.fullQaRequired}
+                  disabled={busy}
+                  onChange={e => run(() => api.updateTicket(t.id, { fullQaRequired: e.target.checked }))}
+                  className="mt-[3px]"
+                />
+                <span>
+                  <b>Full QA re-run.</b>{' '}
+                  {t.fullQaRequired
+                    ? 'QA must drive every item again on this rework — nothing may be carried over.'
+                    : 'Off — QA may carry over a pass the rework’s diff cannot reach, with its reasoning. Tick to make it drive every item.'}
                 </span>
               </label>
             )}
@@ -460,9 +488,15 @@ export function TicketDetail({
                   // just dimming: "Passed" and "Passed, but about code from three bounces ago" look
                   // identical in the status column, and that is how a regression gets signed off.
                   const expired = q.status === 'Passed' && !q.verified;
+                  // Refinement's expiry is a ruling, not just age: it says why, and the item cannot be
+                  // carried again. The carry-over is the other way round - a pass kept without a re-run -
+                  // and is what whoever signs this off most needs to tell apart from a fresh drive.
+                  const ruledExpired = q.verdict === 'Expired';
+                  const carried = q.verdict === 'CarriedOver';
+                  const ruling = ruledExpired ? q.expiryNote : carried ? q.carryOverNote : null;
                   return (
+                    <div key={q.id} className="flex flex-col gap-0.5">
                     <div
-                      key={q.id}
                       className={`flex items-center gap-2.5 group rounded-md transition-colors ${testing ? 'px-2 -mx-2 py-1 -my-1' : ''}`}
                       style={testing && accent ? { background: accent.wash } : undefined}
                     >
@@ -486,11 +520,21 @@ export function TicketDetail({
                       {expired && (
                         <span
                           className="flex-none text-[10px] font-semibold rounded-full px-2 py-0.5 bg-amber-500/10 text-amber-400/90"
-                          title={q.verifiedAt
-                            ? `Passed ${new Date(q.verifiedAt).toLocaleString()}, before this ticket last went back for rework. QA must re-run it before the ticket can leave.`
+                          title={ruledExpired
+                            ? 'Refinement ruled this pass does not hold. QA must drive it again; it cannot be carried over.'
+                            : q.verifiedAt
+                            ? `Passed ${new Date(q.verifiedAt).toLocaleString()}, before this ticket last went back for rework. QA must re-run it, or carry it over, before the ticket can leave.`
                             : 'Passed before this ticket recorded when its outcomes were taken. QA must re-run it before the ticket can leave.'}
                         >
-                          expired
+                          {ruledExpired ? 'expired by refine' : 'expired'}
+                        </span>
+                      )}
+                      {carried && (
+                        <span
+                          className="flex-none text-[10px] font-semibold rounded-full px-2 py-0.5 bg-sky-500/10 text-sky-300/90"
+                          title={`Not re-run on this rework: QA ruled the rework's diff cannot reach it. Driven on ${q.verifiedOn ?? 'an unrecorded build'}${q.verifiedAt ? `, ${new Date(q.verifiedAt).toLocaleString()}` : ''}.`}
+                        >
+                          carried over
                         </span>
                       )}
                       {q.passedByInspection && !expired && (
@@ -508,6 +552,17 @@ export function TicketDetail({
                       >
                         ✕
                       </button>
+                    </div>
+                    {/* The ruling itself, in the open rather than in a tooltip: there is no hover on a
+                        phone, and this sentence is the whole case for not re-running the item. */}
+                    {ruling && (
+                      <p className="pl-[66px] text-[11.5px] leading-snug text-gray-500 break-words min-w-0">
+                        <span className={ruledExpired ? 'text-amber-400/80' : 'text-sky-300/80'}>
+                          {ruledExpired ? 'Refinement: ' : `Carried from ${shortCommits(q.verifiedOn)}: `}
+                        </span>
+                        {ruling}
+                      </p>
+                    )}
                     </div>
                   );
                 })}
@@ -1377,7 +1432,7 @@ function RequestChangesPanel({ busy, priority, canReplan, onSubmit }: {
   priority: Priority;
   /** Whether this gate can send the ticket back to speculation — the final review, on Delivery. */
   canReplan: boolean;
-  onSubmit: (body: string, items: string[], shortLoop: boolean, replan: boolean, files: File[], priority?: Priority) => void;
+  onSubmit: (body: string, items: string[], shortLoop: boolean, replan: boolean, files: File[], priority?: Priority, fullQa?: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [body, setBody] = useState('');
@@ -1385,6 +1440,7 @@ function RequestChangesPanel({ busy, priority, canReplan, onSubmit }: {
   const [draft, setDraft] = useState('');
   const [shortLoop, setShortLoop] = useState(false);
   const [replan, setReplan] = useState(false);
+  const [fullQa, setFullQa] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [band, setBand] = useState<Priority>(priority);
   const pick = useRef<HTMLInputElement>(null);
@@ -1398,6 +1454,7 @@ function RequestChangesPanel({ busy, priority, canReplan, onSubmit }: {
   };
   const reset = () => {
     setOpen(false); setBody(''); setItems([]); setDraft(''); setShortLoop(false); setReplan(false); setFiles([]);
+    setFullQa(false);
     setBand(priority);
   };
 
@@ -1481,11 +1538,22 @@ function RequestChangesPanel({ busy, priority, canReplan, onSubmit }: {
       )}
 
       <label className={`flex items-start gap-2 mt-3 ${replan ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}>
-        <input type="checkbox" checked={shortLoop} disabled={replan} onChange={e => setShortLoop(e.target.checked)} className="mt-[3px]" />
+        <input type="checkbox" checked={shortLoop} disabled={replan} onChange={e => { setShortLoop(e.target.checked); if (e.target.checked) setFullQa(false); }} className="mt-[3px]" />
         <span className="text-[12px] leading-snug text-gray-400">
           <b className="text-gray-300">Bring it straight back to me</b> — skip QA and refinement and
           return here as soon as the change is made. For a tweak small enough that a full cycle costs
           more than it proves. Off means the full cycle: implement, QA, refine, then back here.
+        </span>
+      </label>
+
+      {/* The other end of the same dial: not less QA, more. Without it, QA may keep a pass the
+          rework's diff provably cannot reach rather than driving it again. */}
+      <label className={`flex items-start gap-2 mt-3 ${shortLoop ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}>
+        <input type="checkbox" checked={fullQa} disabled={shortLoop} onChange={e => setFullQa(e.target.checked)} className="mt-[3px]" />
+        <span className="text-[12px] leading-snug text-gray-400">
+          <b className="text-gray-300">Re-run all of QA</b> — QA drives every item again, and carries
+          nothing over. Off, it may keep a pass the rework's diff cannot reach, saying why, and
+          refinement checks each one.
         </span>
       </label>
 
@@ -1511,7 +1579,7 @@ function RequestChangesPanel({ busy, priority, canReplan, onSubmit }: {
         </button>
         <button
           // Only sent when the reviewer actually moved it — see requestChanges in the api client.
-          onClick={() => { onSubmit(body.trim(), items, shortLoop, replan, files, band === priority ? undefined : band); reset(); }}
+          onClick={() => { onSubmit(body.trim(), items, shortLoop, replan, files, band === priority ? undefined : band, fullQa && !shortLoop); reset(); }}
           disabled={busy || !body.trim()}
           className="ml-auto px-3 py-1.5 text-xs font-semibold bg-amber-700 hover:bg-amber-600 disabled:opacity-40 disabled:hover:bg-amber-700 rounded-lg text-amber-50"
         >
@@ -1527,6 +1595,15 @@ function RequestChangesPanel({ busy, priority, canReplan, onSubmit }: {
  * rounded up to "1KB": a 130-byte log dump is a real thing to attach, and rounding it makes every
  * small file look like the same file.
  */
+/** A QA item's verified-on build as git prints it: short shas, each prefixed by its repo on a project of several. */
+function shortCommits(verifiedOn?: string | null): string {
+  if (!verifiedOn) return 'an unrecorded build';
+  return verifiedOn.split(',').map(p => p.trim()).filter(Boolean).map(p => {
+    const at = p.lastIndexOf('@');
+    return at > 0 ? `${p.slice(0, at)}@${p.slice(at + 1, at + 8)}` : p.slice(0, 7);
+  }).join(', ');
+}
+
 function sizeLabel(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   return bytes >= 1024 ? `${(bytes / 1024).toFixed(bytes >= 10 * 1024 ? 0 : 1)}KB` : `${bytes} B`;

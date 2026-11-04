@@ -309,7 +309,20 @@ export interface QaItem {
   // The pass was argued from the code rather than driven through the app — a real outcome for some
   // items, but a weaker claim than an executed test, so the drawer says which one it is.
   passedByInspection?: boolean;
+  // What the pass rests on - Driven, ByInspection, CarriedOver (an earlier pass kept because the
+  // rework's diff cannot reach it), Expired (refinement ruled it does not hold) or Stale. Null when
+  // not Passed. The server decides, because only it knows when the last rework was.
+  verdict?: QaVerdict | null;
+  // The build the pass was driven on: the branch head, or `dir@sha, ...` per touched repo. A
+  // carry-over keeps it, so it is always the build that was actually tested.
+  verifiedOn?: string | null;
+  carriedOverAt?: string | null;
+  carryOverNote?: string | null;
+  expiredAt?: string | null;
+  expiryNote?: string | null;
 }
+
+export type QaVerdict = 'Driven' | 'ByInspection' | 'CarriedOver' | 'Expired' | 'Stale';
 
 /** One file the author attached to a note — a screenshot of what is wrong, a log dump. */
 export interface NoteAttachment {
@@ -437,6 +450,9 @@ export interface TicketDetail {
   // Pending one-shot routing from a reviewer's change request: the next implementation comes
   // straight back to NeedsReview instead of going round through QA and refinement.
   shortLoopReview: boolean;
+  // The owner asked for every QA item to be driven again on this rework - nothing may be carried
+  // over. Spent when QA next hands off clean.
+  fullQaRequired?: boolean;
   blockedReason?: string | null;
   // The same block as the questions the agent actually asked, when it asked in questions. Absent for
   // a fault report, a hand-written block, or anything blocked before the structured form existed —

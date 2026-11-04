@@ -158,9 +158,13 @@ public class TicketTools
                 error = ex.Message,
                 retryable = true,
                 blockedPhase = ex.To.ToString(),
-                note = $"The move to {ex.To} is legal and still the right one. It was refused only "
-                     + "because this ticket is not carrying what that hand-off requires. Do the thing "
-                     + "named above, then call set_phase again with the same phase.",
+                note = ex.RouteInstead is { } instead
+                    ? $"The move to {ex.To} cannot be made from where this ticket stands: what it requires "
+                    + $"is only met by sending the ticket to {instead}. Do what the error says, then call "
+                    + $"set_phase with {instead}."
+                    : $"The move to {ex.To} is legal and still the right one. It was refused only "
+                    + "because this ticket is not carrying what that hand-off requires. Do the thing "
+                    + "named above, then call set_phase again with the same phase.",
             };
         }
         catch (InvalidTransitionException ex)
@@ -321,15 +325,34 @@ public class TicketTools
     [McpServerTool, Description(
         "Set the outcome of a QA item after testing: Todo, Passed, Failed, or Blocked. Provide a note explaining Failed/Blocked outcomes. " +
         "Record each outcome the moment you have it, not in a batch at the end of the run — an outcome sitting in your head is invisible to anyone watching, and lost entirely if the run is cut short. " +
-        "A Passed here means YOU exercised this item against the branch as it stands now. If you settled it by reading the code instead, pass passedByInspection true and say in the note what you read and why the app could not be driven — that is a legitimate outcome for some items, but it is a different claim and it is recorded as one.")]
-    public static async Task<object> SetQaStatus(TicketService svc,
+        "A Passed here means YOU exercised this item against the branch as it stands now. If you settled it by reading the code instead, pass passedByInspection true and say in the note what you read and why the app could not be driven — that is a legitimate outcome for some items, but it is a different claim and it is recorded as one. " +
+        "After a rework, an item whose pass has expired (get_ticket: status Passed, verified false, verdict Stale) may instead be CARRIED OVER: status Passed, carriedOver true, and a note that names the rework's diff from the commit the item was verified on (its verifiedOn) to the branch now, and says why that diff cannot reach the item's path. Only when it provably cannot: shared code, styling, config, startup, routing, a dependency bump or a migration in the diff reach everything that uses them, and when in doubt you drive the item. Refused when the note is empty or does not name that commit, when refinement expired the item, and when the owner asked for a full re-run. Refinement audits every carry-over against the diff it names.")]
+    public static async Task<object> SetQaStatus(TicketService svc, TicketGitService git,
         [Description("The QA item id.")] int qaItemId,
         [Description("Outcome: Todo, Passed, Failed, or Blocked.")] string status,
-        [Description("Explanation for a Failed or Blocked outcome, or for a pass settled by inspection.")] string? note = null,
-        [Description("True when this Passed was argued from the code rather than driven through the app. Requires a note saying what you read. Ignored for any outcome other than Passed.")] bool passedByInspection = false)
+        [Description("Explanation for a Failed or Blocked outcome, for a pass settled by inspection, or for a carry-over.")] string? note = null,
+        [Description("True when this Passed was argued from the code rather than driven through the app. Requires a note saying what you read. Ignored for any outcome other than Passed.")] bool passedByInspection = false,
+        [Description("True to carry an expired pass over instead of driving the item again, because the rework's diff cannot reach it. Requires status Passed and a note naming the diff from the item's verifiedOn commit to the branch and why it cannot reach the item's path. The item keeps its original verifiedOn.")] bool carriedOver = false)
     {
         if (!Enum.TryParse<QaStatus>(status, true, out var st))
             return new { error = $"Unknown QA status '{status}'" };
+
+        // A carry-over is a ruling about an existing pass, not a new outcome, so it never reaches the
+        // update below: that would stamp the item with today's build and erase the one it was driven on.
+        if (carriedOver)
+        {
+            if (st != QaStatus.Passed)
+                return new { error = "Only a pass is carried over: carriedOver true needs status Passed." };
+            if (passedByInspection)
+                return new { error = "A carry-over keeps the item's existing pass as it was recorded; do not also pass passedByInspection." };
+            if (string.IsNullOrWhiteSpace(note))
+                return new { error = "A carry-over needs a note: name the rework's diff from the commit this item was verified on to the branch now, and say why that diff cannot reach this item's path." };
+            var (carried, problem) = await svc.CarryOverQaItemAsync(qaItemId, note);
+            return carried is null
+                ? new { error = problem, retryable = true, qaItemId }
+                : new { carried.Id, status = carried.Status.ToString(), carriedOver = true, carried.CarriedOverAt,
+                        carried.CarryOverNote, carried.VerifiedOn, carried.VerifiedAt };
+        }
 
         // The flag exists to make the weaker claim visible, which it only does if it comes with the
         // reasoning. Refused rather than defaulted: a bare "passed by inspection" is the shape of
@@ -337,10 +360,34 @@ public class TicketTools
         if (passedByInspection && st == QaStatus.Passed && string.IsNullOrWhiteSpace(note))
             return new { error = "A pass by inspection needs a note saying what you read and why you could not drive it." };
 
-        var qi = await svc.UpdateQaItemAsync(qaItemId, null, st, note, null, passedByInspection);
+        var verifiedOn = st == QaStatus.Passed ? await VerifiedOnAsync(svc, git, qaItemId) : null;
+        var qi = await svc.UpdateQaItemAsync(qaItemId, null, st, note, null, passedByInspection, verifiedOn);
         return qi is null
             ? new { error = $"QA item {qaItemId} not found" }
-            : (object)new { qi.Id, status = qi.Status.ToString(), qi.Note, qi.PassedByInspection, qi.VerifiedAt };
+            : (object)new { qi.Id, status = qi.Status.ToString(), qi.Note, qi.PassedByInspection, qi.VerifiedAt, qi.VerifiedOn };
+    }
+
+    /// <summary>The build a pass on this item is being taken on: its ticket's branch head per touched repo.</summary>
+    internal static async Task<string?> VerifiedOnAsync(TicketService svc, TicketGitService git, int qaItemId)
+    {
+        var t = await svc.TicketOfQaItemAsync(qaItemId);
+        return t is null ? null : QaCommits.Format(await git.BranchHeadsAsync(t.ProjectKey, t.Branch));
+    }
+
+    [McpServerTool, Description(
+        "REFINEMENT ONLY. Expire one QA item's pass because it does not hold: a carry-over whose named diff DOES reach the item's path, or a pass by inspection whose argument does not convince. " +
+        "The item then counts as unverified, cannot be carried over again, and only a QA run driving it clears it. While any item is expired the hand-off to NeedsReview is refused - send the ticket to NeedsQa instead, with an add_comment naming what you expired and why. " +
+        "This is how refinement makes QA re-drive one item: add_qa_items and a trip to NeedsQa alone leave a carried item carryable.")]
+    public static async Task<object> ExpireQaItem(TicketService svc,
+        [Description("The QA item id - a Passed item from get_ticket's qaItems.")] int qaItemId,
+        [Description("Why the pass does not hold: which change in the diff reaches this item's path, or what the argument misses. The QA run that re-drives the item reads this.")] string reason)
+    {
+        var (qi, problem) = await svc.ExpireQaItemAsync(qaItemId, reason);
+        return qi is null
+            ? new { error = problem, qaItemId }
+            : new { qi.Id, status = qi.Status.ToString(), expired = true, qi.ExpiredAt, qi.ExpiryNote,
+                    note = "Expired. Send the ticket to NeedsQa (set_phase) with an add_comment naming each expired item; "
+                         + "the hand-off to NeedsReview stays refused while it stands." };
     }
 
     [McpServerTool, Description("Post a progress note (comment) on a ticket, authored by Claude. This is the async communication channel that replaces tracker comments.")]

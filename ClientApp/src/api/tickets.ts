@@ -59,6 +59,7 @@ export const updateTicket = (id: number, body: Partial<{
   title: string; description: string; issueKey: string; issueUrl: string; branch: string; projectKey: string;
   requiresSpeculationReview: boolean; requiresImplementationReview: boolean; masterNotes: string;
   skipQaTesting: boolean; priority: Priority; shortLoopReview: boolean; skipClassroomAnalysis: boolean;
+  fullQaRequired: boolean;
 }>) => fetch(`/api/tickets/${id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);
 
 export const deleteTicket = (id: number) =>
@@ -113,12 +114,14 @@ export const addNote = (ticketId: number, body: string, files: File[] = []) => {
 // implementation - for new scope rather than a correction.
 export const requestChanges = (ticketId: number, body: {
   body: string; changeItems?: string[]; shortLoop?: boolean; replan?: boolean; files?: File[]; priority?: Priority;
+  fullQa?: boolean;
 }) => {
   const form = new FormData();
   form.append('body', body.body);
   (body.changeItems ?? []).forEach(i => form.append('changeItems', i));
   form.append('shortLoop', body.shortLoop ? 'true' : 'false');
   if (body.replan) form.append('replan', 'true');
+  if (body.fullQa) form.append('fullQa', 'true');
   if (body.priority) form.append('priority', body.priority);
   (body.files ?? []).forEach(f => form.append('files', f, f.name));
   return fetch(`/api/tickets/${ticketId}/request-changes`, { method: 'POST', body: form }).then(json<TicketDetail>);

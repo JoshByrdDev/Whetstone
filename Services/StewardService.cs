@@ -660,6 +660,8 @@ public partial class StewardService
                     status = q.Status.ToString(),
                     verified = HandoffRequirements.IsVerified(q, lastBackward),
                     byInspection = q.PassedByInspection,
+                    carriedOver = HandoffRequirements.IsCarriedOver(q, lastBackward),
+                    expired = q.ExpiredAt is not null,
                     q.Text,
                     q.Note,
                 }),
@@ -697,6 +699,7 @@ public partial class StewardService
             items = qa.Count,
             passedAndCurrent = qa.Count(q => q.Status == QaStatus.Passed && HandoffRequirements.IsVerified(q, lastBackward)),
             byInspection = qa.Count(q => q.PassedByInspection),
+            carriedOver = qa.Count(q => HandoffRequirements.IsCarriedOver(q, lastBackward)),
         };
         reply["findingsAtAGlance"] = new { findings = findings.Count, unruled = findings.Count(f => f.Ruling is null) };
         reply["parts"] = ReviewParts.ToDictionary(p => p, p => System.Text.Json.JsonSerializer.Serialize(parts[p]).Length);

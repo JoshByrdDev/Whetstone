@@ -152,7 +152,7 @@ public static class HandoffRequirements
     public static string? GuideSummary(Ticket t, TicketPhase from, TicketPhase to)
     {
         var parts = new[] { OwnerNoteRequirement(t, from, to)?.Summary, GateFindingRequirement(t, from, to)?.Summary,
-                For(from, to, t)?.Summary }
+                ExpiredQaRequirement(t, from, to)?.Summary, For(from, to, t)?.Summary }
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToArray();
         return parts.Length == 0 ? null : string.Join(" ALSO: ", parts);
@@ -233,12 +233,15 @@ public static class HandoffRequirements
         (TicketPhase.QaTesting, TicketPhase.NeedsRefinement) => new Requirement(
             "REQUIRES every QA item to carry a Passed recorded on THIS pass — a pass from before the "
           + "ticket last went back for rework has expired, because it is a verdict on code that has "
-          + "since changed — and either captioned QA shots or a recorded reason there are none. "
+          + "since changed, unless you carry it over (set_qa_status Passed, carriedOver true) with a note naming the "
+          + "rework's diff from the commit it was verified on and why that diff cannot reach the item's "
+          + "path — and either captioned QA shots or a recorded reason there are none. "
           + "Screenshots are strongly preferred - attach them whenever the work is visible anywhere "
           + "in the app. The empty-set escape hatch is for work with genuinely nothing to show "
           + "(a stored-procedure or migration change, a build fix), not for a run that ran out of time.",
             "Re-test each item this message names - start_qa_item, exercise it against the branch as "
-          + "it stands now, then set_qa_status - and write the checklist first if this ticket has "
+          + "it stands now, then set_qa_status (or, for an expired pass the rework's diff provably cannot "
+          + "reach, set_qa_status Passed with carriedOver true and that reasoning) - and write the checklist first if this ticket has "
           + "none. Then either call set_qa_shots with 3-6 captioned screenshots of the finished "
           + "feature - three when there is more than one thing worth showing, and up to six when "
           + "there is more than that - or, if this ticket has nothing to photograph, call "
@@ -277,6 +280,11 @@ public static class HandoffRequirements
         // the work back, and a brief written first would describe code that is about to change.
         var findings = GateFindingRequirement(t, from, to);
         if (findings is not null) return findings.HowToSatisfy;
+
+        // Before the brief too: an item refinement expired sends the ticket to QA, and a brief written
+        // first would be written for a hand-off that is not going to happen.
+        var expiredQa = ExpiredQaRequirement(t, from, to);
+        if (expiredQa is not null) return expiredQa.HowToSatisfy;
 
         var req = For(from, to, t);
         if (req is null) return null;
@@ -370,8 +378,50 @@ public static class HandoffRequirements
     /// inherits it has no way to tell it apart from one recorded five minutes ago.
     /// </para>
     /// </summary>
-    public static bool IsVerified(QaItem q, DateTime? lastBackwardAt) =>
-        q.Status == QaStatus.Passed && !IsStale(q.VerifiedAt, lastBackwardAt);
+    /// <para>
+    /// A carry-over (<see cref="QaItem.CarriedOverAt"/>) counts too, dated by the ruling rather than
+    /// the run: it is QA's statement, made after this rework, that the rework's diff cannot reach the
+    /// item, so the old pass still describes the code the item runs through. It expires at the next
+    /// bounce exactly as a fresh pass does. <paramref name="allowCarry"/> false - the owner asked for a
+    /// full re-run - counts only passes driven since the bounce. An item refinement expired
+    /// (<see cref="QaItem.ExpiredAt"/>) counts as nothing until it is driven again.
+    /// </para>
+    public static bool IsVerified(QaItem q, DateTime? lastBackwardAt, bool allowCarry = true) =>
+        q.Status == QaStatus.Passed && q.ExpiredAt is null
+        && (!IsStale(q.VerifiedAt, lastBackwardAt)
+            || (allowCarry && q.CarriedOverAt is not null && !IsStale(q.CarriedOverAt, lastBackwardAt)));
+
+    /// <summary>Whether this item's current standing is a carry-over rather than a pass driven since the last bounce.</summary>
+    public static bool IsCarriedOver(QaItem q, DateTime? lastBackwardAt) =>
+        IsVerified(q, lastBackwardAt) && IsStale(q.VerifiedAt, lastBackwardAt);
+
+    /// <summary>
+    /// The items refinement audits: those counting as verified on something weaker than a drive since
+    /// the last bounce - carried over, or passed by inspection.
+    /// </summary>
+    public static IReadOnlyList<QaItem> ToAudit(Ticket t, DateTime? lastBackwardAt) => t.QaItems
+        .Where(q => IsVerified(q, lastBackwardAt) && (q.PassedByInspection || IsCarriedOver(q, lastBackwardAt)))
+        .OrderBy(q => q.Order).ToList();
+
+    /// <summary>
+    /// Why refinement cannot hand off while it has expired a QA item, or null when it has not. The
+    /// expiry is refinement saying a pass does not hold; handing the ticket to the owner anyway would
+    /// put an untested item in front of them labelled as tested. Applies to the clean hand-off only:
+    /// NeedsQa is where an expired item is meant to go.
+    /// </summary>
+    public static Requirement? ExpiredQaRequirement(Ticket t, TicketPhase from, TicketPhase to)
+    {
+        if (from != TicketPhase.Refining || to != TicketPhase.NeedsReview) return null;
+        var expired = t.QaItems.Where(q => q.ExpiredAt is not null).OrderBy(q => q.Order).ToList();
+        if (expired.Count == 0) return null;
+
+        return new Requirement(
+            $"REQUIRES no expired QA item. {Describe(expired)} been expired (expire_qa_item) because its "
+          + "pass did not hold - this ticket goes to NeedsQa instead, where QA drives it again.",
+            $"You expired QA item(s) {Ids(expired)}, so the ticket is not tested as it stands and cannot go "
+          + "to review. Send it to NeedsQa with an add_comment naming each expired item and why, so QA "
+          + "re-drives them. An expired item can only be cleared by a QA run driving it again.");
+    }
 
     /// <summary>
     /// Why this ticket's QA checklist does not yet support leaving QA, or null when every item on it
@@ -396,20 +446,29 @@ public static class HandoffRequirements
                  + "criteria, the work items and the diff, then run it. ";
 
         var items = t.QaItems.OrderBy(q => q.Order).ToList();
-        var stale = items.Where(q => q.Status == QaStatus.Passed && IsStale(q.VerifiedAt, lastBackwardAt)).ToList();
+        var allowCarry = !t.FullQaRequired;
         var open = items.Where(q => q.Status != QaStatus.Passed).ToList();
+        var expired = items.Where(q => q.Status == QaStatus.Passed && q.ExpiredAt is not null).ToList();
+        var stale = items.Where(q => q.Status == QaStatus.Passed && q.ExpiredAt is null
+                                     && !IsVerified(q, lastBackwardAt, allowCarry)).ToList();
 
-        if (stale.Count == 0 && open.Count == 0) return null;
+        if (stale.Count == 0 && open.Count == 0 && expired.Count == 0) return null;
 
         var parts = new List<string>();
         if (open.Count > 0)
             parts.Add($"{Describe(open)} not been taken to a Passed outcome on this run");
+        if (expired.Count > 0)
+            parts.Add($"{Describe(expired)} been expired by refinement, which found its pass did not hold - "
+                    + "drive it again; it cannot be carried over");
         if (stale.Count > 0)
             parts.Add($"{Describe(stale)} last passed before this ticket went back for rework, so "
-                    + "that verdict describes a version of the branch that has since changed");
+                    + "that verdict describes a version of the branch that has since changed - "
+                    + (allowCarry
+                        ? "drive it again, or, where the rework's diff provably cannot reach its path, carry it over (set_qa_status Passed with carriedOver true and the note)"
+                        : "drive it again; the owner asked for a full re-run, so nothing may be carried over"));
 
         return $"This ticket cannot leave QA yet: {string.Join("; and ", parts)}. "
-             + $"The items to deal with are {Ids(stale.Concat(open))}. ";
+             + $"The items to deal with are {Ids(stale.Concat(open).Concat(expired))}. ";
     }
 
     /// <summary>

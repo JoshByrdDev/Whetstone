@@ -31,8 +31,15 @@ public class HandoffRequirementException : InvalidTransitionException
     /// <summary>The phase that was refused — still reachable, once the requirement is met.</summary>
     public TicketPhase To { get; }
 
-    public HandoffRequirementException(string message, TicketPhase from, TicketPhase to, IEnumerable<TicketPhase> allowed)
-        : base(message, from, allowed) => To = to;
+    /// <summary>
+    /// Set when the refusal is not "this move, once you have done X" but "a different move": the
+    /// requirement can only be met by going there instead. Null for every ordinary refusal.
+    /// </summary>
+    public TicketPhase? RouteInstead { get; }
+
+    public HandoffRequirementException(string message, TicketPhase from, TicketPhase to, IEnumerable<TicketPhase> allowed,
+        TicketPhase? routeInstead = null)
+        : base(message, from, allowed) => (To, RouteInstead) = (to, routeInstead);
 }
 
 /// <summary>
@@ -653,10 +660,13 @@ public class TicketService
     public async Task<Ticket?> UpdateAsync(int id, string? title, string? description, string? issueKey, string? issueUrl, string? branch, string? projectKey,
         bool? requiresSpeculationReview = null, bool? requiresImplementationReview = null, string? masterNotes = null,
         bool? skipQaTesting = null, TicketPriority? priority = null, bool? shortLoopReview = null,
-        bool? skipClassroomAnalysis = null)
+        bool? skipClassroomAnalysis = null, bool? fullQaRequired = null)
     {
         var t = await _db.Tickets.FindAsync(id);
         if (t is null) return null;
+
+        // Editable between the send-back and the QA pass for the same reason the short loop is.
+        if (fullQaRequired is not null) t.FullQaRequired = fullQaRequired.Value;
 
         if (requiresSpeculationReview is not null) t.RequiresSpeculationReview = requiresSpeculationReview.Value;
         if (requiresImplementationReview is not null) t.RequiresImplementationReview = requiresImplementationReview.Value;
@@ -879,7 +889,9 @@ public class TicketService
         {
             var unmet = HandoffRequirements.Unmet(t, t.Phase, to, await LastBackwardAtAsync(id));
             if (unmet is not null)
-                throw new HandoffRequirementException(unmet, t.Phase, to, PhaseMachine.NextPhasesFor(t));
+                throw new HandoffRequirementException(unmet, t.Phase, to, PhaseMachine.NextPhasesFor(t),
+                    // An item refinement expired is not something more work here can clear: only QA can.
+                    unmet == HandoffRequirements.ExpiredQaRequirement(t, t.Phase, to)?.HowToSatisfy ? TicketPhase.NeedsQa : null);
 
             // A block that says nothing stops the work and withholds the one thing needed to restart
             // it: nobody can answer a question that was never asked, and the board shows the bare
@@ -938,6 +950,11 @@ public class TicketService
         // of the person who asked for it. Left standing, the next change request they make would
         // silently skip QA too - having been granted once, for a different change.
         if (to == TicketPhase.NeedsReview) t.ShortLoopReview = false;
+
+        // The owner's full re-run is spent the same way: by the QA pass it asked for, once that pass
+        // hands off clean. A QA run that sends the work back keeps it standing for the next one.
+        if (from == TicketPhase.QaTesting && to is TicketPhase.NeedsRefinement or TicketPhase.NeedsReview)
+            t.FullQaRequired = false;
 
         // Going round again puts the ball back in our court, so the submitted stamp has to go with
         // it - otherwise the gate would still read "awaiting dev" while a fresh pass was queued, and
@@ -1228,7 +1245,7 @@ public class TicketService
     /// </summary>
     public async Task<Ticket?> RequestChangesAsync(int id, string body, IReadOnlyList<string>? changeItems,
         bool shortLoop, IReadOnlyList<NoteAttachment>? attachments = null, TicketPriority? priority = null,
-        bool replan = false, TransitionActor actor = TransitionActor.Human)
+        bool replan = false, TransitionActor actor = TransitionActor.Human, bool fullQa = false)
     {
         // A steward sends work back in the owner's place: the same note, the same move, under its
         // own name. Anything else through this door is a person.
@@ -1244,6 +1261,9 @@ public class TicketService
         // the checks, a replan says it is big enough to need planning first.
         if (replan && shortLoop)
             throw new InvalidOperationException("A replan goes the full way round - it cannot also skip QA and refinement.");
+        // A full re-run is a demand on the QA pass the short loop skips.
+        if (fullQa && shortLoop)
+            throw new InvalidOperationException("A full QA re-run cannot also skip QA - pick one.");
 
         var target = replan ? TicketPhase.NeedsSpeculation : TicketPhase.NeedsImplementation;
         if (!PhaseMachine.CanTransition(t.Phase, target, t.Track))
@@ -1267,6 +1287,9 @@ public class TicketService
         // A replan exists so the owner sees the plan before it is built, so the gate goes on whatever
         // the ticket was set to — the same reason RequestRespeculationAsync forces it.
         if (replan) t.RequiresSpeculationReview = true;
+        // Only ever switched on here: a request that says nothing about it leaves a full re-run the
+        // owner already asked for standing, rather than quietly allowing carry-overs again.
+        if (fullQa) t.FullQaRequired = true;
         await _db.SaveChangesAsync();
 
         // The move's own reason is the note's first line, so the transition log and the board read
@@ -1414,8 +1437,12 @@ public class TicketService
     /// flag alone, which is what a caller that only means to retitle or reorder an item wants; any
     /// outcome other than Passed clears it regardless, because the distinction only exists between
     /// two kinds of pass.</param>
+    /// <param name="verifiedOn">The build a Passed was taken on, as <see cref="QaCommits.Format"/>
+    /// writes it - the callers read it from the ticket's branch. Stored only with a Passed; any new
+    /// outcome replaces the old one, and a carry-over or an expiry on the item goes with it, because
+    /// whatever was ruled about the old verdict is not a ruling about this one.</param>
     public async Task<QaItem?> UpdateQaItemAsync(int id, string? text, QaStatus? status, string? note, int? order,
-        bool? passedByInspection = null)
+        bool? passedByInspection = null, string? verifiedOn = null)
     {
         var qi = await _db.QaItems.FindAsync(id);
         if (qi is null) return null;
@@ -1433,7 +1460,9 @@ public class TicketService
             // Todo withdraws the verdict, so it withdraws the timestamp with it rather than leaving
             // a date behind that nothing is true of any more.
             qi.VerifiedAt = qi.Status == QaStatus.Todo ? null : DateTime.UtcNow;
+            qi.VerifiedOn = qi.Status == QaStatus.Passed ? verifiedOn : null;
             if (qi.Status != QaStatus.Passed) qi.PassedByInspection = false;
+            ClearRulings(qi);
         }
         if (passedByInspection is not null && qi.Status == QaStatus.Passed)
             qi.PassedByInspection = passedByInspection.Value;
@@ -1466,10 +1495,112 @@ public class TicketService
 
         qi.Status = QaStatus.Todo;
         qi.VerifiedAt = null;
+        qi.VerifiedOn = null;
         qi.PassedByInspection = false;
+        ClearRulings(qi);
         qi.StartedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return qi;
+    }
+
+    /// <summary>The ticket a QA item is on, untracked - what the callers read its branch from.</summary>
+    public Task<Ticket?> TicketOfQaItemAsync(int qaItemId) =>
+        _db.QaItems.AsNoTracking().Where(q => q.Id == qaItemId).Select(q => q.Ticket).FirstOrDefaultAsync();
+
+    /// <summary>A new verdict on an item ends whatever was ruled about the old one.</summary>
+    private static void ClearRulings(QaItem qi)
+    {
+        qi.CarriedOverAt = null;
+        qi.CarryOverNote = null;
+        qi.ExpiredAt = null;
+        qi.ExpiryNote = null;
+    }
+
+    /// <summary>
+    /// QA's ruling that an item's expired pass still holds, because the rework's diff cannot reach
+    /// its path: the third verdict (see <see cref="QaItem.CarriedOverAt"/>). Returns the item, or an
+    /// error in words the run can act on.
+    /// <para>
+    /// Every refusal here errs toward driving the item. The item must have a pass that has expired -
+    /// a current one needs nothing, and anything else was never a pass to carry. It must record the
+    /// build it was verified on, because that is the only thing a carry can be measured from, and the
+    /// note must name that build (its short sha, per repo): a note that does not is a note written
+    /// without reading the diff it claims to have read. Refinement's expiry and the owner's full
+    /// re-run each rule carrying out altogether. <see cref="QaItem.VerifiedAt"/> and
+    /// <see cref="QaItem.VerifiedOn"/> stay as they are, so a second carry after a second rework is
+    /// still measured from the build that was driven.
+    /// </para>
+    /// </summary>
+    public async Task<(QaItem? item, string? error)> CarryOverQaItemAsync(int id, string? note)
+    {
+        var qi = await _db.QaItems.Include(q => q.Ticket).FirstOrDefaultAsync(q => q.Id == id);
+        if (qi?.Ticket is not { } t) return (null, $"QA item {id} not found");
+
+        if (t.Phase != TicketPhase.QaTesting)
+            return (null, $"A QA item is carried over by the QA run, while the ticket is in QaTesting; this one is in {t.Phase}.");
+        if (t.FullQaRequired)
+            return (null, "The owner asked for a full QA re-run on this rework, so nothing may be carried over. "
+                        + "Drive this item again: start_qa_item, exercise it, set_qa_status.");
+        if (qi.ExpiredAt is not null)
+            return (null, $"Refinement expired this item's pass ({qi.ExpiryNote}). It cannot be carried over - drive it again.");
+        if (qi.Status != QaStatus.Passed)
+            return (null, $"QA item {id} is {qi.Status}, not Passed: only an expired pass can be carried over. Test it.");
+
+        var lastBackward = await LastBackwardAtAsync(t.Id);
+        if (HandoffRequirements.IsVerified(qi, lastBackward))
+            return (null, $"QA item {id}'s pass is already current for this rework; there is nothing to carry over.");
+
+        var commits = QaCommits.Parse(qi.VerifiedOn);
+        if (commits.Count == 0)
+            return (null, $"QA item {id} has no record of the build it was verified on, so no diff can be measured "
+                        + "from it and it cannot be carried over. Drive it again.");
+
+        if (string.IsNullOrWhiteSpace(note))
+            return (null, "A carry-over needs a note: name the rework's diff, from the commit this item was verified "
+                        + $"on ({DescribeCommits(commits)}) to the branch now, and say why that diff cannot reach this item's path.");
+
+        var missing = commits.Where(c => note.IndexOf(QaCommits.Short(c.Sha), StringComparison.OrdinalIgnoreCase) < 0).ToList();
+        if (missing.Count > 0)
+            return (null, $"The note does not name the build this item was verified on. Name the diff from "
+                        + $"{DescribeCommits(missing)} to the branch (for example `git diff {QaCommits.Short(missing[0].Sha)}..<branch>`) "
+                        + "and say why it cannot reach this item's path.");
+
+        qi.CarriedOverAt = DateTime.UtcNow;
+        qi.CarryOverNote = note.Trim();
+        qi.StartedAt = null;
+        t.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return (qi, null);
+    }
+
+    private static string DescribeCommits(IEnumerable<(string Dir, string Sha)> commits) =>
+        string.Join(", ", commits.Select(c => c.Dir.Length == 0 ? QaCommits.Short(c.Sha) : $"{c.Dir}@{QaCommits.Short(c.Sha)}"));
+
+    /// <summary>
+    /// Refinement's ruling that a QA item's pass does not hold - a carry-over whose diff does reach
+    /// the item, a by-inspection argument that does not convince - so QA has to drive it again. The
+    /// item stays Passed in the record, with the expiry beside it; it counts as nothing for any
+    /// hand-off, it cannot be carried over, and refinement cannot hand the ticket to review while it
+    /// stands. Only a QA run driving it clears it.
+    /// </summary>
+    public async Task<(QaItem? item, string? error)> ExpireQaItemAsync(int id, string? reason)
+    {
+        var qi = await _db.QaItems.Include(q => q.Ticket).FirstOrDefaultAsync(q => q.Id == id);
+        if (qi?.Ticket is not { } t) return (null, $"QA item {id} not found");
+
+        if (t.Phase != TicketPhase.Refining)
+            return (null, $"A QA item is expired by the refinement run, while the ticket is in Refining; this one is in {t.Phase}.");
+        if (qi.Status != QaStatus.Passed)
+            return (null, $"QA item {id} is {qi.Status}, not Passed, so there is no pass to expire - it already has to be tested.");
+        if (string.IsNullOrWhiteSpace(reason))
+            return (null, "Say why the pass does not hold - which change in the diff reaches this item's path, or what "
+                        + "the argument misses. The QA run that re-drives it starts from what you write.");
+
+        qi.ExpiredAt = DateTime.UtcNow;
+        qi.ExpiryNote = reason.Trim();
+        t.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return (qi, null);
     }
 
     public async Task<bool> DeleteQaItemAsync(int id)

@@ -116,6 +116,43 @@ public partial class TicketGitService
         return result;
     }
 
+    /// <summary>
+    /// The branch's head in each repo the ticket has touched - what a QA pass is verified on, stored
+    /// on the item (<see cref="Models.QaItem.VerifiedOn"/>) so a later carry-over can be measured from
+    /// it. Falls back to every writable repo holding the branch when none is touched yet, and is empty
+    /// when the branch is nowhere on this machine; a pass with nothing recorded can never be carried.
+    /// <para>
+    /// Read from the board host's own refs. A worker host hands its branch back when a run ends, and
+    /// QA commits nothing, so during a QA run the board's ref is the build that run is testing.
+    /// </para>
+    /// </summary>
+    public async Task<IReadOnlyList<(string Dir, string Sha)>> BranchHeadsAsync(string projectKey, string? branch,
+        CancellationToken ct = default)
+    {
+        var heads = new List<(string Dir, string Sha, bool Touched)>();
+        if (string.IsNullOrWhiteSpace(branch)) return Array.Empty<(string, string)>();
+        try
+        {
+            var cfg = _registry.GetProjectConfig(projectKey);
+            foreach (var target in TargetsOf(cfg))
+            {
+                if (target.ReadOnly || !IsGitRepo(target.Path)) continue;
+                var head = await GitAsync(target.Path, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
+                if (!head.Ok || string.IsNullOrWhiteSpace(head.Stdout)) continue;
+                var touched = !cfg.IsMultiRepo || (await TouchOfAsync(cfg, target, branch, ct)).Touched;
+                heads.Add((target.Dir, head.Stdout.Trim(), touched));
+            }
+        }
+        catch (Exception ex)
+        {
+            // A pass is never refused because its commit could not be read; it is only left uncarryable.
+            _log.LogWarning(ex, "Could not read {Branch}'s heads in {Project}", branch, projectKey);
+            return Array.Empty<(string, string)>();
+        }
+        var chosen = heads.Any(h => h.Touched) ? heads.Where(h => h.Touched) : heads;
+        return chosen.Select(h => (h.Dir, h.Sha)).ToList();
+    }
+
     private async Task<RepoTouch> TouchOfAsync(ProjectConfig cfg, RepoTarget target, string branch, CancellationToken ct)
     {
         RepoTouch Untouched(string? baseRef = null, string? worktree = null) =>

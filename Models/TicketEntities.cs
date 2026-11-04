@@ -423,6 +423,18 @@ public class Ticket
     public bool ShortLoopReview { get; set; }
 
     /// <summary>
+    /// The owner's "re-run all of it": the next QA pass may carry no expired pass over (see
+    /// <see cref="QaItem.CarriedOverAt"/>) and must drive every item again.
+    /// <para>
+    /// Set from the review gate's change request, or by hand from the drawer while the rework is on
+    /// its way, and spent the moment QA hands off cleanly - like the short loop, one trip and never a
+    /// standing setting. Carrying over is a judgement that a diff cannot reach an item, and this is
+    /// the owner saying that, this time, they do not want that judgement made.
+    /// </para>
+    /// </summary>
+    public bool FullQaRequired { get; set; }
+
+    /// <summary>
     /// Who filed this ticket, when it was not a person: <see cref="TransitionActor.Steward"/> for
     /// one a steward wrote from the plan. Null for everything a person filed, and for every ticket
     /// from before this was recorded.
@@ -697,7 +709,72 @@ public class QaItem
     /// </summary>
     public bool PassedByInspection { get; set; }
 
+    /// <summary>
+    /// The build this item's pass was taken on: the ticket's branch head in each repo it had touched
+    /// when the Passed was recorded (see <see cref="QaCommits"/> for the shape). Null for anything not
+    /// Passed, and for a pass recorded where no branch could be read.
+    /// <para>
+    /// It is what a carry-over is measured from, so a carry-over leaves it alone: a chain of them is
+    /// always measured from the build that was actually driven, never from the last ruling that it
+    /// did not need to be.
+    /// </para>
+    /// </summary>
+    public string? VerifiedOn { get; set; }
+
+    /// <summary>
+    /// When QA ruled, after a rework, that this item's expired pass still holds because the rework's
+    /// diff cannot reach its path - instead of driving it again. Null when it was not carried over.
+    /// <para>
+    /// A third verdict beside a fresh pass and <see cref="PassedByInspection"/>, and narrower than
+    /// both: it claims nothing about the item except that the code it runs through is byte-for-byte
+    /// the code that was driven on <see cref="VerifiedOn"/>. It counts as verified for the hand-off
+    /// (see HandoffRequirements.IsVerified) for as long as no later rework expires it; refinement
+    /// audits each one against the diff its note names, and expires the ones that do not hold.
+    /// </para>
+    /// </summary>
+    public DateTime? CarriedOverAt { get; set; }
+
+    /// <summary>The carry-over's reasoning: the diff it read, and why that diff cannot reach this item.</summary>
+    public string? CarryOverNote { get; set; }
+
+    /// <summary>
+    /// When refinement ruled this item's pass does not hold - a carry-over whose diff does reach it,
+    /// a by-inspection argument that does not convince - and that QA has to drive it again. Null
+    /// otherwise. Cleared only by a re-run: an expired item cannot be carried over again, and the
+    /// ticket cannot leave refinement while one stands.
+    /// </summary>
+    public DateTime? ExpiredAt { get; set; }
+
+    /// <summary>Why refinement expired it, for the QA run that re-drives it.</summary>
+    public string? ExpiryNote { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// The commits a QA pass was verified on, written to <see cref="QaItem.VerifiedOn"/>. A project of
+/// one repo stores the bare sha; a project of several stores <c>dir@sha</c> per touched repo, comma
+/// separated, in config order - readable as it stands in a prompt, which is where it is mostly read.
+/// </summary>
+public static class QaCommits
+{
+    public static string? Format(IReadOnlyList<(string Dir, string Sha)> heads)
+    {
+        var parts = heads.Where(h => !string.IsNullOrWhiteSpace(h.Sha))
+            .Select(h => string.IsNullOrEmpty(h.Dir) ? h.Sha.Trim() : $"{h.Dir}@{h.Sha.Trim()}")
+            .ToList();
+        return parts.Count == 0 ? null : string.Join(", ", parts);
+    }
+
+    public static IReadOnlyList<(string Dir, string Sha)> Parse(string? verifiedOn) =>
+        string.IsNullOrWhiteSpace(verifiedOn)
+            ? Array.Empty<(string, string)>()
+            : verifiedOn.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(p => p.LastIndexOf('@') is var at and > 0 ? (p[..at], p[(at + 1)..]) : ("", p))
+                .ToList();
+
+    /// <summary>A sha as a note may name it: the first seven characters git prints by default.</summary>
+    public static string Short(string sha) => sha.Length > 7 ? sha[..7] : sha;
 }
 
 /// <summary>A local progress note on a ticket (replaces tracker comments — the async channel).</summary>

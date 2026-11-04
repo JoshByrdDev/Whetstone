@@ -156,6 +156,11 @@ public static class StewardFlags
         if (inspected.Count > 0)
             flags.Add(new("passed-by-inspection", false, false, "These checks passed by reading the code, not by running it.", inspected));
 
+        // A carry-over is the same weaker kind of claim: the check was not run on this build.
+        var carried = t.QaItems.Where(q => HandoffRequirements.IsCarriedOver(q, lastBackwardAt)).Select(q => q.Text).ToList();
+        if (carried.Count > 0)
+            flags.Add(new("carried-over", false, false, "These checks were carried over from an earlier build because the rework's diff cannot reach them, not run again.", carried));
+
         if (!t.SkipQaTesting)
         {
             var unverified = t.QaItems.Where(q => !HandoffRequirements.IsVerified(q, lastBackwardAt))
