@@ -360,8 +360,10 @@ public class TicketTools
         if (passedByInspection && st == QaStatus.Passed && string.IsNullOrWhiteSpace(note))
             return new { error = "A pass by inspection needs a note saying what you read and why you could not drive it." };
 
-        var verifiedOn = st == QaStatus.Passed ? await VerifiedOnAsync(svc, git, qaItemId) : null;
-        var qi = await svc.UpdateQaItemAsync(qaItemId, null, st, note, null, passedByInspection, verifiedOn);
+        // Read for every outcome: a pass stores it on the item, and every ruling records it in the log.
+        var verifiedOn = st != QaStatus.Todo ? await VerifiedOnAsync(svc, git, qaItemId) : null;
+        var qi = await svc.UpdateQaItemAsync(qaItemId, null, st, note, null, passedByInspection, verifiedOn,
+            TransitionActor.Worker);
         return qi is null
             ? new { error = $"QA item {qaItemId} not found" }
             : (object)new { qi.Id, status = qi.Status.ToString(), qi.Note, qi.PassedByInspection, qi.VerifiedAt, qi.VerifiedOn };

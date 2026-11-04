@@ -35,6 +35,8 @@ public static class AnalyticsEndpoints
                 timeSplit = a.Mart("mart_time_split", s),
                 rework = a.Mart("mart_rework", s, orderBy: "phase, runs DESC"),
                 firstPass = a.Mart("mart_first_pass_qa", s, orderBy: "dimension, dim_value"),
+                // QA's carry-overs and passes by inspection, and how often refinement overturned them.
+                qaRulings = a.Mart("mart_qa_rulings", s, orderBy: "dimension, dim_value"),
                 daily = a.Mart("mart_daily", s, orderBy: "day"),
                 startRebase = a.Mart("mart_start_rebase", s, orderBy: "phase, runs DESC"),
                 diffSize = a.Mart("mart_diff_size", s, orderBy: "phase, size_order"),

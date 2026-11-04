@@ -26,6 +26,7 @@ public sealed class AnalyticsService
         "mart_phase_breakdown", "mart_time_split", "mart_rework", "mart_tool_time",
         "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
         "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
+        "mart_qa_rulings",
     ];
 
     /// <summary>Marts older than this are refreshed when someone opens the page.</summary>

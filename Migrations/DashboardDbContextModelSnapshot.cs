@@ -321,6 +321,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("LargestToolResultsJson")
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("LeaseRunId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("LinesAdded")
                         .HasColumnType("INTEGER");
 
@@ -795,6 +798,73 @@ namespace Whetstone.Migrations
                     b.HasIndex("TicketId");
 
                     b.ToTable("QaItems");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.QaRulingEvent", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("OverturnsEventId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Phase")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PriorVerdict")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("QaItemId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Track")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VerifiedOn")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RunId");
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("QaItemId", "At");
+
+                    b.ToTable("QaRulingEvents");
                 });
 
             modelBuilder.Entity("Whetstone.Models.QaShot", b =>
@@ -2178,6 +2248,17 @@ namespace Whetstone.Migrations
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithMany("QaItems")
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.QaRulingEvent", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
                         .HasForeignKey("TicketId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

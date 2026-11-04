@@ -1440,13 +1440,23 @@ public class TicketService
     /// <param name="verifiedOn">The build a Passed was taken on, as <see cref="QaCommits.Format"/>
     /// writes it - the callers read it from the ticket's branch. Stored only with a Passed; any new
     /// outcome replaces the old one, and a carry-over or an expiry on the item goes with it, because
-    /// whatever was ruled about the old verdict is not a ruling about this one.</param>
+    /// whatever was ruled about the old verdict is not a ruling about this one. Any outcome other than
+    /// Todo is also written to the ruling log (<see cref="QaRulingEvent"/>) with this as its build.</param>
+    /// <param name="actor">Who made the ruling, for the log: a worker run (whose live ticket lease
+    /// names it) or a person at the drawer.</param>
     public async Task<QaItem?> UpdateQaItemAsync(int id, string? text, QaStatus? status, string? note, int? order,
-        bool? passedByInspection = null, string? verifiedOn = null)
+        bool? passedByInspection = null, string? verifiedOn = null, TransitionActor actor = TransitionActor.Human)
     {
         var qi = await _db.QaItems.FindAsync(id);
         if (qi is null) return null;
         if (text is not null) qi.Text = text.Trim();
+        Ticket? ruledOn = null;
+        string? prior = null;
+        if (status is not null and not QaStatus.Todo && await _db.Tickets.FindAsync(qi.TicketId) is { } owner)
+        {
+            ruledOn = owner;
+            prior = HandoffRequirements.VerdictOf(qi, await LastBackwardAtAsync(owner.Id), !owner.FullQaRequired);
+        }
         if (status is not null)
         {
             qi.Status = status.Value;
@@ -1468,9 +1478,57 @@ public class TicketService
             qi.PassedByInspection = passedByInspection.Value;
         if (note is not null) qi.Note = string.IsNullOrWhiteSpace(note) ? null : note;
         if (order is not null) qi.Order = order.Value;
+        if (ruledOn is not null)
+        {
+            var kind = qi.Status switch
+            {
+                QaStatus.Failed => QaRulingKind.Failed,
+                QaStatus.Blocked => QaRulingKind.Blocked,
+                _ => qi.PassedByInspection ? QaRulingKind.ByInspection : QaRulingKind.Driven,
+            };
+            await RecordRulingAsync(qi, ruledOn, kind, prior, verifiedOn, qi.Note, actor);
+        }
         await _db.SaveChangesAsync();
         return qi;
     }
+
+    /// <summary>
+    /// Append one ruling to the log (<see cref="QaRulingEvent"/>), to be saved with the change it
+    /// records. A worker's ruling is credited to the run holding the ticket's lease; an expiry is
+    /// linked to the pass it overturns - the latest pass recorded on the item.
+    /// </summary>
+    private async Task RecordRulingAsync(QaItem qi, Ticket t, QaRulingKind kind, string? priorVerdict,
+        string? verifiedOn, string? note, TransitionActor actor)
+    {
+        int? runId = null;
+        if (actor == TransitionActor.Worker)
+        {
+            var key = ResourceLeaseService.TicketKey(t.Id);
+            var now = DateTime.UtcNow;
+            runId = await _db.ResourceLeases
+                .Where(l => l.ResourceKey == key && l.ReleasedAt == null && l.ExpiresAt > now)
+                .OrderByDescending(l => l.Id).Select(l => (int?)l.Id).FirstOrDefaultAsync();
+        }
+
+        int? overturns = null;
+        if (kind == QaRulingKind.Expired)
+            overturns = await _db.QaRulingEvents
+                .Where(e => e.QaItemId == qi.Id && (e.Kind == QaRulingKind.Driven
+                    || e.Kind == QaRulingKind.ByInspection || e.Kind == QaRulingKind.CarriedOver))
+                .OrderByDescending(e => e.Id).Select(e => (int?)e.Id).FirstOrDefaultAsync();
+
+        _db.QaRulingEvents.Add(new QaRulingEvent
+        {
+            TicketId = t.Id, QaItemId = qi.Id, ProjectKey = t.ProjectKey, Track = t.Track, Phase = t.Phase,
+            Kind = kind, PriorVerdict = priorVerdict, VerifiedOn = verifiedOn,
+            Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim(),
+            Actor = actor, RunId = runId, OverturnsEventId = overturns, At = DateTime.UtcNow,
+        });
+    }
+
+    /// <summary>The ruling log for one ticket, oldest first.</summary>
+    public Task<List<QaRulingEvent>> RulingsAsync(int ticketId) =>
+        _db.QaRulingEvents.AsNoTracking().Where(e => e.TicketId == ticketId).OrderBy(e => e.Id).ToListAsync();
 
     /// <summary>
     /// Mark one QA item as the one being tested right now, and every sibling as not. The QA mirror
@@ -1531,7 +1589,8 @@ public class TicketService
     /// still measured from the build that was driven.
     /// </para>
     /// </summary>
-    public async Task<(QaItem? item, string? error)> CarryOverQaItemAsync(int id, string? note)
+    public async Task<(QaItem? item, string? error)> CarryOverQaItemAsync(int id, string? note,
+        TransitionActor actor = TransitionActor.Worker)
     {
         var qi = await _db.QaItems.Include(q => q.Ticket).FirstOrDefaultAsync(q => q.Id == id);
         if (qi?.Ticket is not { } t) return (null, $"QA item {id} not found");
@@ -1565,10 +1624,12 @@ public class TicketService
                         + $"{DescribeCommits(missing)} to the branch (for example `git diff {QaCommits.Short(missing[0].Sha)}..<branch>`) "
                         + "and say why it cannot reach this item's path.");
 
+        var prior = HandoffRequirements.VerdictOf(qi, lastBackward);
         qi.CarriedOverAt = DateTime.UtcNow;
         qi.CarryOverNote = note.Trim();
         qi.StartedAt = null;
         t.UpdatedAt = DateTime.UtcNow;
+        await RecordRulingAsync(qi, t, QaRulingKind.CarriedOver, prior, qi.VerifiedOn, qi.CarryOverNote, actor);
         await _db.SaveChangesAsync();
         return (qi, null);
     }
@@ -1583,7 +1644,8 @@ public class TicketService
     /// hand-off, it cannot be carried over, and refinement cannot hand the ticket to review while it
     /// stands. Only a QA run driving it clears it.
     /// </summary>
-    public async Task<(QaItem? item, string? error)> ExpireQaItemAsync(int id, string? reason)
+    public async Task<(QaItem? item, string? error)> ExpireQaItemAsync(int id, string? reason,
+        TransitionActor actor = TransitionActor.Worker)
     {
         var qi = await _db.QaItems.Include(q => q.Ticket).FirstOrDefaultAsync(q => q.Id == id);
         if (qi?.Ticket is not { } t) return (null, $"QA item {id} not found");
@@ -1596,9 +1658,11 @@ public class TicketService
             return (null, "Say why the pass does not hold - which change in the diff reaches this item's path, or what "
                         + "the argument misses. The QA run that re-drives it starts from what you write.");
 
+        var prior = HandoffRequirements.VerdictOf(qi, await LastBackwardAtAsync(t.Id), !t.FullQaRequired);
         qi.ExpiredAt = DateTime.UtcNow;
         qi.ExpiryNote = reason.Trim();
         t.UpdatedAt = DateTime.UtcNow;
+        await RecordRulingAsync(qi, t, QaRulingKind.Expired, prior, qi.VerifiedOn, qi.ExpiryNote, actor);
         await _db.SaveChangesAsync();
         return (qi, null);
     }

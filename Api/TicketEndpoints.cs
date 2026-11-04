@@ -853,7 +853,7 @@ public static class TicketEndpoints
                 status = st;
             }
             // A pass a person records by hand is a pass on the build in front of them, dated like a worker's.
-            var verifiedOn = status == QaStatus.Passed ? await Whetstone.Mcp.TicketTools.VerifiedOnAsync(svc, git, id) : null;
+            var verifiedOn = status is not null and not QaStatus.Todo ? await Whetstone.Mcp.TicketTools.VerifiedOnAsync(svc, git, id) : null;
             var qi = await svc.UpdateQaItemAsync(id, req.Text, status, req.Note, req.Order, verifiedOn: verifiedOn);
             return qi is null ? Results.NotFound() : Results.Ok(new QaItemDto(qi.Id, qi.Text, qi.Status.ToString(), qi.Note, qi.Order, qi.StartedAt));
         });

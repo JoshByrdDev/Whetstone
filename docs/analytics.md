@@ -116,6 +116,7 @@ a skill is invisible to the git side - one more reason skills are committed.
 | `mart_start_rebase` | What the start rebase costs, by what it found |
 | `mart_diff_size` | Duration and tokens by size of change |
 | `mart_first_pass_qa` | Share of tickets QA never sent back, by week and by what built them |
+| `mart_qa_rulings` | QA's carry-overs and passes by inspection, how often refinement overturned one, and how often the re-drive then failed - by the QA run's model, effort, provider, skill and prompt version and arm. Read from the append-only `QaRulingEvents` log, each ruling joined to its run by the ticket lease id (`CycleRuns.LeaseRunId`) |
 | `mart_version_trend` | Each skill and prompt version in order, with what its runs cost and how often their work came back |
 | `mart_daily` | The trend under all of it |
 | `fct_runs`, `fct_tool_calls`, `fct_tickets` | The drill-down: one run, its calls, one ticket |

@@ -92,12 +92,7 @@ public record QaItemDto(int Id, string Text, string Status, string? Note, int Or
     public static QaItemDto From(QaItem q, DateTime? lastBackwardAt, bool allowCarry = true)
     {
         var verified = HandoffRequirements.IsVerified(q, lastBackwardAt, allowCarry);
-        string? verdict = q.Status != QaStatus.Passed ? null
-            : q.ExpiredAt is not null ? "Expired"
-            : !verified ? "Stale"
-            : HandoffRequirements.IsCarriedOver(q, lastBackwardAt) ? "CarriedOver"
-            : q.PassedByInspection ? "ByInspection"
-            : "Driven";
+        var verdict = HandoffRequirements.VerdictOf(q, lastBackwardAt, allowCarry);
         return new QaItemDto(q.Id, q.Text, q.Status.ToString(), q.Note, q.Order, q.StartedAt, q.VerifiedAt,
             verified, q.PassedByInspection, verdict, q.VerifiedOn, q.CarriedOverAt, q.CarryOverNote,
             q.ExpiredAt, q.ExpiryNote);

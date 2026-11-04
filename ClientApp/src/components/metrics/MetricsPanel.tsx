@@ -9,7 +9,7 @@ import { scopeQuery } from './types';
 import { Empty, Stat, ago, compact, mins, pct, phaseName, reasonOf, useJson } from './parts';
 import { PhaseTable, Rework, TimeSplit } from './Phases';
 import { DiffAndRebase, SplitBy, Tools, Versions, type RunFilter } from './PhaseDetail';
-import { Daily, FirstPassQa } from './Quality';
+import { Daily, FirstPassQa, QaRulings } from './Quality';
 import { RunList } from './Runs';
 import { Bugs } from './Bugs';
 import { ExperimentResults } from './ExperimentResults';
@@ -201,6 +201,8 @@ export function MetricsPanel() {
               <FirstPassQa rows={data.firstPass} />
               <Daily rows={data.daily} phase={shownFocus} />
             </div>
+
+            <QaRulings rows={data.qaRulings ?? []} />
 
             <Bugs scope={scope} bump={bump} onPick={pick} />
             <ExperimentResults project={scope.project} bump={bump} onPick={pick} />

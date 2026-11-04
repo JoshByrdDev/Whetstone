@@ -108,6 +108,8 @@ try {
     Check 'a run with no worker host ran on the board host' "$($detail.host) $($null -eq $detail.slot)" '@board True'
     $remote = New-RunDetail -Provider 'claude' -Effort 'high' -RunHost 'bravo-host' -Slot 12
     Check '... and one on a worker host names it, with its berth' "$($remote.host) $($remote.slot)" 'bravo-host 12'
+    Check 'a run names its ticket lease, which the QA ruling log credits' (New-RunDetail -Provider 'claude' -RunId 41).runId 41
+    Check '... and a run with none sends none' ($null -eq $detail.runId) $true
     $detail.skillHash = 'abc123abc123'; $detail.prepSeconds = 12.5; $detail.filesChanged = 0; $detail.changedFiles = @('a.cs', 'b.cs')
     $script:posted = @()
     Send-CycleReport -TicketId '7' -Project 'alpha' -Phase 'Speculating' -Skill 'speculate' -Resumed $false -Model 'm' `

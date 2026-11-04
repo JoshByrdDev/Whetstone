@@ -391,6 +391,19 @@ public static class HandoffRequirements
         && (!IsStale(q.VerifiedAt, lastBackwardAt)
             || (allowCarry && q.CarriedOverAt is not null && !IsStale(q.CarriedOverAt, lastBackwardAt)));
 
+    /// <summary>
+    /// What a Passed item's standing rests on: <c>Driven</c>, <c>ByInspection</c>, <c>CarriedOver</c>,
+    /// <c>Expired</c> (refinement ruled it out) or <c>Stale</c> (from before the last rework). Null when
+    /// the item is not Passed.
+    /// </summary>
+    public static string? VerdictOf(QaItem q, DateTime? lastBackwardAt, bool allowCarry = true) =>
+        q.Status != QaStatus.Passed ? null
+        : q.ExpiredAt is not null ? "Expired"
+        : !IsVerified(q, lastBackwardAt, allowCarry) ? "Stale"
+        : IsCarriedOver(q, lastBackwardAt) ? "CarriedOver"
+        : q.PassedByInspection ? "ByInspection"
+        : "Driven";
+
     /// <summary>Whether this item's current standing is a carry-over rather than a pass driven since the last bounce.</summary>
     public static bool IsCarriedOver(QaItem q, DateTime? lastBackwardAt) =>
         IsVerified(q, lastBackwardAt) && IsStale(q.VerifiedAt, lastBackwardAt);
