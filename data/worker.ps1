@@ -163,9 +163,11 @@ function Send-CycleReport {
 # CycleRun on the board). Made as the cycle starts and filled in as the run learns each part, so a
 # run that ends early still reports what it knew. The keys are the API's names.
 function New-RunDetail {
-    param([string]$Provider, [string]$Effort, [string]$RunHost = '', [int]$Slot = 0)
+    param([string]$Provider, [string]$Effort, [string]$RunHost = '', [int]$Slot = 0, [int]$RunId = 0)
     return [ordered]@{
         provider = $(if ($Provider) { $Provider } else { $null }); effort = $(if ($Effort) { $Effort } else { $null })
+        # The ticket lease's id - the run's own id, which the QA ruling log credits each call to.
+        runId = $(if ($RunId -gt 0) { $RunId } else { $null })
         # Where it ran: a worker host's name, or the dispatch order's name for the board host.
         host = $(if ($RunHost) { $RunHost } else { '@board' }); slot = $(if ($Slot -gt 0) { $Slot } else { $null })
         cliVersion = $null; skillHash = $null; promptHash = $null; sessionId = $null
@@ -1748,7 +1750,7 @@ $cycleStartedAt = (Get-Date).ToUniversalTime()
 $cycleTimer     = [System.Diagnostics.Stopwatch]::StartNew()
 # What this run will say about how it was set up and what it left, filled in as it goes and sent
 # with every cycle report below, however the run ends.
-$runDetail = New-RunDetail -Provider "$($AgentProvider.Key)" -Effort "$WorkerReasoningEffort" -RunHost $runHost -Slot $Agent
+$runDetail = New-RunDetail -Provider "$($AgentProvider.Key)" -Effort "$WorkerReasoningEffort" -RunHost $runHost -Slot $Agent -RunId $(if ("$runId" -match '^\d+$') { [int]$runId } else { 0 })
 if ($armRun.Id) {
     $runDetail.experimentId = $armRun.Id
     $runDetail.experimentArm = $armRun.Arm

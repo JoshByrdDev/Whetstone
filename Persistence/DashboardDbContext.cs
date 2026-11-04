@@ -16,6 +16,7 @@ public class DashboardDbContext : DbContext
     public DbSet<NoteAttachment> NoteAttachments => Set<NoteAttachment>();
     public DbSet<PhaseTransition> PhaseTransitions => Set<PhaseTransition>();
     public DbSet<CycleRun> CycleRuns => Set<CycleRun>();
+    public DbSet<QaRulingEvent> QaRulingEvents => Set<QaRulingEvent>();
     public DbSet<TicketDependency> TicketDependencies => Set<TicketDependency>();
     public DbSet<ResourceLease> ResourceLeases => Set<ResourceLease>();
     public DbSet<TicketAnalysis> TicketAnalyses => Set<TicketAnalysis>();
@@ -148,6 +149,19 @@ public class DashboardDbContext : DbContext
             // Every metric over this table is "some window, some project, grouped by phase".
             e.HasIndex(p => p.At);
             e.HasIndex(p => new { p.ProjectKey, p.At });
+            e.HasOne(p => p.Ticket).WithMany().HasForeignKey(p => p.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<QaRulingEvent>(e =>
+        {
+            e.Property(p => p.Kind).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.Phase).HasConversion<string>().HasMaxLength(32);
+            e.Property(p => p.Actor).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.Track).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.ProjectKey).HasMaxLength(128);
+            e.Property(p => p.PriorVerdict).HasMaxLength(16);
+            e.HasIndex(p => new { p.QaItemId, p.At });
+            e.HasIndex(p => p.RunId);
             e.HasOne(p => p.Ticket).WithMany().HasForeignKey(p => p.TicketId).OnDelete(DeleteBehavior.Cascade);
         });
 

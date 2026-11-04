@@ -40,7 +40,7 @@ public record SetVerdictRequest(string Verdict, string? Note = null);
 public record UpdateTicketRequest(string? Title, string? Description, string? IssueKey, string? IssueUrl, string? Branch, string? ProjectKey,
     bool? RequiresSpeculationReview = null, bool? RequiresImplementationReview = null, string? MasterNotes = null,
     bool? SkipQaTesting = null, string? Priority = null, bool? ShortLoopReview = null,
-    bool? SkipClassroomAnalysis = null,
+    bool? SkipClassroomAnalysis = null, bool? FullQaRequired = null,
     // The whole list of what this ticket's testing needs whatever its branch changes; [] clears it.
     string[]? Needs = null);
 public record TransitionRequest(string ToPhase, string? Reason);
@@ -760,7 +760,7 @@ public static class TicketEndpoints
                 req.IssueKey is null ? null : (normalized ?? ""),
                 issueUrl, req.Branch, req.ProjectKey,
                 req.RequiresSpeculationReview, req.RequiresImplementationReview, req.MasterNotes, req.SkipQaTesting,
-                priority, req.ShortLoopReview, req.SkipClassroomAnalysis, needs);
+                priority, req.ShortLoopReview, req.SkipClassroomAnalysis, req.FullQaRequired, needs);
             if (t is null) return Results.NotFound();
             var r = await resolver.ResolveAsync(t);
             return Results.Ok(TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable, tracker: tracker));
@@ -856,7 +856,7 @@ public static class TicketEndpoints
             return qi is null ? Results.NotFound() : Results.Ok(new QaItemDto(qi.Id, qi.Text, qi.Status.ToString(), qi.Note, qi.Order, qi.StartedAt));
         });
 
-        app.MapPut("/api/qaitems/{id:int}", async (int id, UpdateQaItemRequest req, TicketService svc) =>
+        app.MapPut("/api/qaitems/{id:int}", async (int id, UpdateQaItemRequest req, TicketService svc, TicketGitService git) =>
         {
             QaStatus? status = null;
             if (req.Status is not null)
@@ -865,7 +865,9 @@ public static class TicketEndpoints
                     return Results.BadRequest(new { error = $"Unknown QA status '{req.Status}'" });
                 status = st;
             }
-            var qi = await svc.UpdateQaItemAsync(id, req.Text, status, req.Note, req.Order);
+            // A pass a person records by hand is a pass on the build in front of them, dated like a worker's.
+            var verifiedOn = status is not null and not QaStatus.Todo ? await Whetstone.Mcp.TicketTools.VerifiedOnAsync(svc, git, id) : null;
+            var qi = await svc.UpdateQaItemAsync(id, req.Text, status, req.Note, req.Order, verifiedOn: verifiedOn);
             return qi is null ? Results.NotFound() : Results.Ok(new QaItemDto(qi.Id, qi.Text, qi.Status.ToString(), qi.Note, qi.Order, qi.StartedAt));
         });
 
@@ -951,6 +953,8 @@ public static class TicketEndpoints
             var items = form["changeItems"].Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s!.Trim()).ToList();
             var shortLoop = form["shortLoop"].ToString() is "true" or "on" or "1";
             var replan = form["replan"].ToString() is "true" or "on" or "1";
+            // The owner's "re-run all of it": the next QA pass may carry nothing over.
+            var fullQa = form["fullQa"].ToString() is "true" or "on" or "1";
             // Absent means "leave the band where it is" — the same shape as the update endpoint, so
             // a reviewer who says nothing about priority does not silently reset it to Normal.
             if (!TryParsePriority(form["priority"].ToString(), out var priority))
@@ -961,7 +965,7 @@ public static class TicketEndpoints
 
             try
             {
-                var t = await svc.RequestChangesAsync(id, body, items, shortLoop, saved, priority, replan);
+                var t = await svc.RequestChangesAsync(id, body, items, shortLoop, saved, priority, replan, fullQa: fullQa);
                 if (t is null)
                 {
                     foreach (var a in saved) files.Delete(a);

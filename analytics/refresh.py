@@ -48,6 +48,7 @@ PUBLISHED = [
     "mart_phase_breakdown", "mart_time_split", "mart_rework", "mart_tool_time",
     "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
     "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
+    "mart_qa_rulings",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an
@@ -76,6 +77,16 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         "Host": "VARCHAR", "Slot": "INTEGER",
         # Added by AddRunContextWindow: what the peak is measured against, and whether it overflowed.
         "ContextWindowTokens": "BIGINT", "Compactions": "INTEGER",
+        # Added by AddQaRulingLog: the run's ticket lease id, which QA rulings record as their run.
+        "LeaseRunId": "INTEGER",
+    },
+    # Every ruling on a QA item, append-only (AddQaRulingLog): QA's statuses, carry-overs, and
+    # refinement's expiries, each linked to the call it overturned.
+    "QaRulingEvents": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "QaItemId": "INTEGER", "ProjectKey": "VARCHAR",
+        "Track": "VARCHAR", "Phase": "VARCHAR", "Kind": "VARCHAR", "PriorVerdict": "VARCHAR",
+        "VerifiedOn": "VARCHAR", "Note": "VARCHAR", "At": "VARCHAR", "Actor": "VARCHAR",
+        "RunId": "INTEGER", "OverturnsEventId": "INTEGER",
     },
     "PhaseTransitions": {
         "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR",

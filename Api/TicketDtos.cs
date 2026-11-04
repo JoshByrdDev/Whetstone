@@ -77,8 +77,27 @@ public record WorkItemDto(int Id, string Text, bool Done, int Order, DateTime? S
 /// caller with no history to hand (the tests, the board summary) gets the honest false.</param>
 /// <param name="PassedByInspection">The pass was argued from the code rather than driven through the
 /// app. A weaker claim than an executed test, and recorded separately so nobody has to infer it.</param>
+/// <param name="Verdict">What the item's standing rests on, so whoever signs the ticket off sees which
+/// items were re-run and which were not: <c>Driven</c> (passed in the app since the last rework),
+/// <c>ByInspection</c> (passed by reading the code), <c>CarriedOver</c> (an earlier pass kept because
+/// the rework's diff cannot reach it), <c>Expired</c> (refinement ruled the pass does not hold), or
+/// <c>Stale</c> (passed before the last rework and neither re-run nor carried). Null when not Passed.</param>
+/// <param name="VerifiedOn">The build the pass was driven on - the branch head per touched repo. A
+/// carry-over keeps it, so it is always the build that was actually tested.</param>
 public record QaItemDto(int Id, string Text, string Status, string? Note, int Order, DateTime? StartedAt = null,
-    DateTime? VerifiedAt = null, bool Verified = false, bool PassedByInspection = false);
+    DateTime? VerifiedAt = null, bool Verified = false, bool PassedByInspection = false,
+    string? Verdict = null, string? VerifiedOn = null, DateTime? CarriedOverAt = null, string? CarryOverNote = null,
+    DateTime? ExpiredAt = null, string? ExpiryNote = null)
+{
+    public static QaItemDto From(QaItem q, DateTime? lastBackwardAt, bool allowCarry = true)
+    {
+        var verified = HandoffRequirements.IsVerified(q, lastBackwardAt, allowCarry);
+        var verdict = HandoffRequirements.VerdictOf(q, lastBackwardAt, allowCarry);
+        return new QaItemDto(q.Id, q.Text, q.Status.ToString(), q.Note, q.Order, q.StartedAt, q.VerifiedAt,
+            verified, q.PassedByInspection, verdict, q.VerifiedOn, q.CarriedOverAt, q.CarryOverNote,
+            q.ExpiredAt, q.ExpiryNote);
+    }
+}
 /// <summary>
 /// One file attached to a progress note, addressed to both readers at once.
 /// <para>
@@ -228,6 +247,9 @@ public record TicketDetailDto(
     // A slice's walk-through: QA on the base branch, driving the story, with no code of its own.
     // Read by the worker off the claim (a detached checkout of the base) and by the QA skill.
     bool Walkthrough = false,
+    // The owner asked for every QA item to be driven again on this rework: nothing may be carried over.
+    // Readable by the QA run through get_ticket; set only from the review gate or the drawer.
+    bool FullQaRequired = false,
     // What this ticket's testing needs whatever its branch changes (Ticket.NeedsResources). Set by
     // the owner from the drawer or the steward on its own ticket; readable by a worker, settable by none.
     IReadOnlyList<string>? Needs = null);
@@ -272,7 +294,7 @@ public static class TicketMapper
         t.Id, t.ProjectKey, t.IssueKey != null ? (effectiveTitle ?? t.IssueKey) : (effectiveTitle ?? t.Title ?? ""), t.Phase.ToString(),
         t.IssueKey, t.IssueUrl, issueUnavailable, t.Branch, t.BoardOrder,
         t.WorkItems.Count, t.WorkItems.Count(w => w.Done),
-        t.QaItems.Count, t.QaItems.Count(q => HandoffRequirements.IsVerified(q, lastBackwardAt)),
+        t.QaItems.Count, t.QaItems.Count(q => HandoffRequirements.IsVerified(q, lastBackwardAt, !t.FullQaRequired)),
         notes?.All ?? t.Comments.Count, t.BlockedReason, t.PhaseBeforeBlock?.ToString(), t.UpdatedAt,
         blockers?.Any(b => !b.Satisfied && b.Override != false) == true,
         blockers?.Where(b => !b.Satisfied && b.Override != false).Select(b => b.Label).ToList(),
@@ -343,8 +365,7 @@ public static class TicketMapper
         t.BlockedReason, t.PhaseBeforeBlock?.ToString(), t.BoardOrder,
         t.CreatedAt, t.UpdatedAt,
         t.WorkItems.OrderBy(w => w.Order).Select(w => new WorkItemDto(w.Id, w.Text, w.Done, w.Order, w.StartedAt, w.Scope.ToString())).ToList(),
-        t.QaItems.OrderBy(q => q.Order).Select(q => new QaItemDto(q.Id, q.Text, q.Status.ToString(), q.Note, q.Order,
-            q.StartedAt, q.VerifiedAt, HandoffRequirements.IsVerified(q, lastBackwardAt), q.PassedByInspection)).ToList(),
+        t.QaItems.OrderBy(q => q.Order).Select(q => QaItemDto.From(q, lastBackwardAt, !t.FullQaRequired)).ToList(),
         t.Comments.OrderBy(c => c.CreatedAt).Select(c => new CommentDto(
             c.Id, c.Author.ToString(), c.Body, c.Phase?.ToString(), c.CreatedAt,
             c.Attachments.OrderBy(a => a.Id).Select(a => new NoteAttachmentDto(
@@ -377,6 +398,7 @@ public static class TicketMapper
             ? new TicketPlanDto(t.PlanKey ?? "", unit, StewardProgress.OutcomesOf(t))
             : null,
         t.Walkthrough,
+        t.FullQaRequired,
         t.Needs);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)

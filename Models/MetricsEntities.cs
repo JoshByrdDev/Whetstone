@@ -456,6 +456,12 @@ public class CycleRun
     /// the time, how loaded that machine was.
     /// </summary>
     public int? Slot { get; set; }
+
+    /// <summary>
+    /// The run's ticket lease id (<c>ClaimResult.RunId</c>) - what a QA ruling made during the run
+    /// records as its run (<see cref="QaRulingEvent.RunId"/>). Null for a run from before it was sent.
+    /// </summary>
+    public int? LeaseRunId { get; set; }
 }
 
 /// <summary>
@@ -487,4 +493,78 @@ public class CapacitySample
     /// tickets were sitting when nothing was ready. For the page's detail line, never for the totals.
     /// </summary>
     public string? DetailJson { get; set; }
+}
+
+/// <summary>What a <see cref="QaRulingEvent"/> records.</summary>
+public enum QaRulingKind
+{
+    /// <summary>A Passed driven through the app.</summary>
+    Driven,
+    /// <summary>A Passed argued from the code (<see cref="QaItem.PassedByInspection"/>).</summary>
+    ByInspection,
+    /// <summary>An expired pass kept because the rework's diff cannot reach it (<see cref="QaItem.CarriedOverAt"/>).</summary>
+    CarriedOver,
+    Failed,
+    Blocked,
+    /// <summary>Refinement ruling that a pass does not hold (<see cref="QaItem.ExpiredAt"/>).</summary>
+    Expired,
+}
+
+/// <summary>
+/// One ruling on one QA item, as it was made: append-only, never updated or deleted.
+/// <para>
+/// The item itself only holds its current standing, and a re-drive clears what was ruled about the
+/// one before (the carry-over, refinement's expiry). That is right for the item and wrong for the
+/// question this table answers: how often QA's weaker calls - a carry-over, a pass by inspection -
+/// are overturned by refinement's audit, and how often the re-drive then finds a real defect. A
+/// high rate says QA's ruling needs tuning, and the run id joins each call to the run that made
+/// it, so the tuning can be by skill, model, effort or provider. The re-drive's outcome is not
+/// stored twice: it is the next driven ruling on the same item, read from this log.
+/// </para>
+/// </summary>
+public class QaRulingEvent
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    /// <summary>The item ruled on. Not a foreign key: the log outlives an item someone deletes.</summary>
+    public int QaItemId { get; set; }
+
+    public string ProjectKey { get; set; } = "";
+    public TicketTrack Track { get; set; } = TicketTrack.Delivery;
+
+    /// <summary>The phase the ticket was in when the ruling was made.</summary>
+    public TicketPhase Phase { get; set; }
+
+    public QaRulingKind Kind { get; set; }
+
+    /// <summary>
+    /// What the item stood on just before this ruling (QaItemDto's verdict: Driven, ByInspection,
+    /// CarriedOver, Expired, Stale), or null for an item with no pass. For an expiry, the call it
+    /// overturned; for a re-drive, whether it was stale or expired.
+    /// </summary>
+    public string? PriorVerdict { get; set; }
+
+    /// <summary>
+    /// The build the ruling was made on: the branch head per touched repo for a ruling that drove
+    /// the app, the item's own <see cref="QaItem.VerifiedOn"/> for a carry-over or an expiry.
+    /// </summary>
+    public string? VerifiedOn { get; set; }
+
+    public string? Note { get; set; }
+    public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Who made it: a worker run, or a person at the drawer.</summary>
+    public TransitionActor Actor { get; set; }
+
+    /// <summary>
+    /// The run that made it: the id of the ticket lease held while the call was made, which is the
+    /// run's id (<c>ClaimResult.RunId</c>) and is recorded on its <see cref="CycleRun.LeaseRunId"/>.
+    /// Null for a person's ruling, and for a worker call made with no live lease.
+    /// </summary>
+    public int? RunId { get; set; }
+
+    /// <summary>For an expiry: the ruling it overturns - the latest pass recorded on the item. Null otherwise.</summary>
+    public int? OverturnsEventId { get; set; }
 }

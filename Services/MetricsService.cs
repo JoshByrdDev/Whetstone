@@ -75,7 +75,8 @@ public class MetricsService
         string? ExperimentArm = null,
         bool? ExperimentApplied = null,
         string? Host = null,
-        int? Slot = null);
+        int? Slot = null,
+        int? RunId = null);
 
     /// <summary>The most paths <see cref="CycleRun.ChangedFilesJson"/> keeps.</summary>
     public const int MaxChangedFiles = 200;
@@ -174,6 +175,7 @@ public class MetricsService
             // Where it ran, so a machine can be compared with another doing the same work.
             run.Host = Clip(d.Host, 64);
             run.Slot = d.Slot is > 0 ? d.Slot : null;
+            run.LeaseRunId = d.RunId is > 0 ? d.RunId : null;
         }
 
         // Why the run happened, and which time round it is. Both read from what the dashboard already

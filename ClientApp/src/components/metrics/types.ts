@@ -102,10 +102,22 @@ export interface ToolCall {
   resultChars: number | null; isSidechain: boolean;
 }
 
+/** QA's weaker calls - carry-overs and passes by inspection - and how often refinement overturned them (mart_qa_rulings). */
+export interface QaRulingRow {
+  dimension: string; dimValue: string; qaRuns: number; reworkRuns: number; reworkRunsOverturned: number;
+  reworkOverturnShare: number | null; passes: number; passesDriven: number; byInspection: number;
+  carryOvers: number; carryOverRate: number | null; inspectionRate: number | null;
+  carryOverturned: number; carryOverturnRate: number | null;
+  inspectionOverturned: number; inspectionOverturnRate: number | null; drivenOverturned: number;
+  overturned: number; overturnRate: number | null; overturnedRedriven: number;
+  overturnedFailed: number; overturnedFailedRate: number | null;
+}
+
 export interface Overview {
   scope: { windowDays: number; project: string; track: string };
   status: AnalyticsStatus;
   phases: PhaseRow[]; timeSplit: TimeSplitRow[]; rework: ReworkRow[]; firstPass: FirstPassRow[];
+  qaRulings?: QaRulingRow[];
   daily: DailyRow[]; startRebase: StartRebaseRow[]; diffSize: DiffSizeRow[];
 }
 

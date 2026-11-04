@@ -94,6 +94,7 @@ select
          when matched_session_id is not null then 'transcript'
          else 'none' end                                               as machine_source,
     slot,
+    lease_run_id,
     coalesce(provider, case
         when model ilike 'claude%' then 'claude'
         when model ilike 'gemini%' then 'gemini'

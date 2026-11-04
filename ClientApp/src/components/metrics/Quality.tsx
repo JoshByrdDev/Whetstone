@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Chip } from '../ui';
 import { MONO } from '../orbit';
-import type { DailyRow, FirstPassRow } from './types';
-import { Empty, Meter, Section, Sheet, compact, mins, pct } from './parts';
+import type { DailyRow, FirstPassRow, QaRulingRow } from './types';
+import { Empty, Meter, Section, Sheet, Stat, compact, mins, pct } from './parts';
 
 /**
  * First-pass QA: of the tickets QA looked at, the share it never sent back. Over each ticket's whole
@@ -96,6 +96,77 @@ export function Daily({ rows, phase }: { rows: DailyRow[]; phase: string | null 
             <span>{days[days.length - 1]?.day}</span>
           </div>
         </Sheet>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * How often QA's weaker calls hold up: the passes it carried over from before a rework or argued
+ * from the code, how often refinement's audit overturned one, and how often the re-drive that
+ * followed then failed - a real defect the call was hiding. Cut by the QA run that made each call,
+ * because a high rate is something to tune in that run's skill, model, effort or provider.
+ */
+const RULINGS_BY: { key: string; label: string }[] = [
+  { key: 'model', label: 'QA model' },
+  { key: 'skill_version', label: 'QA skill' },
+  { key: 'effort', label: 'Effort' },
+  { key: 'provider', label: 'Provider' },
+  { key: 'prompt_version', label: 'Prompt' },
+  { key: 'experiment_arm', label: 'Experiment arm' },
+];
+
+export function QaRulings({ rows }: { rows: QaRulingRow[] }) {
+  const [by, setBy] = useState('model');
+  const all = rows.find(r => r.dimension === 'all');
+  const shown = rows.filter(r => r.dimension === by).sort((a, b) => b.passes - a.passes);
+  const weak = all ? all.carryOvers + all.byInspection : 0;
+  return (
+    <Section title="QA's carry-overs and refinement's overturns"
+      meta={all ? `${all.carryOvers} carried · ${all.byInspection} by inspection · ${all.overturned} overturned` : undefined}>
+      {!all ? (
+        <Empty>No QA run in this window logged a ruling. The log starts with the runs after it was added.</Empty>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-3">
+            <Stat label="Carry-over rate" value={pct(all.carryOverRate)} muted={!all.passes}
+              context={`${all.carryOvers} of ${all.passes} passes carried from an earlier build`} />
+            <Stat label="Overturn rate" value={pct(all.overturnRate)} muted={!weak}
+              context={`${all.overturned} of ${weak} carried or by-inspection passes expired by refinement`} />
+            <Stat label="Overturned and failed" value={String(all.overturnedFailed)} muted={!all.overturnedRedriven}
+              context={all.overturnedRedriven
+                ? `of ${all.overturnedRedriven} re-driven - a defect the call was hiding`
+                : 'nothing overturned has been re-driven yet'} />
+            <Stat label="Reworks with an overturn" value={pct(all.reworkOverturnShare)} muted={!all.reworkRuns}
+              context={`${all.reworkRunsOverturned} of ${all.reworkRuns} QA passes after a rework`} />
+          </div>
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {RULINGS_BY.map(b => <Chip key={b.key} on={by === b.key} onClick={() => setBy(b.key)}>{b.label}</Chip>)}
+          </div>
+          {shown.length === 0 ? <Empty>Nothing to split.</Empty> : (
+            <Sheet className="orbit-swap" key={by}>
+              <ul className="space-y-1.5 text-xs">
+                {shown.map(r => (
+                  <li key={r.dimValue} className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)_3rem_3rem_3rem] items-center gap-x-3">
+                    <span className="min-w-0 truncate text-gray-300" style={by.endsWith('version') ? { fontFamily: MONO } : undefined}>{r.dimValue}</span>
+                    <Meter value={r.carryOverRate ?? 0} max={1} swatch="bg-sky-500"
+                      title={`${r.carryOvers} of ${r.passes} passes carried over`} />
+                    <span className="text-right text-gray-100" style={{ fontFamily: MONO }} title="carry-over rate">{pct(r.carryOverRate)}</span>
+                    <span className={`text-right ${r.overturned ? 'text-amber-300' : 'text-gray-600'}`} style={{ fontFamily: MONO }}
+                      title={`${r.overturned} of ${r.carryOvers + r.byInspection} carried or by-inspection passes overturned`}>
+                      {pct(r.overturnRate)}
+                    </span>
+                    <span className={`text-right ${r.overturnedFailed ? 'text-red-300' : 'text-gray-600'}`} style={{ fontFamily: MONO }}
+                      title={`${r.overturnedFailed} overturned calls failed when driven again, of ${r.overturnedRedriven} re-driven`}>
+                      {r.overturnedFailed}
+                    </span>
+                  </li>
+                ))}
+                <li className="pt-1 text-[10.5px] text-gray-600">Columns: carry-over rate · overturned by refinement · overturned and then failed.</li>
+              </ul>
+            </Sheet>
+          )}
+        </>
       )}
     </Section>
   );

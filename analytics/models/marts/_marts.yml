@@ -212,3 +212,23 @@ models:
         tests: [is_fraction]
       - name: escaped_p
         tests: [is_fraction]
+
+  - name: mart_qa_rulings
+    description: QA's carry-overs and passes by inspection, how often refinement overturned them, and how often the re-drive then failed - by the QA run's model, effort, provider, skill and prompt version and experiment arm.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, dimension, dim_value]
+    columns:
+      - name: rework_overturn_share
+        tests: [is_fraction]
+      - name: carry_over_rate
+        tests: [is_fraction]
+      - name: inspection_rate
+        tests: [is_fraction]
+      - name: carry_overturn_rate
+        tests: [is_fraction]
+      - name: inspection_overturn_rate
+        tests: [is_fraction]
+      - name: overturned_failed_rate
+        tests: [is_fraction]

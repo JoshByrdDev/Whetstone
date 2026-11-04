@@ -499,17 +499,7 @@ public class ProjectStackService
     private static async Task<RunOutcome> RunCommandAsync(
         string command, string workDir, TimeSpan timeout, Action<string> onLine)
     {
-        var psi = new ProcessStartInfo
-        {
-            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
-            WorkingDirectory = workDir,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        psi.ArgumentList.Add(OperatingSystem.IsWindows() ? "/c" : "-c");
-        psi.ArgumentList.Add(command);
+        var psi = ShellStart(command, workDir);
 
         using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         proc.OutputDataReceived += (_, e) => { if (e.Data is not null) onLine(e.Data); };
@@ -540,6 +530,39 @@ public class ProjectStackService
         }
 
         return new RunOutcome(proc.ExitCode == 0, proc.ExitCode, null);
+    }
+
+    /// <summary>
+    /// How a configured command line reaches the shell, exactly as it was typed.
+    /// <para>
+    /// On Windows it is NOT handed over through <see cref="ProcessStartInfo.ArgumentList"/>: that
+    /// quotes it as one argument for the C runtime's rules, escaping every inner quote as <c>\"</c>,
+    /// which cmd does not unescape - so <c>-File "C:\x\up.ps1"</c> arrived as a path with quote
+    /// marks in it, and any stack command with a quoted path failed. <c>/s /c "..."</c> is cmd's
+    /// own form for this: it strips the outer pair and runs everything between them verbatim.
+    /// </para>
+    /// </summary>
+    public static ProcessStartInfo ShellStart(string command, string workDir)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/sh",
+            WorkingDirectory = workDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        if (OperatingSystem.IsWindows())
+        {
+            psi.Arguments = $"/d /s /c \"{command}\"";
+        }
+        else
+        {
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add(command);
+        }
+        return psi;
     }
 
     /// <summary>

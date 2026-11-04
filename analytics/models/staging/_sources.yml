@@ -13,6 +13,11 @@ sources:
         columns:
           - name: Id
             tests: [unique, not_null]
+      - name: QaRulingEvents
+        description: Every ruling on a QA item, append-only. Empty on a database from before AddQaRulingLog.
+        columns:
+          - name: Id
+            tests: [unique, not_null]
       - name: PhaseTransitions
         columns:
           - name: Id

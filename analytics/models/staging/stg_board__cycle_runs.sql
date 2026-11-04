@@ -48,5 +48,6 @@ select
     "ExperimentArm"               as experiment_arm,
     "ExperimentApplied"           as experiment_applied,
     "Host"                        as host,
-    "Slot"                        as slot
+    "Slot"                        as slot,
+    "LeaseRunId"                  as lease_run_id
 from {{ source('board', 'CycleRuns') }}

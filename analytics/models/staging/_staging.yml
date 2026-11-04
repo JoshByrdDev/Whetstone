@@ -17,6 +17,18 @@ models:
           - accepted_values:
               arguments:
                 values: ['Completed', 'Timeout', 'Error']
+  - name: stg_board__qa_ruling_events
+    description: One ruling on one QA item - a status, a carry-over, or refinement's expiry - with the run that made it.
+    columns:
+      - name: event_id
+        tests: [unique, not_null]
+      - name: qa_item_id
+        tests: [not_null]
+      - name: kind
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Driven', 'ByInspection', 'CarriedOver', 'Failed', 'Blocked', 'Expired']
   - name: stg_board__phase_transitions
     columns:
       - name: transition_id
