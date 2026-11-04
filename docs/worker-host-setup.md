@@ -251,8 +251,18 @@ Optional. Leave it out and QA stays on the board host.
   finished, the runner fetches, fast-forwards to exactly the board host's commit, logs `Updated this
   checkout from ... to the board host's commit ...`, and starts again on the new code. The runner
   log then says `Runner '<name>' on commit <new>`, and the host is back in rotation within a minute
-  or two. It never moves past the board host's commit, over modified tracked files, or backwards; a
-  refusal is logged once and needs a person. A commit it cannot fetch yet is retried every 5 min.
+  or two. It never moves past the board host's commit or over modified tracked files; that refusal
+  is logged once and needs a person. A commit it cannot fetch yet is retried every 5 min.
+- **After a rebase or reset on the board host:** nothing to do either. The board's commit is then
+  not a step forward from this checkout's, and the runner moves to it anyway, first keeping its old
+  commit as a branch (`runner-backup/<date>-<sha>`, the newest ten kept) and logging that it did.
+  This checkout only follows the board, so that branch normally holds nothing anyone wrote here.
+  `"followRewrites": false` in `host.json` makes it refuse instead, as it used to.
+- **When the runner cannot update itself** - it has died, it was stopped, or tracked files here are
+  modified - double-click `C:\Whetstone\Update-Runner.bat`. It stops the runner (waiting for runs in
+  progress here to finish), moves this checkout to the board host's commit by the same rules,
+  and starts the scheduled task again, so the supervisor is on the new code too. Modified files are
+  listed and left alone. It refuses to do anything on a machine with no `data/host.json`.
 - **To manage the commit by hand instead**, add `"autoUpdate": false` to `host.json`. Then, after
   each commit on the board host: create `C:\Whetstone\data\runner.stop`, wait for the runner to
   exit (its runs finish first), `git -C C:\Whetstone pull`, and start the scheduled task again.

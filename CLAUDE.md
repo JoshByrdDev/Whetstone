@@ -387,9 +387,11 @@ discoverable from the code:
   started from a Claude session, because whatever owns its tree can kill every worker under it.
 - **A worker host follows the board host's commit by itself.** It gets work only on the exact same
   commit, and any commit here - docs included - takes it out of rotation until its runner, once
-  idle, fast-forwards to it and restarts on the new code. Started normally, `runner.ps1` is a small
+  idle, fast-forwards to it and restarts on the new code. A board history that was rewritten (a
+  rebase, a reset) is followed too, the host's old commit kept as a `runner-backup/*` branch: that
+  checkout is a follower and has no commits of its own. Started normally, `runner.ps1` is a small
   supervisor around the runner (`-Inner`); a change to the supervisor's own lines needs the task
-  started again on that machine.
+  started again on that machine, which `Update-Runner.bat` there does (`data/update-runner.ps1`).
 - **A slot's tens digit names the machine.** The board host's workers are 1..`MaxWorkers` (10),
   and each worker host gets a block of ten after them in config order: the first from 11, the next
   from 21. The steward is 99, outside every block, so it never interrupts that numbering. Changing

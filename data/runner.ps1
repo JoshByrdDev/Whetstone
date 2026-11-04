@@ -79,7 +79,9 @@ function Read-HostConfig {
     if ($projects.Count -eq 0) { return @{ ok = $false; reason = "host.json maps no projects to a clone on this machine" } }
     # On unless it says false in so many words: a host that stays off the board's commit gets no work.
     $autoUpdate = -not ($raw.PSObject.Properties['autoUpdate'] -and $raw.autoUpdate -eq $false)
-    return @{ ok = $true; name = $name; projects = $projects; autoUpdate = $autoUpdate }
+    # On too: a board whose history was rewritten is followed, keeping the old commit as a branch.
+    $followRewrites = -not ($raw.PSObject.Properties['followRewrites'] -and $raw.followRewrites -eq $false)
+    return @{ ok = $true; name = $name; projects = $projects; autoUpdate = $autoUpdate; followRewrites = $followRewrites }
 }
 
 # The claim as this machine must read it. Every path in it is the board host's, so each one is
@@ -346,10 +348,14 @@ function Get-UpdateAction {
 #   missing    $Sha is not reachable even after a fetch (the board's commit is not where this
 #              checkout fetches from yet) - worth trying again later
 #   dirty      tracked files here are modified - a person's work, never overwritten
-#   not-ff     $Sha is not ahead of HEAD - the board went backwards or sideways; a person decides
+#   rewound    $Sha is not ahead of HEAD - the board's history was rewritten (a rebase, a reset) -
+#              so this checkout was moved to it anyway, its old commit kept as a branch first
+#              ($result.backup names it). This checkout only ever follows the board, so a commit
+#              of its own is not expected; if one was made, nothing is lost.
+#   not-ff     the same, with -FollowRewrites:$false (host.json "followRewrites": false): refused
 #   failed     git refused for another reason
 function Update-OwnCheckout {
-    param([string]$Repo, [string]$Sha)
+    param([string]$Repo, [string]$Sha, [bool]$FollowRewrites = $true)
     $ErrorActionPreference = 'Continue'
     git -C $Repo cat-file -e "$Sha^{commit}" 2>$null
     if ($LASTEXITCODE -ne 0) {
@@ -360,11 +366,29 @@ function Update-OwnCheckout {
     $dirty = @(git -C $Repo status --porcelain --untracked-files=no 2>$null | Where-Object { $_ })
     if ($dirty.Count -gt 0) { return @{ ok = $false; state = 'dirty'; reason = "$($dirty.Count) tracked file(s) here are modified" } }
     git -C $Repo merge-base --is-ancestor HEAD $Sha 2>$null
-    if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = 'not-ff'; reason = "the board's commit $Sha is not ahead of this checkout's - it is not a fast-forward" } }
+    if ($LASTEXITCODE -ne 0) {
+        if (-not $FollowRewrites) { return @{ ok = $false; state = 'not-ff'; reason = "the board's commit $Sha is not ahead of this checkout's - it is not a fast-forward" } }
+        $old = "$(git -C $Repo rev-parse HEAD 2>$null)".Trim()
+        $backup = "runner-backup/$(Get-Date -Format 'yyyyMMdd-HHmmss')-$($old.Substring(0, [Math]::Min(7, $old.Length)))"
+        git -C $Repo branch --quiet $backup $old *> $null
+        if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = 'failed'; reason = "could not keep this checkout's commit $old as $backup before moving" } }
+        git -C $Repo reset --quiet --hard $Sha *> $null
+        $head = "$(git -C $Repo rev-parse HEAD 2>$null)".Trim()
+        if ($LASTEXITCODE -ne 0 -or $head -ine $Sha) { return @{ ok = $false; state = 'failed'; reason = "git could not move to $Sha (the old commit is kept as $backup)" } }
+        Remove-OldBackups -Repo $Repo
+        return @{ ok = $true; state = 'rewound'; backup = $backup; from = $old }
+    }
     git -C $Repo merge --quiet --ff-only $Sha *> $null
     $head = "$(git -C $Repo rev-parse HEAD 2>$null)".Trim()
     if ($LASTEXITCODE -ne 0 -or $head -ine $Sha) { return @{ ok = $false; state = 'failed'; reason = "git could not fast-forward to $Sha" } }
     return @{ ok = $true; state = 'moved' }
+}
+
+# Keep the newest $Keep runner-backup branches; a rewrite now and then should not leave a pile.
+function Remove-OldBackups {
+    param([string]$Repo, [int]$Keep = 10)
+    $all = @(git -C $Repo for-each-ref --sort=-refname --format='%(refname:short)' 'refs/heads/runner-backup/' 2>$null | Where-Object { $_ })
+    foreach ($b in @($all | Select-Object -Skip $Keep)) { git -C $Repo branch --quiet -D $b *> $null }
 }
 
 # Whether the supervisor that started this runner is still there to start it again. A pid can be
@@ -513,9 +537,12 @@ while ($true) {
         $updateSaid[$boardSha] = 'wait'
     }
     elseif ($action -eq 'update' -and -not ($updateRetryAt[$boardSha] -and (Get-Date) -lt $updateRetryAt[$boardSha])) {
-        $result = Update-OwnCheckout -Repo $ownRepo -Sha $boardSha
+        $result = Update-OwnCheckout -Repo $ownRepo -Sha $boardSha -FollowRewrites $HostCfg.followRewrites
         if ($result.ok) {
-            Write-Log "Updated this checkout from $commit to the board host's commit $boardSha."
+            if ($result.state -eq 'rewound') {
+                Write-Log "The board host's history was rewritten: moved this checkout from $commit to its commit $boardSha. The old commit is kept as branch $($result.backup)."
+            }
+            else { Write-Log "Updated this checkout from $commit to the board host's commit $boardSha." }
             $single.ReleaseMutex()
             if (Test-SupervisorAlive -SupervisorPid $SupervisorPid) { exit $RunnerUpdatedExit }
             # Nothing would start this runner again: its supervisor has gone (a console closed, a

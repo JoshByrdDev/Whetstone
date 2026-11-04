@@ -207,14 +207,79 @@ try {
 
     $c = New-Checkouts 'backwards'
     $old = "$(git -C $c.board rev-parse HEAD)".Trim()
-    $null = New-Commit $c.here 'here, ahead of the board'
+    $ahead = New-Commit $c.here 'here, ahead of the board'
     $r = Update-OwnCheckout -Repo $c.here -Sha $old
-    Check 'a board host behind this checkout: refused' "$($r.ok) $($r.state)" 'False not-ff'
+    Check 'a board host behind this checkout: followed' "$($r.ok) $($r.state)" 'True rewound'
+    Check '... onto exactly its commit' "$(git -C $c.here rev-parse HEAD)".Trim() $old
+    Check '... with the old commit kept as a branch' "$(git -C $c.here rev-parse $r.backup)".Trim() $ahead
+    Check '... named for when and what' ($r.backup -match '^runner-backup/\d{8}-\d{6}-[0-9a-f]{7}$') $true
+
+    # What a rebase on the board host looks like from here: the commit this checkout followed is
+    # replaced by a copy of itself on a new base.
+    $c = New-Checkouts 'rebased'
+    $followed = New-Commit $c.board 'ours'
+    git -C $c.here fetch -q origin *> $null; git -C $c.here merge -q --ff-only $followed *> $null
+    git -C $c.board reset -q --hard HEAD~1 *> $null
+    $null = New-Commit $c.board 'theirs, from origin'
+    $rebased = New-Commit $c.board 'ours, rebased'
+    $r = Update-OwnCheckout -Repo $c.here -Sha $rebased
+    Check 'a board host that rebased: followed' "$($r.ok) $($r.state)" 'True rewound'
+    Check '... onto its new commit' "$(git -C $c.here rev-parse HEAD)".Trim() $rebased
+    Check '... the commit it had followed kept' "$(git -C $c.here rev-parse $r.backup)".Trim() $followed
 
     $c = New-Checkouts 'sideways'
     $target = New-Commit $c.board 'board went one way'
-    $null = New-Commit $c.here 'this went another'
-    Check 'diverged: refused' (Update-OwnCheckout -Repo $c.here -Sha $target).state 'not-ff'
+    $mine = New-Commit $c.here 'this went another'
+    $r = Update-OwnCheckout -Repo $c.here -Sha $target -FollowRewrites $false
+    Check 'diverged, with followRewrites off: refused' "$($r.ok) $($r.state)" 'False not-ff'
+    Check '... and nothing moved' "$(git -C $c.here rev-parse HEAD)".Trim() $mine
+    Check '... and no backup made' "$(git -C $c.here branch --list 'runner-backup/*')".Trim() ''
+
+    $c = New-Checkouts 'sideways-dirty'
+    $target = New-Commit $c.board 'board went one way'
+    $mine = New-Commit $c.here 'this went another'
+    Add-Content -Path (Join-Path $c.here 'f.txt') -Value 'a person editing' -Encoding ascii
+    $r = Update-OwnCheckout -Repo $c.here -Sha $target
+    Check 'a rewrite over modified tracked files: still refused' "$($r.ok) $($r.state)" 'False dirty'
+    Check '... and nothing moved' "$(git -C $c.here rev-parse HEAD)".Trim() $mine
+
+    $c = New-Checkouts 'prune'
+    foreach ($i in 1..12) { git -C $c.here branch ("runner-backup/20260101-0000{0:d2}-abcdef0" -f $i) *> $null }
+    Remove-OldBackups -Repo $c.here
+    $left = @(git -C $c.here for-each-ref --format='%(refname:short)' 'refs/heads/runner-backup/')
+    Check 'only the newest ten backups are kept' $left.Count 10
+    Check '... the oldest go first' ($left -contains 'runner-backup/20260101-000001-abcdef0') $false
+
+    Write-Host "== update-runner.ps1: finding the runner"
+    $upd = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'update-runner.ps1'), [ref]$null, [ref]$null)
+    foreach ($fn in $upd.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) { . ([scriptblock]::Create($fn.Extent.Text)) }
+    $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
+    . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Test-RunsScript' }, $false) | Select-Object -First 1).Extent.Text))
+    $standIn = Join-Path $root 'standin\data'
+    New-Item -ItemType Directory -Path $standIn -Force | Out-Null
+    $RunnerScript = Join-Path $standIn 'runner.ps1'
+    Set-Content -Path $RunnerScript -Value 'Start-Sleep 30' -Encoding ascii
+    $elsewhere = Join-Path $root 'elsewhere\runner.ps1'
+    New-Item -ItemType Directory -Path (Split-Path $elsewhere) -Force | Out-Null
+    Set-Content -Path $elsewhere -Value 'Start-Sleep 30' -Encoding ascii
+    Check 'no runner running: none found' @(Get-RunnerProcesses).Count 0
+    $p1 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
+    $p2 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $elsewhere) -PassThru -WindowStyle Hidden
+    try {
+        Start-Sleep -Milliseconds 800
+        $found = @(Get-RunnerProcesses)
+        Check 'this checkout''s runner is found' (@($found | ForEach-Object { $_.ProcessId }) -contains $p1.Id) $true
+        Check '... and another checkout''s runner.ps1 is not' (@($found | ForEach-Object { $_.ProcessId }) -contains $p2.Id) $false
+    }
+    finally { foreach ($p in $p1, $p2) { try { $p.Kill() } catch { } } }
+    Check 'no scheduled task runs a stand-in: none found' ($null -eq (Find-RunnerTask)) $true
+
+    Write-Host "== Read-HostConfig followRewrites\"
+    $hf = Join-Path $root 'host-follow.json'
+    Write-Json $hf '{ "name": "bravo-host", "projects": { "alpha": { "path": "D:\\src\\alpha" } } }'
+    Check 'followRewrites is on unless it says otherwise' (Read-HostConfig -Path $hf).followRewrites $true
+    Write-Json $hf '{ "name": "bravo-host", "followRewrites": false, "projects": { "alpha": { "path": "D:\\src\\alpha" } } }'
+    Check '... and off when it says false' (Read-HostConfig -Path $hf).followRewrites $false
 
     # ---- Invoke-RunnerSupervisor, with a stand-in for the runner ----------------
     Write-Host "== Invoke-RunnerSupervisor"
