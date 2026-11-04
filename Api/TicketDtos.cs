@@ -227,7 +227,10 @@ public record TicketDetailDto(
     TicketPlanDto? Plan = null,
     // A slice's walk-through: QA on the base branch, driving the story, with no code of its own.
     // Read by the worker off the claim (a detached checkout of the base) and by the QA skill.
-    bool Walkthrough = false);
+    bool Walkthrough = false,
+    // What this ticket's testing needs whatever its branch changes (Ticket.NeedsResources). Set by
+    // the owner from the drawer or the steward on its own ticket; readable by a worker, settable by none.
+    IReadOnlyList<string>? Needs = null);
 
 /// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
 public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
@@ -373,7 +376,8 @@ public static class TicketMapper
         t.PlanUnit is { } unit
             ? new TicketPlanDto(t.PlanKey ?? "", unit, StewardProgress.OutcomesOf(t))
             : null,
-        t.Walkthrough);
+        t.Walkthrough,
+        t.Needs);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

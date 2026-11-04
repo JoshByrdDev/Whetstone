@@ -128,6 +128,12 @@ export interface ProjectInfo {
    */
   skipClassroomAnalysisByDefault?: boolean;
   /**
+   * What a ticket's testing can ask for whatever its branch changes: the resources this project
+   * takes only for the branches that touch their paths (an emulator only a phone-app change gets).
+   * Empty, or absent from an older server, when there are none.
+   */
+  askableResources?: string[];
+  /**
    * A git project that delivers by merging the ticket's branch into its base rather than by pull
    * request. The PR button's dialog then ends in a merge. Absent from an older server: PRs.
    */
@@ -475,6 +481,8 @@ export interface TicketDetail {
   // The unit of a plan this ticket belongs to and the outcomes it carries. Set by a steward when it
   // files the ticket, or by the owner from the drawer. Null when it is in no plan.
   plan?: { key: string; unit: number; outcomes: string[] } | null;
+  // What this ticket's testing needs whatever its branch changes (ProjectInfo.askableResources).
+  needs?: string[] | null;
 }
 
 /** One thing an independent Classroom analysis raised, and refinement's ruling on it. */

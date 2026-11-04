@@ -201,6 +201,33 @@ public class ProjectConfig
         return null;
     }
 
+    /// <summary>
+    /// The resources a ticket can ask for whatever its branch changes (<see cref="Ticket.NeedsResources"/>):
+    /// those taken only for some branches, named as <see cref="ResourcePaths"/> names them.
+    /// </summary>
+    public IReadOnlyList<string> AskableResources =>
+        ResourcePaths.Where(kv => kv.Value.Length > 0).Select(kv => kv.Key).ToArray();
+
+    /// <summary>
+    /// <paramref name="names"/> read as a ticket's needs: trimmed, de-duplicated, each one of
+    /// <see cref="AskableResources"/>. Null with the reason when one is not.
+    /// </summary>
+    public (string? Value, string? Error) NeedsFrom(IEnumerable<string>? names)
+    {
+        var list = (names ?? Array.Empty<string>()).Select(n => n?.Trim() ?? "").Where(n => n.Length > 0)
+            .Distinct(StringComparer.Ordinal).ToList();
+        var askable = AskableResources;
+        if (list.FirstOrDefault(n => !askable.Contains(n, StringComparer.Ordinal)) is { } bad)
+            return (null, askable.Count == 0
+                ? $"This project takes every resource for every run that needs one, so there is nothing to ask for ('{bad}')."
+                : $"'{bad}' is not one this project takes only for some branches. It can be: {string.Join(", ", askable)}.");
+        return (list.Count == 0 ? "" : string.Join(",", list), null);
+    }
+
+    /// <summary>Whether a ticket naming <paramref name="needs"/> asks for <paramref name="resourceKey"/> (fully qualified, never host-qualified).</summary>
+    public bool Asks(IEnumerable<string> needs, string resourceKey) =>
+        needs.Any(n => Qualify(n).Equals(resourceKey, StringComparison.Ordinal));
+
     /// <summary>Whether any of <paramref name="changed"/> falls under one of <paramref name="prefixes"/>, read with forward slashes.</summary>
     public static bool Touches(IEnumerable<string> changed, IReadOnlyCollection<string> prefixes)
     {

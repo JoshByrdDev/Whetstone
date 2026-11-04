@@ -153,14 +153,19 @@ public class StewardTools
         s.AnswerBlockAsync(project, ticketId, answer);
 
     [McpServerTool(Name = "steward_amend"), Description(
-        "Correct a ticket that was itself wrong: a criterion that was false, two that disagree, or testing set the wrong way. " +
+        "Correct a ticket that was itself wrong: a criterion that was false, two that disagree, testing set the wrong way, or a " +
+        "resource its testing needs and was not given (a ticket blocked because its tester had no emulator is fixed here, then unblocked). " +
         "Give only what changes. It leaves a note on the ticket that a worker mid-flight will be shown.")]
     public static Task<StewardReply> Amend(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
         [Description("The new title, or omit to leave it.")] string? title = null,
         [Description("The new description in full, or omit to leave it.")] string? description = null,
-        [Description("True: its tester reads the diff and runs nothing. False: it is tested in full. Omit to leave it.")] bool? codeReviewOnly = null) =>
-        s.AmendAsync(project, ticketId, title, description, codeReviewOnly);
+        [Description("True: its tester reads the diff and runs nothing. False: it is tested in full. Omit to leave it.")] bool? codeReviewOnly = null,
+        [Description("Resources its testing needs whatever its branch changes, named as the project's resourcePaths names them, like " +
+                     "[\"android:emulator\"]. Such a resource is given only to a branch that changes its paths, so a ticket " +
+                     "whose acceptance criteria are proved on it (screenshots inside the phone app) but which changes none of its " +
+                     "code must name it, or its tester never gets it and can only block." + " The whole list: [] clears it. Omit to leave it.")] string[]? needs = null) =>
+        s.AmendAsync(project, ticketId, title, description, codeReviewOnly, needs);
 
     [McpServerTool(Name = "steward_create"), Description(
         "File a ticket against an AGREED unit of the plan. The agent that plans it has the repo and your description and " +
@@ -177,8 +182,12 @@ public class StewardTools
         [Description("Ids of tickets that must be merged before this one starts.")] int[]? dependsOn = null,
         [Description("Lowest, Low, Normal or High. Omit for Normal. Critical is the owner's.")] string? priority = null,
         [Description("True when nothing in the change can be exercised by running the app, so its tester reads the diff and " +
-                     "runs nothing and its own tests are the proof. When unsure, leave it false.")] bool codeReviewOnly = false) =>
-        s.CreateAsync(project, new StewardTicketDraft(unit, outcomes, title, description, dependsOn, priority, codeReviewOnly));
+                     "runs nothing and its own tests are the proof. When unsure, leave it false.")] bool codeReviewOnly = false,
+        [Description("Resources its testing needs whatever its branch changes, named as the project's resourcePaths names them, like " +
+                     "[\"android:emulator\"]. Such a resource is given only to a branch that changes its paths, so a ticket " +
+                     "whose acceptance criteria are proved on it (screenshots inside the phone app) but which changes none of its " +
+                     "code must name it, or its tester never gets it and can only block.")] string[]? needs = null) =>
+        s.CreateAsync(project, new StewardTicketDraft(unit, outcomes, title, description, dependsOn, priority, codeReviewOnly, needs));
 
     [McpServerTool(Name = "steward_set_outcome"), Description(
         "Record where one outcome of an agreed unit stands. This, and only this, is what calls an outcome done: set it when " +

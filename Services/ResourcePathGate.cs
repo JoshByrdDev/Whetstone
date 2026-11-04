@@ -6,7 +6,9 @@ namespace Whetstone.Services;
 /// <summary>
 /// Decides, for the claim, whether a ticket's run needs a resource its project takes only for some
 /// branches (<see cref="ProjectConfig.ResourcePaths"/>): it does when the branch changes something
-/// under one of the resource's paths.
+/// under one of the resource's paths, or when the ticket asks for it (<see cref="Ticket.NeedsResources"/>):
+/// a check whose proof is on the device changes nothing of the device's code. A walk-through takes
+/// every one, because it drives the whole slice on the base and has no branch of its own to read.
 /// <para>
 /// Every doubt reads as "needed". A ticket with no branch, a branch the board cannot read, a diff
 /// that fails: each takes the resource, because a run that needs one it was not given starts it on
@@ -44,7 +46,9 @@ public class ResourcePathGate
     public async Task<bool> NeededAsync(Ticket ticket, string resourceKey)
     {
         var plain = WorkerHostConfig.SplitHostResource(resourceKey)?.Resource ?? resourceKey;
-        if (_config(ticket.ProjectKey).PathsFor(plain) is not { } paths) return true;
+        var cfg = _config(ticket.ProjectKey);
+        if (cfg.PathsFor(plain) is not { } paths) return true;
+        if (ticket.Walkthrough || cfg.Asks(ticket.Needs, plain)) return true;
         if (string.IsNullOrWhiteSpace(ticket.Branch)) return true;
 
         var key = $"{ticket.ProjectKey}|{ticket.Branch}";

@@ -1630,6 +1630,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime?>("MergedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("NeedsResources")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Phase")
                         .IsRequired()
                         .HasMaxLength(32)

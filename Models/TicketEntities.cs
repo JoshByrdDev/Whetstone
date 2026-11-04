@@ -368,6 +368,30 @@ public class Ticket
     public bool SkipQaTesting { get; set; }
 
     /// <summary>
+    /// Resources this ticket's testing needs whatever its branch changes, comma-separated and named
+    /// as the project's <c>resourcePaths</c> names them (<c>android:emulator</c>). Only those are
+    /// accepted: a resource every run of a phase takes needs no asking for.
+    /// <para>
+    /// The paths answer "does this change need the device"; this answers "does this ticket's proof".
+    /// A layout check whose acceptance criteria ask for screenshots inside a phone app changes no
+    /// file of the app, so by its paths it never gets the emulator, and its QA run can only block.
+    /// It happened twice in one plan before this existed. Set by whoever writes the acceptance
+    /// criteria - the owner, or the steward filing or amending its own ticket - and never by a
+    /// worker: a run that could ask for a lease mid-run would be choosing what it waits on.
+    /// </para>
+    /// </summary>
+    public string? NeedsResources { get; set; }
+
+    /// <summary>The names in <see cref="NeedsResources"/>.</summary>
+    [System.ComponentModel.DataAnnotations.Schema.NotMapped]
+    public IReadOnlyList<string> Needs => ParseNeeds(NeedsResources);
+
+    public static IReadOnlyList<string> ParseNeeds(string? raw) =>
+        string.IsNullOrWhiteSpace(raw) ? Array.Empty<string>()
+            : raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.Ordinal).ToArray();
+
+    /// <summary>
     /// A slice's walk-through, filed by the board once every other outcome of the slice is done
     /// (docs/plans-as-slices.md, section 4). It changes no code: it is tested on the base branch
     /// as it stands, by a QA run that drives the slice's story end to end and captures each step.

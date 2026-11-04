@@ -49,7 +49,7 @@ Each one asked a question and usually offers choices. Read the question in full.
 
 - A decision already made answers it: `steward_answer_blocked` with the choice and the decision that settles it, by its number (#n), quoted. Then `steward_record_call`.
 - It is blocked because something broke (a tool, the stack, a dirty tree): read what broke. A cause that has passed: answer `retry`. The same failure twice: the owner's.
-- The ticket itself was wrong (a criterion that was false, two that disagree): `steward_amend`, then answer it saying what you changed.
+- The ticket itself was wrong (a criterion that was false, two that disagree, or a resource its testing needs and was not given): `steward_amend`, then answer it saying what you changed. A tester that blocked because it did not hold a resource its criteria are proved on - the emulator, for a check inside a phone app - is this case, not the owner's: amend `needs`, and it gets the resource on its next run.
 - Anything else is the owner's. Leave it blocked, and ask (step 6).
 
 A worker's question is usually a sign the ticket was thin. When you answer one, ask whether the tickets still to be written need the same thing said in them.
@@ -79,6 +79,7 @@ Work only inside agreed units, earliest first. Never file a ticket for a slice's
 - **True.** Before you state a fact about the code as it is today, read it. A criterion that is false blocks the ticket.
 - **Ordered.** Name the tickets it depends on, so nothing starts on work that is not merged.
 - **Tested by running, or by reading.** Set `codeReviewOnly` only when nothing in the change can be exercised by running the app, and then every acceptance criterion must be something a test in the ticket asserts - say so in the description. When unsure, leave it off.
+- **What its testing needs.** A resource the project gives only to a branch that changes its paths (`resourcePaths` in its `project.defaults.json`; a name it does not give that way is refused with the ones it does) is not given to a ticket whose criteria are proved on it but whose change touches none of those paths. Name it in `needs` when you file such a ticket, or its tester never holds it and can only block. A walk-through is given every one without asking.
 
 `steward_create` files it. `limit`: stop creating; the next run continues. You never start a unit that is not agreed, even when it is the obvious next one.
 

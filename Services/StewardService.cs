@@ -21,7 +21,8 @@ public record StewardReply(string Answer, string? Why = null, object? Data = nul
 /// <summary>What a steward wants filed as a ticket.</summary>
 public record StewardTicketDraft(
     int Unit, IReadOnlyList<string> Outcomes, string Title, string Description,
-    IReadOnlyList<int>? DependsOn = null, string? Priority = null, bool CodeReviewOnly = false);
+    IReadOnlyList<int>? DependsOn = null, string? Priority = null, bool CodeReviewOnly = false,
+    IReadOnlyList<string>? Needs = null);
 
 /// <summary>What a steward wants to put to the owner.</summary>
 /// <param name="Touches">The register's decisions the question bears on; empty when none does. Required.</param>
@@ -1096,19 +1097,27 @@ public partial class StewardService
         return new StewardReply("answered", null, new { to = to.ToString() });
     }
 
-    /// <summary>Correct a ticket the steward itself got wrong: its title, its description, how it is tested.</summary>
+    /// <summary>Correct a ticket the steward itself got wrong: its title, its description, how it is tested, what its testing needs.</summary>
     public async Task<StewardReply> AmendAsync(string projectKey, int ticketId, string? title, string? description,
-        bool? codeReviewOnly, CancellationToken ct = default)
+        bool? codeReviewOnly, IReadOnlyList<string>? needs = null, CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
         if (cfg is null) return off!;
         title = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
         description = string.IsNullOrWhiteSpace(description) ? null : description;
-        if (title is null && description is null && codeReviewOnly is null)
-            return Refuse("bad-request", "Give a title, a description, how it is tested, or more than one.");
+        if (title is null && description is null && codeReviewOnly is null && needs is null)
+            return Refuse("bad-request", "Give a title, a description, how it is tested, what its testing needs, or more than one.");
+        string? needsValue = null;
+        if (needs is not null)
+        {
+            var (v, err) = cfg.NeedsFrom(needs);
+            if (err is not null) return Refuse("bad-request", err);
+            needsValue = v;
+        }
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
         if (t is null) return no!;
-        if (!string.IsNullOrEmpty(t.IssueKey))
+        // What its testing needs is not the ticket's words, so a linked ticket's can still be set.
+        if (!string.IsNullOrEmpty(t.IssueKey) && (title is not null || description is not null || codeReviewOnly is not null))
             return Refuse("refused", "This ticket's words belong to its tracker issue, and that is the owner's to edit.");
 
         var what = string.Join(" and ", new[]
@@ -1116,12 +1125,16 @@ public partial class StewardService
             title is null ? null : "title",
             description is null ? null : "description",
             codeReviewOnly == true ? "testing (now read, not run)" : codeReviewOnly == false ? "testing (now tested in full)" : null,
+            needsValue is null ? null
+                : needsValue.Length == 0 ? "testing's needs (now nothing beyond what its branch takes)"
+                : $"testing's needs (now {needsValue.Replace(",", ", ")}, whatever its branch changes)",
         }.Where(x => x is not null));
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"amend ticket {ticketId}: {what}");
 
         // The plan line is the steward's own and is what ties the ticket to its outcomes on a read.
         if (description is not null && PlanLine(t) is { } line && !description.Contains(line)) description = $"{description.TrimEnd()}\n\n{line}";
-        await _tickets.UpdateAsync(ticketId, title, description, null, null, null, null, skipQaTesting: codeReviewOnly);
+        await _tickets.UpdateAsync(ticketId, title, description, null, null, null, null, skipQaTesting: codeReviewOnly,
+            needsResources: needsValue);
         await _tickets.AddCommentAsync(ticketId, $"Amended the {what}.", AuthorKind.Steward);
         return new StewardReply("amended");
     }
@@ -1179,6 +1192,8 @@ public partial class StewardService
         var dependsOn = (d.DependsOn ?? Array.Empty<int>()).Distinct().ToList();
         if (dependsOn.Where(id => all.All(t => t.Id != id)).ToList() is { Count: > 0 } missing)
             return Refuse("bad-request", $"It depends on tickets that do not exist here: {string.Join(", ", missing)}.");
+        var (needs, needsError) = cfg.NeedsFrom(d.Needs);
+        if (needsError is not null) return Refuse("bad-request", needsError);
 
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"create \"{title}\" for unit {unit.Number} {string.Join(", ", outcomes)}"
@@ -1191,6 +1206,7 @@ public partial class StewardService
         row.PlanUnit = unit.Number;
         row.PlanKey = cfg.Steward.Plan.Key;
         row.PlanOutcomes = string.Join(", ", outcomes);
+        row.NeedsResources = string.IsNullOrEmpty(needs) ? null : needs;
         row.Description = $"{d.Description!.TrimEnd()}\n\n{PlanLine(row)}";
         s.CreatedCount++;
         await _db.SaveChangesAsync(ct);

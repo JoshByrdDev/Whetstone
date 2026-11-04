@@ -653,10 +653,14 @@ public class TicketService
     public async Task<Ticket?> UpdateAsync(int id, string? title, string? description, string? issueKey, string? issueUrl, string? branch, string? projectKey,
         bool? requiresSpeculationReview = null, bool? requiresImplementationReview = null, string? masterNotes = null,
         bool? skipQaTesting = null, TicketPriority? priority = null, bool? shortLoopReview = null,
-        bool? skipClassroomAnalysis = null)
+        bool? skipClassroomAnalysis = null, string? needsResources = null)
     {
         var t = await _db.Tickets.FindAsync(id);
         if (t is null) return null;
+
+        // What testing needs whatever the branch changes. Last on the list for the same reason as
+        // priority: it decides what the run waits on, so no positional MCP call reaches it.
+        if (needsResources is not null) t.NeedsResources = needsResources.Length == 0 ? null : needsResources;
 
         if (requiresSpeculationReview is not null) t.RequiresSpeculationReview = requiresSpeculationReview.Value;
         if (requiresImplementationReview is not null) t.RequiresImplementationReview = requiresImplementationReview.Value;

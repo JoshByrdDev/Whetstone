@@ -59,6 +59,8 @@ export const updateTicket = (id: number, body: Partial<{
   title: string; description: string; issueKey: string; issueUrl: string; branch: string; projectKey: string;
   requiresSpeculationReview: boolean; requiresImplementationReview: boolean; masterNotes: string;
   skipQaTesting: boolean; priority: Priority; shortLoopReview: boolean; skipClassroomAnalysis: boolean;
+  // The whole list; [] clears it.
+  needs: string[];
 }>) => fetch(`/api/tickets/${id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);
 
 export const deleteTicket = (id: number) =>
