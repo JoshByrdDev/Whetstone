@@ -26,6 +26,20 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
 - **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
 
+## Under PR review - only when your prompt says **Under PR review**
+
+Most tickets are never in this state, and this section does not apply to them. When your prompt has an **Under PR review** line - or `classify_escape` answers with a `reviewedOn` - this branch is in a pull request someone has read, and the commits that line names (`dir@sha` per repo on a workspace of several) are what they read. Rewriting those commits loses the reviewer's comment threads and turns the owner's next push into a force push, so the branch works in rounds instead of in one rewritten commit:
+
+- **The reviewed commits are fixed.** No `git commit --amend`, squash, rebase or `reset` that reaches them. `git log --oneline <reviewed sha>..HEAD` is the round; nothing below it is yours to change.
+- **A round is one commit on top of them, in each repo it changes.** A repo the reviewer has not seen yet - one this round touches for the first time - is the usual one commit against its base ref.
+- **Do not rebase onto the base ref, even when it has moved.** A rebase replaces exactly the commits this section protects. If the branch no longer merges, say so in an `add_comment` naming the files and leave it to the owner; the heartbeat does not rebase it either.
+
+In this phase:
+
+- **Classify the send-back before you commit anything.** `classify_escape` with `PrReview` is what puts a ticket under PR review, at the build that was sent back, and whether it is decides the shape of every commit you make. Its answer says so.
+- **The first fix you commit makes the round's commit; everything after it in the same round amends it** - each later work item, and any later run before the ticket is back at review (a QA bounce, an owner's note): `git commit --amend`, never onto the reviewed commit. Tick items off as usual: an amended round commit is committed work.
+- **Write its message in the repo's own style for review fixes** - the conventions file says, or the history of `<base-ref>` shows how this team marks one - and about this round only: what the reviewer asked for and what changed for it. It is read beside the commit they already reviewed, so it does not restate the feature.
+
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` to read the ticket and its `workItems`. Items with `done: false` are what you implement; `done: true` are already complete - skip them.
@@ -116,6 +130,16 @@ Where a work item's real target is a deployed environment - a row to delete on p
 
 Then, as its own work item, the **runbook `add_comment`**: what is wrong, the ordered steps, what each is run against, what they should see after each one, how to verify, how to roll back, and what should make them stop. Write it for someone who has not read this ticket. That comment and the committed artifact together are the deliverable - the ticket is complete with them and hands off through the normal phases, exactly like one that shipped a feature.
 
+#### Standing in for a service this machine cannot reach
+
+Where a ticket talks to a service beyond this machine - a vendor's API, another team's system - the code you build for it runs here against a stand-in: a fake client, a stub handler, fixtures replayed from disk. That stand-in is a claim about the real service, written by the same run that wrote the code calling it. Every QA pass after you drives the stand-in and never the service, so a wrong claim in it is confirmed on every pass and found by somebody else, against the real thing.
+
+- **Know where each behaviour comes from.** For everything the stand-in does with what it is sent - the formats it accepts, how it matches a search, what it trims or pads, how it pages, what an error looks like - the source is the service's documentation, a response recorded from the real service (the master notes hold any that someone has seen), or nothing. Nothing is a guess.
+- **Where the source is silent, be strict.** Pass input through as it was sent and match it literally; never accept two forms where the documentation shows one. A forgiving stand-in hides the question - the app sends `12-3456789`, the stand-in finds it, and nobody asks whether the service would. A strict one makes the app's own inputs fail here, where they cost a fix rather than an incident.
+- **Name the guesses.** In that item's `add_comment`, list each behaviour the app relies on that is a guess, as *unproven against the real service*, with the source beside every one that is not.
+- **Write the contract check, as a work item of its own.** A short script that someone with the service's credentials runs against its non-production environment: each request it sends, which guess that request settles, and what a matching answer looks like. It asks for any secret at the prompt and prints none. It goes in an `add_comment` as a fenced block, or where this repo's conventions keep developer scripts if they name such a place - it is a tool for that person, not part of the change. You never run it: this pipeline does not contact the service, and that is not a step you have left undone.
+- **A result someone recorded outranks your guess.** Where the master notes say what the real service did, build the app and the stand-in to match it, and say so.
+
 ### 3. Post progress
 `add_comment` with a summary of what you changed (files/areas touched, notable decisions).
 
@@ -124,6 +148,19 @@ Call `set_implementation_summary` with a short, plain-language description of th
 
 ### 5. Commit locally (never push to origin)
 Ensure **all** your changes are committed to the ticket's branch - QA and review must run against a clean, committed tree. Prefer atomic commits per work item, messaged as above; at minimum, `git status --porcelain` must be empty before you hand off. **Never run `git push`** (or `git push origin ...`): the heartbeat workflow is entirely local - pushing to origin is out of scope and not permitted.
+
+#### A ticket sent back from review
+
+When someone sent this ticket back from `NeedsReview` or `Done` - the owner after trying it, or a reviewer on the pull request - the pipeline called the work finished and a person disagreed. That is an escape, and this run is the one that knows what was missed. Before you hand off, classify it with **`classify_escape`**: the kind, who found it (`Owner`, `PrReview` or `Other`), and a `why` of one or two sentences. `set_phase` out of `Implementing` is refused until you have. Do it first, before you commit anything: classifying it as `PrReview` puts the ticket under PR review, and that changes the shape of every commit this run makes (**Under PR review**, above).
+
+- **`OutsideContract`** - a stand-in for, or an assumption about, a service this machine cannot reach was wrong.
+- **`InheritedBehaviour`** - old behaviour or data that a new rule depends on: a ported screen's choice, a field one path never collects.
+- **`UiPolish`** - how a screen looks or moves: a size that jumps, columns that do not line up, something clipped.
+- **`Logic`** - a plain defect: the code does the wrong thing.
+- **`RequirementChange`** - the owner asked for something the ticket never asked for.
+- **`Other`** - a miss that is none of the above.
+
+**A `RequirementChange` has to quote its evidence.** Its `why` must quote, in double quotes, what the owner's note asks for that the description and the master notes did not; the tool refuses one that quotes nothing. The pipeline is judging its own misses here, and calling a miss a change of mind is the easy way out of one. If you cannot find words in the note that nothing earlier asked for, it was not a change of mind: it was a miss, and one of the other kinds.
 
 ### 6. Hand off
 - `set_phase` to `NeedsImplementationReview`. That is the only legal move from `Implementing`: QA is mandatory in this pipeline, so you can never jump to `NeedsQa`, `NeedsReview` or `Done` yourself.

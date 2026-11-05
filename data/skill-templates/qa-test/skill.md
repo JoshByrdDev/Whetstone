@@ -96,6 +96,8 @@ Read it against three things: the ticket's `workItems` (what was planned), the d
   - *A rule the diff takes away.* A dropped index or constraint, a validation narrowed, a required field made optional, a uniqueness assumption relaxed. The database enforced it against *every* writer, including the ones that carry no check of their own because they never needed one - so the call sites this breaks are the ones with nothing to grep for. Find the writers to that column or field yourself and confirm each is either newly guarded or genuinely fine.
   - *A rule the diff does not inherit.* New code that saves, resolves or lists something existing code already serves to the same user - the ids a picker offers, the rows a report counts, the states a workflow allows - through a query of its own. Open the existing one and compare the filters. A narrower or wider set on the new side is a record the user can create but not see, or be shown but not pick.
 
+  - *Data a new rule reads.* A rule the diff adds that matches, decides or deduplicates on a field - and every path that writes that field, new and old. Open each form, import and endpoint that creates the record and confirm it collects what the rule needs. A form ported from an older screen keeps that screen's choices, including which fields it shows when; a rule that leans on a field one path never asks for is weaker on exactly the records that path creates, and nothing in the diff shows it.
+  - *A stand-in for a service this machine cannot reach.* Compare what the stand-in accepts with what the app sends it. Every behaviour the app relies on that the stand-in grants without a source - a second format accepted, input normalised, a looser match - is a guess, and the implementation must have named it and written a contract check someone can run against the real service. A guess left unnamed, or no contract check, goes back.
   Name every seam you checked in your Part A comment, with what the unchanged side assumes - however short the list. A seam you did not name is one you did not check.
 - **Behaviour nobody asked for.** Something a user sees, or a business rule, that the description, its attachments, the master notes and the owner's answers do not ask for, and no work item marked `expansion` covers. QA items do not count as asking - speculation wrote them. `Blocked`, naming the behaviour and asking keep or remove with remove `recommended`: passing it hands the owner the same question a full QA cycle later.
 - Anything left behind: debug logging, commented-out code, a stray file, a TODO written during the work.
@@ -222,6 +224,18 @@ Reach for it because the item cannot be driven, never because driving it is slow
 
 **Record each outcome as you get it, never in a batch at the end.** An outcome you are holding in your head is invisible to anyone watching the board, and lost outright if the run is cut short - a QA pass that tested eleven of fourteen items and died has to start again from nothing if it recorded none of them. Write the note at the same time as the status, while you can still see what you observed; a `Failed` you come back to label later gets a vaguer note than the one you would have written at the time.
 
+### B4a. Use what changed
+
+The items say what to prove. They cannot say everything that would make the owner send a screen back. Once every item has an outcome, and only when the diff changes something a person sees, spend a few minutes using the changed screens the way the person they are for would:
+
+- **In motion, not only at rest.** Type through the inputs, scroll and page the lists, go between steps and back, let the slow parts be slow. Some of what goes wrong only shows between states - a box that changes size on every keystroke, rows that jump when results arrive - and no screenshot of a finished state shows it.
+- **Against this app's own screens, not a list of rules.** Open a screen that already does something similar and compare. What this app already does well is the standard; a new screen that falls short of it is a finding.
+- **At this project's widths** - the line at the end of this step.
+- **Report it as an observation, not a failure.** Anything a careful reviewer on this team would send back - something that jumps, misaligns, clips, reads awkwardly, or behaves unlike the app's neighbouring screens - goes in your hand-off comment under **Observations for the owner**, one line each with where to see it. An observation fails no item and sends nothing back: the owner decides which are worth a rework. A defect is still a defect - broken, unreachable or wrong goes through the items and A3 as before - and an observation that makes an item's own words untrue is that item's failure.
+- **How it is done, never what it lacks.** A feature the screen does not have is not an observation; it is the owner's question, as Part A says.
+
+**This project's widths:** none named - use the desktop width you already test at.
+
 ### B5. Capture QA shots - THE HAND-OFF WILL NOT GO THROUGH WITHOUT THIS
 
 While the app is still open on the finished work, capture **3 to 6** screenshots that best show the completed feature working, and attach them with `set_qa_shots`. These are the at-a-glance visual proof of what you QA'd - not per-test-step captures, but the money shots of the delivered result. They are the only part of your run a reviewer takes in at a glance, and the thing refinement checks the ticket's record against.
@@ -247,7 +261,7 @@ Use `mcp__playwright__browser_close` when done. Screenshots belong in the screen
 
 # Hand off
 
-- `add_comment` summarizing the run: what the code review covered, then the QA outcome (passed / failed / blocked, with details for non-passes) if you ran Part B.
+- `add_comment` summarizing the run: what the code review covered, then the QA outcome (passed / failed / blocked, with details for non-passes) if you ran Part B, with every **Observations for the owner** line from B4a or a line saying there were none.
 - **Code-review-only ticket, review passed** -> `set_phase` to `NeedsRefinement`. Say in your comment that this ticket was code-review-only and no functional QA was run, so the reviewer is never left guessing why there are no screenshots. Nothing else is required of you: the shots requirement does not apply to these tickets.
 - **Every item Passed on this run, or carried over under B3c** -> `set_phase` to `NeedsRefinement`. Say in your comment which items you carried and which you drove. If that call comes back refused it is telling you one of two things, and it names which: either step B5 never happened (do B5, then call `set_phase` again with the same phase), or the checklist is not finished - it lists the item ids still untested or carrying an expired pass. Go and run those. Do not go looking for a different phase to move to, and do not treat the refusal as a bug in the tool: it is the one part of this phase that cannot be talked out of.
 - **Any Failed or Blocked, or a Part A finding that goes back** -> `set_phase` to `NeedsImplementation` (re-enters the pipeline so the failures get fixed). An acceptance criterion found unmet lands here too, even when every item you were handed passed: A3 makes it a `Failed` item, and it goes back rather than to the reviewer as a note.

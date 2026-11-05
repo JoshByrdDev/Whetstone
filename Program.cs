@@ -293,6 +293,12 @@ using (var scope = app.Services.CreateScope())
     var backfilled = await scope.ServiceProvider.GetRequiredService<MetricsService>().BackfillTransitionsAsync();
     if (backfilled > 0)
         app.Logger.LogInformation("Backfilled {Count} phase transition(s) from historical comments.", backfilled);
+
+    // One-off, likewise: the escapes from before the escape log, read from the phase history's
+    // person-made moves (see BackfillEscapesAsync). No-ops once any escape is logged.
+    var escapes = await scope.ServiceProvider.GetRequiredService<TicketService>().BackfillEscapesAsync();
+    if (escapes > 0)
+        app.Logger.LogInformation("Backfilled {Count} escape(s) from the phase history.", escapes);
 }
 
 // Clear registrations for worktrees whose directories are gone. The user is free to delete a
@@ -333,6 +339,7 @@ app.MapHub<HeartbeatHub>("/hub/heartbeat");
 
 // Local ticketing API (tickets, work items, QA items, comments, transitions).
 app.MapTicketEndpoints();
+app.MapEscapeEndpoints();
 
 // The Classroom: on-demand teaching analyses of a ticket. Read-only over the pipeline.
 app.MapAnalysisEndpoints();

@@ -103,6 +103,8 @@ export interface PrPreflightResponse {
   multiRepo?: boolean;
   /** One entry per repo, in config order; a list of one on a project that is one repo. */
   repos?: RepoPreflight[];
+  /** Under PR review: what the reviewer last saw (sha, or dir@sha per repo). The dialog then shows the diff since it, asks for no rebase, and pushes as a fast-forward. */
+  reviewedOn?: string | null;
 }
 
 /** One repo of a ticket, as the PR dialog opens on it. */
@@ -119,6 +121,9 @@ export interface RepoPreflight {
   preflight: PrPreflight | null;
   /** This repo's own draft, which names the other repos the change is in. */
   suggestedDescription: string | null;
+  /** Under PR review: the commit the reviewer last saw in this repo, and what is new on the branch since it. */
+  reviewedSha?: string | null;
+  sinceReviewed?: PrPreflight | null;
 }
 
 /** Where a ticket stands in each of its repos, from local reads - see /git/repos. */
@@ -156,7 +161,7 @@ export interface PrCreateResult {
   pushed: boolean;
   url?: string | null;
   /** "gh" — the PR exists. "web" — pushed, and url is the prefilled form to finish on. */
-  mode: 'gh' | 'web' | 'none';
+  mode: 'gh' | 'web' | 'none' | 'push';  // 'push': a round of a ticket under PR review, pushed with no PR raised
   output: string[];
   /** The form's link could not carry the description (too long for the host), so it must be pasted in. */
   descriptionLeftOut?: boolean;
@@ -264,6 +269,11 @@ export async function rebaseTicket(id: number, repo?: string): Promise<RebaseRes
 
 export async function forcePushTicket(id: number, repo?: string): Promise<ForcePushResult> {
   return post<ForcePushResult>(`/api/tickets/${id}/git/force-push${repoQuery(repo)}`);
+}
+
+/** Push a round of a ticket under PR review: a plain push, refused unless it is a fast-forward. */
+export async function pushRound(id: number, repo?: string): Promise<ForcePushResult> {
+  return post<ForcePushResult>(`/api/tickets/${id}/git/push${repoQuery(repo)}`);
 }
 
 /** Where a ticket stands in each of its repos. Local reads only, so cheap enough for one card. */

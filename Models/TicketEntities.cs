@@ -491,6 +491,35 @@ public class Ticket
     public DateTime? MergedAt { get; set; }
 
     /// <summary>
+    /// This ticket's branch is in a pull request someone has reviewed, and these are the commits
+    /// they last saw: the branch head per repo, in the shape <see cref="QaCommits"/> writes. Null
+    /// when the ticket is not under review - which is every ticket until its owner opens a PR.
+    /// <para>
+    /// Before review the pipeline keeps a branch to one commit per repo, squashing and rebasing as
+    /// it goes. Once someone has commented on a PR, rewriting what they read would lose their
+    /// threads and turn every push into a force push, so a ticket under review works in rounds
+    /// instead: the reviewed commits stay byte for byte, each round adds one commit on top per
+    /// touched repo, a bounce inside the round amends that commit, and nothing rebases it. The
+    /// worker reads this off the claim (data/worker.ps1, Compress-ReviewRound) and the prompt
+    /// names it to the run.
+    /// </para>
+    /// <para>
+    /// Set by the owner from the drawer (a REST route with no tool behind it), which records each
+    /// repo's branch head or a point they name, and by a run classifying a send-back as found in
+    /// PR review (classify_escape with PrReview), which records the build that was sent back - the
+    /// commits the reviewer was looking at. Not the review track's <see cref="ReviewTarget"/>,
+    /// which is someone else's branch read by this board; this is this ticket's own branch read by
+    /// someone else. Cleared when the ticket is Done or merged.
+    /// </para>
+    /// </summary>
+    public string? ReviewedOn { get; set; }
+
+    /// <summary>When <see cref="ReviewedOn"/> was last set. Null when the ticket is not under review.</summary>
+    public DateTime? ReviewedOnAt { get; set; }
+
+    public bool UnderReview => !string.IsNullOrWhiteSpace(ReviewedOn);
+
+    /// <summary>
     /// This ticket fixes a bug. When it lands, the board blames the lines its fix changed back to
     /// the tickets that wrote them (see <see cref="BugLink"/>). A field rather than a label because
     /// it drives what the board does, and labels are promised never to. The owner's call: no MCP

@@ -73,6 +73,23 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
 - **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
 
+## Under PR review - only when your prompt says **Under PR review**
+
+Most tickets are never in this state, and this section does not apply to them. When your prompt has an **Under PR review** line - or `classify_escape` answers with a `reviewedOn` - this branch is in a pull request someone has read, and the commits that line names (`dir@sha` per repo on a workspace of several) are what they read. Rewriting those commits loses the reviewer's comment threads and turns the owner's next push into a force push, so the branch works in rounds instead of in one rewritten commit:
+
+- **The reviewed commits are fixed.** No `git commit --amend`, squash, rebase or `reset` that reaches them. `git log --oneline <reviewed sha>..HEAD` is the round; nothing below it is yours to change.
+- **A round is one commit on top of them, in each repo it changes.** A repo the reviewer has not seen yet - one this round touches for the first time - is the usual one commit against its base ref.
+- **Do not rebase onto the base ref, even when it has moved.** A rebase replaces exactly the commits this section protects. If the branch no longer merges, say so in an `add_comment` naming the files and leave it to the owner; the heartbeat does not rebase it either.
+
+In this phase:
+
+- **Do not squash to one.** The expected shape is the reviewed commits, untouched, plus one commit for each round since - normally one, this round's. Wherever steps 2 and 4 say "one commit", they mean that shape: collapse this round's commits into one with `git reset --soft <reviewed sha>` then `git commit`, with the step 2 tree-hash check, and never reset past the reviewed sha.
+- **Check the reviewed commits are the ones the reviewer saw**, by sha: `git merge-base --is-ancestor <reviewed sha> HEAD` must exit 0. If it does not, something rewrote them; put them back with the same `reset --soft <reviewed sha>` and one commit on top (the tree hash must not change), and say so in your hand-off comment.
+- **Write the round commit's message for this round only**, in the repo's own style for review fixes (the conventions file, or the history of `<base-ref>`). The step 2 rules still hold for its body, except that it describes the round's diff against the reviewed sha, not the whole branch; where the repo marks a review fix in its subject, that marker is the repo's convention, not narration of this pipeline.
+- **Do not rebase - check that it merges.** `git merge-tree --write-tree --name-only HEAD <base-ref>` exits 0 when it does. When it does not, do not resolve it: `add_comment` naming the files and saying the branch is under review so it was not rebased, then hand off as you would have.
+- **The merged-PR check in step 2 still applies.** Its "squash and say the branch needs a force push" bullet does not: under review nothing needs a force push.
+- **In your hand-off comment, name what is new for the reviewer** - `git log --oneline <reviewed sha>..HEAD` in each repo - and that pushing it is a fast-forward.
+
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` to read the ticket: its `description`, `workItems` (should be `done`), `qaItems` (should be `Passed`, with notes), `qaShots` (the captioned screenshots QA attached), `implementationSummary`, and any linked `issueKey`.
@@ -95,7 +112,7 @@ Do **not** run `git checkout`, `git switch`, or create a branch. Other checkouts
 
 ### 2. Tidy the commit history - THE MAIN JOB (local only, never push)
 
-**Do this first, every time.** It is not optional and it is not conditional on the history "looking messy". A branch reaches this phase as the implementation commit plus a trail of fix-ups from QA bounces - each one a fix to the commit before it, none of them meaningful to anyone reading the history later. Those belong folded into the work they fix. The rule for this pipeline is **one ticket, one commit** - on a workspace of several repos, one commit in each repo the ticket changed, with every step below run once per repo against that repo's own `<base-ref>`.
+**Under PR review, the shape is different: read that section first.** **Do this first, every time.** It is not optional and it is not conditional on the history "looking messy". A branch reaches this phase as the implementation commit plus a trail of fix-ups from QA bounces - each one a fix to the commit before it, none of them meaningful to anyone reading the history later. Those belong folded into the work they fix. The rule for this pipeline is **one ticket, one commit** - on a workspace of several repos, one commit in each repo the ticket changed, with every step below run once per repo against that repo's own `<base-ref>`.
 
 It goes first because it is the one thing no other phase does. If the run is cut short after this step, the branch is still in good shape.
 
@@ -155,6 +172,8 @@ A paperwork check on the ticket, not a re-test of the app. You are asking "does 
 - **QA shots:** the ticket should carry 3-6 captioned screenshots showing the delivered result, and fewer than three only where the work genuinely is one screen. Check they exist and that the captions describe this ticket's work rather than something generic. *No shots on visible UI work, or captions that say nothing -> **NeedsQa**.*
 - **Description / acceptance criteria:** skim the diff and satisfy yourself each one is addressed somewhere. Absence is what you are looking for - a requirement with no corresponding change - not a proof of correctness for the ones that are there. *An unaddressed requirement -> **NeedsImplementation**.*
 - **Test data that would ship:** a fixture, seed or sample row added in a migration, a seed script, or anything else that runs when this code is deployed. Find what keeps it out of production - the tag, profile or environment check this repo's other fixtures sit behind - and confirm it in the diff. This is a reading check and has to be: every run QA made was against a development database, so an ungated fixture passes QA exactly like a gated one. A guard in the script that skips when its data is missing is not a gate. The reverse is also wrong - a schema change or reference data production needs must not be gated. *Test data with nothing stopping it reaching production, or a real change hidden behind the gate -> **NeedsImplementation**, naming the file and the gate.*
+- **A stand-in for a service this machine cannot reach:** where the branch adds or changes one, confirm the implementation named its guesses and wrote the contract check. *Either missing -> **NeedsImplementation**.* A contract check the master notes do not yet record someone running is not a reason to hold the ticket: put it first in your hand-off comment's notes for the reviewer, with the guesses it settles - it is the one test of this ticket the pipeline could not run.
+- **QA's observations:** copy every **Observations for the owner** line from the last QA pass into your hand-off comment, unchanged, so the owner meets them at review rather than digging through QA's comment. *They send the ticket nowhere.*
 - **Leftovers in the diff:** debug output, commented-out code, dead code, stale or misleading comments, stray files (screenshots, logs, `.env`, editor droppings) that should never have been committed. *Yours to fix, below - unless removing it changes behaviour, in which case it is code, not a leftover.*
 
 Text-only tidy-ups you may make yourself: a stale comment, a leftover debug line, a stray file. Fix it, then fold it into the single commit with **`git commit --amend`**. Never plain `git commit` in this phase - once step 2 has left the branch at one commit, a bare `git commit` silently makes it two again, and every later step reads as if the history were still clean. If the amend changes the tree (it will - you changed a file), that is expected here; the tree-hash check belongs to the squash in step 2, not to this.
@@ -182,7 +201,7 @@ git log --oneline <base-ref>..HEAD
 
 **Exactly one commit, with a message you wrote, or you are not finished** - in each repo the ticket changed, on a workspace of several. If there is more than one, collapse it now with the step 2 recipe (or `git reset --soft HEAD~1 && git commit --amend` for the common two-commit case) before doing anything else. If there is one commit but its message is machine-written - a bare subject with no body, or a subject truncated with a trailing `...` - the heartbeat wrote it as a safety net for a phase that forgot to commit, and replacing it is your job: `git commit --amend`.
 
-Do not `set_phase` until this check passes.
+Do not `set_phase` until this check passes. Under PR review the check is the reviewed commits plus one per round, never one in all.
 
 ### 5. Write the learning brief - THE OTHER EXIT GATE
 

@@ -10,6 +10,7 @@ import { Empty, Stat, ago, compact, mins, pct, phaseName, reasonOf, useJson } fr
 import { PhaseTable, Rework, TimeSplit } from './Phases';
 import { DiffAndRebase, SplitBy, Tools, Versions, type RunFilter } from './PhaseDetail';
 import { Daily, FirstPassQa, QaRulings } from './Quality';
+import { Escapes } from './Escapes';
 import { RunList } from './Runs';
 import { Bugs } from './Bugs';
 import { ExperimentResults } from './ExperimentResults';
@@ -203,6 +204,7 @@ export function MetricsPanel() {
             </div>
 
             <QaRulings rows={data.qaRulings ?? []} />
+            <Escapes rows={data.escapes ?? []} project={scope.project} bump={bump} />
 
             <Bugs scope={scope} bump={bump} onPick={pick} />
             <ExperimentResults project={scope.project} bump={bump} onPick={pick} />

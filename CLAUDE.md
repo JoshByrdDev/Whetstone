@@ -146,6 +146,32 @@ or bare `<base>` in a git command has reintroduced the bug for one kind of proje
 powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
 ```
 
+## A branch under PR review is not rewritten
+
+Before anyone has reviewed a pull request, a ticket's branch is one commit per repo, squashed and
+rebased freely. Once someone has commented on it, rewriting what they read loses their threads and
+makes every push a force push, so a ticket can be **under PR review** (`Ticket.ReviewedOn`, the
+commits the reviewer last saw, `dir@sha` like `QaItem.VerifiedOn`). Then the reviewed commits stay,
+each round is one commit on top, a bounce inside the round amends that commit, and nothing rebases -
+the hand-off only asks whether the branch still merges and says so if not. It is turned on by the
+owner from the drawer (`PUT /api/tickets/{id}/under-review`, no tool behind it) or by a run
+classifying its send-back as `PrReview`, which records the build that was sent back; Done or a
+merge ends it. Not the review track's `ReviewTarget`, which is someone else's branch read here.
+
+Every place that squashes or rebases has to ask first: the worker's nets and start rebase
+(`Compress-ReviewRound`, `Test-ReviewBranchMerges` in `data/worker.ps1`), the board's rebase and
+force-push routes (`RefuseRewriteUnderReview`), and the implement and refine skills' **Under PR
+review** section, which is a pipeline rule in every copy. A new rewrite of a ticket's branch that
+does not ask is how the reviewer's threads get lost.
+
+```bash
+powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-review.tests.ps1
+```
+
+```bash
+dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~UnderReview"
+```
+
 ## A project can be several repos
 
 A project's `projectPath` is either a git repo or, with `repos`, a folder of repos side by side that

@@ -769,15 +769,24 @@ public static class TicketEndpoints
         app.MapDelete("/api/tickets/{id:int}", async (int id, TicketService svc) =>
             await svc.DeleteAsync(id) ? Results.Ok(new { deleted = true }) : Results.NotFound());
 
-        app.MapPost("/api/tickets/{id:int}/transition", async (int id, TransitionRequest req, TicketService svc) =>
+        app.MapPost("/api/tickets/{id:int}/transition", async (int id, TransitionRequest req, TicketService svc, TicketGitService git) =>
         {
             if (!Enum.TryParse<TicketPhase>(req.ToPhase, true, out var to))
                 return Results.BadRequest(new { error = $"Unknown phase '{req.ToPhase}'" });
             try
             {
+                // A move that sends finished work back is logged as an escape, with the build it
+                // escaped from - read only for those, since it costs a git call per repo.
+                string? build = null;
+                if (await svc.GetAsync(id) is { } current && EscapeEvent.IsEscape(current.Track, current.Phase, to, TransitionActor.Human))
+                {
+                    try { build = QaCommits.Format(await git.BranchHeadsAsync(current.ProjectKey, current.Branch)); }
+                    catch (Exception) { build = null; }
+                }
+
                 // Everything that reaches the REST API is a person on the board - the heartbeat's own
                 // moves come through the MCP server or through TicketService directly.
-                var t = await svc.TransitionAsync(id, to, req.Reason, TransitionActor.Human);
+                var t = await svc.TransitionAsync(id, to, req.Reason, TransitionActor.Human, build: build);
                 return t is null ? Results.NotFound() : Results.Ok(TicketMapper.ToDetail(t));
             }
             catch (InvalidTransitionException ex)

@@ -1,6 +1,45 @@
 version: 2
 
+unit_tests:
+  # The rule mart_escapes sums: a requirement change is not a miss, an unclassified escape is not
+  # one either (it is counted apart), and each escape belongs to the latest hand-off before it, built
+  # by the latest implementing run before that hand-off.
+  - name: escapes_count_a_requirement_change_apart_from_misses
+    model: int_escape_handoffs
+    given:
+      - input: ref('stg_board__phase_transitions')
+        rows:
+          - {transition_id: 1, ticket_id: 10, project_key: alpha, track: Delivery, from_phase: Refining, to_phase: NeedsReview, moved_at: '2026-11-02 10:00:00'}
+          - {transition_id: 2, ticket_id: 10, project_key: alpha, track: Delivery, from_phase: Refining, to_phase: NeedsReview, moved_at: '2026-11-03 10:00:00'}
+          - {transition_id: 3, ticket_id: 11, project_key: bravo, track: Review, from_phase: PeerReviewing, to_phase: NeedsReview, moved_at: '2026-11-03 10:00:00'}
+      - input: ref('stg_board__escape_events')
+        rows:
+          - {escape_id: 100, ticket_id: 10, project_key: alpha, track: Delivery, kind: RequirementChange, source: Owner, escaped_at: '2026-11-02 12:00:00', backfilled: false}
+          - {escape_id: 101, ticket_id: 10, project_key: alpha, track: Delivery, kind: Logic, source: PrReview, escaped_at: '2026-11-03 12:00:00', backfilled: false}
+          - {escape_id: 102, ticket_id: 10, project_key: alpha, track: Delivery, kind: null, source: null, escaped_at: '2026-11-03 13:00:00', backfilled: false}
+      - input: ref('int_runs')
+        rows:
+          - {run_id: 7, ticket_id: 10, phase: Implementing, started_at: '2026-11-02 08:00:00', model: model-a, effort: high, provider: claude, skill_version: s1}
+          - {run_id: 8, ticket_id: 10, phase: Implementing, started_at: '2026-11-03 08:00:00', model: model-b, effort: high, provider: claude, skill_version: s2}
+    expect:
+      rows:
+        - {row_kind: handoff, handoff_id: 1, escape_id: null, is_miss: false, is_requirement_change: false, is_unclassified: false, built_by_run_id: 7}
+        - {row_kind: handoff, handoff_id: 2, escape_id: null, is_miss: false, is_requirement_change: false, is_unclassified: false, built_by_run_id: 8}
+        - {row_kind: escape, handoff_id: 1, escape_id: 100, is_miss: false, is_requirement_change: true, is_unclassified: false, built_by_run_id: 7}
+        - {row_kind: escape, handoff_id: 2, escape_id: 101, is_miss: true, is_requirement_change: false, is_unclassified: false, built_by_run_id: 8}
+        - {row_kind: escape, handoff_id: 2, escape_id: 102, is_miss: false, is_requirement_change: false, is_unclassified: true, built_by_run_id: 8}
+
 models:
+  - name: int_escape_handoffs
+    description: Every hand-off to review and every escape on the delivery track, one row each - an escape tied to the hand-off it came back from and both to the implementing run that built it.
+    columns:
+      - name: row_kind
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['handoff', 'escape']
+
   - name: int_transcript_sessions
     description: One Claude session, with its span, working directory and the ticket its prompt names.
     columns:
