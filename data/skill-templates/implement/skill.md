@@ -116,6 +116,16 @@ Where a work item's real target is a deployed environment - a row to delete on p
 
 Then, as its own work item, the **runbook `add_comment`**: what is wrong, the ordered steps, what each is run against, what they should see after each one, how to verify, how to roll back, and what should make them stop. Write it for someone who has not read this ticket. That comment and the committed artifact together are the deliverable - the ticket is complete with them and hands off through the normal phases, exactly like one that shipped a feature.
 
+#### Standing in for a service this machine cannot reach
+
+Where a ticket talks to a service beyond this machine - a vendor's API, another team's system - the code you build for it runs here against a stand-in: a fake client, a stub handler, fixtures replayed from disk. That stand-in is a claim about the real service, written by the same run that wrote the code calling it. Every QA pass after you drives the stand-in and never the service, so a wrong claim in it is confirmed on every pass and found by somebody else, against the real thing.
+
+- **Know where each behaviour comes from.** For everything the stand-in does with what it is sent - the formats it accepts, how it matches a search, what it trims or pads, how it pages, what an error looks like - the source is the service's documentation, a response recorded from the real service (the master notes hold any that someone has seen), or nothing. Nothing is a guess.
+- **Where the source is silent, be strict.** Pass input through as it was sent and match it literally; never accept two forms where the documentation shows one. A forgiving stand-in hides the question - the app sends `12-3456789`, the stand-in finds it, and nobody asks whether the service would. A strict one makes the app's own inputs fail here, where they cost a fix rather than an incident.
+- **Name the guesses.** In that item's `add_comment`, list each behaviour the app relies on that is a guess, as *unproven against the real service*, with the source beside every one that is not.
+- **Write the contract check, as a work item of its own.** A short script that someone with the service's credentials runs against its non-production environment: each request it sends, which guess that request settles, and what a matching answer looks like. It asks for any secret at the prompt and prints none. It goes in an `add_comment` as a fenced block, or where this repo's conventions keep developer scripts if they name such a place - it is a tool for that person, not part of the change. You never run it: this pipeline does not contact the service, and that is not a step you have left undone.
+- **A result someone recorded outranks your guess.** Where the master notes say what the real service did, build the app and the stand-in to match it, and say so.
+
 ### 3. Post progress
 `add_comment` with a summary of what you changed (files/areas touched, notable decisions).
 
