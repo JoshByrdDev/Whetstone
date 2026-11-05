@@ -94,6 +94,8 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         "FromPhase": "VARCHAR", "ToPhase": "VARCHAR", "Reason": "VARCHAR", "NoteCommentId": "INTEGER",
         "Build": "VARCHAR", "At": "VARCHAR", "Backfilled": "BOOLEAN", "Kind": "VARCHAR",
         "Source": "VARCHAR", "ClassifierNote": "VARCHAR", "ClassifiedAt": "VARCHAR",
+        # Added by AddEscapeClassifiedByRun: the run (or person) that classified it, and a person's override.
+        "ClassifiedBy": "VARCHAR", "ClassifiedByRunId": "INTEGER", "Overridden": "BOOLEAN",
     },
     "PhaseTransitions": {
         "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR",

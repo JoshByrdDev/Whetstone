@@ -392,6 +392,30 @@ public class TicketTools
                          + "the hand-off to NeedsReview stays refused while it stands." };
     }
 
+    [McpServerTool, Description(
+        "IMPLEMENTATION, on a ticket someone sent back from review: say what kind of miss it was. The pipeline called this work done and a person disagreed; this records which part of the pipeline should have caught it. " +
+        "set_phase out of Implementing is refused until the escape that started this cycle is classified. " +
+        "Kinds: OutsideContract (a stand-in for, or assumption about, a service this machine cannot reach was wrong), InheritedBehaviour (old behaviour or data a new rule depends on), UiPolish (how a screen looks or moves), Logic (a plain defect), RequirementChange (the owner asked for something new), Other. " +
+        "RequirementChange is refused unless `why` quotes, in double quotes, what the owner's note asks for that the description and master notes did not.")]
+    public static async Task<object> ClassifyEscape(TicketService svc,
+        [Description("The local ticket id.")] int ticketId,
+        [Description("OutsideContract, InheritedBehaviour, UiPolish, Logic, RequirementChange or Other.")] string kind,
+        [Description("Who found it: Owner, PrReview or Other.")] string source,
+        [Description("One or two sentences: what was missed and why it is this kind. For RequirementChange, quote the owner's new ask in double quotes.")] string why)
+    {
+        if (!Enum.TryParse<EscapeKind>(kind, true, out var k) || !Enum.IsDefined(k))
+            return new { error = $"Unknown kind '{kind}'. Use one of: {string.Join(", ", Enum.GetNames<EscapeKind>())}." };
+        if (!Enum.TryParse<EscapeSource>(source, true, out var s) || !Enum.IsDefined(s))
+            return new { error = $"Unknown source '{source}'. Use one of: {string.Join(", ", Enum.GetNames<EscapeSource>())}." };
+
+        var (e, problem) = await svc.ClassifyEscapeByRunAsync(ticketId, k, s, why);
+        return e is null
+            ? new { error = problem, ticketId }
+            : new { e.Id, kind = e.Kind?.ToString(), source = e.Source?.ToString(), why = e.ClassifierNote,
+                    e.ClassifiedAt, runId = e.ClassifiedByRunId,
+                    note = "Classified. set_phase out of Implementing is no longer held by this escape." };
+    }
+
     [McpServerTool, Description("Post a progress note (comment) on a ticket, authored by Claude. This is the async communication channel that replaces tracker comments.")]
     public static async Task<object> AddComment(TicketService svc,
         [Description("The local ticket id.")] int ticketId,

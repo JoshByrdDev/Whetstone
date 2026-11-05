@@ -1,8 +1,9 @@
 -- What got past the whole pipeline: finished work a person sent back after it reached review, by
--- the kind of miss they said it was. The rate is per hand-off to review, so it falls when the
--- pipeline gets better, not only when less work is done. A requirement change is counted apart -
--- it is the owner changing their mind, not a miss - and an unclassified escape counts as a miss
--- until someone says otherwise, with its own count so the page can ask for it.
+-- the kind of miss the implementation run that picked it up said it was (corrected by a person
+-- where they disagreed - counted as overridden). The rate is per hand-off to review, so it falls
+-- when the pipeline gets better, not only when less work is done. A requirement change is counted
+-- apart - the owner changing their mind is not a miss - and an escape nobody classified (one from
+-- before runs classified their own) is counted apart too, never guessed into a kind.
 --
 -- Cut by the week of the hand-off (the trend) and by the settings of the implementing run that
 -- built what was handed off, so a kind that keeps escaping can be traced to a skill or a model.
@@ -32,6 +33,7 @@ select
     count(*) filter (where is_miss)                                 as misses,
     count(*) filter (where is_requirement_change)                   as requirement_changes,
     count(*) filter (where is_unclassified)                         as unclassified,
+    count(*) filter (where is_overridden)                           as overridden,
     count(*) filter (where is_escape and kind = 'OutsideContract')    as outside_contract,
     count(*) filter (where is_escape and kind = 'InheritedBehaviour') as inherited_behaviour,
     count(*) filter (where is_escape and kind = 'UiPolish')           as ui_polish,

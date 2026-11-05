@@ -1,8 +1,8 @@
 version: 2
 
 unit_tests:
-  # The rule mart_escapes sums: a requirement change is not a miss, an unclassified escape is one
-  # until someone says otherwise, and each escape belongs to the latest hand-off before it, built
+  # The rule mart_escapes sums: a requirement change is not a miss, an unclassified escape is not
+  # one either (it is counted apart), and each escape belongs to the latest hand-off before it, built
   # by the latest implementing run before that hand-off.
   - name: escapes_count_a_requirement_change_apart_from_misses
     model: int_escape_handoffs
@@ -27,7 +27,7 @@ unit_tests:
         - {row_kind: handoff, handoff_id: 2, escape_id: null, is_miss: false, is_requirement_change: false, is_unclassified: false, built_by_run_id: 8}
         - {row_kind: escape, handoff_id: 1, escape_id: 100, is_miss: false, is_requirement_change: true, is_unclassified: false, built_by_run_id: 7}
         - {row_kind: escape, handoff_id: 2, escape_id: 101, is_miss: true, is_requirement_change: false, is_unclassified: false, built_by_run_id: 8}
-        - {row_kind: escape, handoff_id: 2, escape_id: 102, is_miss: true, is_requirement_change: false, is_unclassified: true, built_by_run_id: 8}
+        - {row_kind: escape, handoff_id: 2, escape_id: 102, is_miss: false, is_requirement_change: false, is_unclassified: true, built_by_run_id: 8}
 
 models:
   - name: int_escape_handoffs

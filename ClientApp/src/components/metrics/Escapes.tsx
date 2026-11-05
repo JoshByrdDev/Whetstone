@@ -7,9 +7,11 @@ import { Empty, Meter, Section, Sheet, Stat, ago, pct, phaseName, useJson } from
 
 /**
  * What got past the whole pipeline: finished work a person sent back after it reached review
- * (mart_escapes), by the kind of miss they said it was. The rate is per hand-off to review. A
- * requirement change is counted apart - the owner changing their mind is not a miss - and the
- * escapes nobody has classified yet are listed underneath, to be classified in place.
+ * (mart_escapes), by the kind of miss it was. The implementation run that picks up a send-back
+ * classifies it before it can hand off, so this panel only reports: the counts, the trend, and each
+ * escape with the run's reason. A person can correct one from its row, and that is recorded as
+ * theirs. A requirement change is counted apart - the owner changing their mind is not a miss - and
+ * an escape from before runs classified their own stays unclassified rather than counted as one.
  */
 const KINDS: { key: string; label: string; field: keyof EscapeRow; swatch: string; note: string }[] = [
   { key: 'OutsideContract', label: 'Outside contract', field: 'outsideContract', swatch: 'bg-sky-500', note: 'a stand-in or an assumption about a service the fleet cannot reach' },
@@ -19,9 +21,11 @@ const KINDS: { key: string; label: string; field: keyof EscapeRow; swatch: strin
   { key: 'Other', label: 'Other', field: 'other', swatch: 'bg-gray-500', note: 'anything else the pipeline missed' },
   { key: 'RequirementChange', label: 'Requirement change', field: 'requirementChanges', swatch: 'bg-emerald-500', note: 'the owner asked for something new - not a miss' },
 ];
+const kindLabel = (k: string | null) => (k ? KINDS.find(x => x.key === k)?.label ?? k : 'Unclassified');
 const SOURCES: { key: string; label: string }[] = [
   { key: 'Owner', label: 'Owner' }, { key: 'PrReview', label: 'PR review' }, { key: 'Other', label: 'Other' },
 ];
+const sourceLabel = (s: string | null) => (s ? SOURCES.find(x => x.key === s)?.label ?? s : null);
 const BY: { key: string; label: string }[] = [
   { key: 'week', label: 'Week' },
   { key: 'model', label: 'Built by model' },
@@ -37,8 +41,8 @@ export function Escapes({ rows, project, bump }: { rows: EscapeRow[]; project: s
   const shown = rows.filter(r => r.dimension === by)
     .sort((a, b) => by === 'week' ? a.dimValue.localeCompare(b.dimValue) : b.handoffs - a.handoffs);
   const most = Math.max(1, ...shown.map(r => r.misses));
-  const open = useJson<EscapeList>(escapesUrl(project, true), bump + saved);
-  const unclassified = open.data?.escapes ?? [];
+  const list = useJson<EscapeList>(escapesUrl(project, false), bump + saved);
+  const escapes = list.data?.escapes ?? [];
 
   return (
     <Section title="Escapes after review"
@@ -49,11 +53,11 @@ export function Escapes({ rows, project, bump }: { rows: EscapeRow[]; project: s
         <>
           <div className="mb-3 flex flex-wrap gap-3">
             <Stat label="Misses per hand-off" value={pct(all.missesPerHandoff)} muted={!all.handoffs}
-              context={`${all.misses} sent back of ${all.handoffs} hand-offs to review`} />
+              context={`${all.misses} missed of ${all.handoffs} hand-offs to review`} />
             <Stat label="Misses per ticket" value={all.missesPerTicket == null ? '—' : all.missesPerTicket.toFixed(2)} muted={!all.ticketsReviewed}
               context={`${all.ticketsReviewed} tickets reached review`} />
-            <Stat label="Unclassified" value={String(all.unclassified)} muted={!all.unclassified}
-              context={all.unclassified ? 'counted as misses until someone says otherwise' : 'every escape has a kind'} />
+            <Stat label="Corrected by a person" value={String(all.overridden ?? 0)} muted={!all.overridden}
+              context={all.unclassified ? `${all.unclassified} older escapes unclassified, counted as neither` : 'the run\'s own call, overridden'} />
           </div>
 
           <Sheet className="mb-3">
@@ -68,6 +72,14 @@ export function Escapes({ rows, project, bump }: { rows: EscapeRow[]; project: s
                   </li>
                 );
               })}
+              {all.unclassified > 0 && (
+                <li className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)_2.5rem] items-center gap-x-3"
+                  title="From before runs classified their own - counted as no kind">
+                  <span className="min-w-0 truncate text-gray-500">Unclassified</span>
+                  <span className="text-[10.5px] text-gray-600">older, counted as no kind</span>
+                  <span className="text-right text-gray-500" style={{ fontFamily: MONO }}>{all.unclassified}</span>
+                </li>
+              )}
             </ul>
           </Sheet>
 
@@ -92,35 +104,27 @@ export function Escapes({ rows, project, bump }: { rows: EscapeRow[]; project: s
         </>
       )}
 
-      {unclassified.length > 0 && (
+      {escapes.length > 0 && (
         <div className="min-w-0">
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-[calc(var(--w-track)*0.1em)] text-gray-500">
-            To classify ({unclassified.length})
+            Escapes ({escapes.length})
           </div>
           <ul className="space-y-2">
-            {unclassified.map(e => <Unclassified key={e.id} e={e} onSaved={() => setSaved(s => s + 1)} />)}
+            {escapes.map(e => <EscapeItem key={e.id} e={e} onSaved={() => setSaved(s => s + 1)} />)}
           </ul>
         </div>
       )}
-      {open.error && <Empty>Could not load the escapes to classify: {open.error}</Empty>}
+      {list.error && <Empty>Could not load the escapes: {list.error}</Empty>}
     </Section>
   );
 }
 
-/** One escape nobody has classified yet: what came back and why, and the two calls to make about it. */
-function Unclassified({ e, onSaved }: { e: EscapeView; onSaved: () => void }) {
-  const [kind, setKind] = useState<string | null>(null);
-  const [source, setSource] = useState<string | null>('Owner');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const why = e.note ?? e.reason ?? '';
-
-  const save = async () => {
-    if (!kind) return;
-    setBusy(true); setError(null);
-    try { await classifyEscape(e.id, kind, source); onSaved(); }
-    catch (err) { setError(String(err instanceof Error ? err.message : err)); setBusy(false); }
-  };
+/** One escape: what came back, the kind the run called it, its reason - and a person's correction, behind Edit. */
+function EscapeItem({ e, onSaved }: { e: EscapeView; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const who = e.kind == null ? null
+    : e.classifiedBy === 'Worker' ? (e.classifiedByRunId != null ? `run ${e.classifiedByRunId}` : 'a run')
+    : e.overridden ? 'corrected by a person' : 'a person';
 
   return (
     <li className="min-w-0">
@@ -130,21 +134,55 @@ function Unclassified({ e, onSaved }: { e: EscapeView; onSaved: () => void }) {
           <span className="min-w-0 flex-1 truncate text-gray-200">{e.ticketTitle ?? 'Untitled ticket'}</span>
           <span className="text-[11px] text-gray-500">{phaseName(e.fromPhase)} → {phaseName(e.toPhase)} · {ago(e.at)}</span>
         </div>
-        {why && <p className="mt-1.5 line-clamp-3 min-w-0 break-words text-xs leading-relaxed text-gray-400">{why}</p>}
-        <div className="mt-2 flex flex-wrap gap-1.5" role="group" aria-label="Kind of miss">
-          {KINDS.map(k => <Chip key={k.key} on={kind === k.key} title={k.note} onClick={() => setKind(k.key)}>{k.label}</Chip>)}
-        </div>
-        <div className="mt-1.5 flex flex-wrap items-center gap-1.5" role="group" aria-label="Found by">
-          <span className="text-[11px] text-gray-500">Found by</span>
-          {SOURCES.map(s => <Chip key={s.key} on={source === s.key} onClick={() => setSource(s.key)}>{s.label}</Chip>)}
+        <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+          <span className={e.kind ? 'text-gray-100' : 'text-gray-500'}>{kindLabel(e.kind)}</span>
+          {sourceLabel(e.source) && <span className="text-gray-500">· found by {sourceLabel(e.source)}</span>}
+          {who && <span className={e.overridden ? 'text-amber-300' : 'text-gray-600'}>· {who}</span>}
+          {e.backfilled && <span className="text-gray-600">· from history</span>}
           <span className="ml-auto">
-            <GhostButton onClick={save} disabled={!kind || busy} title={kind ? 'Save this classification' : 'Pick a kind first'}>
-              {busy ? 'Saving…' : 'Save'}
+            <GhostButton onClick={() => setEditing(v => !v)} title="Correct this escape's kind or source">
+              {editing ? 'Close' : 'Edit'}
             </GhostButton>
           </span>
         </div>
-        {error && <p className="mt-1.5 text-xs text-red-300">{error}</p>}
+        {e.why
+          ? <p className={`mt-1.5 min-w-0 break-words text-xs leading-relaxed ${e.kind === 'RequirementChange' ? 'text-emerald-200' : 'text-gray-400'}`}>{e.why}</p>
+          : (e.note ?? e.reason) && <p className="mt-1.5 line-clamp-2 min-w-0 break-words text-xs leading-relaxed text-gray-500">{e.note ?? e.reason}</p>}
+        {editing && <Correct e={e} onSaved={() => { setEditing(false); onSaved(); }} />}
       </Sheet>
     </li>
+  );
+}
+
+/** A person's correction: the kind and who found it. Saved as a person's, overriding the run's call. */
+function Correct({ e, onSaved }: { e: EscapeView; onSaved: () => void }) {
+  const [kind, setKind] = useState<string | null>(e.kind);
+  const [source, setSource] = useState<string | null>(e.source ?? 'Owner');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const save = async () => {
+    if (!kind) return;
+    setBusy(true); setError(null);
+    try { await classifyEscape(e.id, kind, source, e.why ?? undefined); onSaved(); }
+    catch (err) { setError(String(err instanceof Error ? err.message : err)); setBusy(false); }
+  };
+
+  return (
+    <div className="orbit-swap mt-2 border-t border-hair pt-2">
+      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Kind of miss">
+        {KINDS.map(k => <Chip key={k.key} on={kind === k.key} title={k.note} onClick={() => setKind(k.key)}>{k.label}</Chip>)}
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5" role="group" aria-label="Found by">
+        <span className="text-[11px] text-gray-500">Found by</span>
+        {SOURCES.map(s => <Chip key={s.key} on={source === s.key} onClick={() => setSource(s.key)}>{s.label}</Chip>)}
+        <span className="ml-auto">
+          <GhostButton onClick={save} disabled={!kind || busy} title="Save this correction as yours">
+            {busy ? 'Saving…' : 'Save'}
+          </GhostButton>
+        </span>
+      </div>
+      {error && <p className="mt-1.5 text-xs text-red-300">{error}</p>}
+    </div>
   );
 }

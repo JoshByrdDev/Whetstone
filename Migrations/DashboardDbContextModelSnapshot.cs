@@ -451,6 +451,13 @@ namespace Whetstone.Migrations
                     b.Property<DateTime?>("ClassifiedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ClassifiedBy")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("ClassifiedByRunId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("ClassifierNote")
                         .HasColumnType("TEXT");
 
@@ -464,6 +471,9 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("NoteCommentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("Overridden")
                         .HasColumnType("INTEGER");
 
                     b.Property<string>("ProjectKey")

@@ -5,9 +5,9 @@ namespace Whetstone.Api;
 
 /// <summary>
 /// What got past the pipeline: the escapes a person logged by sending finished work back
-/// (<see cref="EscapeEvent"/>), and their classification. Classifying is a person's call, so it is a
-/// REST route with no MCP tool behind it. Everything here reads and writes the board's own
-/// database and nothing else.
+/// (<see cref="EscapeEvent"/>). The implementation run that picks one up classifies it through the
+/// classify_escape tool; this route is a person's correction of that call, recorded as theirs.
+/// Everything here reads and writes the board's own database and nothing else.
 /// </summary>
 public static class EscapeEndpoints
 {
@@ -17,13 +17,15 @@ public static class EscapeEndpoints
         int Id, int TicketId, string? TicketTitle, string ProjectKey, string Track,
         string FromPhase, string ToPhase, string? Reason, int? NoteCommentId, string? Note,
         string? Build, DateTime At, bool Backfilled,
-        string? Kind, string? Source, string? ClassifierNote, DateTime? ClassifiedAt);
+        string? Kind, string? Source, string? Why, DateTime? ClassifiedAt,
+        string? ClassifiedBy, int? ClassifiedByRunId, bool Overridden);
 
     private static EscapeDto ToDto(TicketService.EscapeView v) => new(
         v.Event.Id, v.Event.TicketId, v.TicketTitle, v.Event.ProjectKey, v.Event.Track.ToString(),
         v.Event.FromPhase.ToString(), v.Event.ToPhase.ToString(), v.Event.Reason, v.Event.NoteCommentId, v.Note,
         v.Event.Build, v.Event.At, v.Event.Backfilled,
-        v.Event.Kind?.ToString(), v.Event.Source?.ToString(), v.Event.ClassifierNote, v.Event.ClassifiedAt);
+        v.Event.Kind?.ToString(), v.Event.Source?.ToString(), v.Event.ClassifierNote, v.Event.ClassifiedAt,
+        v.Event.ClassifiedBy?.ToString(), v.Event.ClassifiedByRunId, v.Event.Overridden);
 
     public static void MapEscapeEndpoints(this WebApplication app)
     {
@@ -60,7 +62,8 @@ public static class EscapeEndpoints
             var e = await svc.ClassifyEscapeAsync(id, kind, source, req.Note);
             return e is null
                 ? Results.NotFound()
-                : Results.Ok(new { e.Id, kind = e.Kind?.ToString(), source = e.Source?.ToString(), e.ClassifierNote, e.ClassifiedAt });
+                : Results.Ok(new { e.Id, kind = e.Kind?.ToString(), source = e.Source?.ToString(), why = e.ClassifierNote,
+                    e.ClassifiedAt, classifiedBy = e.ClassifiedBy?.ToString(), e.Overridden });
         });
     }
 }

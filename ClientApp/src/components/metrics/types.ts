@@ -116,7 +116,7 @@ export interface QaRulingRow {
 /** Finished work a person sent back after it reached review, by kind of miss (mart_escapes). */
 export interface EscapeRow {
   dimension: string; dimValue: string; handoffs: number; ticketsReviewed: number; escapes: number;
-  misses: number; requirementChanges: number; unclassified: number;
+  misses: number; requirementChanges: number; unclassified: number; overridden: number;
   outsideContract: number; inheritedBehaviour: number; uiPolish: number; logic: number; other: number;
   foundByOwner: number; foundInPrReview: number;
   missesPerHandoff: number | null; missesPerTicket: number | null;

@@ -156,6 +156,161 @@ public class EscapeLogTests : IDisposable
         Assert.Null(cleared.ClassifiedAt);
     }
 
+    /// <summary>A ticket sent back from review by a person and claimed by an implementation run holding its lease.</summary>
+    private async Task<(int TicketId, int RunId)> SentBackAndClaimed(string reason = "Owner note: keep the grid one height")
+    {
+        var id = await Seed(TicketPhase.NeedsReview);
+        await using (var ctx = NewCtx())
+        {
+            var svc = new TicketService(ctx);
+            await svc.TransitionAsync(id, TicketPhase.NeedsImplementation, reason, TransitionActor.Human);
+            await svc.TransitionAsync(id, TicketPhase.Implementing, "claimed by heartbeat", TransitionActor.System);
+        }
+        await using (var ctx = NewCtx())
+        {
+            var l = new ResourceLease { ResourceKey = ResourceLeaseService.TicketKey(id), TicketId = id, ExpiresAt = DateTime.UtcNow.AddHours(1) };
+            ctx.ResourceLeases.Add(l);
+            await ctx.SaveChangesAsync();
+            return (id, l.Id);
+        }
+    }
+
+    private async Task Forward(int id)
+    {
+        await using var ctx = NewCtx();
+        await new TicketService(ctx).TransitionAsync(id, TicketPhase.NeedsImplementationReview, "implemented", TransitionActor.Worker);
+    }
+
+    [Fact]
+    public async Task A_run_classifies_the_escape_that_sent_its_ticket_back_and_is_recorded_as_the_run()
+    {
+        var (id, run) = await SentBackAndClaimed();
+        await using (var ctx = NewCtx())
+        {
+            var (e, problem) = await new TicketService(ctx).ClassifyEscapeByRunAsync(id, EscapeKind.UiPolish, EscapeSource.Owner,
+                "The grid changed height on every keystroke; nothing in QA looked at the screen in motion.");
+            Assert.Null(problem);
+            Assert.NotNull(e);
+        }
+
+        var stored = Assert.Single(await Escapes(id));
+        Assert.Equal(EscapeKind.UiPolish, stored.Kind);
+        Assert.Equal(EscapeSource.Owner, stored.Source);
+        Assert.Equal(TransitionActor.Worker, stored.ClassifiedBy);
+        Assert.Equal(run, stored.ClassifiedByRunId);
+        Assert.NotNull(stored.ClassifiedAt);
+        Assert.False(stored.Overridden);
+    }
+
+    [Theory]
+    [InlineData("The owner now wants the badge on the right.")]
+    [InlineData("The owner said \"ok\" to it.")]
+    [InlineData("   ")]
+    public async Task A_requirement_change_that_quotes_nothing_is_refused(string why)
+    {
+        var (id, _) = await SentBackAndClaimed();
+        await using (var ctx = NewCtx())
+        {
+            var (e, problem) = await new TicketService(ctx).ClassifyEscapeByRunAsync(id, EscapeKind.RequirementChange, EscapeSource.Owner, why);
+            Assert.Null(e);
+            Assert.NotNull(problem);
+        }
+        Assert.Null(Assert.Single(await Escapes(id)).Kind);
+    }
+
+    [Fact]
+    public async Task A_requirement_change_that_quotes_the_owner_is_taken()
+    {
+        var (id, _) = await SentBackAndClaimed();
+        await using var ctx = NewCtx();
+        var (e, problem) = await new TicketService(ctx).ClassifyEscapeByRunAsync(id, EscapeKind.RequirementChange, EscapeSource.Owner,
+            "The note asks for “right-align the Already added badge”, which neither the description nor the master notes mention.");
+        Assert.Null(problem);
+        Assert.Equal(EscapeKind.RequirementChange, e!.Kind);
+    }
+
+    [Fact]
+    public async Task The_hand_off_out_of_implementing_waits_for_the_escape_that_started_the_cycle()
+    {
+        var (id, _) = await SentBackAndClaimed();
+
+        var refused = await Assert.ThrowsAsync<HandoffRequirementException>(() => Forward(id));
+        Assert.Contains("classify_escape", refused.Message);
+
+        await using (var ctx = NewCtx())
+            await new TicketService(ctx).ClassifyEscapeByRunAsync(id, EscapeKind.Logic, EscapeSource.PrReview, "A plain defect the diff review should have seen.");
+        await Forward(id);
+
+        await using (var ctx = NewCtx())
+            Assert.NotEqual(TicketPhase.Implementing, (await ctx.Tickets.FindAsync(id))!.Phase);
+    }
+
+    [Fact]
+    public async Task Blocking_and_going_back_are_never_held_by_the_escape()
+    {
+        var (id, _) = await SentBackAndClaimed();
+        await using var ctx = NewCtx();
+        var t = await new TicketService(ctx).TransitionAsync(id, TicketPhase.Blocked,
+            "Which of the two layouts in the note does the owner want: the stacked one or the side-by-side one?", TransitionActor.Worker);
+        Assert.Equal(TicketPhase.Blocked, t!.Phase);
+    }
+
+    [Fact]
+    public async Task An_older_escape_does_not_hold_a_later_cycle()
+    {
+        var (id, _) = await SentBackAndClaimed();
+        await using (var ctx = NewCtx())
+        {
+            var svc = new TicketService(ctx);
+            // The run that picked up the send-back went to QA without classifying (as a run from
+            // before the gate would have), and QA sent it back: this cycle was started by QA, not by
+            // the escape, so the escape no longer holds it.
+            var t = await ctx.Tickets.FindAsync(id);
+            t!.Phase = TicketPhase.QaTesting;
+            await ctx.SaveChangesAsync();
+            await svc.TransitionAsync(id, TicketPhase.NeedsImplementation, "QA failed item 3", TransitionActor.Worker);
+            await svc.TransitionAsync(id, TicketPhase.Implementing, "claimed by heartbeat", TransitionActor.System);
+        }
+
+        await Forward(id);
+        Assert.Null(Assert.Single(await Escapes(id)).Kind);
+    }
+
+    [Fact]
+    public async Task A_backfilled_escape_never_holds_a_hand_off()
+    {
+        var id = await Seed(TicketPhase.Implementing);
+        var at = DateTime.UtcNow.AddMinutes(-20);
+        await using (var ctx = NewCtx())
+        {
+            ctx.PhaseTransitions.Add(new PhaseTransition { TicketId = id, ProjectKey = "alpha", From = TicketPhase.NeedsReview, To = TicketPhase.NeedsImplementation, Actor = TransitionActor.Human, Backward = true, At = at });
+            ctx.EscapeEvents.Add(new EscapeEvent { TicketId = id, ProjectKey = "alpha", FromPhase = TicketPhase.NeedsReview, ToPhase = TicketPhase.NeedsImplementation, At = at, Backfilled = true });
+            await ctx.SaveChangesAsync();
+        }
+
+        await Forward(id);
+        await using (var ctx = NewCtx())
+            Assert.NotEqual(TicketPhase.Implementing, (await ctx.Tickets.FindAsync(id))!.Phase);
+    }
+
+    [Fact]
+    public async Task A_person_correcting_a_run_s_call_is_recorded_as_a_person_s_override()
+    {
+        var (id, _) = await SentBackAndClaimed();
+        await using (var ctx = NewCtx())
+            await new TicketService(ctx).ClassifyEscapeByRunAsync(id, EscapeKind.UiPolish, EscapeSource.Owner, "Looked like polish.");
+        var escapeId = (await Escapes(id))[0].Id;
+
+        await using (var ctx = NewCtx())
+            await new TicketService(ctx).ClassifyEscapeAsync(escapeId, EscapeKind.OutsideContract, EscapeSource.PrReview, "The fake accepted a format the service does not.");
+
+        var e = Assert.Single(await Escapes(id));
+        Assert.Equal(EscapeKind.OutsideContract, e.Kind);
+        Assert.Equal(TransitionActor.Human, e.ClassifiedBy);
+        Assert.Null(e.ClassifiedByRunId);
+        Assert.True(e.Overridden);
+    }
+
     [Fact]
     public async Task Classifying_an_escape_that_does_not_exist_finds_nothing()
     {

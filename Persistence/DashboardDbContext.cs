@@ -173,6 +173,7 @@ public class DashboardDbContext : DbContext
             e.Property(p => p.Track).HasConversion<string>().HasMaxLength(16);
             e.Property(p => p.Kind).HasConversion<string>().HasMaxLength(24);
             e.Property(p => p.Source).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.ClassifiedBy).HasConversion<string>().HasMaxLength(16);
             e.Property(p => p.ProjectKey).HasMaxLength(128);
             e.HasIndex(p => new { p.ProjectKey, p.At });
             e.HasIndex(p => p.TicketId);

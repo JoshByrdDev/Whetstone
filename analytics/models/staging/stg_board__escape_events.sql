@@ -15,6 +15,9 @@ select
     coalesce("Backfilled", false)   as backfilled,
     "Kind"                          as kind,
     "Source"                        as source,
-    "ClassifierNote"                as classifier_note,
-    {{ board_ts('"ClassifiedAt"') }} as classified_at
+    "ClassifierNote"                as why,
+    {{ board_ts('"ClassifiedAt"') }} as classified_at,
+    "ClassifiedBy"                  as classified_by,
+    "ClassifiedByRunId"             as classified_by_lease_run_id,
+    coalesce("Overridden", false)   as overridden
 from {{ source('board', 'EscapeEvents') }}

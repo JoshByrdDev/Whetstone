@@ -27,7 +27,7 @@ handoffs as (
 -- older than the transition log) is dated by itself.
 escape_rows as (
     select
-        e.escape_id, e.ticket_id, e.project_key, e.track, e.kind, e.source, e.backfilled,
+        e.escape_id, e.ticket_id, e.project_key, e.track, e.kind, e.source, e.backfilled, e.overridden,
         h.handoff_id,
         coalesce(h.handed_off_at, e.escaped_at) as handed_off_at
     from escapes e
@@ -37,10 +37,10 @@ escape_rows as (
 
 rows_ as (
     select 'handoff' as row_kind, handoff_id, null::integer as escape_id, ticket_id, project_key, track,
-           handed_off_at, null::varchar as kind, null::varchar as source
+           handed_off_at, null::varchar as kind, null::varchar as source, false as overridden
     from handoffs
     union all
-    select 'escape', handoff_id, escape_id, ticket_id, project_key, track, handed_off_at, kind, source
+    select 'escape', handoff_id, escape_id, ticket_id, project_key, track, handed_off_at, kind, source, overridden
     from escape_rows
 )
 
@@ -50,11 +50,13 @@ select
     x.kind, x.source,
     x.row_kind = 'handoff'                                      as is_handoff,
     x.row_kind = 'escape'                                       as is_escape,
-    -- A requirement change is a ticket coming back, not something the pipeline missed. Everything
-    -- else, unclassified included until someone says otherwise, counts as a miss.
+    -- A requirement change is a ticket coming back, not something the pipeline missed. An escape
+    -- nobody classified (one from before runs classified their own) is neither: it is counted
+    -- apart, as unclassified, rather than guessed into a kind.
     x.row_kind = 'escape' and coalesce(x.kind, '') = 'RequirementChange' as is_requirement_change,
-    x.row_kind = 'escape' and coalesce(x.kind, '') <> 'RequirementChange' as is_miss,
+    x.row_kind = 'escape' and x.kind is not null and x.kind <> 'RequirementChange' as is_miss,
     x.row_kind = 'escape' and x.kind is null                    as is_unclassified,
+    x.row_kind = 'escape' and coalesce(x.overridden, false)     as is_overridden,
     r.run_id as built_by_run_id, r.model, r.effort, r.provider, r.skill_version
 from rows_ x
 left join runs r on r.ticket_id = x.ticket_id and r.started_at <= x.handed_off_at
