@@ -188,14 +188,26 @@ try {
     Check 'behind, in a worktree: worktree moved with it' (Get-Sha $cwt HEAD) (Get-Sha $u.board t-1)
     Check 'behind, in a worktree: files arrived' ((Get-Content (Join-Path $cwt 'f.txt')) -join '|') 'T1: speculated on the board host|T1: more on the board host|T1: and more'
 
+    # Leftovers of a run killed before its hand-off nets: set aside, not a block on every retry.
     Add-Commit -Dir $bwt -File 'g.txt' -Subject 'T1: one more'
     Add-Content -Path (Join-Path $cwt 'f.txt') -Value 'uncommitted' -Encoding ascii
-    $before = Get-Sha $u.clone t-1
+    Set-Content -Path (Join-Path $cwt 'stray.txt') -Value 'untracked' -Encoding ascii
     $r = Sync-Branch -Pair $u -Branch 't-1'
-    Check 'dirty worktree: refused' "$($r.ok) $($r.state)" 'False behind'
-    Check 'dirty worktree: branch untouched' (Get-Sha $u.clone t-1) $before
-    git -C $cwt checkout --quiet -- . *> $null
-    $null = Sync-Branch -Pair $u -Branch 't-1'
+    Check 'dirty worktree, behind: brought level' "$($r.ok) $($r.state)" 'True behind'
+    Check 'dirty worktree, behind: worktree at the board host' (Get-Sha $cwt HEAD) (Get-Sha $u.board t-1)
+    Check 'dirty worktree, behind: worktree clean' "$(git -C $cwt status --porcelain)" ''
+    Check 'dirty worktree, behind: says what it set aside' ((@($r.stash.files) | Sort-Object) -join ',') 'f.txt,stray.txt'
+    Check 'dirty worktree, behind: the stash it names is the newest' $r.stash.sha (Get-Sha $u.clone refs/stash)
+    Check 'dirty worktree, behind: the edit is in the stash' `
+        ("$(git -C $cwt show "$($r.stash.sha):f.txt")" -match 'uncommitted') $true
+    Check 'dirty worktree, behind: so is the untracked file' "$(git -C $cwt show "$($r.stash.sha)^3:stray.txt")".Trim() 'untracked'
+    Check 'dirty worktree, behind: stash named for the branch' ("$(git -C $cwt stash list)" -match 'left uncommitted on t-1') $true
+
+    Add-Content -Path (Join-Path $cwt 'f.txt') -Value 'again' -Encoding ascii
+    $r = Sync-Branch -Pair $u -Branch 't-1'
+    Check 'dirty worktree, current: still set aside' "$($r.ok) $($r.state) $(@($r.stash.files) -join ',')" 'True current f.txt'
+    Check 'dirty worktree, current: clean, so Resolve-Worktree will start' "$(git -C $cwt status --porcelain)" ''
+    Check 'clean worktree: nothing set aside' ((Sync-Branch -Pair $u -Branch 't-1').stash) $null
 
     Add-Commit -Dir $cwt -File 'h.txt' -Subject 'T1: here, hand-back refused'
     $mine = Get-Sha $u.clone t-1
@@ -208,6 +220,13 @@ try {
     $r = Sync-Branch -Pair $u -Branch 't-1'
     Check 'diverged with unhanded commits: refused' "$($r.ok) $($r.state)" 'False diverged'
     Check 'diverged with unhanded commits: kept' (Get-Sha $u.clone t-1) $mine
+    Add-Content -Path (Join-Path $cwt 'h.txt') -Value 'uncommitted' -Encoding ascii
+    $stashes = @(git -C $cwt stash list).Count
+    $r = Sync-Branch -Pair $u -Branch 't-1'
+    Check 'diverged and dirty: still refused' "$($r.ok) $($r.state)" 'False diverged'
+    Check 'diverged and dirty: nothing stashed' @(git -C $cwt stash list).Count $stashes
+    Check 'diverged and dirty: edits left where they are' ("$(git -C $cwt status --porcelain)" -match 'h.txt') $true
+    git -C $cwt checkout --quiet -- . *> $null
 
     # Diverged because the board host rebased what it already had: safe to take theirs.
     $d = New-Pair 'diverged'

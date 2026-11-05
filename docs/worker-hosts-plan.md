@@ -88,8 +88,12 @@ The **agreed** commit is `refs/whetstone/agreed/<branch>` in the clone. It is se
 branch is brought up to the board host's commit, and when the board host accepts a hand-back
 (`Set-BranchHandedBack`). It replaced this plan's first idea, which was "every run hands back, so
 divergence is always safe to reset." That isn't true after a refused hand-back, and a reset there
-would delete work nobody else has. A worktree holding the branch moves with it, and refuses if it
-has anything uncommitted.
+would delete work nobody else has. A worktree holding the branch moves with it. Anything uncommitted
+in it is set aside in a stash first (`Save-WorktreeLeftovers`) and named in a ticket comment, rather
+than refused: in every case that reaches the worktree, each commit here is already on the board host,
+and the leftovers are what a run killed before its hand-off nets left. Refusing them blocked the
+ticket on every retry, and nothing but a person at that machine could clean the tree. `ahead` and a
+refused `diverged` never touch the worktree.
 
 After that, `Resolve-Worktree` sees a local branch and runs unchanged. Worktrees on the worker host
 are kept between runs, which keeps `node_modules` and friends warm. The board host's

@@ -125,9 +125,14 @@ function Get-BoardBranch {
 #                                host and the divergence is a rebase over there. Otherwise refused:
 #                                those commits exist nowhere else.
 #
-# A worktree holding the branch is moved with it, and refuses when it has anything uncommitted -
-# a run hands back only what it committed, so uncommitted files there are somebody's edits.
-# Returns @{ ok; state; reason }.
+# A worktree holding the branch is moved with it. Anything uncommitted in it is set aside in a
+# stash first (Save-WorktreeLeftovers) rather than refusing. By the time a worktree is looked at,
+# every commit on the branch here is also on the board host ('current', 'behind', and a 'reset'
+# from the agreed commit), so what is uncommitted is all there is to keep - and in practice it is
+# what a run that was killed before its hand-off nets left behind. Refusing instead blocked the
+# ticket on every retry, with nobody able to clean a tree on another machine but a person there.
+# 'ahead' and a refused 'diverged' never reach the worktree, and are as they were.
+# Returns @{ ok; state; reason; stash } - stash is @{ sha; files; message } when something was set aside.
 function Update-BranchFromBoard {
     param([string]$RepoDir, [string]$Branch, [string]$BoardSha)
     $ErrorActionPreference = 'Continue'
@@ -144,39 +149,69 @@ function Update-BranchFromBoard {
             git -C $RepoDir update-ref $agreed $BoardSha *> $null
             return @{ ok = $true; state = 'created' }
         }
-        if ($local -eq $BoardSha) {
-            git -C $RepoDir update-ref $agreed $BoardSha *> $null
-            return @{ ok = $true; state = 'current' }
-        }
 
-        git -C $RepoDir merge-base --is-ancestor $local $BoardSha *> $null
-        $behind = ($LASTEXITCODE -eq 0)
-        if (-not $behind) {
-            git -C $RepoDir merge-base --is-ancestor $BoardSha $local *> $null
-            if ($LASTEXITCODE -eq 0) { return @{ ok = $true; state = 'ahead' } }
-            if ((Get-RefSha -Dir $RepoDir -Ref $agreed) -ne $local) {
-                return @{ ok = $false; state = 'diverged'
-                          reason = "'$Branch' here has commits the board host never received, and the board host's branch has moved on without them" }
+        $behind = $false
+        if ($local -eq $BoardSha) { $state = 'current' }
+        else {
+            git -C $RepoDir merge-base --is-ancestor $local $BoardSha *> $null
+            $behind = ($LASTEXITCODE -eq 0)
+            if (-not $behind) {
+                git -C $RepoDir merge-base --is-ancestor $BoardSha $local *> $null
+                if ($LASTEXITCODE -eq 0) { return @{ ok = $true; state = 'ahead' } }
+                if ((Get-RefSha -Dir $RepoDir -Ref $agreed) -ne $local) {
+                    return @{ ok = $false; state = 'diverged'
+                              reason = "'$Branch' here has commits the board host never received, and the board host's branch has moved on without them" }
+                }
             }
+            $state = if ($behind) { 'behind' } else { 'reset' }
         }
-        $state = if ($behind) { 'behind' } else { 'reset' }
 
         $wt = Get-BranchWorktree -RepoDir $RepoDir -Branch $Branch
+        $stash = $null
         if ($wt) {
-            if (@(git -C $wt status --porcelain 2>$null | Where-Object { $_ }).Count -gt 0) {
-                return @{ ok = $false; state = $state; reason = "the worktree at $wt has uncommitted changes" }
+            $saved = Save-WorktreeLeftovers -Dir $wt -Branch $Branch
+            if (-not $saved.ok) { return @{ ok = $false; state = $state; reason = $saved.reason } }
+            if ($saved.sha) { $stash = $saved }
+        }
+
+        if ($state -ne 'current') {
+            if ($wt) {
+                if ($behind) { git -C $wt merge --quiet --ff-only $BoardSha *> $null }
+                else         { git -C $wt reset --quiet --hard $BoardSha *> $null }
             }
-            if ($behind) { git -C $wt merge --quiet --ff-only $BoardSha *> $null }
-            else         { git -C $wt reset --quiet --hard $BoardSha *> $null }
+            else {
+                git -C $RepoDir update-ref "refs/heads/$Branch" $BoardSha $local *> $null
+            }
+            if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = $state; reason = "could not move '$Branch' to the board host's commit"; stash = $stash } }
         }
-        else {
-            git -C $RepoDir update-ref "refs/heads/$Branch" $BoardSha $local *> $null
-        }
-        if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = $state; reason = "could not move '$Branch' to the board host's commit" } }
 
         git -C $RepoDir update-ref $agreed $BoardSha *> $null
-        return @{ ok = $true; state = $state }
+        return @{ ok = $true; state = $state; stash = $stash }
     }
+}
+
+# Set aside everything uncommitted in a worktree - untracked files included, ignored ones not - as
+# one stash entry named after the branch, so the worktree is clean and nothing in it is lost. The
+# stash lives in the repo's shared refs, so `git stash list` in any worktree of the clone shows it.
+# Returns @{ ok; sha; files; message; reason } - sha is '' when there was nothing to set aside.
+function Save-WorktreeLeftovers {
+    param([string]$Dir, [string]$Branch)
+    $ErrorActionPreference = 'Continue'
+
+    $files = @(git -C $Dir status --porcelain 2>$null | Where-Object { $_ } | ForEach-Object { "$_".Substring(3) })
+    if ($files.Count -eq 0) { return @{ ok = $true; sha = ''; files = @() } }
+
+    $message = "whetstone: left uncommitted on $Branch, set aside before bringing it level with the board host"
+    git -C $Dir stash push --quiet --include-untracked -m $message *> $null
+    if ($LASTEXITCODE -ne 0) {
+        return @{ ok = $false; sha = ''; files = $files
+                  reason = "the worktree at $Dir has uncommitted changes, and setting them aside in a stash failed" }
+    }
+    if (@(git -C $Dir status --porcelain 2>$null | Where-Object { $_ }).Count -gt 0) {
+        return @{ ok = $false; sha = ''; files = $files
+                  reason = "the worktree at $Dir still has uncommitted changes after setting them aside in a stash" }
+    }
+    return @{ ok = $true; sha = (Get-RefSha -Dir $Dir -Ref 'refs/stash'); files = $files; message = $message }
 }
 
 # Push the worktree's HEAD to refs/whetstone/incoming/<RunId> on the board host.

@@ -1860,6 +1860,15 @@ if ($onHost -and $repoDir) {
                 -Comment "This run was on worker host ``$runHost``, whose copy of ``$recordedBranch`` cannot be brought level with the board host's without losing work: $($level.reason). Ticket blocked; no work was attempted. Compare the two machines' branches and keep the one that is right, then unblock."
         }
         Write-Log "  Worker host $runHost - '$recordedBranch' against the board host: $($level.state)"
+        # Leftovers of an earlier run here - one killed before its hand-off nets - set aside rather
+        # than blocking on them. Said on the ticket, because they are the only copy.
+        if ($level.stash) {
+            $s = $level.stash
+            $names = (@($s.files) | Select-Object -First 10 | ForEach-Object { "- $_" }) -join "`n"
+            $more = if (@($s.files).Count -gt 10) { "`n- ... and $(@($s.files).Count - 10) more" } else { '' }
+            Write-Log "  Worker host $runHost - set aside $(@($s.files).Count) uncommitted file(s) on '$recordedBranch' as stash $($s.sha)."
+            Send-TicketComment -TicketId $ticketId -Body "Worker host ``$runHost`` found $(@($s.files).Count) uncommitted file(s) in this ticket's worktree there, left by an earlier run that never finished. Every commit of this branch is already on the board host, so they were set aside in a stash rather than blocking the ticket, and this run starts from the branch as the board host has it.`n`n$names$more`n`nThey are kept on ``$runHost`` as stash ``$($s.sha)`` (``git stash list`` in that clone shows it as: $($s.message)). To look: ``git stash show -p --include-untracked $($s.sha)``. Nothing needs doing unless something in them was wanted."
+        }
     }
 }
 # The ticket's own files - the owner's attachments, the linked issue's - kept at the same paths
