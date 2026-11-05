@@ -89,6 +89,7 @@ builder.Services.AddSingleton<NotificationSender>();
 // config on every call rather than caching it, so the Settings toggle takes effect without a
 // restart — which here would also kill every in-flight worker. The heartbeat's own runs have the
 // same abstraction on the PowerShell side, in data/providers.ps1.
+builder.Services.AddSingleton(_ => new ApiCreditsState());
 builder.Services.AddSingleton<AgentProviderFactory>();
 builder.Services.AddSingleton<CodexUsageService>();
 builder.Services.AddSingleton<ImprovementApplier>();

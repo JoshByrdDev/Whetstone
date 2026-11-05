@@ -71,6 +71,9 @@ public class DashboardPaths
     /// package.json are tracked; node_modules and models/ are not).
     /// </summary>
     public string NarratorDir => Path.Combine(DataRoot, "narrator");
+
+    /// <summary>The Agent SDK runner that spends a plan's monthly API credits (<see cref="ClaudeApiCredits"/>).</summary>
+    public string AgentSdkDir => Path.Combine(DataRoot, "agent-sdk");
     /// <summary>QA's browser server as installed by <c>npm install</c> in data/playwright-mcp; worker.ps1 runs the same file.</summary>
     public string PlaywrightMcpCli => Path.Combine(DataRoot, "playwright-mcp", "node_modules", "@playwright", "mcp", "cli.js");
 

@@ -64,6 +64,8 @@ data/jira-attachments/
 data/walkthrough-clips/
 data/unit-reports/
 data/narrator/node_modules/
+# The Agent SDK the dashboard's own runs use on API credits; run.mjs and package.json are source.
+data/agent-sdk/node_modules/
 # QA's browser server, installed once so a run does not ask the npm registry at every launch.
 data/playwright-mcp/node_modules/
 # The analytics warehouse and its published marts (docs/analytics.md): rebuilt by a refresh, one machine's.

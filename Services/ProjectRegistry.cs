@@ -529,6 +529,9 @@ public class StackConfig
 public class ProjectRegistry
 {
     private readonly DashboardPaths _paths;
+
+    /// <summary>Where this registry's data lives, for a reader that already holds the registry.</summary>
+    public DashboardPaths Paths => _paths;
     private readonly QaIsolation _isolation;
 
     public ProjectRegistry(DashboardPaths paths, QaIsolation? isolation = null)

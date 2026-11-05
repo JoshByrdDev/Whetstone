@@ -29,7 +29,9 @@ public class SetupCheckService
         Func<string?, string, string?> GitConfig,
         Func<string?> NarratorUnavailable,
         Func<string?> HeartbeatStartupError,
-        Func<bool> PlaywrightInstalled);
+        Func<bool> PlaywrightInstalled,
+        // Null while the API-credits setting is off, which needs nothing on this machine.
+        Func<(int Keys, string? RunnerUnavailable)?>? ApiCredits = null);
 
     private static readonly Dictionary<string, (string Name, string Install)> Clis = new()
     {
@@ -49,7 +51,10 @@ public class SetupCheckService
             RunGitConfig,
             narrator.Unavailable,
             () => heartbeat.StartupError,
-            () => File.Exists(paths.PlaywrightMcpCli)))
+            () => File.Exists(paths.PlaywrightMcpCli),
+            () => ClaudeApiCredits.Read(registry.GetGlobalConfig()) is { Enabled: true } s
+                ? (s.Keys.Count, ClaudeApiCredits.RunnerUnavailable(paths))
+                : null))
     { }
 
     public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Probe probe) =>
@@ -146,6 +151,20 @@ public class SetupCheckService
             : new SetupItem("narrator", "Walkthrough voice-over", "warn", false,
                 "Walkthroughs play with captions only: " + narrator,
                 "Run npm install once in data/narrator (the first voiced walkthrough also downloads a ~90MB voice model)."));
+
+        // ---- the Agent SDK runner, only once the API-credits setting is switched on ----
+        if (probe.ApiCredits?.Invoke() is { } credits)
+            items.Add(credits switch
+            {
+                { RunnerUnavailable: { } why } => new SetupItem("api-credits", "Dashboard runs on API credits", "warn", false,
+                    "Switched on, but every dashboard run is on plan usage: " + why,
+                    "Run npm install once in data/agent-sdk."),
+                { Keys: 0 } => new SetupItem("api-credits", "Dashboard runs on API credits", "warn", false,
+                    "Switched on with no key saved, so every dashboard run is on plan usage.",
+                    "Add a Console API key in Settings, from an organization your plan is linked to."),
+                _ => new SetupItem("api-credits", "Dashboard runs on API credits", "ok", false,
+                    $"The runner is installed and {credits.Keys} key{(credits.Keys == 1 ? " is" : "s are")} saved.", null),
+            });
 
         // ---- uv: runs the analytics refresh (dbt over DuckDB) behind the Metrics page ----
         items.Add(Tool(probe, "uv", "uv (Metrics analytics)", required: false,

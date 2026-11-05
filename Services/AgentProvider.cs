@@ -79,6 +79,19 @@ public abstract class AgentProvider
     public abstract string DisplayName { get; }
 
     /// <summary>
+    /// The API-credits key this run spends, by its name; null for a run on a plan's own usage.
+    /// See <see cref="ClaudeApiCredits"/>.
+    /// </summary>
+    public virtual string? ApiCreditName => null;
+
+    /// <summary>
+    /// What to run instead when this run's key refused it before it did anything - its credits
+    /// spent, or a key that does not work. Handed the error; null when there is nothing to fall
+    /// back to. Set by <see cref="AgentProviderFactory"/>, which also notes the refusal.
+    /// </summary>
+    public Func<string, AgentProvider>? WhenKeyRefuses { get; init; }
+
+    /// <summary>
     /// Build the Classroom's read-only, schema-validated run. The read-only guarantee is enforced by
     /// the CLI rather than asked for in the prompt — how, is each provider's business.
     /// </summary>
@@ -231,6 +244,23 @@ public sealed class ClaudeAgentProvider : AgentProvider
     private readonly string _model;
     private readonly string? _effort;
     private readonly string? _configDir;
+    private readonly ApiCreditKey? _credit;
+    private readonly string? _sdkRunner;
+
+    /// <summary>
+    /// The same run on a plan's monthly API credits: through the Agent SDK runner rather than the
+    /// CLI, on one Console key, and with no Claude login at all - see <c>data/agent-sdk/run.mjs</c>.
+    /// The runner takes the CLI's own flags and prints the CLI's own output, so everything below
+    /// that builds arguments or reads a result is the same code either way.
+    /// </summary>
+    public ClaudeAgentProvider(string? model, string? effort, ApiCreditKey credit, string sdkRunner)
+        : this(model, effort, configDir: null)
+    {
+        _credit = credit;
+        _sdkRunner = sdkRunner;
+    }
+
+    public override string? ApiCreditName => _credit?.Name;
 
     /// <param name="effort">
     /// Claude Code's <c>--effort</c>; blank leaves it to the CLI. Its default is per MODEL (Opus 5
@@ -248,13 +278,13 @@ public sealed class ClaudeAgentProvider : AgentProvider
     }
 
     public override AgentProviderKind Kind => AgentProviderKind.Claude;
-    public override string Executable => "claude";
-    public override string DisplayName => "Anthropic Claude Code";
+    // What a failure message names, so "exited with code 1" points at what actually ran.
+    public override string Executable => _credit is null ? "claude" : "the Agent SDK runner";
+    public override string DisplayName => _credit is null ? "Anthropic Claude Code" : "Claude Agent SDK (API credits)";
 
     public override AgentRun BuildAnalysisRun(string workDir, string jsonSchema, string scratchDir)
     {
-        var run = new AgentRun { FileName = Executable };
-        AddAccount(run);
+        var run = NewRun();
         // ArgumentList rather than a single Arguments string: the schema is 2KB of quotes and
         // braces, and hand-escaping that for a Windows command line is a bug waiting to happen.
         run.Arguments.AddRange(new[]
@@ -290,17 +320,29 @@ public sealed class ClaudeAgentProvider : AgentProvider
 
     public override AgentRun BuildFreeformRun(string workDir, string scratchDir)
     {
-        var run = new AgentRun { FileName = Executable };
-        AddAccount(run);
+        var run = NewRun();
         run.Arguments.AddRange(new[] { "-p", "--model", _model });
         AddEffort(run);
         run.Arguments.AddRange(new[] { "--permission-mode", "bypassPermissions" });
         return run;
     }
 
-    private void AddAccount(AgentRun run)
+    /// <summary>
+    /// The process a run starts as: the CLI on an account's login, or the Agent SDK runner on a key.
+    /// The key goes in the environment and never in the arguments, where a process listing shows it.
+    /// </summary>
+    private AgentRun NewRun()
     {
-        if (_configDir != null) run.Environment["CLAUDE_CONFIG_DIR"] = _configDir;
+        if (_credit is null)
+        {
+            var cli = new AgentRun { FileName = "claude" };
+            if (_configDir != null) cli.Environment["CLAUDE_CONFIG_DIR"] = _configDir;
+            return cli;
+        }
+        var sdk = new AgentRun { FileName = "node" };
+        sdk.Arguments.Add(_sdkRunner!);
+        sdk.Environment["ANTHROPIC_API_KEY"] = _credit.Key;
+        return sdk;
     }
 
     private void AddEffort(AgentRun run)
@@ -1227,9 +1269,13 @@ public class AgentProviderFactory
 {
     private readonly ProjectRegistry _registry;
     private readonly QaIsolation _isolation;
+    private readonly ApiCreditsState _credits;
 
-    public AgentProviderFactory(ProjectRegistry registry, QaIsolation? isolation = null) =>
-        (_registry, _isolation) = (registry, isolation ?? QaIsolation.Off);
+    public AgentProviderFactory(ProjectRegistry registry, QaIsolation? isolation = null, ApiCreditsState? credits = null) =>
+        (_registry, _isolation, _credits) = (registry, isolation ?? QaIsolation.Off, credits ?? new ApiCreditsState());
+
+    /// <summary>Which keys have lately refused a run - what Settings shows beside each key.</summary>
+    public ApiCreditsState Credits => _credits;
 
     /// <summary>
     /// How hard a run thinks when its role has never been told. Never "whatever the CLI defaults
@@ -1242,8 +1288,32 @@ public class AgentProviderFactory
     /// <summary>What a role is set to, every gap filled. See <see cref="AgentRoles"/>.</summary>
     public AgentRole Role(string role) => AgentRoles.Resolve(_registry.GetGlobalConfig(), role);
 
-    /// <summary>The provider for one role, on that role's model and effort.</summary>
-    public AgentProvider For(string role) => Build(Role(role));
+    /// <summary>
+    /// The provider for one role, on that role's model and effort - on a plan's API credits when
+    /// the role is a Claude one, the API-credits setting covers it, and a key has not lately
+    /// refused a run. Otherwise exactly what it always was.
+    /// </summary>
+    public AgentProvider For(string role)
+    {
+        var resolved = Role(role);
+        if (_isolation.On || resolved.Provider != "claude") return Build(resolved);
+
+        var settings = ClaudeApiCredits.Read(_registry.GetGlobalConfig());
+        if (!settings.Enabled || !settings.Roles.Contains(role)) return Build(resolved);
+        if (ClaudeApiCredits.RunnerUnavailable(_registry.Paths) is not null) return Build(resolved);
+        if (settings.Keys.FirstOrDefault(k => _credits.RefusalOf(k.Name) is null) is not { } key) return Build(resolved);
+
+        return new ClaudeAgentProvider(resolved.Model, resolved.Effort, key, ClaudeApiCredits.RunnerScript(_registry.Paths))
+        {
+            // A refused key is noted, and the run asks again: the next key, or plan usage once
+            // none is left. Each refusal removes one key, so this cannot go round forever.
+            WhenKeyRefuses = error =>
+            {
+                _credits.Refused(key.Name, ClaudeApiCredits.Describe(error));
+                return For(role);
+            },
+        };
+    }
 
     /// <summary>
     /// Whether any role runs on Claude. The rate-limit meter reads Claude Code's own subscription,

@@ -9,6 +9,8 @@ import { usePop } from '../hooks/usePop';
 import { useUnsavedGuard } from '../hooks/useUnsavedGuard';
 import { SmartSwitchField } from './SmartSwitchField';
 import type { SmartSwitchSetting } from './SmartSwitchField';
+import { ApiCreditsField, API_CREDITS_OFF } from './ApiCreditsField';
+import type { ApiCreditsSetting } from './ApiCreditsField';
 
 // ---------- Shared field primitives -----------------------------------------
 
@@ -251,6 +253,8 @@ interface GlobalConfig {
   claudeAccounts: ClaudeAccountOption[];
   /** Moving down an ordered list of those accounts by itself as each one fills. */
   claudeSmartSwitch: SmartSwitchSetting;
+  /** The dashboard's own runs on a plan's monthly API credits. Off unless switched on. */
+  claudeApiCredits: ApiCreditsSetting;
   /** Served by the API rather than hardcoded here, so the two halves cannot disagree about
    *  which providers and models exist. */
   agentProviders: AgentProviderOption[];
@@ -421,6 +425,7 @@ function withDefaults(d: GlobalConfig): GlobalConfig {
     showWorkerHosts: d.showWorkerHosts ?? false,
     workerHostsInUse: d.workerHostsInUse ?? false,
     claudeSmartSwitch: d.claudeSmartSwitch ?? { enabled: false, chain: [] },
+    claudeApiCredits: d.claudeApiCredits ?? API_CREDITS_OFF,
   };
 }
 
@@ -495,6 +500,13 @@ function GlobalSettings() {
       errors.qaLeases = `A whole number from 1 to ${maxQa}`;
     if (cfg.claudeSmartSwitch?.chain.some(r => !(r.weekly >= 1 && r.weekly <= 100) || !(r.session >= 1 && r.session <= 100)))
       errors.claudeSmartSwitch = 'Each limit is a percent from 1 to 100';
+    const creditKeys = cfg.claudeApiCredits?.keys ?? [];
+    if (creditKeys.some(k => !k.name.trim()))
+      errors.claudeApiCredits = 'Each key needs a name';
+    else if (new Set(creditKeys.map(k => k.name.trim().toLowerCase())).size !== creditKeys.length)
+      errors.claudeApiCredits = 'Each key needs a different name';
+    else if (creditKeys.some(k => !k.keySet && !k.key?.trim()))
+      errors.claudeApiCredits = 'Paste a key into each new row, or remove it';
   }
   const hasErrors = Object.keys(errors).length > 0;
 
@@ -905,6 +917,15 @@ function GlobalSettings() {
           dirty={dirty}
         />
         {errors.claudeSmartSwitch && <p className="text-xs text-red-400">{errors.claudeSmartSwitch}</p>}
+      </FieldGroup>
+
+      <FieldGroup title="API Credits">
+        <ApiCreditsField
+          value={cfg.claudeApiCredits}
+          roleLabels={Object.fromEntries((cfg.agentRoleCatalog ?? []).map(r => [r.key, r.label]))}
+          onChange={claudeApiCredits => update({ claudeApiCredits })}
+        />
+        {errors.claudeApiCredits && <p className="text-xs text-red-400">{errors.claudeApiCredits}</p>}
       </FieldGroup>
 
       <FieldGroup title="Rate-Limit Meter">

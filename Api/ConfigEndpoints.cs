@@ -274,7 +274,7 @@ public static class ConfigEndpoints
     {
         // ---- Global settings ------------------------------------------------
 
-        app.MapGet("/api/config", (ProjectRegistry registry, DashboardPaths paths) =>
+        app.MapGet("/api/config", (ProjectRegistry registry, DashboardPaths paths, AgentProviderFactory providers) =>
         {
             var g = registry.GetGlobalConfig();
             return Results.Ok(new
@@ -338,6 +338,9 @@ public static class ConfigEndpoints
                     .Select(a => new { name = a.Name, configDir = a.ConfigDir, signedIn = ClaudeAccounts.HasLogin(a) }),
                 // The smart switch, with every limit filled in, so the form shows what will be applied.
                 claudeSmartSwitch = SmartSwitchOut(g),
+                // The dashboard's own runs on a plan's API credits. Each key's NAME and whether it
+                // lately refused a run - never the key, for the same reason as claudeOauthTokenSet.
+                claudeApiCredits = ApiCreditsOut(g, paths, providers.Credits),
                 // The catalogue the Settings panel renders from.
                 agentProviders = AgentProviders,
                 notificationEventCatalog = NotificationEvents,
@@ -443,6 +446,12 @@ public static class ConfigEndpoints
             // Limits clamped to 1..100 and names deduplicated where it is stored, as the accounts are.
             if (target.ContainsKey(ClaudeSmartSwitch.ConfigKey))
                 target[ClaudeSmartSwitch.ConfigKey] = ClaudeSmartSwitch.Normalize(target[ClaudeSmartSwitch.ConfigKey]);
+
+            // Merged with what is stored rather than copied, because the page never has the keys to
+            // send back: an entry without one keeps the key already saved under its name.
+            if (incoming.ContainsKey(ClaudeApiCredits.ConfigKey))
+                target[ClaudeApiCredits.ConfigKey] = ClaudeApiCredits.Normalize(
+                    incoming[ClaudeApiCredits.ConfigKey], target[ClaudeApiCredits.ConfigKey]);
 
             SaveObject(paths.GlobalConfigPath, target, before);
             return Results.Ok(new { saved = true });
@@ -863,6 +872,28 @@ public static class ConfigEndpoints
         {
             enabled = s.Enabled,
             chain = s.Chain.Select(r => new { account = r.Account, weekly = r.Weekly, session = r.Session }),
+        };
+    }
+
+    private static object ApiCreditsOut(IReadOnlyDictionary<string, JsonElement> g, DashboardPaths paths, ApiCreditsState state)
+    {
+        var s = ClaudeApiCredits.Read(g);
+        var stored = g.ContainsKey(ClaudeApiCredits.ConfigKey);
+        return new
+        {
+            enabled = s.Enabled,
+            // A machine that never saved the setting shows the roles switching it on would cover.
+            roles = stored ? s.Roles : ClaudeApiCredits.DefaultRoles,
+            keys = s.Keys.Select(k => new
+            {
+                name = k.Name,
+                keySet = true,
+                // The last four characters, so two saved keys can be told apart without showing either.
+                hint = k.Key.Length > 8 ? "…" + k.Key[^4..] : null,
+                refused = state.RefusalOf(k.Name) is { } r ? new { at = r.At, why = r.Why } : null,
+            }),
+            eligibleRoles = ClaudeApiCredits.EligibleRoles,
+            runnerUnavailable = ClaudeApiCredits.RunnerUnavailable(paths),
         };
     }
 

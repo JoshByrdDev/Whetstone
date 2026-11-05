@@ -38,6 +38,31 @@ public static class AgentJsonRunner
         string prompt, string jsonSchema, IRunProgress progress, TimeSpan timeout, string what,
         ILogger log, CancellationToken ct)
     {
+        while (true)
+        {
+            if (provider.ApiCreditName is { } credit) progress.Step($"Running on API credits ({credit})");
+            var result = await RunOnceAsync(provider, workDir, scratch, prompt, jsonSchema, progress, timeout, what, log, ct);
+
+            // A key that refused the run before it did anything - credits spent, or a key that does
+            // not work - has cost one request and no work, so the run goes again on whatever comes
+            // next: another key, or the plan's usage. A failure after the run got going is the
+            // run's own and is reported as it is.
+            if (result.Outcome is not null || result.Steps > 0 || provider.WhenKeyRefuses is not { } next
+                || !ClaudeApiCredits.IsRefusedByKey(result.Error))
+                return result;
+
+            log.LogWarning("The {What} was refused on API credits ({Credit}): {Error}. Running it again on what comes next.",
+                what, provider.ApiCreditName, result.Error);
+            provider = next(result.Error!);
+            progress.Step($"API credits refused ({ClaudeApiCredits.Describe(result.Error!)}) - " +
+                (provider.ApiCreditName is null ? "running on plan usage instead" : "trying the next key"));
+        }
+    }
+
+    private static async Task<Result> RunOnceAsync(AgentProvider provider, string workDir, string scratch,
+        string prompt, string jsonSchema, IRunProgress progress, TimeSpan timeout, string what,
+        ILogger log, CancellationToken ct)
+    {
         var sw = Stopwatch.StartNew();
         var stdout = new StringBuilder();
         var stderr = new StringBuilder();

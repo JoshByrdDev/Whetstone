@@ -88,55 +88,7 @@ public class ImprovementApplier
 
         try
         {
-            var provider = _providers.For(AgentRoles.Applier);
-            _run = provider.BuildFreeformRun(repoRoot, scratch);
-
-            _process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = CliPath.Resolve(_run.FileName),
-                    // Prompt is fed on stdin (avoids escaping a large multi-line argument).
-                    WorkingDirectory = repoRoot,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardInput = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    // Same reason as the Classroom run: the CLI speaks UTF-8 both ways, and the
-                    // console's code page is not a fact about the CLI.
-                    StandardOutputEncoding = ProcessText.Utf8,
-                    StandardErrorEncoding = ProcessText.Utf8,
-                    StandardInputEncoding = ProcessText.Utf8,
-                },
-                EnableRaisingEvents = true
-            };
-            foreach (var arg in _run.Arguments) _process.StartInfo.ArgumentList.Add(arg);
-            foreach (var (k, v) in _run.Environment) _process.StartInfo.Environment[k] = v;
-
-            _process.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data != null) _output.AppendLine(e.Data);
-            };
-            _process.ErrorDataReceived += (_, e) =>
-            {
-                if (e.Data != null) _output.AppendLine(e.Data);
-            };
-            _process.Exited += (_, _) =>
-            {
-                _success = _process?.ExitCode == 0;
-                if (_success != true)
-                    _error = "Process exited with non-zero exit code";
-                _running = false;
-                if (_run != null) AgentProvider.Cleanup(_run);
-            };
-
-            _process.Start();
-            _process.StandardInput.Write(prompt);
-            _process.StandardInput.Close();
-            _process.BeginOutputReadLine();
-            _process.BeginErrorReadLine();
-
+            Launch(_providers.For(AgentRoles.Applier), repoRoot, scratch, prompt);
             return (true, "Apply started");
         }
         catch (Exception ex)
@@ -146,6 +98,89 @@ public class ImprovementApplier
             if (_run != null) AgentProvider.Cleanup(_run);
             return (false, $"Failed to start: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// How soon a run on API credits has to fail for the failure to count as the key refusing it.
+    /// A spent or rejected key answers the first request in about a second; this run's output is
+    /// prose, with no tool calls to count, so time is the one sign that nothing was edited yet.
+    /// </summary>
+    private static readonly TimeSpan RefusedWithin = TimeSpan.FromSeconds(60);
+
+    private void Launch(AgentProvider provider, string repoRoot, string scratch, string prompt)
+    {
+        _run = provider.BuildFreeformRun(repoRoot, scratch);
+        var started = DateTimeOffset.UtcNow;
+        if (provider.ApiCreditName is { } credit) _output.AppendLine($"[Running on API credits ({credit})]");
+
+        _process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = CliPath.Resolve(_run.FileName),
+                // Prompt is fed on stdin (avoids escaping a large multi-line argument).
+                WorkingDirectory = repoRoot,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                // Same reason as the Classroom run: the CLI speaks UTF-8 both ways, and the
+                // console's code page is not a fact about the CLI.
+                StandardOutputEncoding = ProcessText.Utf8,
+                StandardErrorEncoding = ProcessText.Utf8,
+                StandardInputEncoding = ProcessText.Utf8,
+            },
+            EnableRaisingEvents = true
+        };
+        foreach (var arg in _run.Arguments) _process.StartInfo.ArgumentList.Add(arg);
+        foreach (var (k, v) in _run.Environment) _process.StartInfo.Environment[k] = v;
+
+        _process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data != null) _output.AppendLine(e.Data);
+        };
+        _process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data != null) _output.AppendLine(e.Data);
+        };
+        var process = _process;
+        var run = _run;
+        _process.Exited += (_, _) =>
+        {
+            // Exited can arrive before the last lines are read, and the refusal is a last line.
+            // WaitForExit() with no timeout also waits for both streams to drain.
+            try { process.WaitForExit(); } catch { /* already reaped */ }
+            var ok = process.ExitCode == 0;
+            AgentProvider.Cleanup(run);
+
+            // Refused by its key before it could have edited anything: go again on what comes
+            // next - another key, or the plan's usage - instead of reporting a failed apply.
+            var said = _output.ToString();
+            if (!ok && provider.WhenKeyRefuses is { } next && ClaudeApiCredits.IsRefusedByKey(said)
+                && DateTimeOffset.UtcNow - started < RefusedWithin)
+            {
+                try
+                {
+                    var fallback = next(said);
+                    _output.AppendLine($"[API credits refused ({ClaudeApiCredits.Describe(said)}) - " +
+                        (fallback.ApiCreditName is null ? "running on plan usage instead]" : "trying the next key]"));
+                    Launch(fallback, repoRoot, scratch, prompt);
+                    return;
+                }
+                catch (Exception ex) { _output.AppendLine($"Could not start again: {ex.Message}"); }
+            }
+
+            _success = ok;
+            if (!ok) _error = "Process exited with non-zero exit code";
+            _running = false;
+        };
+
+        _process.Start();
+        _process.StandardInput.Write(prompt);
+        _process.StandardInput.Close();
+        _process.BeginOutputReadLine();
+        _process.BeginErrorReadLine();
     }
 
     /// <summary>
