@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useVeil } from '../hooks/useVeil';
-import { getPrPreflight, getPrBaseCheck, createPr, mergeTicket, rebaseTicket, forcePushTicket, copyLeftOutDescription } from '../api/git';
-import type { PrPreflight, PrBaseCheck, PrCreateResult, MergeResult } from '../api/git';
+import { getPrPreflight, getPrBaseCheck, createPr, mergeTicket, rebaseTicket, forcePushTicket, pushRound, copyLeftOutDescription } from '../api/git';
+import type { PrPreflight, PrBaseCheck, PrCreateResult, MergeResult, ForcePushResult } from '../api/git';
 import { DiffReviewList } from './DiffReviewList';
 
 /**
@@ -32,6 +32,11 @@ import { DiffReviewList } from './DiffReviewList';
  * instead: the branch is merged into the base in the hub with a merge commit, and nothing is pushed.
  * Being behind the base stops being a reason to refuse - a merge commit is exactly how that is
  * reconciled - and origin's copy of the branch stops mattering, because nothing is sent there.
+ *
+ * A ticket under PR review (`reviewedOn`) is a pull request that already exists and has been read.
+ * Its rounds go on top of what the reviewer saw, so the dialog offers the diff since then, never asks
+ * for a rebase or a force push (both would replace what the reviewer read, and the server refuses
+ * them), and its button is a plain push that origin takes as a fast-forward or refuses.
  */
 export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () => void }) {
   // The row that opened this unmounts it on close, so the dialog holds its own exit open long
@@ -60,6 +65,12 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
   const [gitBusy, setGitBusy] = useState<'rebase' | 'force' | null>(null);
   const [gitMsg, setGitMsg] = useState<{ tone: 'good' | 'bad'; text: string; files?: string[] } | null>(null);
   const [confirmForce, setConfirmForce] = useState(false);
+  // Under PR review: what the reviewer last saw, the branch read from there, which of the two is on
+  // screen, and the outcome of pushing a round.
+  const [reviewedOn, setReviewedOn] = useState<string | null>(null);
+  const [since, setSince] = useState<PrPreflight | null>(null);
+  const [view, setView] = useState<'since' | 'branch'>('since');
+  const [pushed, setPushed] = useState<ForcePushResult | null>(null);
 
   // Which load the answers on the wire belong to. Two requests per load, either of which can be
   // outrun by a re-check or a switch of ticket, and a late reply landing on a newer branch's
@@ -83,6 +94,8 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
       known = r.preflight;
       setPre(r.preflight);
       setMerge(r.mergeInsteadOfPr === true);
+      setReviewedOn(r.reviewedOn ?? null);
+      setSince(r.repos?.find(x => x.sinceReviewed)?.sinceReviewed ?? null);
       if (!keepText) {
         setTitle(r.suggestedTitle ?? '');
         setDescription(r.suggestedDescription ?? '');
@@ -139,6 +152,7 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
 
   async function submit() {
     if (merge) return submitMerge();
+    if (underReview) return submitPush();
     setBusy(true); setError(null);
     try {
       const r = await createPr(ticketId, title.trim(), description);
@@ -153,6 +167,21 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not raise the PR.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** A round of a ticket under review: push only. A refusal means it was not a fast-forward. */
+  async function submitPush() {
+    setBusy(true); setError(null);
+    try {
+      const r = await pushRound(ticketId);
+      setPushed(r);
+      if (!r.ok) setError(r.error ?? 'Could not push.');
+      else await load(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not push.');
     } finally {
       setBusy(false);
     }
@@ -222,14 +251,19 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
   // The base answer, once there is one. Every judgement below reads it through this rather than off
   // `pre`, so a number that has not been checked yet cannot be mistaken for one that has.
   const checked = pre?.ok === true && pre.baseChecked ? pre : null;
+  // A pull request someone has read. Its push is a fast-forward and nothing here rewrites it.
+  const underReview = !merge && !!reviewedOn;
+  // What the diff and commit tabs show: under review, by default, only what is new since the reviewer.
+  const shown = underReview && view === 'since' && since?.ok ? since : pre;
   const nothingToRaise = checked !== null && checked.ahead === 0;
   const stale = checked !== null && checked.behind > 0;
   // origin holds commits this branch does not: the two histories parted, which is what a rebase
   // leaves behind and the only case a plain push cannot fix. A merge pushes nothing, so it is moot.
   const diverged = !merge && checked !== null && checked.remoteBranchExists && checked.remoteAhead > 0;
   const gitting = gitBusy !== null;
-  const done = merge ? merged?.ok === true : result?.ok === true;
-  const canSubmit = checked !== null && !nothingToRaise && !busy && !gitting && !done && (merge || !stale || override);
+  const done = merge ? merged?.ok === true : underReview ? pushed?.ok === true : result?.ok === true;
+  const canSubmit = checked !== null && !nothingToRaise && !busy && !gitting && !done
+    && (merge || underReview || !stale || override) && !(underReview && (diverged || checked.remoteUpToDate));
 
   // Through the body, not in place: the button that opens this lives in the row's hover panel, and
   // that panel is a clipped, opacity-driven box — a dialog rendered inside it gets cropped to the
@@ -275,10 +309,24 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
             <>
               {/* ---- Is this branch fit to raise? ---- */}
               <div className="space-y-1.5">
+                {underReview && (
+                  <Banner tone="warn">
+                    <b>Under PR review.</b> The reviewer last saw{' '}
+                    <span className="font-mono">{shortSha(reviewedOn)}</span>
+                    {since?.ok && <> — {since.commits.length} commit{since.commits.length === 1 ? '' : 's'} on top since</>}.
+                    {' '}Those commits stay as they are, so this pushes as a fast-forward and nothing here rebases or forces.
+                  </Banner>
+                )}
                 {!pre.baseChecked ? (
                   <Banner tone="wait">
                     Fetching <span className="font-mono">origin/{pre.baseBranch}</span> to see whether this branch
                     is based off the latest of it. Everything below is already read from the branch itself.
+                  </Banner>
+                ) : stale && underReview ? (
+                  <Banner tone="warn">
+                    <b>{pre.behind} commit{pre.behind === 1 ? '' : 's'} behind {pre.baseRef}</b> — not rebased, because a rebase would
+                    replace the commits the reviewer read and lose their threads. Refinement checks it still merges, and says on
+                    the ticket if it does not. To rebase anyway, take the ticket out of review on its drawer first.
                   </Banner>
                 ) : stale ? (
                   <Banner tone={merge ? 'warn' : 'bad'}>
@@ -340,7 +388,18 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
                   </Banner>
                 )}
 
-                {diverged && (
+                {diverged && underReview && (
+                  <Banner tone="bad">
+                    <b>
+                      <span className="font-mono">origin/{pre.branch}</span> has {pre.remoteAhead} commit
+                      {pre.remoteAhead === 1 ? '' : 's'} this branch does not.
+                    </b>{' '}
+                    Pushing would not be a fast-forward, and forcing would replace what the reviewer has. Look at what moved
+                    before anything is pushed; if the branch really must be forced, take the ticket out of review first.
+                  </Banner>
+                )}
+
+                {diverged && !underReview && (
                   <Banner tone="warn">
                     <b>
                       <span className="font-mono">origin/{pre.branch}</span> has {pre.remoteAhead} commit
@@ -378,7 +437,7 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
                   </Banner>
                 )}
 
-                {!merge && checked !== null && checked.remoteBranchExists && !checked.remoteUpToDate && !diverged && (
+                {!merge && !underReview && checked !== null && checked.remoteBranchExists && !checked.remoteUpToDate && !diverged && (
                   <Banner tone="warn">
                     <span className="font-mono">origin/{pre.branch}</span> exists but is behind your local branch —
                     creating the PR pushes the rest.
@@ -414,22 +473,40 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
               <div className="pt-1">
                 <div className="flex items-center gap-3 border-b border-hair">
                   <Tab active={tab === 'diff'} onClick={() => setTab('diff')}>
-                    Files <span className="text-gray-600">{pre.files.length}</span>
+                    Files <span className="text-gray-600">{shown!.files.length}</span>
                   </Tab>
                   <Tab active={tab === 'commits'} onClick={() => setTab('commits')}>
-                    Commits <span className="text-gray-600">{pre.commits.length}</span>
+                    Commits <span className="text-gray-600">{shown!.commits.length}</span>
                   </Tab>
                   <span className="flex-1" />
+                  {underReview && since?.ok && (
+                    <span className="flex items-center gap-1 pb-1.5 text-[10px]">
+                      <button
+                        onClick={() => setView('since')}
+                        aria-current={view === 'since' ? 'true' : undefined}
+                        className={`orbit-tap px-1.5 py-0.5 rounded border ${view === 'since' ? 'border-amber-700 text-amber-200' : 'border-hair text-gray-500'}`}
+                      >
+                        Since the reviewer
+                      </button>
+                      <button
+                        onClick={() => setView('branch')}
+                        aria-current={view === 'branch' ? 'true' : undefined}
+                        className={`orbit-tap px-1.5 py-0.5 rounded border ${view === 'branch' ? 'border-amber-700 text-amber-200' : 'border-hair text-gray-500'}`}
+                      >
+                        Whole branch
+                      </button>
+                    </span>
+                  )}
                   <span className="text-[10px] font-mono text-gray-600 pb-1.5">
-                    <span className="text-emerald-500">+{pre.files.reduce((s, f) => s + f.added, 0)}</span>{' '}
-                    <span className="text-red-500">−{pre.files.reduce((s, f) => s + f.removed, 0)}</span>
+                    <span className="text-emerald-500">+{shown!.files.reduce((s, f) => s + f.added, 0)}</span>{' '}
+                    <span className="text-red-500">−{shown!.files.reduce((s, f) => s + f.removed, 0)}</span>
                   </span>
                 </div>
 
                 {tab === 'commits' ? (
                   <div className="py-2">
-                    {pre.commits.length === 0 && <div className="text-[11px] text-gray-600 py-2">No commits on this branch.</div>}
-                    {pre.commits.map(c => (
+                    {shown!.commits.length === 0 && <div className="text-[11px] text-gray-600 py-2">{shown === since ? 'Nothing new since the reviewer looked.' : 'No commits on this branch.'}</div>}
+                    {shown!.commits.map(c => (
                       <div key={c.sha} className="flex items-baseline gap-2.5 py-1 text-xs border-b border-hairsoft last:border-0">
                         <span className="font-mono text-[10px] text-amber-500 flex-none">{c.sha}</span>
                         <span className="text-gray-300 truncate flex-1">{c.subject}</span>
@@ -439,8 +516,8 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
                   </div>
                 ) : (
                   <DiffReviewList
-                    files={pre.files}
-                    truncated={pre.patchTruncated}
+                    files={shown!.files}
+                    truncated={shown!.patchTruncated}
                     pinned={pinned}
                     onTogglePin={togglePin}
                     // The branch is checked out in the agent's worktree, so that is the copy these
@@ -488,6 +565,18 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
               {merged.output.join('\n')}
             </pre>
           )}
+          {pushed?.ok && (
+            <div className="rounded border border-emerald-800 bg-emerald-950/40 px-3 py-2.5 text-xs text-emerald-200">
+              Pushed <span className="font-mono">{pushed.branch}</span> to origin at{' '}
+              <span className="font-mono">{pushed.sha?.slice(0, 7)}</span> as a fast-forward. The pull request shows the new
+              round on top; re-take what the reviewer saw on the ticket's drawer once they have looked.
+            </div>
+          )}
+          {pushed && pushed.output.length > 0 && (
+            <pre className="text-[10px] font-mono text-gray-500 bg-black/40 border border-hair rounded px-2.5 py-2 max-h-32 overflow-auto whitespace-pre-wrap">
+              {pushed.output.join('\n')}
+            </pre>
+          )}
           {result?.ok && (
             <div className="rounded border border-emerald-800 bg-emerald-950/40 px-3 py-2.5 text-xs text-emerald-200 space-y-1.5">
               <div>
@@ -515,12 +604,17 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-hair bg-panel">
           <div className="text-[11px] text-gray-500 min-w-0">
-            {!merge && stale && !override && (
+            {underReview && checked && !done && (
+              <span className={diverged ? 'text-red-400' : ''}>
+                {diverged ? 'Not a fast-forward — nothing will be pushed.' : checked.remoteUpToDate ? 'origin already has this round.' : 'A plain push: origin moves forward to the new round, no force.'}
+              </span>
+            )}
+            {!merge && !underReview && stale && !override && (
               <button onClick={() => setOverride(true)} className="text-amber-400 hover:text-amber-300 underline">
                 Raise it anyway, without rebasing
               </button>
             )}
-            {!merge && stale && override && <span className="text-amber-400">Raising without rebasing.</span>}
+            {!merge && !underReview && stale && override && <span className="text-amber-400">Raising without rebasing.</span>}
             {/* The button is shut until origin has answered, so say that rather than leaving a
                 greyed-out button with no reason beside it. */}
             {pre?.ok && !checked && !done && (
@@ -529,7 +623,7 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
             {merge && checked && !done && (
               <span>Merges into {pre?.baseBranch} in your repo with a merge commit. Nothing is pushed.</span>
             )}
-            {!merge && !stale && checked && !result?.ok && (
+            {!merge && !underReview && !stale && checked && !result?.ok && (
               diverged ? (
                 // Raising would push, and a push against a diverged remote is simply rejected. Say so
                 // here rather than letting the button find out.
@@ -553,7 +647,9 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
             >
               {merge
                 ? (busy ? 'Merging…' : done ? 'Done' : `Merge into ${pre?.baseBranch ?? 'base'}`)
-                : (busy ? 'Pushing…' : done ? 'Done' : 'Create pull request')}
+                : underReview
+                  ? (busy ? 'Pushing…' : done ? 'Done' : 'Push the round')
+                  : (busy ? 'Pushing…' : done ? 'Done' : 'Create pull request')}
             </button>
           </div>
         </div>
@@ -564,6 +660,14 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
 }
 
 // ---- bits ----
+
+/** A recorded point as git prints it: short shas, each with its repo on a project of several. */
+export function shortSha(point: string | null): string {
+  return (point ?? '').split(',').map(p => p.trim()).filter(Boolean).map(p => {
+    const at = p.lastIndexOf('@');
+    return at > 0 ? `${p.slice(0, at)}@${p.slice(at + 1, at + 8)}` : p.slice(0, 7);
+  }).join(', ');
+}
 
 /**
  * The base check landing on the branch read that arrived first. Every field it owns replaces the

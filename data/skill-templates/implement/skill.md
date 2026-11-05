@@ -26,6 +26,20 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **Name the repo whenever you name a file or a result.** A file is `<repo>/<path>` (`alpha-api/src/Foo.cs`), and every outcome, QA note and comment says which repo it is about.
 - **Build and test each change in the repo it is in.** The ticket is not done until every repo it changed is.
 
+## Under PR review - only when your prompt says **Under PR review**
+
+Most tickets are never in this state, and this section does not apply to them. When your prompt has an **Under PR review** line - or `classify_escape` answers with a `reviewedOn` - this branch is in a pull request someone has read, and the commits that line names (`dir@sha` per repo on a workspace of several) are what they read. Rewriting those commits loses the reviewer's comment threads and turns the owner's next push into a force push, so the branch works in rounds instead of in one rewritten commit:
+
+- **The reviewed commits are fixed.** No `git commit --amend`, squash, rebase or `reset` that reaches them. `git log --oneline <reviewed sha>..HEAD` is the round; nothing below it is yours to change.
+- **A round is one commit on top of them, in each repo it changes.** A repo the reviewer has not seen yet - one this round touches for the first time - is the usual one commit against its base ref.
+- **Do not rebase onto the base ref, even when it has moved.** A rebase replaces exactly the commits this section protects. If the branch no longer merges, say so in an `add_comment` naming the files and leave it to the owner; the heartbeat does not rebase it either.
+
+In this phase:
+
+- **Classify the send-back before you commit anything.** `classify_escape` with `PrReview` is what puts a ticket under PR review, at the build that was sent back, and whether it is decides the shape of every commit you make. Its answer says so.
+- **The first fix you commit makes the round's commit; everything after it in the same round amends it** - each later work item, and any later run before the ticket is back at review (a QA bounce, an owner's note): `git commit --amend`, never onto the reviewed commit. Tick items off as usual: an amended round commit is committed work.
+- **Write its message in the repo's own style for review fixes** - the conventions file says, or the history of `<base-ref>` shows how this team marks one - and about this round only: what the reviewer asked for and what changed for it. It is read beside the commit they already reviewed, so it does not restate the feature.
+
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` to read the ticket and its `workItems`. Items with `done: false` are what you implement; `done: true` are already complete - skip them.
@@ -137,7 +151,7 @@ Ensure **all** your changes are committed to the ticket's branch - QA and review
 
 #### A ticket sent back from review
 
-When someone sent this ticket back from `NeedsReview` or `Done` - the owner after trying it, or a reviewer on the pull request - the pipeline called the work finished and a person disagreed. That is an escape, and this run is the one that knows what was missed. Before you hand off, classify it with **`classify_escape`**: the kind, who found it (`Owner`, `PrReview` or `Other`), and a `why` of one or two sentences. `set_phase` out of `Implementing` is refused until you have.
+When someone sent this ticket back from `NeedsReview` or `Done` - the owner after trying it, or a reviewer on the pull request - the pipeline called the work finished and a person disagreed. That is an escape, and this run is the one that knows what was missed. Before you hand off, classify it with **`classify_escape`**: the kind, who found it (`Owner`, `PrReview` or `Other`), and a `why` of one or two sentences. `set_phase` out of `Implementing` is refused until you have. Do it first, before you commit anything: classifying it as `PrReview` puts the ticket under PR review, and that changes the shape of every commit this run makes (**Under PR review**, above).
 
 - **`OutsideContract`** - a stand-in for, or an assumption about, a service this machine cannot reach was wrong.
 - **`InheritedBehaviour`** - old behaviour or data that a new rule depends on: a ported screen's choice, a field one path never collects.

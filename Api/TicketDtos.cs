@@ -252,7 +252,12 @@ public record TicketDetailDto(
     bool FullQaRequired = false,
     // What this ticket's testing needs whatever its branch changes (Ticket.NeedsResources). Set by
     // the owner from the drawer or the steward on its own ticket; readable by a worker, settable by none.
-    IReadOnlyList<string>? Needs = null);
+    IReadOnlyList<string>? Needs = null,
+    // The pull request's reviewer last saw these commits (Ticket.ReviewedOn): the ticket works in rounds
+    // on top of them rather than one rewritten commit. Null when it is not under review. Set from the
+    // drawer, or by a run classifying a send-back as found in PR review; never by a tool of its own.
+    string? ReviewedOn = null,
+    DateTime? ReviewedOnAt = null);
 
 /// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
 public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
@@ -399,7 +404,9 @@ public static class TicketMapper
             : null,
         t.Walkthrough,
         t.FullQaRequired,
-        t.Needs);
+        t.Needs,
+        t.ReviewedOn,
+        t.ReviewedOnAt);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

@@ -738,6 +738,9 @@ public class TicketService
         if (t is null || string.IsNullOrWhiteSpace(mergeSha)) return;
         t.MergeSha = mergeSha.Trim();
         t.MergedAt = DateTime.UtcNow;
+        // Merged is the end of a review: nobody reads that pull request again.
+        t.ReviewedOn = null;
+        t.ReviewedOnAt = null;
         t.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         _bugTraces?.Enqueue(id);
@@ -959,6 +962,14 @@ public class TicketService
         // of the person who asked for it. Left standing, the next change request they make would
         // silently skip QA too - having been granted once, for a different change.
         if (to == TicketPhase.NeedsReview) t.ShortLoopReview = false;
+
+        // Done is the end of a review, as a merge is: a ticket reopened after it starts a new one,
+        // and its owner says so if it does.
+        if (to == TicketPhase.Done)
+        {
+            t.ReviewedOn = null;
+            t.ReviewedOnAt = null;
+        }
 
         // The owner's full re-run is spent the same way: by the QA pass it asked for, once that pass
         // hands off clean. A QA run that sends the work back keeps it standing for the next one.
@@ -1691,8 +1702,47 @@ public class TicketService
         e.ClassifiedBy = TransitionActor.Worker;
         e.ClassifiedByRunId = await LiveRunIdAsync(ticketId);
         e.Overridden = false;
+
+        // Found in PR review means the branch is in a pull request someone has read, so from here
+        // the ticket works in rounds rather than one rewritten commit (Ticket.ReviewedOn). What the
+        // reviewer saw is the build that was sent back - recorded with the move, before this run
+        // touched anything - and a later round's send-back moves the point up to what they saw then.
+        if (source == EscapeSource.PrReview && !string.IsNullOrWhiteSpace(e.Build)
+            && await _db.Tickets.FindAsync(ticketId) is { Track: TicketTrack.Delivery } t)
+        {
+            t.ReviewedOn = e.Build.Trim();
+            t.ReviewedOnAt = DateTime.UtcNow;
+            t.UpdatedAt = DateTime.UtcNow;
+        }
+
         await _db.SaveChangesAsync();
         return (e, null);
+    }
+
+    /// <summary>
+    /// Put a ticket under review at <paramref name="reviewedOn"/> - the commits its PR's reviewer
+    /// last saw, already checked against the branch by the caller - or take it out with null. The
+    /// owner's switch on the drawer: a REST route with no tool behind it. Returns the ticket, or why
+    /// it was refused; null and null when there is no such ticket.
+    /// </summary>
+    public async Task<(Ticket? Ticket, string? Problem)> SetReviewedOnAsync(int id, string? reviewedOn)
+    {
+        var t = await WithChildren().FirstOrDefaultAsync(x => x.Id == id);
+        if (t is null) return (null, null);
+        if (reviewedOn is not null)
+        {
+            if (t.Track != TicketTrack.Delivery)
+                return (null, "Only a delivery ticket's own branch can be under review. A review-track ticket reads someone else's branch.");
+            if (t.Phase == TicketPhase.Done)
+                return (null, "This ticket is Done, and a review ends there. Reopen it first.");
+            if (string.IsNullOrWhiteSpace(reviewedOn))
+                return (null, "Name the commit the reviewer saw, or leave it out to take the branch as it is now.");
+        }
+        t.ReviewedOn = string.IsNullOrWhiteSpace(reviewedOn) ? null : reviewedOn.Trim();
+        t.ReviewedOnAt = t.ReviewedOn is null ? null : DateTime.UtcNow;
+        t.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return (t, null);
     }
 
     /// <summary>

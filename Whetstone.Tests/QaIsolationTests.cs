@@ -48,6 +48,7 @@ public class QaIsolationTests : IDisposable
     [InlineData("POST", "/api/steward/plan/units/2/report")]
     [InlineData("POST", "/api/tickets/7/git/pr")]
     [InlineData("POST", "/api/tickets/7/git/force-push")]
+    [InlineData("POST", "/api/tickets/7/git/push")]
     [InlineData("GET", "/api/tickets/7/git/checkin")]
     [InlineData("POST", "/api/tickets/7/git/checkin/record")]
     [InlineData("POST", "/api/projects/alpha/tfvc/sync")]

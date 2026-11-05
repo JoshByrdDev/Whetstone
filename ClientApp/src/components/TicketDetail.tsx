@@ -261,6 +261,18 @@ export function TicketDetail({
               </label>
             )}
 
+            {/* Under PR review: once a pull request has comments, rounds go on top of what the
+                reviewer saw instead of being rewritten into it. The owner's switch, shown wherever
+                the ticket has a branch of its own that is not finished yet. */}
+            {t.track !== 'Review' && !!t.branch && (t.phase !== 'Done' || !!t.reviewedOn) && (
+              <UnderReviewControl
+                reviewedOn={t.reviewedOn ?? null}
+                reviewedOnAt={t.reviewedOnAt ?? null}
+                busy={busy}
+                onSet={(on, point) => run(() => api.setUnderReview(t.id, on, point))}
+              />
+            )}
+
             {/* Master notes — human-only, outrank everything else on the ticket */}
             <div>
               <SectionLabel>
@@ -1955,5 +1967,97 @@ function IssueFooter({ issueKey, issueUrl, issueUnavailable, trackerKind, tracke
 
   return (
     <button onClick={() => setEditing(true)} className="text-[11px] text-gray-500 hover:text-gray-300">+ Link {trackerName}</button>
+  );
+}
+
+/**
+ * The owner's switch for a ticket whose branch is in a pull request someone has reviewed. Off, the
+ * pipeline keeps the branch to one commit and rebases it as it likes. On, the commits the reviewer
+ * saw stay as they are, each round of fixes is one commit on top, and the push is a fast-forward.
+ * What the reviewer saw is taken from the branch head, re-taken after a hand push, or named.
+ */
+function UnderReviewControl({ reviewedOn, reviewedOnAt, busy, onSet }: {
+  reviewedOn: string | null;
+  reviewedOnAt: string | null;
+  busy: boolean;
+  onSet: (on: boolean, point?: string) => void;
+}) {
+  const on = !!reviewedOn;
+  const [naming, setNaming] = useState(false);
+  const [point, setPoint] = useState('');
+  return (
+    <div
+      className={`rounded-lg border px-3 py-2 text-[12px] leading-snug ${
+        on ? 'border-amber-900/50 bg-amber-950/10 text-amber-200/80' : 'border-hair bg-black/20 text-gray-500'
+      }`}
+    >
+      <label className="flex items-start gap-2 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={busy}
+          onChange={e => onSet(e.target.checked)}
+          className="mt-[3px]"
+        />
+        <span className="min-w-0">
+          <b>Under PR review.</b>{' '}
+          {on ? (
+            <>
+              The reviewer last saw <span className="font-mono break-all">{shortCommits(reviewedOn)}</span>
+              {reviewedOnAt && <span className="text-amber-200/50"> · set {ago(reviewedOnAt) === 'just now' ? 'just now' : `${ago(reviewedOnAt)} ago`}</span>}. Those
+              commits stay as they are: each round adds one commit on top, nothing rebases, and the push is a fast-forward.
+            </>
+          ) : (
+            'Off — the pipeline keeps this branch to one commit and rebases it as it goes. Tick once its pull request has review comments, so fixes land as their own commit and the push stays a fast-forward.'
+          )}
+        </span>
+      </label>
+      {on && (
+        <div className="mt-2 pl-5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onSet(true)}
+            title="Record the branch head as what the reviewer saw - after you push a round by hand"
+            className="orbit-tap text-[11px] font-semibold text-amber-100 px-2 py-0.5 rounded border border-amber-800 disabled:opacity-40"
+          >
+            Re-take from branch head
+          </button>
+          {naming ? (
+            <form
+              className="flex flex-1 min-w-0 max-sm:basis-full items-center gap-1.5"
+              onSubmit={e => { e.preventDefault(); if (point.trim()) { onSet(true, point.trim()); setNaming(false); setPoint(''); } }}
+            >
+              <input
+                autoFocus
+                value={point}
+                onChange={e => setPoint(e.target.value)}
+                placeholder="sha, or repo@sha, repo@sha"
+                className="flex-1 min-w-0 bg-gray-900 border border-hair rounded px-2 py-0.5 font-mono text-[11px] text-gray-200 focus:outline-none focus:border-gray-500"
+              />
+              <button
+                type="submit"
+                disabled={busy || !point.trim()}
+                className="orbit-tap text-[11px] font-semibold text-amber-100 px-2 py-0.5 rounded border border-amber-800 disabled:opacity-40"
+              >
+                Save
+              </button>
+              <button type="button" onClick={() => setNaming(false)} className="text-[11px] text-amber-400/70 hover:text-amber-300 transition-colors">
+                Cancel
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setNaming(true)}
+              className="orbit-tap text-[11px] text-amber-300/80 px-2 py-0.5 rounded border border-amber-900/60 disabled:opacity-40"
+            >
+              Name the commit…
+            </button>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

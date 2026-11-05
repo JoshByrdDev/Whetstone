@@ -459,6 +459,10 @@ export interface TicketDetail {
   // The owner asked for every QA item to be driven again on this rework - nothing may be carried
   // over. Spent when QA next hands off clean.
   fullQaRequired?: boolean;
+  // Under PR review: the commits the pull request's reviewer last saw (`sha`, or `dir@sha, ...` per repo).
+  // Each round goes on top of them as one commit, nothing rebases. Null when not under review.
+  reviewedOn?: string | null;
+  reviewedOnAt?: string | null;
   blockedReason?: string | null;
   // The same block as the questions the agent actually asked, when it asked in questions. Absent for
   // a fault report, a hand-written block, or anything blocked before the structured form existed —

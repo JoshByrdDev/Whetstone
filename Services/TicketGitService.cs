@@ -403,7 +403,7 @@ public partial class TicketGitService
     /// </summary>
     public Task<PrPreflight> PreflightAsync(string projectKey, string branch, CancellationToken ct = default,
         string? member = null)
-        => PreflightCoreAsync(projectKey, branch, fetch: true, ct, member);
+        => PreflightCoreAsync(projectKey, branch, fetch: true, ct, member, null);
 
     /// <summary>
     /// The half of the preflight that never leaves this machine: the commits, the ranked diff, and
@@ -425,11 +425,14 @@ public partial class TicketGitService
     /// </para>
     /// </summary>
     public Task<PrPreflight> LocalPreflightAsync(string projectKey, string branch, CancellationToken ct = default,
-        string? member = null)
-        => PreflightCoreAsync(projectKey, branch, fetch: false, ct, member);
+        string? member = null, string? since = null)
+        => PreflightCoreAsync(projectKey, branch, fetch: false, ct, member, since);
 
+    /// <param name="since">Read the commits and the diff from this commit rather than from the base: a
+    /// ticket under review shows what is new since its reviewer last looked. The base comparison is
+    /// unchanged - it is about where the branch sits, not about what is on screen.</param>
     private async Task<PrPreflight> PreflightCoreAsync(string projectKey, string branch, bool fetch, CancellationToken ct,
-        string? member)
+        string? member, string? since = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var target = TargetOf(cfg, member, out var notHere);
@@ -464,9 +467,10 @@ public partial class TicketGitService
         // point is to open — so they go together. The commit body is read without first asking
         // whether it is wanted: waiting for the log to be counted costs a round trip to save one.
         var dirtyRead = DirtyCountAsync(repo, branch, ct);
-        var commitsRead = ReadCommitsAsync(repo, cmp.BaseRef, branch, ct);
+        var from = string.IsNullOrWhiteSpace(since) ? cmp.BaseRef : since;
+        var commitsRead = ReadCommitsAsync(repo, from, branch, ct);
         var bodyRead = ReadCommitBodyAsync(repo, branch, ct);
-        var filesRead = ReadFilesAsync(repo, cfg, cmp.BaseRef, branch, ct);
+        var filesRead = ReadFilesAsync(repo, cfg, from, branch, ct);
         await Task.WhenAll(dirtyRead, commitsRead, bodyRead, filesRead);
 
         var (worktree, dirty) = await dirtyRead;
