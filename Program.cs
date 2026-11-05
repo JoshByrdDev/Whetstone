@@ -79,6 +79,8 @@ builder.Services.AddSingleton<CapacitySnapshot>();
 builder.Services.AddSingleton<IssueTrackerFactory>();
 builder.Services.AddSingleton<LinkedIssueResolver>();
 builder.Services.AddSingleton<HeartbeatManager>();
+// Restart-after-drain: the marker file the board and data/restart-board.ps1 hand a restart through.
+builder.Services.AddSingleton<BoardRestart>();
 // A steward run its owner asks for from the Steward page: wakes the heartbeat, or starts one itself.
 builder.Services.AddSingleton<StewardRunner>();
 // Notices the dashboard raises itself. Goes through the heartbeat's own notifier script.
@@ -442,7 +444,7 @@ app.MapGet("/api/heartbeat-prompt", () =>
 });
 
 // GET /api/heartbeat/status — check if heartbeat is running
-app.MapGet("/api/heartbeat/status", (HeartbeatManager hb, EventStore store) =>
+app.MapGet("/api/heartbeat/status", (HeartbeatManager hb, EventStore store, BoardRestart restart) =>
 {
     // draining tells the two halves of a graceful stop apart. A stop that has been asked for while
     // three agents are still finishing their phases looks, to this endpoint, exactly like one with
@@ -456,7 +458,29 @@ app.MapGet("/api/heartbeat/status", (HeartbeatManager hb, EventStore store) =>
         startupError = hb.StartupError,
         stopRequested = hb.StopRequested,
         draining = hb.StopRequested && hb.IsRunning ? store.BusyAgentCount : 0,
+        // A restart-after-drain in hand, with its phase; null when there is none.
+        restart = restart.Read(),
     });
+});
+
+// POST /api/heartbeat/restart-after-drain - a pending stop, then once the agents have finished,
+// restart the board through Start-Whetstone.bat and start the heartbeat again (if it was running).
+// The restart itself is data/restart-board.ps1, outside this process: see BoardRestart.
+app.MapPost("/api/heartbeat/restart-after-drain", (HttpContext http, HeartbeatManager hb, BoardRestart restart) =>
+{
+    var running = hb.IsRunning;
+    var stopWasPending = hb.StopRequested;
+    if (running && !stopWasPending)
+    {
+        var (stopped, why) = hb.RequestStopAfterCycle();
+        if (!stopped) return Results.BadRequest(new { message = why });
+    }
+    // The port this request reached Kestrel on, not the Host header: a phone or the Vite dev server
+    // proxies to it under another.
+    var (ok, message) = restart.Request(running, http.Connection.LocalPort);
+    // A restart that never started leaves the board as it was asked to be before the click.
+    if (!ok && running && !stopWasPending) hb.CancelStopAfterCycle();
+    return ok ? Results.Ok(new { message }) : Results.BadRequest(new { message });
 });
 
 // GET /api/setup-check - what a fresh install needs and this machine lacks: agent CLIs, git and
@@ -508,8 +532,15 @@ app.MapPost("/api/heartbeat/wake", (HeartbeatManager hb) =>
         : Results.BadRequest(new { message = "Heartbeat is not running" }));
 
 // POST /api/heartbeat/cancel-stop — remove the stop-after-cycle signal
-app.MapPost("/api/heartbeat/cancel-stop", (HeartbeatManager hb) =>
+app.MapPost("/api/heartbeat/cancel-stop", (HeartbeatManager hb, BoardRestart restart) =>
 {
+    // A restart waiting on this stop's drain goes with it: the script also notices the stop gone,
+    // and the marker going first means it never reads a half-cancelled board.
+    var failed = restart.Read() is { Phase: "failed" };
+    var (cancelled, why) = restart.Cancel();
+    if (!cancelled) return Results.BadRequest(new { message = why });
+    // Clearing a failed restart is the whole of the click when there is no stop left to cancel.
+    if (failed && !hb.StopRequested) return Results.Ok(new { message = why });
     var (success, message) = hb.CancelStopAfterCycle();
     return success ? Results.Ok(new { message }) : Results.BadRequest(new { message });
 });

@@ -33,6 +33,7 @@ data/**/events.jsonl
 data/**/logs/
 data/**/*.lock
 data/**/*.stop
+data/**/*.restart
 data/**/improvement-suggestions.md
 # The reflection dedup index - runtime state, one accepted fact key per line
 data/**/reflection-keys.txt

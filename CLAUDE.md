@@ -22,7 +22,11 @@ things that are *not* discoverable from the code in front of you.
 - Never host the live instance (5338) as a Claude preview server. `dotnet run` holds the app, the
   heartbeat and every worker in one kill-on-close job, so when the app reaps that session's preview,
   the whole fleet dies silently mid-run. Relaunch it with `explorer.exe <repo>\Start-Whetstone.bat`,
-  which no session owns.
+  which no session owns. To do that without killing anything, the header's menu beside the
+  pending-stop button has *Stop, restart Whetstone, resume* (`POST /api/heartbeat/restart-after-drain`):
+  a pending stop, then `data/restart-board.ps1` - launched through explorer for the same reason -
+  waits for the drain, restarts the board through the .bat and starts the heartbeat again. The two
+  hand off through `data/board.restart` (`BoardRestart`); its log is `data/logs/restart-board.log`.
 - Editing `ClientApp/tailwind.config.js` needs a Vite restart; a reload silently serves the old CSS.
 - `.ps1` files under `data/` must stay pure ASCII (PS 5.1 parses them as cp1252).
 - Classroom walkthroughs are voiced by Kokoro under Node from `data/narrator/`. Run `npm install` there

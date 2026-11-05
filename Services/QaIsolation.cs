@@ -59,7 +59,7 @@ public sealed class QaIsolation
     /// </summary>
     private static readonly Rule[] Rules =
     {
-        R("POST", @"^/api/heartbeat/(start|stop|stop-after-cycle|cancel-stop|wake)/?$",
+        R("POST", @"^/api/heartbeat/(start|stop|stop-after-cycle|cancel-stop|wake|restart-after-drain)/?$",
             "starting, stopping or signalling the heartbeat"),
         R("*", @"^/api/steward/(due|launching|abandon)/?$", "the steward's run loop"),
         R("POST", @"^/api/steward/run/?$", "starting a steward run"),
