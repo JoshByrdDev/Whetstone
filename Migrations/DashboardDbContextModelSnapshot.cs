@@ -433,6 +433,73 @@ namespace Whetstone.Migrations
                     b.ToTable("CycleRuns");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.EscapeEvent", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Backfilled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Build")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ClassifiedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClassifierNote")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FromPhase")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .HasMaxLength(24)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("NoteCommentId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ToPhase")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Track")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("ProjectKey", "At");
+
+                    b.ToTable("EscapeEvents");
+                });
+
             modelBuilder.Entity("Whetstone.Models.Experiment", b =>
                 {
                     b.Property<int>("Id")
@@ -2176,6 +2243,17 @@ namespace Whetstone.Migrations
                 });
 
             modelBuilder.Entity("Whetstone.Models.CycleRun", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.EscapeEvent", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithMany()

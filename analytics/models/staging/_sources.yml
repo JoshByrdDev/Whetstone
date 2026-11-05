@@ -18,6 +18,11 @@ sources:
         columns:
           - name: Id
             tests: [unique, not_null]
+      - name: EscapeEvents
+        description: Finished work a person sent back, with their classification. Empty on a database from before AddEscapeLog.
+        columns:
+          - name: Id
+            tests: [unique, not_null]
       - name: PhaseTransitions
         columns:
           - name: Id

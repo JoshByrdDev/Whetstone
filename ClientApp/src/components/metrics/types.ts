@@ -113,11 +113,21 @@ export interface QaRulingRow {
   overturnedFailed: number; overturnedFailedRate: number | null;
 }
 
+/** Finished work a person sent back after it reached review, by kind of miss (mart_escapes). */
+export interface EscapeRow {
+  dimension: string; dimValue: string; handoffs: number; ticketsReviewed: number; escapes: number;
+  misses: number; requirementChanges: number; unclassified: number;
+  outsideContract: number; inheritedBehaviour: number; uiPolish: number; logic: number; other: number;
+  foundByOwner: number; foundInPrReview: number;
+  missesPerHandoff: number | null; missesPerTicket: number | null;
+}
+
 export interface Overview {
   scope: { windowDays: number; project: string; track: string };
   status: AnalyticsStatus;
   phases: PhaseRow[]; timeSplit: TimeSplitRow[]; rework: ReworkRow[]; firstPass: FirstPassRow[];
   qaRulings?: QaRulingRow[];
+  escapes?: EscapeRow[];
   daily: DailyRow[]; startRebase: StartRebaseRow[]; diffSize: DiffSizeRow[];
 }
 
