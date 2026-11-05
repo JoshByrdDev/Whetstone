@@ -22,7 +22,7 @@ public record StewardReply(string Answer, string? Why = null, object? Data = nul
 public record StewardTicketDraft(
     int Unit, IReadOnlyList<string> Outcomes, string Title, string Description,
     IReadOnlyList<int>? DependsOn = null, string? Priority = null, bool CodeReviewOnly = false,
-    IReadOnlyList<string>? Needs = null);
+    IReadOnlyList<string>? Needs = null, bool PlanReview = false, bool ImplementationReview = false);
 
 /// <summary>What a steward wants to put to the owner.</summary>
 /// <param name="Touches">The register's decisions the question bears on; empty when none does. Required.</param>
@@ -471,7 +471,9 @@ public partial class StewardService
                 unansweredNotes = unanswered > 0 ? unanswered : (int?)null,
                 blockedIn = t.Phase == TicketPhase.Blocked ? t.PhaseBeforeBlock?.ToString() : null,
                 question = t.Phase == TicketPhase.Blocked ? t.BlockedReason : null,
-                sentBack = t.Phase is TicketPhase.Blocked or TicketPhase.NeedsReview ? await SendBacksAsync(t.Id) : (int?)null,
+                sentBack = t.Phase is TicketPhase.Blocked or TicketPhase.NeedsReview or TicketPhase.NeedsApproval
+                    or TicketPhase.NeedsImplementationReview ? await SendBacksAsync(t.Id) : (int?)null,
+                gate = GateNote(t),
             });
         }
 
@@ -1056,11 +1058,25 @@ public partial class StewardService
 
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
         if (t is null) return no!;
-        if (t.Phase != TicketPhase.NeedsReview)
-            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview is sent back from here.{await LeftReviewAsync(t)}");
+        if (t.Phase != TicketPhase.NeedsReview && !Gates.Contains(t.Phase))
+            return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. Only a ticket at NeedsReview, NeedsApproval or "
+                + $"NeedsImplementationReview is sent back from here.{await LeftReviewAsync(t)}");
+        // A gate the owner put the ticket on by hand is theirs to pass or send back, not ours.
+        if (Gates.Contains(t.Phase) && await OwnerPlacedAsync(t, ct))
+            return Refuse("owner", $"The owner put ticket {ticketId} at {t.Phase} by hand, so they mean to look themselves. Leave it there.");
         var before = await SendBacksAsync(ticketId);
         if (before >= cfg.Steward.SendBacksPerTicket)
             return Refuse("limit", $"Ticket {ticketId} has been sent back {before} time(s) already. The next is the owner's: ask.");
+        // Each gate has one way back. Not left to CanTransition: NeedsApproval to NeedsImplementation
+        // is the board's approve edge, and a send-back through it would build the plan it rejects.
+        var gateBack = t.Phase switch
+        {
+            TicketPhase.NeedsApproval => TicketPhase.NeedsSpeculation,
+            TicketPhase.NeedsImplementationReview => TicketPhase.NeedsImplementation,
+            _ => (TicketPhase?)null,
+        };
+        if (gateBack is { } back && to != back)
+            return Refuse("refused", $"A ticket at {t.Phase} goes back to {back}. To let it through, approve it (steward_approve).");
         if (!PhaseMachine.CanTransition(t.Phase, to, t.Track))
             return Refuse("refused", $"The board does not allow {t.Phase} to {to}.");
         if (cfg.StewardMode == StewardMode.Propose)
@@ -1102,14 +1118,23 @@ public partial class StewardService
 
     /// <summary>Correct a ticket the steward itself got wrong: its title, its description, how it is tested, what its testing needs.</summary>
     public async Task<StewardReply> AmendAsync(string projectKey, int ticketId, string? title, string? description,
-        bool? codeReviewOnly, IReadOnlyList<string>? needs = null, CancellationToken ct = default)
+        bool? codeReviewOnly, IReadOnlyList<string>? needs = null, CancellationToken ct = default) =>
+        await AmendAsync(projectKey, ticketId, title, description, codeReviewOnly, needs, null, null, ct);
+
+    /// <summary>
+    /// As above, and also whether the ticket stops at either review gate - its plan, or its build
+    /// before QA - for a look, which the steward then gives (<see cref="ApproveAsync"/>).
+    /// </summary>
+    public async Task<StewardReply> AmendAsync(string projectKey, int ticketId, string? title, string? description,
+        bool? codeReviewOnly, IReadOnlyList<string>? needs, bool? planReview, bool? implementationReview,
+        CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
         if (cfg is null) return off!;
         title = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
         description = string.IsNullOrWhiteSpace(description) ? null : description;
-        if (title is null && description is null && codeReviewOnly is null && needs is null)
-            return Refuse("bad-request", "Give a title, a description, how it is tested, what its testing needs, or more than one.");
+        if (title is null && description is null && codeReviewOnly is null && needs is null && planReview is null && implementationReview is null)
+            return Refuse("bad-request", "Give a title, a description, how it is tested, what its testing needs, which review gates it stops at, or more than one.");
         string? needsValue = null;
         if (needs is not null)
         {
@@ -1131,13 +1156,17 @@ public partial class StewardService
             needsValue is null ? null
                 : needsValue.Length == 0 ? "testing's needs (now nothing beyond what its branch takes)"
                 : $"testing's needs (now {needsValue.Replace(",", ", ")}, whatever its branch changes)",
+            planReview == true ? "plan gate (now stops for a look)" : planReview == false ? "plan gate (now passed through)" : null,
+            implementationReview == true ? "build gate (now stops before QA for a look)"
+                : implementationReview == false ? "build gate (now passed through)" : null,
         }.Where(x => x is not null));
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"amend ticket {ticketId}: {what}");
 
         // The plan line is the steward's own and is what ties the ticket to its outcomes on a read.
         if (description is not null && PlanLine(t) is { } line && !description.Contains(line)) description = $"{description.TrimEnd()}\n\n{line}";
-        await _tickets.UpdateAsync(ticketId, title, description, null, null, null, null, skipQaTesting: codeReviewOnly,
-            needsResources: needsValue);
+        await _tickets.UpdateAsync(ticketId, title, description, null, null, null, null,
+            requiresSpeculationReview: planReview, requiresImplementationReview: implementationReview,
+            skipQaTesting: codeReviewOnly, needsResources: needsValue);
         await _tickets.AddCommentAsync(ticketId, $"Amended the {what}.", AuthorKind.Steward);
         return new StewardReply("amended");
     }
@@ -1200,9 +1229,12 @@ public partial class StewardService
 
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"create \"{title}\" for unit {unit.Number} {string.Join(", ", outcomes)}"
-                + (dependsOn.Count > 0 ? $", after {string.Join(", ", dependsOn)}" : ""));
+                + (dependsOn.Count > 0 ? $", after {string.Join(", ", dependsOn)}" : "")
+                + (d.PlanReview ? ", stopping at its plan for a look" : "")
+                + (d.ImplementationReview ? ", stopping before QA for a look" : ""));
 
         var made = await _tickets.CreateAsync(projectKey, title, d.Description, null, null, TicketPhase.Backlog,
+            requiresSpeculationReview: d.PlanReview, requiresImplementationReview: d.ImplementationReview,
             skipQaTesting: d.CodeReviewOnly, priority: priority, skipClassroomAnalysis: cfg.SkipClassroomAnalysisByDefault);
         var row = await _db.Tickets.FirstAsync(t => t.Id == made.Id, ct);
         row.CreatedBy = TransitionActor.Steward;

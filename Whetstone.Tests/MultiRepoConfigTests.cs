@@ -304,7 +304,7 @@ public class MultiRepoConfigTests : IDisposable
 
     private static SetupCheckService.Probe Machine() => new(
         exe => $@"C:\bin\{exe}.exe", _ => null, (_, key) => key == "user.name" ? "Pat" : "pat@example.com",
-        () => null, () => null);
+        () => null, () => null, () => true);
 
     private static readonly (string, string)[] Roles = { ("implement", "claude") };
 

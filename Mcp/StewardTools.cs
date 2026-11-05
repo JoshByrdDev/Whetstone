@@ -130,10 +130,27 @@ public class StewardTools
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId) =>
         s.RebaseAsync(project, ticketId);
 
+    [McpServerTool(Name = "steward_approve"), Description(
+        "Pass a ticket at one of the two review gates, in the owner's place. At NeedsApproval its plan goes on to be built; at " +
+        "NeedsImplementationReview its build goes on to QA. Read it first with steward_review (part 'record' holds the plan's " +
+        "work items, each with its scope) and, for a build, steward_diff. An open Expansion item is work beyond what the ticket " +
+        "asked for: approve it by leaving it, or name it in 'decline' to take it out of the plan before the rest is built. Keep " +
+        "one only when an agreed slice or a decision in force asks for it, or the ticket's own ask cannot be met without it; " +
+        "anything a user would notice that nothing decided is the owner's: decline it, or ask. A plan wrong in any other way " +
+        "is sent back (steward_send_back to NeedsSpeculation), a build to NeedsImplementation. 'owner' means the owner put the " +
+        "ticket at the gate by hand to look themselves: leave it. Your reason goes on the ticket and on the record the owner reads back.")]
+    public static Task<StewardReply> Approve(StewardService s,
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("Why it holds: what you read, and what makes it right to build (or to test) as it stands; for an expansion " +
+                     "item kept or declined, the decision (#n) or the reason.")] string why,
+        [Description("Ids of open Expansion work items to take out of the plan before approving it. Only at NeedsApproval.")] int[]? decline = null) =>
+        s.ApproveAsync(project, ticketId, why, decline);
+
     [McpServerTool(Name = "steward_send_back"), Description(
-        "Return a ticket at NeedsReview with a note. NeedsImplementation when code must change; NeedsRefinement when the code " +
-        "is right but a check or the record is missing (it adds the check and sends the ticket on to be tested); " +
-        "NeedsSpeculation when the plan was wrong. The note is an instruction the next worker must answer, so it says what is " +
+        "Return a ticket at NeedsReview, or at a review gate, with a note. From NeedsReview: NeedsImplementation when code must change; " +
+        "NeedsRefinement when the code is right but a check or the record is missing (it adds the check and sends the ticket on to be " +
+        "tested); NeedsSpeculation when the plan was wrong. From NeedsApproval (a plan waiting for its yes): NeedsSpeculation, and the " +
+        "replan stops at the gate again for you. From NeedsImplementationReview (a build before QA): NeedsImplementation. The note is an instruction the next worker must answer, so it says what is " +
         "wrong, where, and what done looks like. 'limit' means this ticket has come back too often and the next call is the " +
         "owner's: ask.")]
     public static Task<StewardReply> SendBack(StewardService s,
@@ -164,8 +181,10 @@ public class StewardTools
         [Description("Resources its testing needs whatever its branch changes, named as the project's resourcePaths names them, like " +
                      "[\"android:emulator\"]. Such a resource is given only to a branch that changes its paths, so a ticket " +
                      "whose acceptance criteria are proved on it (screenshots inside the phone app) but which changes none of its " +
-                     "code must name it, or its tester never gets it and can only block." + " The whole list: [] clears it. Omit to leave it.")] string[]? needs = null) =>
-        s.AmendAsync(project, ticketId, title, description, codeReviewOnly, needs);
+                     "code must name it, or its tester never gets it and can only block." + " The whole list: [] clears it. Omit to leave it.")] string[]? needs = null,
+        [Description("True: it stops at its plan (NeedsApproval) for you to read before it is built. False: it goes straight on. Omit to leave it.")] bool? planReview = null,
+        [Description("True: it stops once built (NeedsImplementationReview) for you to read before QA. False: it goes straight on. Omit to leave it.")] bool? implementationReview = null) =>
+        s.AmendAsync(project, ticketId, title, description, codeReviewOnly, needs, planReview, implementationReview);
 
     [McpServerTool(Name = "steward_create"), Description(
         "File a ticket against an AGREED unit of the plan. The agent that plans it has the repo and your description and " +
@@ -186,8 +205,12 @@ public class StewardTools
         [Description("Resources its testing needs whatever its branch changes, named as the project's resourcePaths names them, like " +
                      "[\"android:emulator\"]. Such a resource is given only to a branch that changes its paths, so a ticket " +
                      "whose acceptance criteria are proved on it (screenshots inside the phone app) but which changes none of its " +
-                     "code must name it, or its tester never gets it and can only block.")] string[]? needs = null) =>
-        s.CreateAsync(project, new StewardTicketDraft(unit, outcomes, title, description, dependsOn, priority, codeReviewOnly, needs));
+                     "code must name it, or its tester never gets it and can only block.")] string[]? needs = null,
+        [Description("True: it stops at its plan (NeedsApproval) for you to read before it is built. Most tickets need neither gate.")] bool planReview = false,
+        [Description("True: it stops once built (NeedsImplementationReview) for you to read the diff before QA spends time on it - " +
+                     "for a risky or gray-area change. Most tickets need neither gate.")] bool implementationReview = false) =>
+        s.CreateAsync(project, new StewardTicketDraft(unit, outcomes, title, description, dependsOn, priority, codeReviewOnly, needs,
+            planReview, implementationReview));
 
     [McpServerTool(Name = "steward_set_outcome"), Description(
         "Record where one outcome of an agreed unit stands. This, and only this, is what calls an outcome done: set it when " +

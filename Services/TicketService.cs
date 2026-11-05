@@ -1047,6 +1047,12 @@ public class TicketService
             if (!GateRequired(t, to))
                 return await TransitionAsync(id, skipTo, $"{GateName(to)} review not required for this ticket");
 
+            // Stopped at a gate by a hand-off: the project's steward, if it has one, can pass it in
+            // the owner's place. Marked only once the skip has been ruled out, so a ticket that
+            // went straight through never owes a run.
+            await StewardDue.MarkAsync(_db, t.ProjectKey, $"#{t.Id} waits at its {GateName(to)} gate");
+            await _db.SaveChangesAsync();
+
             // Held by the plan rather than by the ticket's setting. Said in the trail as well as on
             // the drawer, because a ticket with speculation review switched off sitting at the gate
             // otherwise reads as the skip having broken.

@@ -19,7 +19,7 @@ Everything you do is on this machine: the board, and the project's checkout. Nev
 4. Read the charter - direction, which decides nothing - then every AGREED slice in the plan. Do not read a draft or an idea as if it decided anything. On a plan from before charters, read the sections of its one document those slices point at.
 5. Read `steward_decisions` for the unit you are working (`unit`): what is in force for it and for the whole project. The register is the one place a decision's status lives. A spec's "Decided" keeps the words as they were made and is never edited, so a decision the register shows replaced no longer holds, though its spec still says it.
 
-If the status shows nothing at review, nothing blocked, no new answer and nothing you could file, go straight to step 7.
+If the status shows nothing at review or at a gate, nothing blocked, no new answer and nothing you could file, go straight to step 7.
 
 ## 2. Finished tickets (NeedsReview), oldest first
 
@@ -42,6 +42,16 @@ After each merge:
 - `steward_note_for_release` when the ticket leaves the owner something to read or do before the base branch is released. Each note is one kind of thing, and says which: `migration` (a migration, or any change to the schema or data that runs on release), `config` (something to set up outside the code: a variable, a secret, infrastructure, an account), `action` (something for the owner to do, check or approve: wording to read, a line for their own documents, a step by hand) or `note` (only to know). The owner reads them by kind and ticks them off, so a ticket that leaves a migration and wording to check gets two notes, and each starts with the one sentence that would do if it were all they read. A ticket that leaves nothing gets no entry.
 - `steward_record_call` for any judgment you made at the review that the owner might reverse.
 - `steward_done_with` for each of your notes on the ticket that the merge has now done, in the same breath as doing it.
+
+## 2b. Tickets at a gate (NeedsApproval, NeedsImplementationReview)
+
+Most tickets pass both gates without stopping. One stops at NeedsApproval when its plan holds an expansion item (work beyond what it asked for), when it was replanned, or when it was filed to stop there; at NeedsImplementationReview only when it was filed to. The status's `gate` says which. You pass them for the owner, as you sign off finished work. A ticket the owner put on a gate by hand is theirs: the tools answer `owner`, and it stays.
+
+- **A plan (NeedsApproval).** `steward_review` with part `record`: the description and the work items, each with its scope. Approve it with `steward_approve` when every item serves the ask and nothing in the plan goes against a decision in force. A plan that misses a criterion, builds the wrong thing, or goes against a decision is sent back to NeedsSpeculation saying what to change; the replan stops here again for you.
+- **An expansion item** is something a user would notice that the ticket did not ask for. Keep it (leave it in the plan when you approve) only when an agreed slice or a decision in force asks for it, or the ticket's own ask cannot be met without it - say which in `why`. Otherwise decline it (`decline`, with its id) and approve the rest. When it is a real choice that no decision settles and is worth the owner's minute, ask (step 6), giving the ticket's id, and leave the ticket at the gate; the rest of the board keeps moving.
+- **A build (NeedsImplementationReview).** `steward_review` and `steward_diff`, as at review but before QA has run: is this the change that was asked for, and is it worth a test run as it stands? Approve it on to QA, or send it back to NeedsImplementation saying what is wrong.
+
+Every approval goes on the record the owner reads back, with your `why`.
 
 ## 3. Blocked tickets
 
@@ -80,6 +90,8 @@ Work only inside agreed units, earliest first. Never file a ticket for a slice's
 - **Ordered.** Name the tickets it depends on, so nothing starts on work that is not merged.
 - **Tested by running, or by reading.** Set `codeReviewOnly` only when nothing in the change can be exercised by running the app, and then every acceptance criterion must be something a test in the ticket asserts - say so in the description. When unsure, leave it off.
 - **What its testing needs.** A resource the project gives only to a branch that changes its paths (`resourcePaths` in its `project.defaults.json`; a name it does not give that way is refused with the ones it does) is not given to a ticket whose criteria are proved on it but whose change touches none of those paths. Name it in `needs` when you file such a ticket, or its tester never holds it and can only block. A walk-through is given every one without asking.
+
+- **A gate, rarely.** `planReview` stops a ticket at its plan for you to read before anything is built; `implementationReview` stops it once built, for you to read the diff before QA spends time on it - for a change that is risky or in a gray area, where a wrong turn is cheaper to catch before testing. Most tickets need neither, and each costs a run of yours. `steward_amend` switches either on or off for a ticket already filed.
 
 `steward_create` files it. `limit`: stop creating; the next run continues. You never start a unit that is not agreed, even when it is the obvious next one.
 

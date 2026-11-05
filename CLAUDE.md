@@ -324,6 +324,7 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | Tickets only against a unit of the plan its owner agreed | the spec's status line, read from git **as committed** - nothing a steward can run commits one. The owner can, from the Steward page: a REST route with no tool behind it, that makes the same commit |
 | A unit is released when its owner says so | `StewardUnit.ReleasedAt`, set by a REST route with no tool behind it, and refused while an outcome is not done or a note that is something to do is not ticked off |
 | What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
+| A review gate the owner put a ticket on by hand is the owner's | `steward_approve` and `steward_send_back` pass a plan or a build only where a hand-off stopped it; the last move onto the gate being a person's refuses both (`OwnerPlacedAsync`). A declined expansion item is deleted from the plan, and every approval is a `Call` on the owner's record |
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
 | A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
