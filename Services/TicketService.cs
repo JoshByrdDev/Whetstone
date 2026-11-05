@@ -660,13 +660,17 @@ public class TicketService
     public async Task<Ticket?> UpdateAsync(int id, string? title, string? description, string? issueKey, string? issueUrl, string? branch, string? projectKey,
         bool? requiresSpeculationReview = null, bool? requiresImplementationReview = null, string? masterNotes = null,
         bool? skipQaTesting = null, TicketPriority? priority = null, bool? shortLoopReview = null,
-        bool? skipClassroomAnalysis = null, bool? fullQaRequired = null)
+        bool? skipClassroomAnalysis = null, bool? fullQaRequired = null, string? needsResources = null)
     {
         var t = await _db.Tickets.FindAsync(id);
         if (t is null) return null;
 
         // Editable between the send-back and the QA pass for the same reason the short loop is.
         if (fullQaRequired is not null) t.FullQaRequired = fullQaRequired.Value;
+
+        // What testing needs whatever the branch changes. Last on the list for the same reason as
+        // priority: it decides what the run waits on, so no positional MCP call reaches it.
+        if (needsResources is not null) t.NeedsResources = needsResources.Length == 0 ? null : needsResources;
 
         if (requiresSpeculationReview is not null) t.RequiresSpeculationReview = requiresSpeculationReview.Value;
         if (requiresImplementationReview is not null) t.RequiresImplementationReview = requiresImplementationReview.Value;
@@ -873,7 +877,7 @@ public class TicketService
     /// </para>
     /// </summary>
     public async Task<Ticket?> TransitionAsync(int id, TicketPhase to, string? reason,
-        TransitionActor actor = TransitionActor.System, BlockPayload? questions = null)
+        TransitionActor actor = TransitionActor.System, BlockPayload? questions = null, string? build = null)
     {
         var t = await GetAsync(id);
         if (t is null) return null;
@@ -892,6 +896,11 @@ public class TicketService
                 throw new HandoffRequirementException(unmet, t.Phase, to, PhaseMachine.NextPhasesFor(t),
                     // An item refinement expired is not something more work here can clear: only QA can.
                     unmet == HandoffRequirements.ExpiredQaRequirement(t, t.Phase, to)?.HowToSatisfy ? TicketPhase.NeedsQa : null);
+
+            // Work the owner sent back from review is the pipeline's own miss, and the run that fixes
+            // it is the one that knows what it was. Its forward hand-off waits until it has said so.
+            if (await UnclassifiedCycleEscapeAsync(t, to) is { } escape)
+                throw new HandoffRequirementException(EscapeGateMessage(escape), t.Phase, to, PhaseMachine.NextPhasesFor(t));
 
             // A block that says nothing stops the work and withholds the one thing needed to restart
             // it: nobody can answer a question that was never asked, and the board shows the bare
@@ -977,6 +986,9 @@ public class TicketService
 
         // The same move, recorded as a countable row (see PhaseTransition). Written in the same
         // SaveChanges as the phase itself so the log can never disagree with the board.
+        // One clock reading for the move and any escape it logs: the escape gate finds the escape
+        // that started an implementation cycle as the one logged at that cycle's move.
+        var movedAt = DateTime.UtcNow;
         _db.PhaseTransitions.Add(new PhaseTransition
         {
             TicketId    = t.Id,
@@ -993,8 +1005,19 @@ public class TicketService
                 ? t.BlockedReason
                 : string.IsNullOrWhiteSpace(reason) ? null : reason.Trim(),
             Backward    = PhaseMachine.IsBackward(from, to),
-            At          = DateTime.UtcNow,
+            At          = movedAt,
         });
+
+        // A person sending back work the pipeline called done is the one measure of what got past
+        // all of it (EscapeEvent). Logged in the same SaveChanges as the move, unclassified.
+        if (EscapeEvent.IsEscape(t.Track, from, to, actor))
+            _db.EscapeEvents.Add(new EscapeEvent
+            {
+                TicketId = t.Id, ProjectKey = t.ProjectKey, Track = t.Track, FromPhase = from, ToPhase = to,
+                Reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim(),
+                NoteCommentId = await EscapeNoteAsync(t.Id, movedAt),
+                Build = string.IsNullOrWhiteSpace(build) ? null : build, At = movedAt,
+            });
 
         // The two arrivals a project's steward exists to answer: finished work to sign off, and a
         // question somebody has to settle. Not its own moves - a run does not owe itself another.
@@ -1529,6 +1552,176 @@ public class TicketService
     /// <summary>The ruling log for one ticket, oldest first.</summary>
     public Task<List<QaRulingEvent>> RulingsAsync(int ticketId) =>
         _db.QaRulingEvents.AsNoTracking().Where(e => e.TicketId == ticketId).OrderBy(e => e.Id).ToListAsync();
+
+    /// <summary>
+    /// The person's note that explains a move made at <paramref name="at"/>: their latest comment on
+    /// the ticket within <see cref="EscapeEvent.NoteWindow"/> before it, or null.
+    /// </summary>
+    private Task<int?> EscapeNoteAsync(int ticketId, DateTime at)
+    {
+        var from = at - EscapeEvent.NoteWindow;
+        return _db.Comments.AsNoTracking()
+            .Where(c => c.TicketId == ticketId && c.Author == AuthorKind.Human && c.CreatedAt >= from && c.CreatedAt <= at)
+            .OrderByDescending(c => c.CreatedAt).ThenByDescending(c => c.Id)
+            .Select(c => (int?)c.Id).FirstOrDefaultAsync();
+    }
+
+    /// <summary>An escape as the Metrics page lists it: the row, its ticket's title, and the note that explains it.</summary>
+    public sealed record EscapeView(EscapeEvent Event, string? TicketTitle, string? Note);
+
+    /// <summary>Escapes newest first, optionally for one project, a date range, or only those nobody has classified.</summary>
+    public async Task<List<EscapeView>> EscapesAsync(string? project, DateTime? since, DateTime? until,
+        bool unclassifiedOnly, int limit = 200)
+    {
+        var q = _db.EscapeEvents.AsNoTracking().AsQueryable();
+        if (!string.IsNullOrWhiteSpace(project)) q = q.Where(e => e.ProjectKey == project);
+        if (since is not null) q = q.Where(e => e.At >= since);
+        if (until is not null) q = q.Where(e => e.At < until);
+        if (unclassifiedOnly) q = q.Where(e => e.Kind == null);
+        var rows = await q.OrderByDescending(e => e.At).ThenByDescending(e => e.Id)
+            .Take(Math.Clamp(limit, 1, 1000)).ToListAsync();
+
+        var ticketIds = rows.Select(r => r.TicketId).Distinct().ToList();
+        var noteIds = rows.Where(r => r.NoteCommentId != null).Select(r => r.NoteCommentId!.Value).Distinct().ToList();
+        var titles = await _db.Tickets.AsNoTracking().Where(t => ticketIds.Contains(t.Id))
+            .Select(t => new { t.Id, t.Title }).ToDictionaryAsync(t => t.Id, t => t.Title);
+        var notes = await _db.Comments.AsNoTracking().Where(c => noteIds.Contains(c.Id))
+            .Select(c => new { c.Id, c.Body }).ToDictionaryAsync(c => c.Id, c => c.Body);
+
+        return rows.Select(r => new EscapeView(r, titles.GetValueOrDefault(r.TicketId),
+            r.NoteCommentId is int n ? notes.GetValueOrDefault(n) : null)).ToList();
+    }
+
+    /// <summary>
+    /// A person's correction of one escape, replacing whatever was there. Recorded as a person's: no
+    /// run, and marked overridden when it replaces a run's call. Passing no kind clears it back to
+    /// unclassified. Null when there is no such escape.
+    /// </summary>
+    public async Task<EscapeEvent?> ClassifyEscapeAsync(int id, EscapeKind? kind, EscapeSource? source, string? note)
+    {
+        var e = await _db.EscapeEvents.FirstOrDefaultAsync(x => x.Id == id);
+        if (e is null) return null;
+        var replacesRun = e.Kind is not null && e.ClassifiedBy == TransitionActor.Worker;
+        e.Kind = kind;
+        e.Source = kind is null ? null : source;
+        e.ClassifierNote = kind is null || string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        e.ClassifiedAt = kind is null ? null : DateTime.UtcNow;
+        e.ClassifiedBy = kind is null ? null : TransitionActor.Human;
+        e.ClassifiedByRunId = null;
+        e.Overridden = kind is not null && (replacesRun || e.Overridden);
+        await _db.SaveChangesAsync();
+        return e;
+    }
+
+    /// <summary>
+    /// The escape that started the ticket's current implementation cycle: the one logged by the
+    /// ticket's most recent move into NeedsImplementation, when a person's send-back was that move.
+    /// A backfilled escape never counts - it was reconstructed after the fact, and nothing running
+    /// now was asked to account for it.
+    /// </summary>
+    public async Task<EscapeEvent?> CycleEscapeAsync(int ticketId)
+    {
+        var move = await _db.PhaseTransitions.AsNoTracking()
+            .Where(p => p.TicketId == ticketId && p.To == TicketPhase.NeedsImplementation)
+            .OrderByDescending(p => p.At).ThenByDescending(p => p.Id)
+            .Select(p => (DateTime?)p.At).FirstOrDefaultAsync();
+        if (move is null) return null;
+        return await _db.EscapeEvents
+            .Where(e => e.TicketId == ticketId && !e.Backfilled && e.ToPhase == TicketPhase.NeedsImplementation && e.At == move)
+            .OrderByDescending(e => e.Id).FirstOrDefaultAsync();
+    }
+
+    /// <summary>
+    /// The escape a worker's move out of Implementing must classify first, or null when it may go:
+    /// only a forward hand-off is held, and only by the escape that started this cycle.
+    /// </summary>
+    private async Task<EscapeEvent?> UnclassifiedCycleEscapeAsync(Ticket t, TicketPhase to)
+    {
+        if (t.Phase != TicketPhase.Implementing || to == TicketPhase.Blocked) return null;
+        if (PhaseMachine.ProgressRank(to) <= PhaseMachine.ProgressRank(t.Phase)) return null;
+        var e = await CycleEscapeAsync(t.Id);
+        return e is { Kind: null } ? e : null;
+    }
+
+    private static string EscapeGateMessage(EscapeEvent e) =>
+        $"This ticket came back from {e.FromPhase} because someone sent finished work back"
+        + (string.IsNullOrWhiteSpace(e.Reason) ? "" : $" (\"{e.Reason.Trim()}\")")
+        + ", and that escape is not classified yet. Call classify_escape with this ticket's id, the kind of miss "
+        + "(OutsideContract, InheritedBehaviour, UiPolish, Logic, RequirementChange or Other), who found it "
+        + "(Owner, PrReview or Other), and a why of one or two sentences - for RequirementChange, the why must "
+        + "quote what the owner's note asks for that the description and master notes did not. "
+        + "Then call set_phase again with the same phase.";
+
+    /// <summary>The run holding the ticket's lease now - its id, as QA rulings record it - or null.</summary>
+    private Task<int?> LiveRunIdAsync(int ticketId)
+    {
+        var key = ResourceLeaseService.TicketKey(ticketId);
+        var now = DateTime.UtcNow;
+        return _db.ResourceLeases
+            .Where(l => l.ResourceKey == key && l.ReleasedAt == null && l.ExpiresAt > now)
+            .OrderByDescending(l => l.Id).Select(l => (int?)l.Id).FirstOrDefaultAsync();
+    }
+
+    /// <summary>
+    /// A run's classification of the escape that sent its ticket back: the one that started this
+    /// cycle, or, failing that, the ticket's latest unclassified one written as it happened.
+    /// Returns the escape, or a reason it was refused.
+    /// </summary>
+    public async Task<(EscapeEvent? Escape, string? Problem)> ClassifyEscapeByRunAsync(
+        int ticketId, EscapeKind kind, EscapeSource source, string? why)
+    {
+        if (string.IsNullOrWhiteSpace(why))
+            return (null, "A classification needs a why: one or two sentences saying what was missed and why it is this kind.");
+        if (kind == EscapeKind.RequirementChange && !EscapeEvent.QuotesSomething(why))
+            return (null, "A RequirementChange must quote, in double quotes, what the owner's note asks for that the "
+                + "description and master notes did not. This why quotes nothing. If you cannot find such words, "
+                + "it was not a change of mind - it was a miss, and one of the other kinds.");
+
+        var e = await CycleEscapeAsync(ticketId)
+            ?? await _db.EscapeEvents
+                .Where(x => x.TicketId == ticketId && !x.Backfilled && x.Kind == null)
+                .OrderByDescending(x => x.At).ThenByDescending(x => x.Id).FirstOrDefaultAsync();
+        if (e is null)
+            return (null, $"Ticket {ticketId} has no escape to classify: nobody has sent it back from review.");
+
+        e.Kind = kind;
+        e.Source = source;
+        e.ClassifierNote = why.Trim();
+        e.ClassifiedAt = DateTime.UtcNow;
+        e.ClassifiedBy = TransitionActor.Worker;
+        e.ClassifiedByRunId = await LiveRunIdAsync(ticketId);
+        e.Overridden = false;
+        await _db.SaveChangesAsync();
+        return (e, null);
+    }
+
+    /// <summary>
+    /// One-off: the escapes that happened before the log existed, read from the phase history. Only
+    /// moves recorded as they happened count - a backfilled transition's actor is a placeholder, so
+    /// it cannot say whether a person made it. The build is unknown for these. Does nothing once any
+    /// escape has been logged, so it is safe on every startup.
+    /// </summary>
+    public async Task<int> BackfillEscapesAsync()
+    {
+        if (await _db.EscapeEvents.AnyAsync()) return 0;
+
+        var moves = await _db.PhaseTransitions.AsNoTracking()
+            .Where(p => !p.Backfilled && p.Actor == TransitionActor.Human && p.Track == TicketTrack.Delivery
+                        && (p.From == TicketPhase.NeedsReview || p.From == TicketPhase.Done))
+            .OrderBy(p => p.At).ThenBy(p => p.Id).ToListAsync();
+        moves = moves.Where(p => EscapeEvent.IsEscape(p.Track, p.From, p.To, p.Actor)).ToList();
+        if (moves.Count == 0) return 0;
+
+        foreach (var p in moves)
+            _db.EscapeEvents.Add(new EscapeEvent
+            {
+                TicketId = p.TicketId, ProjectKey = p.ProjectKey, Track = p.Track, FromPhase = p.From, ToPhase = p.To,
+                Reason = p.Reason, NoteCommentId = await EscapeNoteAsync(p.TicketId, p.At),
+                At = p.At, Backfilled = true,
+            });
+        await _db.SaveChangesAsync();
+        return moves.Count;
+    }
 
     /// <summary>
     /// Mark one QA item as the one being tested right now, and every sibling as not. The QA mirror

@@ -40,7 +40,9 @@ public record SetVerdictRequest(string Verdict, string? Note = null);
 public record UpdateTicketRequest(string? Title, string? Description, string? IssueKey, string? IssueUrl, string? Branch, string? ProjectKey,
     bool? RequiresSpeculationReview = null, bool? RequiresImplementationReview = null, string? MasterNotes = null,
     bool? SkipQaTesting = null, string? Priority = null, bool? ShortLoopReview = null,
-    bool? SkipClassroomAnalysis = null, bool? FullQaRequired = null);
+    bool? SkipClassroomAnalysis = null, bool? FullQaRequired = null,
+    // The whole list of what this ticket's testing needs whatever its branch changes; [] clears it.
+    string[]? Needs = null);
 public record TransitionRequest(string ToPhase, string? Reason);
 public record SetBranchRequest(string? Branch, string? WorktreePath);
 public record OrderRequest(double BoardOrder);
@@ -465,6 +467,9 @@ public static class TicketEndpoints
                     repoType = cfg.RepoType,
                     // What a new ticket's "skip classroom analysis" box starts as for this project.
                     skipClassroomAnalysisByDefault = cfg.SkipClassroomAnalysisByDefault,
+                    // What a ticket's testing can ask for whatever its branch changes (Ticket.NeedsResources):
+                    // the resources this project takes only for some branches. Empty when there are none.
+                    askableResources = cfg.AskableResources,
                     // A git project that delivers by merging to its base rather than by PR.
                     mergeInsteadOfPr = cfg.MergeInsteadOfPr && !cfg.IsTfvc,
                     // A project of several repos: their folders, in order, which the board's git
@@ -741,13 +746,21 @@ public static class TicketEndpoints
                     ? ""  // unlink -> clear the stale URL (UpdateAsync maps "" to null)
                     : (string.IsNullOrWhiteSpace(issueUrl) ? DeriveIssueUrl(tracker, resulting) : issueUrl);
 
+            string? needs = null;
+            if (req.Needs is not null)
+            {
+                var (v, err) = registry.GetProjectConfig(req.ProjectKey ?? cur.ProjectKey).NeedsFrom(req.Needs);
+                if (err is not null) return Results.BadRequest(new { error = err });
+                needs = v;
+            }
+
             // Pass the NORMALISED key on, not the raw one - "" still means unlink, and anything else
             // has to reach the database in the form the resolver will later look it up by.
             var t = await svc.UpdateAsync(id, req.Title, req.Description,
                 req.IssueKey is null ? null : (normalized ?? ""),
                 issueUrl, req.Branch, req.ProjectKey,
                 req.RequiresSpeculationReview, req.RequiresImplementationReview, req.MasterNotes, req.SkipQaTesting,
-                priority, req.ShortLoopReview, req.SkipClassroomAnalysis, req.FullQaRequired);
+                priority, req.ShortLoopReview, req.SkipClassroomAnalysis, req.FullQaRequired, needs);
             if (t is null) return Results.NotFound();
             var r = await resolver.ResolveAsync(t);
             return Results.Ok(TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable, tracker: tracker));
@@ -756,15 +769,24 @@ public static class TicketEndpoints
         app.MapDelete("/api/tickets/{id:int}", async (int id, TicketService svc) =>
             await svc.DeleteAsync(id) ? Results.Ok(new { deleted = true }) : Results.NotFound());
 
-        app.MapPost("/api/tickets/{id:int}/transition", async (int id, TransitionRequest req, TicketService svc) =>
+        app.MapPost("/api/tickets/{id:int}/transition", async (int id, TransitionRequest req, TicketService svc, TicketGitService git) =>
         {
             if (!Enum.TryParse<TicketPhase>(req.ToPhase, true, out var to))
                 return Results.BadRequest(new { error = $"Unknown phase '{req.ToPhase}'" });
             try
             {
+                // A move that sends finished work back is logged as an escape, with the build it
+                // escaped from - read only for those, since it costs a git call per repo.
+                string? build = null;
+                if (await svc.GetAsync(id) is { } current && EscapeEvent.IsEscape(current.Track, current.Phase, to, TransitionActor.Human))
+                {
+                    try { build = QaCommits.Format(await git.BranchHeadsAsync(current.ProjectKey, current.Branch)); }
+                    catch (Exception) { build = null; }
+                }
+
                 // Everything that reaches the REST API is a person on the board - the heartbeat's own
                 // moves come through the MCP server or through TicketService directly.
-                var t = await svc.TransitionAsync(id, to, req.Reason, TransitionActor.Human);
+                var t = await svc.TransitionAsync(id, to, req.Reason, TransitionActor.Human, build: build);
                 return t is null ? Results.NotFound() : Results.Ok(TicketMapper.ToDetail(t));
             }
             catch (InvalidTransitionException ex)

@@ -37,6 +37,8 @@ public static class AnalyticsEndpoints
                 firstPass = a.Mart("mart_first_pass_qa", s, orderBy: "dimension, dim_value"),
                 // QA's carry-overs and passes by inspection, and how often refinement overturned them.
                 qaRulings = a.Mart("mart_qa_rulings", s, orderBy: "dimension, dim_value"),
+                // What got past the whole pipeline: finished work a person sent back, by kind of miss.
+                escapes = a.Mart("mart_escapes", s, orderBy: "dimension, dim_value"),
                 daily = a.Mart("mart_daily", s, orderBy: "day"),
                 startRebase = a.Mart("mart_start_rebase", s, orderBy: "phase, runs DESC"),
                 diffSize = a.Mart("mart_diff_size", s, orderBy: "phase, size_order"),

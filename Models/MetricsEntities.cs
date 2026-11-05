@@ -568,3 +568,117 @@ public class QaRulingEvent
     /// <summary>For an expiry: the ruling it overturns - the latest pass recorded on the item. Null otherwise.</summary>
     public int? OverturnsEventId { get; set; }
 }
+
+/// <summary>What sent a ticket back after the pipeline called it done (<see cref="EscapeEvent.Kind"/>).</summary>
+public enum EscapeKind
+{
+    /// <summary>A stand-in for, or an assumption about, a service this machine cannot reach was wrong.</summary>
+    OutsideContract,
+    /// <summary>Old behaviour or data a new rule depends on: a ported screen, a field one path never collects.</summary>
+    InheritedBehaviour,
+    /// <summary>How a screen looks or moves: layout, alignment, a size that jumps.</summary>
+    UiPolish,
+    /// <summary>A plain defect.</summary>
+    Logic,
+    /// <summary>The owner asked for something new or changed their mind. Not a pipeline miss.</summary>
+    RequirementChange,
+    Other,
+}
+
+/// <summary>Who found an escape (<see cref="EscapeEvent.Source"/>).</summary>
+public enum EscapeSource
+{
+    /// <summary>The ticket's owner, trying the work themselves.</summary>
+    Owner,
+    /// <summary>A reviewer on the pull request.</summary>
+    PrReview,
+    Other,
+}
+
+/// <summary>
+/// One time a person sent a ticket back after the pipeline had called it done: a move by a person
+/// from <see cref="TicketPhase.NeedsReview"/> or <see cref="TicketPhase.Done"/> back into the
+/// working phases, on the delivery track. Written with the move, and never changed afterwards
+/// except for the classification a person adds.
+/// <para>
+/// <see cref="QaRulingEvent"/> counts QA's wrong calls inside the pipeline; this counts what got past
+/// all of it. The kind says which part of the pipeline should have caught it, so a rising count of
+/// one kind says which skill to tighten, and the build it escaped from joins it to the runs that
+/// produced that build. A requirement change is recorded too, and counted apart: it is a ticket
+/// coming back, not a miss.
+/// </para>
+/// </summary>
+public class EscapeEvent
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    public string ProjectKey { get; set; } = "";
+    public TicketTrack Track { get; set; } = TicketTrack.Delivery;
+
+    public TicketPhase FromPhase { get; set; }
+    public TicketPhase ToPhase { get; set; }
+
+    /// <summary>The reason given with the move.</summary>
+    public string? Reason { get; set; }
+
+    /// <summary>
+    /// The person's note or comment that explains the move: their latest on the ticket within
+    /// <see cref="NoteWindow"/> before it. Not a foreign key: the log outlives a deleted comment.
+    /// </summary>
+    public int? NoteCommentId { get; set; }
+
+    /// <summary>The build that escaped: the branch head per touched repo, as <see cref="QaItem.VerifiedOn"/> writes it. Null when unknown.</summary>
+    public string? Build { get; set; }
+
+    public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>True for a row reconstructed from <see cref="PhaseTransition"/> history rather than written with the move.</summary>
+    public bool Backfilled { get; set; }
+
+    /// <summary>
+    /// What kind of miss it was; null until classified. The implementation run that picks up the
+    /// send-back classifies it (classify_escape) and cannot hand off until it has; a person can
+    /// correct it afterwards.
+    /// </summary>
+    public EscapeKind? Kind { get; set; }
+    public EscapeSource? Source { get; set; }
+
+    /// <summary>Why it is that kind, in a sentence or two. For a requirement change, it quotes what the owner asked for that nothing before did.</summary>
+    public string? ClassifierNote { get; set; }
+    public DateTime? ClassifiedAt { get; set; }
+
+    /// <summary>Who classified it: a worker run, or a person on the board. Null while unclassified.</summary>
+    public TransitionActor? ClassifiedBy { get; set; }
+
+    /// <summary>The run that classified it: its ticket lease id, as <see cref="QaRulingEvent.RunId"/>. Null for a person.</summary>
+    public int? ClassifiedByRunId { get; set; }
+
+    /// <summary>True when a person replaced a run's classification - the run's own call on its miss did not hold.</summary>
+    public bool Overridden { get; set; }
+
+    /// <summary>
+    /// Whether a move is an escape: a person, on the delivery track, from review or done back into
+    /// the working phases. Not a block (its own outcome) and not a shelving to the backlog. The
+    /// review track's own trip back from NeedsReview is the author pushing a fix, not a miss.
+    /// </summary>
+    public static bool IsEscape(TicketTrack track, TicketPhase from, TicketPhase to, TransitionActor actor) =>
+        actor == TransitionActor.Human
+        && track == TicketTrack.Delivery
+        && from is TicketPhase.NeedsReview or TicketPhase.Done
+        && to is not (TicketPhase.Backlog or TicketPhase.Blocked)
+        && Whetstone.Persistence.PhaseMachine.IsBackward(from, to);
+
+    /// <summary>How long before the move a person's comment still counts as the note that explains it.</summary>
+    public static readonly TimeSpan NoteWindow = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Whether a run's reason for a requirement change quotes the owner: text inside straight or
+    /// curly double quotes, at least a few characters long. The pipeline is judging its own misses,
+    /// and calling one a change of mind is the easy way out, so that call has to show its evidence.
+    /// </summary>
+    public static bool QuotesSomething(string? why) =>
+        !string.IsNullOrWhiteSpace(why)
+        && System.Text.RegularExpressions.Regex.IsMatch(why, "[\"“][^\"“”]{3,}[\"”]");
+}

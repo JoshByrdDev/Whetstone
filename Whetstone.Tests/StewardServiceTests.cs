@@ -150,6 +150,44 @@ public partial class StewardServiceTests : IDisposable
 
     // ---- filing tickets ------------------------------------------------------------
 
+    private void WithEmulatorByPath()
+    {
+        var paths = new DashboardPaths(_dataRoot);
+        File.WriteAllText(paths.ProjectConfigDefaults("alpha"), """
+            { "displayName": "Alpha", "projectPath": "C:/Repos/Alpha", "mergeInsteadOfPr": true,
+              "phaseResources": { "qa-test": ["app-stack", "device:emulator"] },
+              "resourcePaths": { "device:emulator": ["apps/mobile/"] },
+              "steward": { "limits": { "createdPerDay": 5, "openAtOnce": 5 }, "plan": { "units": "docs/units" } } }
+            """);
+    }
+
+    [Fact]
+    public async Task A_ticket_proved_on_a_device_its_branch_does_not_touch_is_filed_needing_it()
+    {
+        WithEmulatorByPath();
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.CreateAsync("alpha", Draft() with { Needs = new[] { "app-stack" } }))).Answer);
+        Assert.Equal("created", (await In(s => s.CreateAsync("alpha", Draft() with { Needs = new[] { "device:emulator" } }))).Answer);
+
+        int id;
+        await using (var ctx = NewCtx())
+        {
+            var t = ctx.Tickets.Single();
+            Assert.Equal("device:emulator", t.NeedsResources);
+            id = t.Id;
+        }
+
+        // And a ticket already filed without it - one whose tester blocked for want of it - is amended.
+        Assert.Equal("amended", (await In(s => s.AmendAsync("alpha", id, null, null, null, Array.Empty<string>()))).Answer);
+        await using (var ctx = NewCtx()) Assert.Null(ctx.Tickets.Single().NeedsResources);
+        Assert.Equal("amended", (await In(s => s.AmendAsync("alpha", id, null, null, null, new[] { "device:emulator" }))).Answer);
+        await using (var ctx = NewCtx())
+        {
+            Assert.Equal("device:emulator", ctx.Tickets.Single().NeedsResources);
+            Assert.Contains(ctx.Comments, c => c.TicketId == id && c.Body.Contains("device:emulator"));
+        }
+    }
+
     [Fact]
     public async Task A_ticket_is_filed_against_an_agreed_unit_and_carries_its_outcomes()
     {

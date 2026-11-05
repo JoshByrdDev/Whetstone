@@ -249,7 +249,10 @@ public record TicketDetailDto(
     bool Walkthrough = false,
     // The owner asked for every QA item to be driven again on this rework: nothing may be carried over.
     // Readable by the QA run through get_ticket; set only from the review gate or the drawer.
-    bool FullQaRequired = false);
+    bool FullQaRequired = false,
+    // What this ticket's testing needs whatever its branch changes (Ticket.NeedsResources). Set by
+    // the owner from the drawer or the steward on its own ticket; readable by a worker, settable by none.
+    IReadOnlyList<string>? Needs = null);
 
 /// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
 public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
@@ -395,7 +398,8 @@ public static class TicketMapper
             ? new TicketPlanDto(t.PlanKey ?? "", unit, StewardProgress.OutcomesOf(t))
             : null,
         t.Walkthrough,
-        t.FullQaRequired);
+        t.FullQaRequired,
+        t.Needs);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

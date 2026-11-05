@@ -17,6 +17,16 @@ models:
           - accepted_values:
               arguments:
                 values: ['Completed', 'Timeout', 'Error']
+  - name: stg_board__escape_events
+    description: Finished work a person sent back after the pipeline called it done, and what kind of miss they said it was.
+    columns:
+      - name: escape_id
+        tests: [unique, not_null]
+      - name: kind
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['OutsideContract', 'InheritedBehaviour', 'UiPolish', 'Logic', 'RequirementChange', 'Other']
   - name: stg_board__qa_ruling_events
     description: One ruling on one QA item - a status, a carry-over, or refinement's expiry - with the run that made it.
     columns:

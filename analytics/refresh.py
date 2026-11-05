@@ -48,7 +48,7 @@ PUBLISHED = [
     "mart_phase_breakdown", "mart_time_split", "mart_rework", "mart_tool_time",
     "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
     "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
-    "mart_qa_rulings",
+    "mart_qa_rulings", "mart_escapes",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an
@@ -87,6 +87,15 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         "Track": "VARCHAR", "Phase": "VARCHAR", "Kind": "VARCHAR", "PriorVerdict": "VARCHAR",
         "VerifiedOn": "VARCHAR", "Note": "VARCHAR", "At": "VARCHAR", "Actor": "VARCHAR",
         "RunId": "INTEGER", "OverturnsEventId": "INTEGER",
+    },
+    # Finished work a person sent back (AddEscapeLog), with their classification of the miss.
+    "EscapeEvents": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR",
+        "FromPhase": "VARCHAR", "ToPhase": "VARCHAR", "Reason": "VARCHAR", "NoteCommentId": "INTEGER",
+        "Build": "VARCHAR", "At": "VARCHAR", "Backfilled": "BOOLEAN", "Kind": "VARCHAR",
+        "Source": "VARCHAR", "ClassifierNote": "VARCHAR", "ClassifiedAt": "VARCHAR",
+        # Added by AddEscapeClassifiedByRun: the run (or person) that classified it, and a person's override.
+        "ClassifiedBy": "VARCHAR", "ClassifiedByRunId": "INTEGER", "Overridden": "BOOLEAN",
     },
     "PhaseTransitions": {
         "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR",

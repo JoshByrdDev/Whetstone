@@ -135,6 +135,19 @@ Call `set_implementation_summary` with a short, plain-language description of th
 ### 5. Commit locally (never push to origin)
 Ensure **all** your changes are committed to the ticket's branch - QA and review must run against a clean, committed tree. Prefer atomic commits per work item, messaged as above; at minimum, `git status --porcelain` must be empty before you hand off. **Never run `git push`** (or `git push origin ...`): the heartbeat workflow is entirely local - pushing to origin is out of scope and not permitted.
 
+#### A ticket sent back from review
+
+When someone sent this ticket back from `NeedsReview` or `Done` - the owner after trying it, or a reviewer on the pull request - the pipeline called the work finished and a person disagreed. That is an escape, and this run is the one that knows what was missed. Before you hand off, classify it with **`classify_escape`**: the kind, who found it (`Owner`, `PrReview` or `Other`), and a `why` of one or two sentences. `set_phase` out of `Implementing` is refused until you have.
+
+- **`OutsideContract`** - a stand-in for, or an assumption about, a service this machine cannot reach was wrong.
+- **`InheritedBehaviour`** - old behaviour or data that a new rule depends on: a ported screen's choice, a field one path never collects.
+- **`UiPolish`** - how a screen looks or moves: a size that jumps, columns that do not line up, something clipped.
+- **`Logic`** - a plain defect: the code does the wrong thing.
+- **`RequirementChange`** - the owner asked for something the ticket never asked for.
+- **`Other`** - a miss that is none of the above.
+
+**A `RequirementChange` has to quote its evidence.** Its `why` must quote, in double quotes, what the owner's note asks for that the description and the master notes did not; the tool refuses one that quotes nothing. The pipeline is judging its own misses here, and calling a miss a change of mind is the easy way out of one. If you cannot find words in the note that nothing earlier asked for, it was not a change of mind: it was a miss, and one of the other kinds.
+
 ### 6. Hand off
 - `set_phase` to `NeedsImplementationReview`. That is the only legal move from `Implementing`: QA is mandatory in this pipeline, so you can never jump to `NeedsQa`, `NeedsReview` or `Done` yourself.
 - Most tickets don't ask for a human look at the code, so the dashboard forwards them straight to `NeedsQa` for you. Always hand off to `NeedsImplementationReview` regardless - the dashboard decides per ticket - and don't be surprised if a later `get_ticket` shows `NeedsQa`. If there is genuinely nothing to QA, the QA phase itself records that and moves the ticket on.

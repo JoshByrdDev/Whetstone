@@ -100,6 +100,60 @@ public class ResourcePathTests : IDisposable
         Assert.Equal(1, reads);
     }
 
+    // ---- What a ticket asks for ----
+
+    [Fact]
+    public async Task A_ticket_that_asks_for_the_resource_gets_it_whatever_its_branch_changes()
+    {
+        // A layout check whose proof is a screenshot inside the app, on a branch that changes only
+        // the site: by its paths it never gets the emulator, and its tester could only block.
+        var reads = 0;
+        var gate = Gate(_ => new[] { "apps/web/page.tsx" }, () => reads++);
+        var asks = new Ticket { Id = 1, ProjectKey = "alpha", Branch = "web", NeedsResources = "device:emulator" };
+        Assert.True(await gate.NeededAsync(asks, "device:emulator"));
+        Assert.True(await gate.NeededAsync(asks, "device:emulator@bravo-host"));
+        Assert.Equal(0, reads);
+        Assert.False(await gate.NeededAsync(T("web"), "device:emulator"));
+    }
+
+    [Fact]
+    public async Task A_walkthrough_takes_every_resource()
+    {
+        var gate = Gate(_ => new[] { "apps/web/page.tsx" });
+        var walk = new Ticket { Id = 1, ProjectKey = "alpha", Branch = "web", Walkthrough = true };
+        Assert.True(await gate.NeededAsync(walk, "device:emulator"));
+    }
+
+    [Fact]
+    public void Only_a_resource_taken_for_some_branches_can_be_asked_for()
+    {
+        Assert.Equal(new[] { "device:emulator" }, Alpha.AskableResources);
+        Assert.Equal(("device:emulator", (string?)null), Alpha.NeedsFrom(new[] { " device:emulator ", "device:emulator" }));
+        Assert.Equal(("", (string?)null), Alpha.NeedsFrom(Array.Empty<string>()));
+        var (value, error) = Alpha.NeedsFrom(new[] { "app-stack" });
+        Assert.Null(value);
+        Assert.Contains("device:emulator", error);
+        Assert.NotNull(new ProjectConfig { Name = "bravo" }.NeedsFrom(new[] { "device:emulator" }).Error);
+    }
+
+    [Fact]
+    public async Task A_web_branch_that_asks_for_the_emulator_holds_it()
+    {
+        using var ctx = new DashboardDbContext(_options);
+        var gate = Gate(_ => new[] { "apps/web/page.tsx" });
+        ctx.Tickets.Add(new Ticket
+        {
+            ProjectKey = "alpha", Title = "layout check", Phase = TicketPhase.NeedsQa, Branch = "web",
+            NeedsResources = "device:emulator", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        });
+        await ctx.SaveChangesAsync();
+        var svc = new TicketService(ctx, leases: new ResourceLeaseService(ctx));
+        var r = await svc.ClaimNextAsync(null, (_, _) => true,
+            resourcesFor: (_, skill) => Alpha.ResourcesFor(skill), resourceNeeded: gate.NeededAsync);
+        Assert.NotNull(r);
+        Assert.Contains("device:emulator", r!.Leases);
+    }
+
     // ---- The claim ----
 
     private async Task<(ClaimResultView Result, ResourceLeaseService Leases)> ClaimQa(DashboardDbContext ctx,

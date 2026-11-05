@@ -82,6 +82,36 @@ export function TicketOptions({
   );
 }
 
+/**
+ * What a ticket's testing needs whatever its branch changes. A project can give a resource only to
+ * the branches that touch its paths - an emulator only to a change of the phone app - and a ticket
+ * whose proof is on that device but whose change is not (a layout check with screenshots inside the
+ * app) has to say so, or its tester never gets the device and can only block. Drawn only for a
+ * project that has such a resource.
+ */
+export function TicketNeeds({ askable, needs, disabled, onChange }: {
+  askable: string[];
+  needs: string[];
+  disabled?: boolean;
+  onChange: (needs: string[]) => void;
+}) {
+  if (askable.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      {askable.map(name => (
+        <OptionCheckbox
+          key={name}
+          checked={needs.includes(name)}
+          disabled={disabled}
+          label={`Testing needs ${name}`}
+          hint="Given to this ticket's testing whatever its branch changes. Without it, only a branch that changes what it is for gets it."
+          onChange={v => onChange(v ? [...needs.filter(n => n !== name), name] : needs.filter(n => n !== name))}
+        />
+      ))}
+    </div>
+  );
+}
+
 function OptionCheckbox({ checked, disabled, label, hint, accent = 'accent-violet-500', onChange }: {
   checked: boolean;
   disabled?: boolean;

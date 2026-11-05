@@ -321,6 +321,9 @@ public class OwnerNoteTests : IDisposable
             var note = HandoffRequirements.UnansweredOwnerNotes(t0!).Single();
             await svc.AcknowledgeNoteAsync(note.Id, "Renamed the column header to Net in the grid definition and updated its test.");
             await svc.TransitionAsync(id, TicketPhase.Implementing, null, TransitionActor.Worker);
+            // Sent back from review, so the run classifies the escape before it may hand off.
+            await svc.ClassifyEscapeByRunAsync(id, EscapeKind.RequirementChange, EscapeSource.Owner,
+                "The note asks to \"rename the column header to Net\", which the ticket never asked for.");
         }
 
         await using var ctx2 = NewCtx();
@@ -348,6 +351,8 @@ public class OwnerNoteTests : IDisposable
             var note = HandoffRequirements.UnansweredOwnerNotes(t0!).Single();
             await svc.AcknowledgeNoteAsync(note.Id, "Switched the totals row to away-from-zero rounding and covered the .5 case in tests.");
             await svc.TransitionAsync(id, TicketPhase.Implementing, null, TransitionActor.Worker);
+            // Sent back from review, so the run classifies the escape before it may hand off.
+            await svc.ClassifyEscapeByRunAsync(id, EscapeKind.Logic, EscapeSource.Owner, "The totals row rounded down; a plain defect.");
         }
 
         await using var ctx2 = NewCtx();

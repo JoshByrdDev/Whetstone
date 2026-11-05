@@ -5,7 +5,7 @@ import { PHASE_LABEL, DEFAULT_PRIORITY } from '../types/tickets';
 import type { AgentState } from '../types/events';
 import * as api from '../api/tickets';
 import { ago } from './JourneyTrack';
-import { TicketOptions } from './TicketOptions';
+import { TicketOptions, TicketNeeds } from './TicketOptions';
 import { IndependentReview } from './IndependentReview';
 import { PriorityPicker } from './PriorityPicker';
 import { TicketPlanLink } from './TicketPlanLink';
@@ -91,6 +91,19 @@ export function TicketDetail({
   }, [id]);
 
   useEffect(() => { reload(); }, [reload]);
+
+  // What this ticket's project lets a ticket ask for, for the "Testing needs" boxes. Read once per
+  // project; a failure leaves the boxes out, as for a project that has nothing to ask for.
+  const [askable, setAskable] = useState<string[]>([]);
+  const projectKey = t?.projectKey;
+  useEffect(() => {
+    if (!projectKey) return;
+    let live = true;
+    api.getProjects()
+      .then(r => { if (live) setAskable(r.projects.find(p => p.key === projectKey)?.askableResources ?? []); })
+      .catch(() => { if (live) setAskable([]); });
+    return () => { live = false; };
+  }, [projectKey]);
 
   // The trip only gains a leg when the phase changes, so it is fetched on that rather than on the
   // live poll below — which runs every few seconds while an agent holds the ticket and would be
@@ -332,6 +345,16 @@ export function TicketDetail({
                 track={t.track}
                 onChange={o => run(() => api.updateTicket(t.id, o))}
               />
+              {askable.length > 0 && (
+                <div className="border-t border-white/5 mt-2 pt-2">
+                  <TicketNeeds
+                    askable={askable}
+                    needs={t.needs ?? []}
+                    disabled={busy}
+                    onChange={n => run(() => api.updateTicket(t.id, { needs: n }))}
+                  />
+                </div>
+              )}
             </div>
 
             {/* Implementation summary — maintained by the implement phase */}
