@@ -8,6 +8,12 @@ namespace Whetstone.Api;
 /// <summary>What the PR button was asked to raise. Both fields default to the ticket's own words.</summary>
 public record CreatePrRequest(string? Title, string? Description);
 
+/// <summary>
+/// Put a ticket under PR review, or take it out. <paramref name="ReviewedOn"/> names what the reviewer
+/// saw; left out, the branch head in each touched repo is taken.
+/// </summary>
+public record UnderReviewRequest(bool On, string? ReviewedOn = null);
+
 /// <summary>The changeset Team Explorer reported for a ticket's check-in.</summary>
 public record RecordCheckinRequest(int? Changeset);
 
@@ -50,6 +56,38 @@ public static class GitEndpoints
             return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 409);
         });
 
+        // The owner's switch for "this branch is in a pull request someone is reviewing"
+        // (Ticket.ReviewedOn). A REST route with no tool behind it: a run turns it on only by
+        // classifying a send-back as found in PR review. `on` with no `reviewedOn` takes each repo's
+        // branch head as it stands - which is also how the owner re-takes it after pushing a round -
+        // and a `reviewedOn` they name (`sha`, or `dir@sha, ...` on a project of several) is checked
+        // to be on the branch before it is recorded. `on: false` ends it.
+        app.MapPut("/api/tickets/{id:int}/under-review", async (
+            int id, UnderReviewRequest req, TicketService tickets, TicketGitService git, LinkedIssueResolver resolver,
+            IssueTrackerFactory trackers, CancellationToken ct) =>
+        {
+            var t = await tickets.GetAsync(id);
+            if (t is null) return Results.NotFound();
+
+            string? point = null;
+            if (req.On)
+            {
+                if (RefuseWriteOnReview(t, "put it under review") is { } peer)
+                    return Results.BadRequest(new { error = peer });
+                var given = string.IsNullOrWhiteSpace(req.ReviewedOn) ? null : req.ReviewedOn;
+                var (resolved, error) = await git.ReviewedPointAsync(t.ProjectKey, t.Branch, given, ct);
+                if (resolved is null) return Results.BadRequest(new { error });
+                point = resolved;
+            }
+
+            var (updated, problem) = await tickets.SetReviewedOnAsync(id, point);
+            if (problem is not null) return Results.BadRequest(new { error = problem });
+            if (updated is null) return Results.NotFound();
+            var r = await resolver.ResolveAsync(updated);
+            return Results.Ok(TicketMapper.ToDetail(updated, r.Title, r.Description, r.Unavailable,
+                tracker: trackers.For(updated.ProjectKey)));
+        });
+
         // What the dialog opens on: local reads only, so it is on screen while the base check below
         // is still talking to origin. The two are separate GETs rather than one streamed response
         // because they answer separate questions — this one is "what is on this branch", and it is
@@ -85,6 +123,7 @@ public static class GitEndpoints
             foreach (var touch in touches)
             {
                 PrPreflight? pre = null;
+                PrPreflight? sinceReviewed = null;
                 string? description = null;
                 // A read-only repo has no branch to preflight; an untouched one of several is listed
                 // so the dialog can say it was left alone, without paying for a diff that is empty.
@@ -93,6 +132,11 @@ public static class GitEndpoints
                     pre = soloRead is not null ? await soloRead : await git.LocalPreflightAsync(t.ProjectKey, branch, ct, touch.Dir);
                     var alsoIn = touched.Where(d => d != touch.Dir).ToList();
                     description = PrDescription.Compose(t, pre.CommitBody, r.Description, issueRef, alsoIn);
+                    // Under review, what is new since the reviewer last looked - the round's commits
+                    // and their diff - beside the whole branch.
+                    if (TicketGitService.ReviewedShaFor(t.ReviewedOn, touch.Dir) is { } seen)
+                        sinceReviewed = await git.LocalPreflightAsync(t.ProjectKey, branch, ct,
+                            cfg.IsMultiRepo ? touch.Dir : null, seen);
                     if (lead is null || (!leadTouched && touch.Touched))
                     {
                         lead = pre;
@@ -110,6 +154,8 @@ public static class GitEndpoints
                     dirty = touch.Dirty,
                     preflight = pre,
                     suggestedDescription = description,
+                    reviewedSha = TicketGitService.ReviewedShaFor(t.ReviewedOn, touch.Dir),
+                    sinceReviewed,
                 });
             }
 
@@ -120,6 +166,9 @@ public static class GitEndpoints
                 // A git project that delivers by merging into its base: the dialog's last button merges.
                 mergeInsteadOfPr = cfg.MergeInsteadOfPr && !cfg.IsTfvc,
                 multiRepo = cfg.IsMultiRepo,
+                // Under PR review: what the reviewer last saw. The dialog then offers the diff since
+                // it, does not ask for a rebase, and says the push is a fast-forward.
+                reviewedOn = t.ReviewedOn,
                 preflight = lead,
                 suggestedTitle = SuggestTitle(t, r, issueRef),
                 suggestedDescription = leadDescription ?? PrDescription.Compose(t, null, r.Description, issueRef),
@@ -161,7 +210,8 @@ public static class GitEndpoints
             if (t is null) return Results.NotFound();
             if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
 
-            if ((RefuseWriteOnReview(t, "rebase it") ?? RefuseOnTfvc(registry, t, "rebase it against a remote")) is { } no)
+            if ((RefuseWriteOnReview(t, "rebase it") ?? RefuseRewriteUnderReview(t, "rebase it")
+                 ?? RefuseOnTfvc(registry, t, "rebase it against a remote")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
 
             var result = await git.RebaseAsync(t.ProjectKey, BranchOf(t), ct, repo);
@@ -177,10 +227,29 @@ public static class GitEndpoints
             if (t is null) return Results.NotFound();
             if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
 
-            if ((RefuseWriteOnReview(t, "force push it") ?? RefuseOnTfvc(registry, t, "force push it")) is { } no)
+            if ((RefuseWriteOnReview(t, "force push it") ?? RefuseRewriteUnderReview(t, "force push it")
+                 ?? RefuseOnTfvc(registry, t, "force push it")) is { } no)
                 return Results.Json(new { ok = false, error = no }, statusCode: 409);
 
             var result = await git.ForcePushAsync(t.ProjectKey, BranchOf(t), ct, repo);
+            return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 409);
+        });
+
+        // A round of a ticket under PR review: its pull request exists already, so this only pushes -
+        // a plain push, which origin takes as a fast-forward or refuses. Refused for a ticket not
+        // under review, whose first push goes with raising the PR.
+        app.MapPost("/api/tickets/{id:int}/git/push", async (
+            int id, string? repo, TicketService tickets, TicketGitService git, ProjectRegistry registry, CancellationToken ct) =>
+        {
+            var t = await tickets.GetAsync(id);
+            if (t is null) return Results.NotFound();
+            if (UnnamedRepo(git, registry, t, repo) is { } which) return which;
+            if ((RefuseWriteOnReview(t, "push it") ?? RefuseOnTfvc(registry, t, "push it")) is { } no)
+                return Results.Json(new { ok = false, error = no }, statusCode: 409);
+            if (!t.UnderReview)
+                return Results.Json(new { ok = false, error = "This ticket is not under PR review: raise its pull request instead, which pushes it." }, statusCode: 409);
+
+            var result = await git.PushRoundAsync(t.ProjectKey, BranchOf(t), ct, repo);
             return result.Ok ? Results.Ok(result) : Results.Json(result, statusCode: 409);
         });
 
@@ -442,6 +511,20 @@ public static class GitEndpoints
         t.Track == Models.TicketTrack.Review
             ? $"This is a peer review ticket: the branch belongs to someone else, so this dashboard will not {action}. "
             + "Read the diff, stage your feedback, and send it from the review panel."
+            : null;
+
+    /// <summary>
+    /// Why a rewrite of this ticket's branch - a rebase, a force push - must not run, or null when it
+    /// may: its pull request is under review (<see cref="Models.Ticket.ReviewedOn"/>), and both would
+    /// replace the commits the reviewer read, losing their threads. Its rounds go on top and push as a
+    /// fast-forward. Taking the ticket out of review on the drawer is how a person who means it does
+    /// it anyway. Public for the tests.
+    /// </summary>
+    public static string? RefuseRewriteUnderReview(Models.Ticket t, string action) =>
+        t.UnderReview
+            ? $"This ticket's pull request is under review, so this will not {action}: that would replace the commits "
+            + $"the reviewer read ({t.ReviewedOn}) and lose their comment threads. Each round goes on top of them and pushes "
+            + "as a fast-forward. If the branch really must be rewritten, take the ticket out of review on its drawer first."
             : null;
 
     /// <summary>How this ticket's issue should be cited in prose that leaves this machine, or null

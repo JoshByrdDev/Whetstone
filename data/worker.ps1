@@ -1266,6 +1266,202 @@ function Compress-TicketCommits {
     finally { Pop-Location }
 }
 
+# ---- A ticket under PR review -------------------------------------------------------------------
+#
+# Once a branch is in a pull request someone has commented on, everything above that rewrites it -
+# the squash, the hand-off rebase, the start rebase - is the wrong thing to do: it replaces the
+# commits the reviewer read, loses their comment threads, and turns the owner's next push into a
+# force push. The board records what the reviewer last saw as the ticket's reviewedOn (the branch
+# head per repo, "dir@sha, ..." or a bare sha on a project of one; Ticket.ReviewedOn), and from then
+# on the branch works in rounds: the reviewed commits stay byte for byte, each round is one commit on
+# top of them per touched repo, a bounce inside the round amends that commit, and nothing rebases.
+# data/worker-review.tests.ps1 covers this.
+
+# The commit the reviewer saw in one repo, from a ticket's reviewedOn. $Dir is the repo's folder on a
+# project of several and empty on a project of one. $null when that repo has none - a repo the round
+# touches for the first time, which the reviewer has never seen and which is squashed as usual.
+function Get-ReviewedSha {
+    param([string]$ReviewedOn, [string]$Dir = '')
+    if (-not "$ReviewedOn".Trim()) { return $null }
+    foreach ($part in ("$ReviewedOn" -split ',')) {
+        $p = $part.Trim()
+        if (-not $p) { continue }
+        $at = $p.LastIndexOf('@')
+        $d = if ($at -gt 0) { $p.Substring(0, $at) } else { '' }
+        $sha = if ($at -gt 0) { $p.Substring($at + 1) } else { $p }
+        if ($d -ieq $Dir) { return $sha.Trim() }
+    }
+    return $null
+}
+
+# The prompt's line for a ticket under PR review, appended to the base-ref line ({{REVIEW_NOTE}});
+# empty when it is not. Pipeline rule, so it names no repo's commit style - the conventions file does.
+function Format-ReviewNote {
+    param([string]$ReviewedOn)
+    if (-not "$ReviewedOn".Trim()) { return '' }
+    return "`n- **Under PR review:** this branch is in a pull request someone has reviewed, and the reviewer last saw ``$($ReviewedOn.Trim())``" +
+        " (``dir@sha`` per repo on a workspace of several). Those commits stay exactly as they are - no ``--amend``, squash, rebase or reset that reaches them." +
+        " This round's changes are ONE new commit on top of them in each repo you change: the first fix of the round makes it, and every later fix in the same round (a QA bounce, an owner's note) amends it." +
+        " Its message follows the repo's own style for review fixes (the conventions file and ``git log`` decide) and describes this round only. ``git log <reviewed sha>..HEAD`` is the round." +
+        " Wherever your skill says one commit against the base ref, it means this shape instead - its **Under PR review** section says what changes for this phase. The heartbeat keeps the branch to this shape after you and does not rebase it."
+}
+
+# The board's reading of reviewedOn now, for after the agent: a run that classifies its send-back as
+# found in PR review turns the mode on mid-run, so the claim's copy is stale for the nets. Returns
+# @{ ok; reviewedOn } - ok $false when the board could not be asked, and the claim's copy stands.
+function Get-TicketReviewedOn {
+    param([string]$TicketId)
+    if (-not $DashboardUrl -or -not $TicketId) { return @{ ok = $false; reviewedOn = $null } }
+    try {
+        $t = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId" -TimeoutSec 5
+        return @{ ok = $true; reviewedOn = "$($t.reviewedOn)".Trim() }
+    }
+    catch { return @{ ok = $false; reviewedOn = $null } }
+}
+
+# Keep a branch under review to its shape: the reviewed commits, untouched, and one commit on top
+# for this round. The skills do this themselves; this is the net for a run that left the round as
+# several commits, or that amended or squashed into the reviewed commit despite being told not to -
+# both are put right by `reset --soft <reviewed>` and one commit, which by construction leaves the
+# tree exactly as the run left it (checked anyway, as the squash does).
+#
+# The round commit's message is the run's own: the first commit it made on top of the reviewed one,
+# which the skills tell it to write in the repo's own style for this round only. Only when the run
+# wrote into the reviewed commit instead is there no such message, and then the net writes a plain
+# one and says so on the ticket.
+#
+# Refused, leaving the branch exactly as it is, when:
+# - the reviewed commit is not in this repo - a sha the board recorded that this clone never had;
+# - the branch has taken in commits from the base since the review (a rebase or a merge of the
+#   base) - folding those would put other people's work into the round commit;
+# - the commits it would fold are already on a remote - the owner pushed the round, so rewriting it
+#   is a force push; re-taking what the reviewer saw on the drawer is the owner's move.
+# Returns $null when there is nothing to do (no round yet, or exactly one round commit on top).
+function Compress-ReviewRound {
+    param([string]$WorkDir, [string]$ReviewedSha, [string]$Title, [string]$IssueRef, [string]$BaseBranch, [bool]$MergeLocally)
+
+    $ErrorActionPreference = 'Continue'
+    if (-not $ReviewedSha -or -not (Test-Path (Join-Path $WorkDir ".git"))) { return $null }
+
+    Push-Location $WorkDir
+    try {
+        $branch = (git rev-parse --abbrev-ref HEAD 2>$null)
+        if (-not $branch -or $branch -eq $BaseBranch) { return $null }
+        if (git status --porcelain 2>$null) { return @{ ok = $false; reason = "working tree is not clean" } }
+
+        $reviewed = "$(git rev-parse --verify --quiet "$ReviewedSha^{commit}" 2>$null)".Trim()
+        if (-not $reviewed) { return @{ ok = $false; reason = "the commit the reviewer saw ($ReviewedSha) is not in this repo" } }
+        $head = "$(git rev-parse HEAD 2>$null)".Trim()
+        if ($head -eq $reviewed) { return $null }
+
+        git merge-base --is-ancestor $reviewed HEAD *> $null
+        $onTop = ($LASTEXITCODE -eq 0)
+
+        # Nothing of the base may come in with the round. Where the branch now meets the base has to
+        # be where the reviewed commit already met it, or something brought newer base commits in.
+        $baseRef = Resolve-BaseRef -RepoDir $WorkDir -BaseBranch $BaseBranch -MergeLocally $MergeLocally
+        if ($baseRef) {
+            $meet = "$(git merge-base HEAD $baseRef 2>$null)".Trim()
+            if ($meet) {
+                git merge-base --is-ancestor $meet $reviewed *> $null
+                if ($LASTEXITCODE -ne 0) {
+                    return @{ ok = $false; reason = "the branch has taken in commits from $baseRef since the review (a rebase or a merge of the base), so its round cannot be folded into one commit without carrying other people's work" }
+                }
+            }
+        }
+
+        if ($onTop) {
+            $round = @(git rev-list --reverse "$reviewed..HEAD" 2>$null | Where-Object { $_ })
+            if ($round.Count -le 1) { return $null }
+            $carriers = @(git branch -r --contains $round[0] 2>$null | Where-Object { $_ })
+            if ($carriers.Count -gt 0) {
+                return @{ ok = $false; reason = "this round's commits are already on $($carriers[0].Trim()), so folding them would need a force push. If the reviewer has seen them, re-take what the reviewer saw on the ticket's drawer" }
+            }
+            $message = (@(git log -1 --format=%B $round[0] 2>$null) -join "`n").TrimEnd()
+            $from = $round.Count
+            $machine = $false
+        }
+        else {
+            $from = @(git rev-list "$reviewed..HEAD" 2>$null | Where-Object { $_ }).Count
+            $issue = "$IssueRef".Trim()
+            $subject = if ($issue) { "${issue}: Address review - $($Title.Trim())" } else { "Address review - $($Title.Trim())" }
+            $message = "$subject`n`nThe changes made for this round of review, on top of the commit the reviewer saw."
+            $machine = $true
+        }
+
+        $treeBefore = (git rev-parse "HEAD^{tree}" 2>$null)
+        $backup = "refs/heads/$branch-preround"
+        git update-ref $backup HEAD *> $null
+
+        git reset --soft $reviewed *> $null
+        if ((Invoke-GitCommitFromFile -Message $message) -ne 0) {
+            git reset --hard $backup *> $null
+            git update-ref -d $backup *> $null
+            return @{ ok = $false; reason = "the round commit failed; branch restored" }
+        }
+        if ((git rev-parse "HEAD^{tree}" 2>$null) -ne $treeBefore) {
+            git reset --hard $backup *> $null
+            git update-ref -d $backup *> $null
+            return @{ ok = $false; reason = "folding the round would have changed the tree; branch restored untouched" }
+        }
+        git update-ref -d $backup *> $null
+        return @{ ok = $true; from = $from; rewroteReviewed = (-not $onTop); machineMessage = $machine
+                  branch = $branch; sha = (git rev-parse --short HEAD 2>$null); reviewed = (git rev-parse --short $reviewed 2>$null) }
+    }
+    finally { Pop-Location }
+}
+
+# The hand-off rebase's stand-in under review: does the branch as it stands still merge with the
+# base? Asked the way the start rebase asks after a conflict (Get-MergeConflicts, a merge written
+# nowhere) and never acted on - rebasing would rewrite what the reviewer read, so a conflict is said
+# and left for the owner to decide. Fetches the base first, under the hub lock, as the rebase does.
+# Returns $null when there is no base to measure against, else @{ ok; base; behind; conflicts }.
+function Test-ReviewBranchMerges {
+    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally)
+
+    $ErrorActionPreference = 'Continue'
+    if (-not (Test-Path (Join-Path $WorkDir ".git"))) { return $null }
+
+    git -C $WorkDir remote get-url origin *> $null
+    if ($LASTEXITCODE -eq 0) {
+        Invoke-WithMutex -Name "hub-$RepoDir" -TimeoutMs 900000 -Body {
+            git -C $WorkDir fetch origin $BaseBranch --quiet 2>$null
+        } | Out-Null
+    }
+    $baseRef = Resolve-BaseRef -RepoDir $WorkDir -BaseBranch $BaseBranch -MergeLocally $MergeLocally
+    if (-not $baseRef) { return $null }
+    $behind = [int](git -C $WorkDir rev-list --count "HEAD..$baseRef" 2>$null)
+    if ($behind -le 0) { return @{ ok = $true; base = $baseRef; behind = 0; conflicts = @() } }
+    $whole = Get-MergeConflicts -WorkDir $WorkDir -BaseRef $baseRef
+    return @{ ok = $whole.ok; base = $baseRef; behind = $behind; conflicts = @($whole.conflicts) }
+}
+
+# What is new for the reviewer in one repo, for the comment a ticket under review carries when it
+# reaches NeedsReview: the commits on top of what they saw, and whether pushing the branch moves
+# origin's copy by a fast-forward. push is 'fast-forward', 'up-to-date', 'not-pushed' (origin has
+# no copy), 'diverged' (it would take a force push) or 'unknown' (origin could not be asked).
+function Get-ReviewRoundReport {
+    param([string]$WorkDir, [string]$ReviewedSha)
+
+    $ErrorActionPreference = 'Continue'
+    $branch = "$(git -C $WorkDir rev-parse --abbrev-ref HEAD 2>$null)".Trim()
+    $commits = @(git -C $WorkDir log --format='%h %s' "$ReviewedSha..HEAD" 2>$null | Where-Object { $_ })
+    $remote = ''
+    $push = 'unknown'
+    $line = @(git -C $WorkDir ls-remote --heads origin $branch 2>$null | Where-Object { $_ })
+    if ($LASTEXITCODE -eq 0 -and $line.Count -eq 0) { $push = 'not-pushed' }
+    elseif ($line.Count -gt 0) {
+        $remote = ("$($line[0])" -split '\s+')[0]
+        $head = "$(git -C $WorkDir rev-parse HEAD 2>$null)".Trim()
+        if ($remote -eq $head) { $push = 'up-to-date' }
+        else {
+            git -C $WorkDir merge-base --is-ancestor $remote HEAD *> $null
+            $push = switch ($LASTEXITCODE) { 0 { 'fast-forward' } 1 { 'diverged' } default { 'unknown' } }
+        }
+    }
+    return @{ branch = $branch; commits = $commits; remote = $remote; push = $push }
+}
+
 # ---- Reflection ------------------------------------------------------------------------------
 
 # The output contract for reflection, owned HERE rather than in each project's reflect-prompt.md.
@@ -1671,6 +1867,13 @@ if ($armRun.Id) {
 $memoryDir   = "$($Claim.project.memoryDir)"
 $memoryIndex = "$($Claim.project.memoryIndex)"
 $resumed     = if ($Claim.resumed) { "yes" } else { "no" }
+# What the ticket's pull request reviewer last saw, when it is under PR review (Ticket.ReviewedOn):
+# the branch then works in rounds on top of those commits rather than in one rewritten commit - no
+# start rebase, no squash, no hand-off rebase (see Compress-ReviewRound). Read again after the
+# agent, since a run that classifies its send-back as found in PR review turns it on mid-run.
+$reviewedOn = "$($Claim.ticket.reviewedOn)".Trim()
+if ($reviewedOn) { Write-Log "  Under PR review: the reviewer last saw $reviewedOn." }
+
 # Human-authored standing instructions for this ticket. Injected into EVERY phase's prompt
 # (not left to the worker to fetch) so it is always in context and always outranks the
 # description. Claude has no tool that can write this back.
@@ -2071,8 +2274,14 @@ if ($onHost) {
 # conflict is found while a run that can deal with it is starting rather than after refinement. A
 # project of one only: a workspace's repos each have their own base and are rebased at hand-off.
 # On a worker host the mirrored base is refreshed first, as the hand-off rebase does.
+# Never under PR review: a rebase rewrites the commits the reviewer read, so a branch there stays
+# where it is and the hand-off only checks that it still merges (Test-ReviewBranchMerges).
 $startRebaseNote = ''
-if ($repoDir -and -not $multiRepo -and -not $readsOnly -and ($skill -in @('implement', 'qa-test')) -and $wt.path) {
+if ($reviewedOn -and ($skill -in @('implement', 'qa-test'))) {
+    Write-Log "  Start rebase skipped: the branch is under PR review."
+    $runDetail.startRebase = 'skipped'
+}
+if ($repoDir -and -not $multiRepo -and -not $readsOnly -and -not $reviewedOn -and ($skill -in @('implement', 'qa-test')) -and $wt.path) {
     if ($onHost) {
         $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
         if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the start rebase: $($resync.reason)" }
@@ -2143,6 +2352,10 @@ else {
     $baseRefLine = "``$baseRefNow``"
 }
 
+# The branch is in a pull request someone has reviewed: said on the base-ref line, because it changes
+# what "the base ref" is measured for. Empty otherwise, so every other run reads as it always has.
+$reviewNote = Format-ReviewNote -ReviewedOn $reviewedOn
+
 # What this run should know about the state of its worktree, on the working-directory line: that
 # speculate's install is still going beside it (Start-BackgroundSetup), or that implement starts on
 # a branch that conflicts with the base (Update-BranchAtStart). Empty otherwise, so every other run's
@@ -2203,6 +2416,7 @@ $prompt = $promptTemplate.
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
     Replace('{{BASE_REF}}',    $baseRefLine).
     Replace('{{REPOS_NOTE}}',  $reposNote).
+    Replace('{{REVIEW_NOTE}}', $reviewNote).
     Replace('{{TICKET_ID}}',   $ticketId).
     Replace('{{TITLE}}',       $title).
     Replace('{{PROJECT_KEY}}', $projectKey).
@@ -2601,6 +2815,49 @@ function Invoke-HandOffNets {
         Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase left $($leftovers.files) file(s) uncommitted on '$($leftovers.branch)' and the heartbeat could not commit them automatically. The next phase will block on branch setup until this is sorted out by hand."
     }
 
+    # Under PR review the shape is different and so are both nets below: the reviewed commits stay,
+    # the round is one commit on top (implementation makes it, refinement checks it), and nothing
+    # is rebased - the branch is only asked whether it still merges, and a conflict is said and
+    # left for the owner, because resolving it means rewriting what the reviewer read. A repo the
+    # reviewer never saw (one this round touches for the first time) is squashed and rebased as usual.
+    $seen = Get-ReviewedSha -ReviewedOn $reviewedOn -Dir $(if ($Member) { "$($Member.dir)" } else { '' })
+    if ($seen) {
+        if ($skill -in @('implement', 'refine')) {
+            $round = Compress-ReviewRound -WorkDir $workDir -ReviewedSha $seen -Title $title `
+                -IssueRef "$($Claim.issueCommitRef)" -BaseBranch $effectiveBase -MergeLocally $mergeLocally
+            if ($round -and $round.ok) {
+                $how = if ($round.rewroteReviewed) {
+                    "It had written into the commit the reviewer saw ($($round.reviewed)) instead of on top of it, so the heartbeat put that commit back and made this round's changes one commit on top"
+                } else {
+                    "It left this round as $($round.from) commits on top of the commit the reviewer saw ($($round.reviewed)), so the heartbeat folded them into one"
+                }
+                $msg = if ($round.machineMessage) { " The heartbeat wrote its message, which names no change - rewrite it in the repo's own style before pushing." } else { " The round's first commit message was kept." }
+                Write-Log "  ${in}WARNING: under PR review, $skill did not leave one round commit - reshaped to $($round.sha) on '$($round.branch)'."
+                Send-TicketComment -TicketId $ticketId -Body "${in}This ticket is under PR review. $how ($($round.sha)), with the tree exactly as the $skill run left it.$msg"
+            }
+            elseif ($round) {
+                Write-Log "  ${in}WARNING: under PR review, could not keep the branch to the reviewed commits plus one: $($round.reason)."
+                Send-TicketComment -TicketId $ticketId -Body "${in}This ticket is under PR review, and its branch is not the reviewed commits plus one commit for this round. The heartbeat left it exactly as it is: $($round.reason)."
+            }
+        }
+        if ($skill -eq 'refine') {
+            if ($onHost) {
+                $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+                if (-not $resync.ok) { Write-Log "  ${in}Could not refresh the board host's base before the merge check: $($resync.reason)." }
+            }
+            $merges = Test-ReviewBranchMerges -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally
+            if ($merges -and $merges.conflicts.Count -gt 0) {
+                $files = ($merges.conflicts | ForEach-Object { "- $_" }) -join "`n"
+                Write-Log "  ${in}Under PR review and $($merges.behind) behind $($merges.base), and it conflicts ($($merges.conflicts.Count) file(s)) - not rebased; left for the owner."
+                Send-TicketComment -TicketId $ticketId -Body "${in}This branch is $($merges.behind) commit(s) behind $($merges.base) and no longer merges cleanly with it. It is under PR review, so the heartbeat did not rebase it: that would rewrite the commits the reviewer read. How to settle it is yours to decide - a merge of the base into the branch keeps the reviewed commits, a rebase and force push replaces them (take the ticket out of review on its drawer first). Conflicting files:`n`n$files"
+            }
+            elseif ($merges -and $merges.behind -gt 0) {
+                Write-Log "  ${in}Under PR review: $($merges.behind) behind $($merges.base), merges cleanly - not rebased."
+            }
+        }
+        return
+    }
+
     # One ticket, one commit. Refinement owns tidying the history and writing a good message;
     # this only fires when it did not, and says so on the ticket because a machine-written
     # message is exactly the thing a human should look at. On a project of several repos, one
@@ -2681,6 +2938,16 @@ function Invoke-HandOffNets {
     }
 }
 
+# Whether the ticket is under PR review now, not when it was claimed: classifying a send-back as
+# found in PR review turns it on during this very run, and the nets below have to see that.
+if ($repoDir -and -not $readsOnly) {
+    $fresh = Get-TicketReviewedOn -TicketId $ticketId
+    if ($fresh.ok -and $fresh.reviewedOn -ne $reviewedOn) {
+        Write-Log "  Under PR review is now '$($fresh.reviewedOn)' (was '$reviewedOn' at the claim)."
+        $reviewedOn = $fresh.reviewedOn
+    }
+}
+
 # Every cycle must leave its worktree clean - the next phase refuses to start on a dirty tree.
 # Commit anything the worker forgot, loudly, so the ticket keeps moving and the miss is visible
 # on the ticket rather than showing up as a confusing workspace failure one phase later.
@@ -2702,6 +2969,34 @@ if ($repoDir -and -not $readsOnly) {
         }
     }
     else { Invoke-HandOffNets -WorkDir $workDir -RepoDir $repoDir -EffectiveBase $effectiveBase }
+
+    # Under PR review and back in front of the owner: say what is new for the reviewer, repo by
+    # repo, and whether pushing it is the fast-forward a round is meant to be - the owner pushes
+    # by hand, and a push that turned out to need a force would lose the reviewer's threads.
+    if ($reviewedOn -and (Get-TicketPhase -TicketId $ticketId) -eq 'NeedsReview') {
+        $places = if ($multiRepo) { @($workMembers | Where-Object { -not $_.readOnly } | ForEach-Object { @{ dir = "$($_.dir)"; path = $_.path } }) }
+                  else { @(@{ dir = ''; path = $workDir }) }
+        $parts = @()
+        foreach ($p in $places) {
+            $seen = Get-ReviewedSha -ReviewedOn $reviewedOn -Dir $p.dir
+            if (-not $seen) { continue }
+            $rep = Get-ReviewRoundReport -WorkDir $p.path -ReviewedSha $seen
+            $at = if ($p.dir) { "``$($p.dir)``: " } else { '' }
+            $short = if ($seen.Length -gt 7) { $seen.Substring(0, 7) } else { $seen }
+            $list = if ($rep.commits.Count -gt 0) { ($rep.commits | ForEach-Object { "- ``$_``" }) -join "`n" } else { "- nothing new since $short" }
+            $push = switch ($rep.push) {
+                'fast-forward' { "Pushing ``$($rep.branch)`` is a fast-forward of origin's copy - a plain ``git push``, no force." }
+                'up-to-date'   { "origin already has it." }
+                'not-pushed'   { "origin has no copy of ``$($rep.branch)`` yet." }
+                'diverged'     { "**Pushing this is NOT a fast-forward:** origin's ``$($rep.branch)`` is at $($rep.remote.Substring(0, [Math]::Min(7, $rep.remote.Length))), which this branch no longer contains. Check what moved before forcing anything." }
+                default        { "Whether pushing is a fast-forward could not be checked (origin did not answer)." }
+            }
+            $parts += "${at}new for the reviewer since $short`:`n$list`n$push"
+        }
+        if ($parts.Count -gt 0) {
+            Send-TicketComment -TicketId $ticketId -Body ("This ticket is under PR review, so its reviewed commits are unchanged and this round sits on top of them.`n`n" + ($parts -join "`n`n"))
+        }
+    }
 }
 
 # The run is over: the capture mirror makes one last pass and stops.

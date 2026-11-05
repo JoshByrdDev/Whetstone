@@ -64,6 +64,12 @@ export const updateTicket = (id: number, body: Partial<{
   needs: string[];
 }>) => fetch(`/api/tickets/${id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);
 
+// Put a ticket under PR review, or take it out. Without `reviewedOn` the branch head in each touched
+// repo is taken as what the reviewer saw - also how it is re-taken after pushing a round by hand.
+export const setUnderReview = (id: number, on: boolean, reviewedOn?: string) =>
+  fetch(`/api/tickets/${id}/under-review`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ on, reviewedOn }) })
+    .then(json<TicketDetail>);
+
 export const deleteTicket = (id: number) =>
   fetch(`/api/tickets/${id}`, { method: 'DELETE' }).then(json<{ deleted: boolean }>);
 

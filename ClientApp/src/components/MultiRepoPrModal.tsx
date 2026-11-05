@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useVeil } from '../hooks/useVeil';
-import { getPrPreflight, getPrBaseCheck, createPr, rebaseTicket, forcePushTicket, copyLeftOutDescription } from '../api/git';
+import { getPrPreflight, getPrBaseCheck, createPr, rebaseTicket, forcePushTicket, pushRound, copyLeftOutDescription } from '../api/git';
 import type { PrPreflight, PrCreateResult, RepoPreflight } from '../api/git';
 import { DiffReviewList } from './DiffReviewList';
 import { Action, Banner, Cmd, LeftOutDescription, Tab, providerLabel, withBase } from './PrModal';
@@ -87,6 +87,7 @@ export function MultiRepoPrModal({ ticketId, onClose }: { ticketId: number; onCl
             pinned: old?.pinned ?? new Set(),
             gitBusy: null, gitMsg: null, confirmForce: false, override: false,
             busy: false, result: keepText && old ? old.result : null, error: null,
+            reviewedSha: repo.reviewedSha ?? null, since: repo.sinceReviewed ?? null,
           };
         });
         return next;
@@ -114,6 +115,13 @@ export function MultiRepoPrModal({ ticketId, onClose }: { ticketId: number; onCl
     if (!s) return null;
     patch(dir, { busy: true, error: null });
     try {
+      // Under PR review the pull request exists: a round is pushed, as a fast-forward or not at all.
+      if (s.reviewedSha) {
+        const pushed = await pushRound(ticketId, dir);
+        const asResult = { ok: pushed.ok, error: pushed.error, pushed: pushed.ok, url: null, mode: 'push', output: pushed.output ?? [] } as unknown as PrCreateResult;
+        patch(dir, pushed.ok ? { result: asResult, error: null } : { result: null, error: pushed.error ?? 'Could not push.' });
+        return asResult;
+      }
       const r = await createPr(ticketId, title.trim(), s.description, dir);
       // A refusal is not always a create result: a QA copy's 403 and a 400 for a repo that is not
       // the ticket's carry only an error. Keep the result only when it is one, so nothing below
@@ -355,6 +363,9 @@ interface Section {
   error: string | null;
   /** The description the form's link left out was copied as the form opened. Only the opened one is. */
   copied?: boolean;
+  /** Under PR review: the commit the reviewer last saw in this repo, and the branch read from it. */
+  reviewedSha?: string | null;
+  since?: PrPreflight | null;
 }
 
 /** PrModal's own gate, per repo: origin has answered, there is something to raise, and nothing says stop. */
@@ -362,6 +373,8 @@ function canCreate(s: Section): boolean {
   const checked = s.pre.ok && s.pre.baseChecked;
   if (!checked || s.pre.ahead === 0 || s.busy || s.gitBusy || s.result?.ok) return false;
   if (s.pre.remoteBranchExists && s.pre.remoteAhead > 0) return false;
+  // Under review a round is pushed as it stands: behind the base is said, never fixed by a rebase.
+  if (s.reviewedSha) return !s.pre.remoteUpToDate;
   return s.pre.behind === 0 || s.override;
 }
 
@@ -385,8 +398,12 @@ function RepoSection({
   const stale = checked && pre.behind > 0;
   const diverged = checked && pre.remoteBranchExists && pre.remoteAhead > 0;
   const busy = lockAll || s.busy || s.gitBusy !== null;
+  const under = !!s.reviewedSha;
+  const shown = under && s.since?.ok ? s.since : pre;
 
   const status = s.result?.ok ? { tone: 'text-emerald-400', text: s.result.mode === 'gh' ? 'PR created' : 'pushed' }
+    : under && diverged ? { tone: 'text-red-400', text: 'not a fast-forward' }
+    : under ? { tone: 'text-amber-400', text: 'under review' }
     : !pre.ok ? { tone: 'text-red-400', text: 'cannot read' }
     : !checked ? { tone: 'text-gray-500', text: 'checking…' }
     : diverged ? { tone: 'text-amber-400', text: 'diverged from origin' }
@@ -417,7 +434,15 @@ function RepoSection({
           </Banner>
         )}
 
-        {stale && (
+        {under && (
+          <Banner tone="warn">
+            <b>Under PR review.</b> The reviewer last saw <span className="font-mono">{s.reviewedSha!.slice(0, 7)}</span>
+            {s.since?.ok && <> - {s.since.commits.length} commit{s.since.commits.length === 1 ? '' : 's'} on top since, shown below</>}.
+            {stale && <> It is {pre.behind} behind {pre.baseRef} and is not rebased: that would replace what the reviewer read.</>}
+            {' '}The push is a fast-forward.
+          </Banner>
+        )}
+        {stale && !under && (
           <Banner tone="bad">
             <b>{pre.behind} commit{pre.behind === 1 ? '' : 's'} behind {pre.baseRef}.</b>{' '}
             Rebase it before raising, or this repo's PR will carry other people's work.
@@ -434,7 +459,7 @@ function RepoSection({
             <Cmd>{`git -C "${pre.repoPath}" rebase ${pre.baseRef} ${pre.branch}`}</Cmd>
           </Banner>
         )}
-        {checked && !stale && !diverged && pre.ahead > 0 && !s.result?.ok && (
+        {checked && !under && !stale && !diverged && pre.ahead > 0 && !s.result?.ok && (
           <Banner tone="good">Based off the latest <span className="font-mono">{pre.baseRef}</span>.</Banner>
         )}
 
@@ -460,7 +485,13 @@ function RepoSection({
           </Banner>
         )}
 
-        {diverged && (
+        {diverged && under && (
+          <Banner tone="bad">
+            <b><span className="font-mono">origin/{pre.branch}</span> has {pre.remoteAhead} commit{pre.remoteAhead === 1 ? '' : 's'} this branch does not.</b>{' '}
+            Pushing would not be a fast-forward, and forcing would replace what the reviewer has. Take the ticket out of review first if it really must be forced.
+          </Banner>
+        )}
+        {diverged && !under && (
           <Banner tone="warn">
             <b><span className="font-mono">origin/{pre.branch}</span> has {pre.remoteAhead} commit{pre.remoteAhead === 1 ? '' : 's'} this branch does not.</b>{' '}
             An ordinary push is rejected; forcing replaces origin with this branch.
@@ -499,21 +530,22 @@ function RepoSection({
         <div>
           <div className="flex items-center gap-3 border-b border-hair">
             <Tab active={s.tab === 'diff'} onClick={() => onTab('diff')}>
-              Files <span className="text-gray-600">{pre.files.length}</span>
+              Files <span className="text-gray-600">{shown.files.length}</span>
             </Tab>
             <Tab active={s.tab === 'commits'} onClick={() => onTab('commits')}>
-              Commits <span className="text-gray-600">{pre.commits.length}</span>
+              Commits <span className="text-gray-600">{shown.commits.length}</span>
             </Tab>
             <span className="flex-1" />
+            {shown !== pre && <span className="text-[10px] text-amber-400/80 pb-1.5">since the reviewer</span>}
             <span className="text-[10px] font-mono text-gray-600 pb-1.5">
-              <span className="text-emerald-500">+{pre.files.reduce((n, f) => n + f.added, 0)}</span>{' '}
-              <span className="text-red-500">−{pre.files.reduce((n, f) => n + f.removed, 0)}</span>
+              <span className="text-emerald-500">+{shown.files.reduce((n, f) => n + f.added, 0)}</span>{' '}
+              <span className="text-red-500">−{shown.files.reduce((n, f) => n + f.removed, 0)}</span>
             </span>
           </div>
           <div key={s.tab ?? 'none'} className="orbit-swap">
             {s.tab === 'commits' && (
               <div className="py-2">
-                {pre.commits.map(c => (
+                {shown.commits.map(c => (
                   <div key={c.sha} className="flex items-baseline gap-2.5 py-1 text-xs border-b border-hairsoft last:border-0 min-w-0">
                     <span className="font-mono text-[10px] text-amber-500 flex-none">{c.sha}</span>
                     <span className="text-gray-300 truncate flex-1 min-w-0">{c.subject}</span>
@@ -524,8 +556,8 @@ function RepoSection({
             )}
             {s.tab === 'diff' && (
               <DiffReviewList
-                files={pre.files}
-                truncated={pre.patchTruncated}
+                files={shown.files}
+                truncated={shown.patchTruncated}
                 pinned={s.pinned}
                 onTogglePin={onTogglePin}
                 root={pre.worktreePath || pre.repoPath}
@@ -539,7 +571,8 @@ function RepoSection({
         {s.result?.ok && (
           <div className="rounded border border-emerald-800 bg-emerald-950/40 px-3 py-2 text-xs text-emerald-200 space-y-1">
             <div>
-              {s.result.mode === 'gh' ? 'Pull request created.'
+              {s.result.mode === 'push' ? 'Pushed to origin as a fast-forward: the pull request shows the new round on top.'
+                : s.result.mode === 'gh' ? 'Pull request created.'
                 : s.result.mode === 'web' ? 'Branch pushed. Finish creating the PR on its form:'
                 : 'Branch pushed. This host has no PR flow wired up here - raise it manually.'}
             </div>
@@ -560,7 +593,7 @@ function RepoSection({
         {!s.result?.ok && (
           <div className="flex justify-end">
             <Action tone="good" onClick={onCreate} disabled={!canCreate(s) || lockAll}>
-              {s.busy ? 'Pushing…' : `Create pull request in ${dir}`}
+              {s.busy ? 'Pushing…' : under ? `Push the round in ${dir}` : `Create pull request in ${dir}`}
             </Action>
           </div>
         )}

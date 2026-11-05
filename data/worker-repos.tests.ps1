@@ -359,7 +359,7 @@ try {
     Check 'worker.ps1 still parses' (@($tree.FindAll({ $true }, $false)).Count -gt 0 -and $parseErrors.Count -eq 0) $true
     $template = Get-Content -Path (Join-Path $PSScriptRoot 'heartbeat-prompt.md') -Raw
     Check 'the base-ref line takes its backticks from the worker' ($template -match '- \*\*Base ref:\*\* \{\{BASE_REF\}\} - the ref') $true
-    Check '... and ends in the repos note, so an empty one adds nothing' ($template -match 'after you finish\.\{\{REPOS_NOTE\}\}\r?\n') $true
+    Check '... and ends in the repos and review notes, so empty ones add nothing' ($template -match 'after you finish\.\{\{REPOS_NOTE\}\}\{\{REVIEW_NOTE\}\}\r?\n') $true
     Check 'a project of one has no repos note' "[$(Format-ReposNote -Members @((Member '' $soloHub)) -Branch 'jb/solo-1')]" '[]'
     $note = Format-ReposNote -Members $retry.members -Branch 'jb/PROJ-3'
     Check 'several: the note opens a bullet of its own' ($note -match "^`n- \*\*Repos:\*\*") $true
@@ -438,6 +438,39 @@ try {
     Invoke-HandOffNets -WorkDir $soloWs.path -RepoDir $soloHub -EffectiveBase 'main'
     Check 'a project of one: squashed' "$(git -C $soloWs.path rev-list --count origin/main..HEAD)" 1
     Check '... with the comment it always had' (@($script:comments)[0] -match '^Refinement finished without tidying the branch history') $true
+
+    # ---- Under PR review, per repo --------------------------------------------------------------
+    # The reviewer saw alpha-web; this round also touches alpha-api for the first time. The reviewed
+    # repo keeps its commit and gets one on top, and is not rebased even though its base moved and
+    # now conflicts; the repo the reviewer never saw is squashed as usual.
+    Write-Host "== the hand-off under PR review"
+    $u = Open-Workspace -Members $handoff -Branch 'jb/PROJ-6'
+    $uWeb = (Find $u 'alpha-web').path; $uApi = (Find $u 'alpha-api').path
+    Add-Commit -Dir $uWeb -File 'README.md' -Subject 'PROJ-6: the reviewed change'
+    git -C $uWeb push -q origin 'jb/PROJ-6' *> $null
+    $seenWeb = Get-Sha $uWeb HEAD
+    Add-Commit -Dir $uWeb -File 'fix.txt' -Subject 'PROJ-6: Address review - rename the column'
+    Add-Commit -Dir $uWeb -File 'fix.txt' -Subject 'fix-up'
+    Add-Commit -Dir $uApi -File 'api.txt' -Subject 'api: one'
+    Add-Commit -Dir $uApi -File 'api.txt' -Subject 'api: two'
+    $other = Join-Path $root ("clash-" + [guid]::NewGuid().ToString("N").Substring(0, 6))
+    git clone -q -b main (git -C $web remote get-url origin) $other *> $null
+    Set-Identity $other
+    Add-Commit -Dir $other -File 'README.md' -Subject 'someone else edits the readme'
+    git -C $other push -q origin main *> $null
+    git -C $web fetch -q origin *> $null
+    $reviewedOn = "alpha-web@$seenWeb"
+    $script:comments.Clear(); $script:phase = 'NeedsReview'; $script:handOffSentBack = $false
+    foreach ($m in @($u.members | Where-Object { -not $_.readOnly })) {
+        Invoke-HandOffNets -WorkDir $m.path -RepoDir $m.hub -EffectiveBase $m.baseBranch -Label $m.dir -Member $m
+    }
+    Check 'the reviewed repo: one round commit on the reviewed one' (Get-Sha $uWeb 'HEAD~1') $seenWeb
+    Check "... keeping the round's message" "$(git -C $uWeb log -1 --format=%s)" 'PROJ-6: Address review - rename the column'
+    Check '... not rebased onto the base that moved' "$(git -C $uWeb merge-base --is-ancestor origin/main HEAD; $LASTEXITCODE)" 1
+    Check '... the conflict is said, not acted on' (@($script:comments | Where-Object { $_ -match '^`alpha-web`: .*did not rebase it' }).Count) 1
+    Check '... and the ticket stays with the owner' $script:phase 'NeedsReview'
+    Check 'the repo the reviewer never saw is squashed as usual' "$(git -C $uApi rev-list --count origin/develop..HEAD)" 1
+    $reviewedOn = $null
 }
 catch {
     # A check that throws skips every check after it, which would otherwise read as a pass.

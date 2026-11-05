@@ -1838,6 +1838,12 @@ namespace Whetstone.Migrations
                     b.Property<bool>("RequiresSpeculationReview")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ReviewedOn")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ReviewedOnAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("ShortLoopReview")
                         .HasColumnType("INTEGER");
 
