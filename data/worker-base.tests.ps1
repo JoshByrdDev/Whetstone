@@ -21,6 +21,7 @@ foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Langu
     . ([scriptblock]::Create($fn.Extent.Text))
 }
 . (Join-Path $PSScriptRoot 'worker-repos.ps1')
+. (Join-Path $PSScriptRoot 'worker-board.ps1')
 
 $env:GIT_TERMINAL_PROMPT = '0'
 $root = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-base-" + [guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -277,6 +278,38 @@ try {
     Check "A's rebase: against origin/main, nothing to do" "$($ra.ok) $($ra.rebased) $($ra.base)" 'True False origin/main'
     Check "B's rebase: against origin/develop, replayed" "$($rb.ok) $($rb.rebased) $($rb.base) $($rb.behind)" 'True True origin/develop 1'
     Check "B's rebase brought only B's base" ((Test-Path (Join-Path $wb 'b-landed.txt')) -and -not (Test-Path (Join-Path $wa 'b-landed.txt'))) $true
+
+    # ---- A worktree left dirty by a run that never reached its nets ------------
+    # Refusing it blocked the ticket on every retry: "discard and retry" was an instruction to the
+    # next agent, and the next agent never started. The fleet's own worktree is set aside instead.
+    Write-Host "== a worktree left dirty by a killed run"
+    $d = New-Hub 'dirty'
+    $wt = New-TicketWorktree -Repo $d -Branch 't-1' -MergeLocally $false
+    Add-Commit -Dir $wt.path -File 'done.txt' -Subject 'the run got this far'
+    $last = Get-Sha $wt.path HEAD
+    Add-Content -Path (Join-Path $wt.path 'done.txt') -Value 'half-finished' -Encoding ascii
+    Set-Content -Path (Join-Path $wt.path 'new.test.txt') -Value 'untracked' -Encoding ascii
+    $again = New-TicketWorktree -Repo $d -Branch 't-1' -MergeLocally $false -Skill 'implement'
+    Check 'dirty fleet worktree: the phase starts' "$($again.ok) $((Get-FullPathKey $again.path) -eq (Get-FullPathKey $wt.path))" 'True True'
+    Check '... on the last commit' (Get-Sha $wt.path HEAD) $last
+    Check '... with a clean tree' "$(git -C $wt.path status --porcelain)" ''
+    Check '... saying what it set aside' ((@($again.stash.files) | Sort-Object) -join ',') 'done.txt,new.test.txt'
+    Check '... as the newest stash' $again.stash.sha (Get-Sha $d.hub refs/stash)
+    Check '... with the edit in it' ("$(git -C $wt.path show "$($again.stash.sha):done.txt")" -match 'half-finished') $true
+    Check '... and the untracked file' "$(git -C $wt.path show "$($again.stash.sha)^3:new.test.txt")".Trim() 'untracked'
+    Check '... named for the branch' ("$(git -C $wt.path stash list)" -match 'left uncommitted on t-1, set aside before a new phase') $true
+    $clean = New-TicketWorktree -Repo $d -Branch 't-1' -MergeLocally $false -Skill 'implement'
+    Check 'a clean worktree: nothing set aside' "$($clean.ok) $([bool]$clean.stash)" 'True False'
+
+    # A worktree a person made elsewhere is theirs: refused, as it always was, and left alone.
+    $o = New-Hub 'dirty-outside'
+    $mine = Join-Path $root 'dirty-outside\mine'
+    git -C $o.hub branch t-2 *> $null
+    git -C $o.hub worktree add $mine t-2 *> $null
+    Add-Content -Path (Join-Path $mine 'README.md') -Value 'mine, mid-edit' -Encoding ascii
+    $theirs = New-TicketWorktree -Repo $o -Branch 't-2' -MergeLocally $false -Skill 'implement'
+    Check "a dirty worktree outside the root: refused" "$($theirs.ok) $($theirs.reason -match 'outside this project''s worktree root')" 'False True'
+    Check '... and its edits left where they are' ("$(git -C $mine status --porcelain)" -match 'README.md') $true
 
     # ---- A setup command that fails says why ----------------------------------
     # Its output was only ever in the log of whichever machine ran it; on a worker host that is

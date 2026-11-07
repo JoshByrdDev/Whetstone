@@ -293,6 +293,8 @@ function Resolve-Workspace {
 
     $out = New-Object System.Collections.Generic.List[object]
     $pending = New-Object System.Collections.Generic.List[object]
+    # Leftovers Resolve-Worktree set aside in a repo's worktree, said on the ticket by the caller.
+    $stashes = New-Object System.Collections.Generic.List[object]
     $anyCreated = $false
     foreach ($m in $all) {
         $expected = Join-Path $workspace $m.dir
@@ -322,6 +324,7 @@ function Resolve-Workspace {
         $entry = $m.Clone()
         $entry.path = $r.path
         $entry.created = [bool]$r.created
+        if ($r.stash) { [void]$stashes.Add(@{ dir = $m.dir; stash = $r.stash }) }
         if ($r.created) { $anyCreated = $true }
         [void]$out.Add($entry)
         if ($r.needsSetup) { [void]$pending.Add(@{ dir = $m.dir; path = $r.path; hub = $m.hub; copy = @($m.copy); setup = @($m.setup) }) }
@@ -336,7 +339,8 @@ function Resolve-Workspace {
         }
     }
 
-    return @{ ok = $true; path = $workspace; branch = $branch; members = $out.ToArray(); created = $anyCreated }
+    return @{ ok = $true; path = $workspace; branch = $branch; members = $out.ToArray(); created = $anyCreated
+              stashes = $stashes.ToArray() }
 }
 
 # A peer review's workspace on a project of several repos. A pull request lives in one repo, so the

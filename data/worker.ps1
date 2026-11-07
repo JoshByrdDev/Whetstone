@@ -818,10 +818,23 @@ function Resolve-Worktree {
         if ($existing -and (Test-Path $existing)) {
             # Already has a home - including one the user moved or made themselves. Use it where it is.
             $dirty = git -C $existing status --porcelain --untracked-files=no 2>$null
-            if ($dirty) {
-                return @{ ok = $false; reason = "uncommitted changes in the worktree at '$existing' - refusing to start a phase on a dirty tree" }
+            if (-not $dirty) { return @{ ok = $true; path = $existing; branch = $branchName; created = $false } }
+
+            # Uncommitted changes in one of the fleet's own worktrees are what a run killed before its
+            # hand-off nets left behind (Save-WorkerLeftovers commits everything a run that ends
+            # normally leaves). Refusing them blocked the ticket on every retry - an answer of
+            # "discard and retry" reached only the next agent, which never started - so they are set
+            # aside in a named stash, exactly as a worker host does (Update-BranchFromBoard), and
+            # the caller says so on the ticket. A worktree outside the root is a person's: theirs to clean.
+            $root = Get-FullPathKey $WorktreeRoot
+            $here = Get-FullPathKey $existing
+            if (-not ($root -and $here.StartsWith("$root\"))) {
+                return @{ ok = $false; reason = "uncommitted changes in the worktree at '$existing', which is outside this project's worktree root - refusing to start a phase on a dirty tree someone else may be working in" }
             }
-            return @{ ok = $true; path = $existing; branch = $branchName; created = $false }
+            $saved = Save-WorktreeLeftovers -Dir $existing -Branch $branchName -Why 'before a new phase started on it'
+            if (-not $saved.ok) { return @{ ok = $false; reason = $saved.reason } }
+            return @{ ok = $true; path = $existing; branch = $branchName; created = $false
+                      stash = $(if ($saved.sha) { $saved } else { $null }) }
         }
 
         $wtPath = Join-Path $WorktreeRoot $dirName
@@ -2132,6 +2145,19 @@ if ($repoDir) {
         Send-LeaseRelease -TicketId $ticketId -Reason "workspace setup failed"
         Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
         exit 0
+    }
+    # Leftovers of a run killed before its hand-off nets, set aside rather than blocking on them
+    # (Resolve-Worktree). Said on the ticket, because the stash is the only copy of them.
+    $setAside = @()
+    if ($wt.stash) { $setAside += @{ dir = ''; stash = $wt.stash } }
+    if ($wt.stashes) { $setAside += @($wt.stashes) }
+    foreach ($one in $setAside) {
+        $s = $one.stash
+        $inRepo = if ($one.dir) { " of ``$($one.dir)``" } else { '' }
+        $names = (@($s.files) | Select-Object -First 10 | ForEach-Object { "- $_" }) -join "`n"
+        $more = if (@($s.files).Count -gt 10) { "`n- ... and $(@($s.files).Count - 10) more" } else { '' }
+        Write-Log "  Set aside $(@($s.files).Count) uncommitted file(s) in the worktree$inRepo as stash $($s.sha)."
+        Send-TicketComment -TicketId $ticketId -Body "Found $(@($s.files).Count) uncommitted file(s) in this ticket's worktree$inRepo, left by an earlier run that stopped before it could commit them. They were set aside in a stash rather than blocking the ticket, and this run starts from the branch's last commit.`n`n$names$more`n`nThey are kept as stash ``$($s.sha)`` (``git stash list`` shows it as: $($s.message)). To look: ``git stash show -p --include-untracked $($s.sha)``. To take them back: ``git stash apply $($s.sha)`` in the worktree. Nothing needs doing unless something in them was wanted."
     }
     if ($wt.path) {
         $workDir = $wt.path

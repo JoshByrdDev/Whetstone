@@ -193,15 +193,16 @@ function Update-BranchFromBoard {
 # Set aside everything uncommitted in a worktree - untracked files included, ignored ones not - as
 # one stash entry named after the branch, so the worktree is clean and nothing in it is lost. The
 # stash lives in the repo's shared refs, so `git stash list` in any worktree of the clone shows it.
+# Used on the board host as well (Resolve-Worktree), where $Why says why it was set aside instead.
 # Returns @{ ok; sha; files; message; reason } - sha is '' when there was nothing to set aside.
 function Save-WorktreeLeftovers {
-    param([string]$Dir, [string]$Branch)
+    param([string]$Dir, [string]$Branch, [string]$Why = 'before bringing it level with the board host')
     $ErrorActionPreference = 'Continue'
 
     $files = @(git -C $Dir status --porcelain 2>$null | Where-Object { $_ } | ForEach-Object { "$_".Substring(3) })
     if ($files.Count -eq 0) { return @{ ok = $true; sha = ''; files = @() } }
 
-    $message = "whetstone: left uncommitted on $Branch, set aside before bringing it level with the board host"
+    $message = "whetstone: left uncommitted on $Branch, set aside $Why"
     git -C $Dir stash push --quiet --include-untracked -m $message *> $null
     if ($LASTEXITCODE -ne 0) {
         return @{ ok = $false; sha = ''; files = $files
