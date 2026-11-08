@@ -46,6 +46,7 @@ its own nested git repo with its own remote:
 | Paths, ports, tracker, credentials, stack commands | `project.json` / `project.defaults.json` there |
 | A command only that repo makes dangerous | `data/projects/<key>/guard.ps1`, tested by a `guard.tests.ps1` beside it |
 | How the narrator says its product names and key prefix | `data/projects/<key>/pronounce.json` |
+| A rebase conflict that repo's tooling makes mechanical (two branches taking the same migration number) | `data/projects/<key>/rebase-resolve.ps1`, handed each stopped step of the board's rebase; it resolves and stages, or declines and the rebase aborts as before |
 
 If a rule cannot be written without naming a repo, a script in it, or one of its hosts, it is not a
 rule for this repository. When the shared code needs an example, it uses a placeholder: `PROJ-123`

@@ -517,7 +517,9 @@ public partial class StewardService
             limits = new
             {
                 createdToday = $"{created}/{cfg.Steward.CreatedPerDay}",
-                open = $"{open.Count}/{cfg.Steward.OpenAtOnce}",
+                open = await OpenCountAsync(all) is var oc
+                    ? $"{oc.Counted}/{cfg.Steward.OpenAtOnce} workable ({oc.Say()}); {oc.Total}/{OpenCeiling(cfg.Steward)} in all"
+                    : "",
                 sendBacksPerTicket = cfg.Steward.SendBacksPerTicket,
             },
             plan = plan.Count == 0
@@ -1023,6 +1025,29 @@ public partial class StewardService
         return $"{t.Phase}|{change?.Tip}|{change?.Behind}|{change?.Ahead}";
     }
 
+    /// <summary>
+    /// What the open-at-once limit counts. A ticket parked in Backlog is not being worked, and one
+    /// waiting on another ticket cannot be: counting either let a deep chain of dependents fill the
+    /// limit and stop the steward filing the independent work that would have used the free berths.
+    /// So the limit counts the rest, and <see cref="OpenCeiling"/> still bounds the whole board.
+    /// </summary>
+    private async Task<OpenCount> OpenCountAsync(IReadOnlyList<Ticket> all)
+    {
+        var open = all.Where(t => t.Phase != TicketPhase.Done).ToList();
+        var parked = open.Count(t => t.Phase == TicketPhase.Backlog);
+        var live = open.Where(t => t.Phase != TicketPhase.Backlog).Select(t => t.Id).ToList();
+        var waiting = _deps is null || live.Count == 0 ? 0 : (await _deps.BlockedTicketIdsAsync(live)).Count;
+        return new OpenCount(open.Count - parked - waiting, waiting, parked, open.Count);
+    }
+
+    /// <summary>Every open ticket, waiting or parked, counted against twice the open limit.</summary>
+    internal static int OpenCeiling(StewardConfig s) => s.OpenAtOnce * 2;
+
+    private record OpenCount(int Counted, int Waiting, int Parked, int Total)
+    {
+        public string Say() => $"{Waiting} more waiting on another ticket, {Parked} parked in Backlog";
+    }
+
     public async Task<StewardReply> RebaseAsync(string projectKey, int ticketId, CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
@@ -1035,9 +1060,14 @@ public partial class StewardService
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rebase {t.Branch} onto the base");
 
         var r = await _git.RebaseAsync(projectKey, t.Branch, ct);
-        if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files.", r.ConflictedFiles);
+        if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files." +
+            (r.Error is { } e && e.Contains("resolver") ? $" {e}" : ""), r.ConflictedFiles);
         return r.Ok
-            ? new StewardReply("rebased", null, new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha })
+            ? new StewardReply("rebased",
+                r.Resolved.Count > 0
+                    ? $"The project's rebase resolver settled {string.Join(", ", r.Resolved)}, so the change itself moved: its merge checks run again on the new tip. What it did: {string.Join(" | ", r.Output.Where(l => l.StartsWith("[rebase-resolve")))}"
+                    : null,
+                new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha, resolved = r.Resolved })
             : Refuse("refused", r.Error ?? "The rebase was refused.");
     }
 
@@ -1212,13 +1242,15 @@ public partial class StewardService
             return Refuse("bad-request", $"{unit.File} has no outcome {string.Join(", ", unknown)}.");
 
         var all = await _tickets.ListAsync(projectKey, null);
-        var open = all.Count(t => t.Phase != TicketPhase.Done);
+        var open = await OpenCountAsync(all);
         var s = await StewardDue.StateAsync(_db, projectKey);
         if (s.CreatedDay != Today()) { s.CreatedDay = Today(); s.CreatedCount = 0; }
         if (s.CreatedCount >= cfg.Steward.CreatedPerDay)
             return Refuse("limit", $"{cfg.Steward.CreatedPerDay} tickets have been created today. The next run continues.");
-        if (open >= cfg.Steward.OpenAtOnce)
-            return Refuse("limit", $"{open} tickets are open, and {cfg.Steward.OpenAtOnce} is the most at once. Finish some first.");
+        if (open.Counted >= cfg.Steward.OpenAtOnce)
+            return Refuse("limit", $"{open.Counted} tickets are open and workable ({open.Say()}), and {cfg.Steward.OpenAtOnce} is the most at once. Finish some first.");
+        if (open.Total >= OpenCeiling(cfg.Steward))
+            return Refuse("limit", $"{open.Total} tickets are open in all ({open.Say()}), and {OpenCeiling(cfg.Steward)} - twice the open limit - is the most however many of them wait. Finish some first.");
         if (all.FirstOrDefault(t => string.Equals(t.Title?.Trim(), title, StringComparison.OrdinalIgnoreCase)) is { } same)
             return Refuse("duplicate", $"Ticket {same.Id} ({same.Phase}) already has this title.");
         var dependsOn = (d.DependsOn ?? Array.Empty<int>()).Distinct().ToList();

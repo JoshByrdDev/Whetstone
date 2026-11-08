@@ -235,6 +235,58 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal("limit", (await In(s => s.CreateAsync("alpha", Draft("The third ticket of the day")))).Answer);
     }
 
+    private async Task<int> OpenTicket(string title, TicketPhase phase, int? waitsOn = null)
+    {
+        await using var ctx = NewCtx();
+        var t = new Ticket { ProjectKey = "alpha", Title = title, Phase = phase };
+        ctx.Tickets.Add(t);
+        await ctx.SaveChangesAsync();
+        if (waitsOn is { } blocker) await new TicketDependencyService(ctx).AddLocalAsync(t.Id, null, blocker, null);
+        return t.Id;
+    }
+
+    /// <summary>
+    /// A chain of dependents cannot be worked until its head is done, so it does not use up the
+    /// open limit: counting it was how a board with free berths stopped filing the independent work
+    /// that would have filled them. Parked Backlog tickets are not being worked either.
+    /// </summary>
+    [Fact]
+    public async Task Tickets_waiting_on_another_or_parked_in_backlog_do_not_fill_the_open_limit()
+    {
+        var head = await OpenTicket("The head of a chain", TicketPhase.NeedsImplementation);
+        await OpenTicket("Waits on the head", TicketPhase.NeedsSpeculation, waitsOn: head);
+        await OpenTicket("Also waits on the head", TicketPhase.NeedsSpeculation, waitsOn: head);
+        await OpenTicket("Later: an idea parked for now", TicketPhase.Backlog);
+
+        await Begin();
+        // Four open, openAtOnce 3 - but only the head can be worked.
+        Assert.Equal("created", (await In(s => s.CreateAsync("alpha", Draft("Independent work")))).Answer);
+    }
+
+    [Fact]
+    public async Task Workable_tickets_still_fill_the_open_limit()
+    {
+        for (var i = 0; i < 3; i++) await OpenTicket($"Workable {i}", TicketPhase.NeedsImplementation);
+
+        await Begin();
+        var r = await In(s => s.CreateAsync("alpha", Draft("One too many")));
+        Assert.Equal("limit", r.Answer);
+        Assert.Contains("workable", r.Why);
+    }
+
+    /// <summary>Waiting tickets are not free: the whole board stays under twice the limit.</summary>
+    [Fact]
+    public async Task Every_open_ticket_counts_against_twice_the_open_limit()
+    {
+        var head = await OpenTicket("The head of a chain", TicketPhase.NeedsImplementation);
+        for (var i = 0; i < 5; i++) await OpenTicket($"Waits {i}", TicketPhase.NeedsSpeculation, waitsOn: head);
+
+        await Begin();
+        var r = await In(s => s.CreateAsync("alpha", Draft("The seventh")));
+        Assert.Equal("limit", r.Answer);
+        Assert.Contains("twice the open limit", r.Why);
+    }
+
     [Fact]
     public async Task The_same_title_is_not_filed_twice()
     {

@@ -103,7 +103,11 @@ public class StewardConfig
     /// <summary>How many tickets the steward may file in one local day.</summary>
     public int CreatedPerDay { get; init; } = 20;
 
-    /// <summary>How many tickets the project may have open before the steward stops filing more.</summary>
+    /// <summary>
+    /// How many workable tickets the project may have open before the steward stops filing more.
+    /// A ticket waiting on another, or parked in Backlog, is not counted here; every open ticket is
+    /// counted against twice this (<see cref="StewardService.OpenCeiling"/>).
+    /// </summary>
     public int OpenAtOnce { get; init; } = 12;
 
     /// <summary>How many times the steward may send one ticket back. The next is the owner's.</summary>
