@@ -137,7 +137,7 @@ public class WorkerBranchAcceptTests : IDisposable
     }
 
     [Fact]
-    public async Task A_dirty_board_host_worktree_refuses()
+    public async Task A_dirty_board_host_worktree_outside_the_root_refuses_and_names_the_files()
     {
         var wt = Path.Combine(_root, "wt-4");
         Git(_repo, "worktree", "add", "--quiet", "-b", "t-4", wt, "main");
@@ -149,8 +149,52 @@ public class WorkerBranchAcceptTests : IDisposable
         var r = await _svc.AcceptWorkerBranchAsync("alpha", "t-4", "refs/whetstone/incoming/run1", sha, old);
         Assert.False(r.Ok);
         Assert.Contains("uncommitted", r.Why);
+        Assert.Contains("README.md", r.Why);
+        Assert.Null(r.SetAside);
         Assert.Equal(old, Sha(_repo, "t-4"));
         Assert.Equal("a person's edit\n", File.ReadAllText(Path.Combine(wt, "README.md")).Replace("\r\n", "\n"));
+    }
+
+    // A run on the board host stopped before committing, and the ticket then went to a worker host.
+    // The worker host never starts a run here again, so nothing else would ever clean this tree.
+    [Fact]
+    public async Task Leftovers_in_the_fleets_own_worktree_are_stashed_and_the_branch_moves()
+    {
+        var wt = Path.Combine(_root, ".worktrees", "alpha", "t-9");
+        Git(_repo, "worktree", "add", "--quiet", "-b", "t-9", wt, "main");
+        File.WriteAllText(Path.Combine(wt, "README.md"), "a stopped run's edit\n");
+        File.WriteAllText(Path.Combine(wt, "half.txt"), "never committed\n");
+        FetchClone();
+        var old = Sha(_repo, "t-9");
+        var sha = HandBack("t-9", "from the worker host");
+
+        var r = await _svc.AcceptWorkerBranchAsync("alpha", "t-9", "refs/whetstone/incoming/run1", sha, old);
+        Assert.True(r.Ok, r.Why);
+        Assert.Equal(sha, Sha(wt, "HEAD"));
+        Assert.Equal("", Git(wt, "status", "--porcelain"));
+
+        Assert.NotNull(r.SetAside);
+        Assert.Equal(Sha(_repo, "refs/stash"), r.SetAside!.Sha);
+        Assert.Contains("README.md", r.SetAside.Files);
+        Assert.Contains("half.txt", r.SetAside.Files);
+        // Kept, not lost: the stash holds the tracked edit and the untracked file.
+        Assert.Contains("a stopped run's edit", Git(_repo, "show", $"{r.SetAside.Sha}:README.md"));
+        Assert.Contains("never committed", Git(_repo, "show", $"{r.SetAside.Sha}^3:half.txt"));
+    }
+
+    [Fact]
+    public async Task A_clean_hand_back_sets_nothing_aside()
+    {
+        var wt = Path.Combine(_root, ".worktrees", "alpha", "t-10");
+        Git(_repo, "worktree", "add", "--quiet", "-b", "t-10", wt, "main");
+        FetchClone();
+        var old = Sha(_repo, "t-10");
+        var sha = HandBack("t-10", "worker host");
+
+        var r = await _svc.AcceptWorkerBranchAsync("alpha", "t-10", "refs/whetstone/incoming/run1", sha, old);
+        Assert.True(r.Ok, r.Why);
+        Assert.Null(r.SetAside);
+        Assert.Equal("", Sha(_repo, "refs/stash"));
     }
 
     [Fact]
