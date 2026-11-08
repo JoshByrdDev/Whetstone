@@ -105,6 +105,19 @@ $global         = $null
 if (Test-Path $GlobalDefaultsFile) { try { $globalDefaults = Get-Content -Path $GlobalDefaultsFile -Raw | ConvertFrom-Json } catch {} }
 if (Test-Path $GlobalConfigFile)   { try { $global   = Get-Content -Path $GlobalConfigFile   -Raw | ConvertFrom-Json } catch { Write-Host "WARNING: Failed to parse config.json - using defaults." -ForegroundColor Yellow } }
 
+# A JSON list from the dashboard, as a list of its items. Windows PowerShell's Invoke-RestMethod
+# (and ConvertFrom-Json) writes a JSON array to the pipeline as ONE object, so
+# @(Invoke-RestMethod ...) is a list of one item that is the whole array - and since a property
+# read on an array reads it from every element, $item.key quietly becomes every key joined. The
+# steward's learned-facts fold ran that way for weeks: each run wrote all its facts as one note
+# under a name made of every key, could not mark any of them placed, and wrote them all again
+# under the next free number. Assign the response first, then pass it through this.
+function ConvertTo-RestList {
+    param($Response)
+    if ($null -eq $Response) { return ,@() }
+    return ,@($Response)
+}
+
 function Get-Global([string]$Name) {
     if ($global         -and $null -ne $global.$Name)         { return $global.$Name }
     if ($globalDefaults -and $null -ne $globalDefaults.$Name) { return $globalDefaults.$Name }

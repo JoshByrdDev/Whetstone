@@ -200,7 +200,7 @@ function Reset-Leases {
 # failed must never be read that way by anyone about to release leases on the strength of it.
 function Get-ActiveLeases {
     try {
-        return @(Invoke-RestMethod -Uri "$DashboardUrl/api/leases" -Method Get -TimeoutSec 10)
+        return ConvertTo-RestList (Invoke-RestMethod -Uri "$DashboardUrl/api/leases" -Method Get -TimeoutSec 10)
     }
     catch {
         Write-Log "  Could not read leases: $($_.Exception.Message)"
