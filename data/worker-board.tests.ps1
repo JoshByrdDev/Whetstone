@@ -23,6 +23,7 @@ $tree = [System.Management.Automation.Language.Parser]::ParseFile($worker, [ref]
 foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($fn.Extent.Text))
 }
+. (Join-Path $PSScriptRoot 'worker-repos.ps1')
 . (Join-Path $PSScriptRoot 'worker-board.ps1')
 
 $env:GIT_TERMINAL_PROMPT = '0'
@@ -241,6 +242,97 @@ try {
     Check 'board host rebased: reset to theirs' "$($r.ok) $($r.state)" 'True reset'
     Check 'board host rebased: worktree at the rebased commit' (Get-Sha $cwt HEAD) (Get-Sha $d.board t-2)
     Check 'board host rebased: their files are here' (Test-Path (Join-Path $cwt 'landed.txt')) $true
+
+    # ---- A git operation a run left stopped -------------------------------------
+    Write-Host "== a rebase left stopped"
+    # The run ends with its rebase stopped on a conflict: the leftover net keeps it and aborts it,
+    # rather than committing onto the detached HEAD (which moves no branch).
+    $x = New-Pair 'stopped'
+    $null = Sync-BoardRefs -RepoDir $x.clone -BaseBranch main
+    $bwt = New-BoardTicket -Pair $x -Branch 't-5'
+    Add-Commit -Dir $bwt -File 'README.md' -Subject 'T5: the ticket'
+    $null = Sync-Branch -Pair $x -Branch 't-5'
+    $cwt = New-CloneWorktree -Pair $x -Branch 't-5'
+    $before = Get-Sha $x.clone t-5
+    Add-Commit -Dir $x.board -File 'README.md' -Subject 'landed on the base meanwhile'
+    $null = Sync-BoardRefs -RepoDir $x.clone -BaseBranch main
+    git -C $cwt rebase main *> $null
+    Check 'setup: the rebase stopped' (Get-StoppedGitOperation -Dir $cwt).kind 'rebase'
+    Check 'setup: git lists the worktree as detached' ((@(git -C $x.clone worktree list --porcelain) -contains 'branch refs/heads/t-5')) $false
+    Check 'mid-rebase: still the worktree of its branch' ([bool](Get-BranchWorktree -RepoDir $x.clone -Branch 't-5')) $true
+    Check 'mid-rebase: and in the worktree map' ([bool]((Get-WorktreeMap -RepoDir $x.clone)['t-5'])) $true
+    Set-Content -Path (Join-Path $cwt 'resolving.txt') -Value 'made while resolving' -Encoding ascii
+
+    $r = Save-WorkerLeftovers -WorkDir $cwt -TicketId '5' -Title 'T5' -IssueRef '' -Skill 'implement'
+    Check 'run ends mid-rebase: said as stopped' "$($r.ok) $($r.stopped.kind) $($r.stopped.branch)" 'True rebase t-5'
+    Check 'run ends mid-rebase: nothing committed, the branch is where it was' (Get-Sha $x.clone t-5) $before
+    Check 'run ends mid-rebase: worktree back on the branch' "$(git -C $cwt symbolic-ref --quiet --short HEAD)" 't-5'
+    Check 'run ends mid-rebase: no rebase left' (Get-StoppedGitOperation -Dir $cwt) $null
+    Check 'run ends mid-rebase: worktree clean' "$(git -C $cwt status --porcelain)" ''
+    Check 'run ends mid-rebase: kept on the HEAD it stood on' (Get-Sha $cwt "$($r.stopped.ref)~1") (Get-Sha $x.clone main)
+    Check 'run ends mid-rebase: kept the conflicted file, markers and all' `
+        (((git -C $cwt show "$($r.stopped.ref):README.md") -join "`n") -match '<<<<<<<') $true
+    Check 'run ends mid-rebase: kept the untracked file' "$(git -C $cwt show "$($r.stopped.ref):resolving.txt")".Trim() 'made while resolving'
+    Check 'run ends mid-rebase: the comment names the ref' ((Format-StoppedGitOperation -Stopped $r.stopped) -match [regex]::Escape($r.stopped.ref)) $true
+    Check 'clean tree, nothing stopped: still nothing to do' (Save-WorkerLeftovers -WorkDir $cwt -TicketId '5' -Title 'T5' -IssueRef '' -Skill 'implement') $null
+
+    # A HEAD left off the branch is not what is handed back: the branch is.
+    git -C $cwt checkout --quiet --detach main *> $null
+    $r = Send-BranchToBoard -WorkDir $cwt -RunId 'run55' -Ref 'refs/heads/t-5'
+    Check 'detached HEAD: the branch is what is sent' (Get-Sha $x.board refs/whetstone/incoming/run55) $before
+    git -C $cwt checkout --quiet t-5 *> $null
+
+    # The incident, as the old leftover net left a worker host: the rebase stopped, the leftovers
+    # committed on its detached HEAD, that HEAD handed back and recorded as agreed, the branch here
+    # still on the commit the run started from. Every run after it blocked as diverged.
+    Write-Host "== a worker host left mid-rebase by the old leftover net"
+    $y = New-Pair 'incident'
+    $null = Sync-BoardRefs -RepoDir $y.clone -BaseBranch main
+    $bwt = New-BoardTicket -Pair $y -Branch 't-6'
+    Add-Commit -Dir $bwt -File 'README.md' -Subject 'T6: QA passed this'
+    $null = Sync-Branch -Pair $y -Branch 't-6'
+    $cwt = New-CloneWorktree -Pair $y -Branch 't-6'
+    $qa = Get-Sha $y.clone t-6
+    Add-Commit -Dir $y.board -File 'README.md' -Subject 'landed on the base meanwhile'
+    $null = Sync-BoardRefs -RepoDir $y.clone -BaseBranch main
+    git -C $cwt rebase main *> $null
+    Set-Content -Path (Join-Path $cwt 'README.md') -Value 'resolved by hand' -Encoding ascii
+    git -C $cwt add -A *> $null
+    git -C $cwt commit --quiet -m 'leftovers' *> $null
+    $sent = Send-BranchToBoard -WorkDir $cwt -RunId 'run66'
+    git -C $bwt reset --quiet --hard $sent.sha *> $null                 # the accept route
+    $null = Set-BranchHandedBack -RepoDir $y.clone -Branch 't-6' -Sha $sent.sha
+    Check 'setup: the branch here is not what it handed back' ((Get-Sha $y.clone t-6) -eq $sent.sha) $false
+    Check 'setup: and the board host has moved past it' ((Get-Sha $y.board t-6) -eq $qa) $false
+
+    $r = Sync-Branch -Pair $y -Branch 't-6'
+    Check 'stuck clone: brought level' "$($r.ok) $($r.state)" 'True reset'
+    Check 'stuck clone: the stopped rebase was undone, and said' "$($r.stopped.kind) $($r.stopped.branch)" 'rebase t-6'
+    Check "stuck clone: the branch is the board host's" (Get-Sha $y.clone t-6) (Get-Sha $y.board t-6)
+    Check 'stuck clone: worktree on the branch' "$(git -C $cwt symbolic-ref --quiet --short HEAD)" 't-6'
+    Check "stuck clone: worktree at the board host's commit" (Get-Sha $cwt HEAD) (Get-Sha $y.board t-6)
+    Check 'stuck clone: no rebase left' (Get-StoppedGitOperation -Dir $cwt) $null
+    Check 'stuck clone: agreed again' (Get-Sha $y.clone (Get-AgreedRef 't-6')) (Get-Sha $y.board t-6)
+    Check 'stuck clone: the next sync is current' (Sync-Branch -Pair $y -Branch 't-6').state 'current'
+
+    # On the board host the same leftovers meet Resolve-Worktree at the start of the next phase.
+    Write-Host "== Resolve-Worktree on a stopped rebase"
+    $z = New-Pair 'resolve-stopped'
+    $wt = Resolve-Worktree -RepoDir $z.board -WorktreeRoot $z.boardWt -Skill 'speculate' -TicketId '8' `
+        -RecordedBranch 't-8' -IssueBranchToken '' -BaseBranch 'main' -BranchPrefix '' `
+        -CopyFiles @() -Setup @() -ReviewBranch '' -MergeLocally $true
+    Set-Identity $wt.path
+    Add-Commit -Dir $wt.path -File 'README.md' -Subject 'T8: the ticket'
+    $t8 = Get-Sha $z.board t-8
+    Add-Commit -Dir $z.board -File 'README.md' -Subject 'landed on the base meanwhile'
+    git -C $wt.path rebase main *> $null
+    Check 'setup: stopped' (Get-StoppedGitOperation -Dir $wt.path).kind 'rebase'
+    $again = Resolve-Worktree -RepoDir $z.board -WorktreeRoot $z.boardWt -Skill 'implement' -TicketId '8' `
+        -RecordedBranch 't-8' -IssueBranchToken '' -BaseBranch 'main' -BranchPrefix '' `
+        -CopyFiles @() -Setup @() -ReviewBranch '' -MergeLocally $true
+    Check 'next phase: starts, in the same worktree' "$($again.ok) $($again.created)" 'True False'
+    Check 'next phase: says what it undid' $again.stopped.kind 'rebase'
+    Check 'next phase: on the branch, where it was' "$(git -C $again.path symbolic-ref --quiet --short HEAD) $(Get-Sha $again.path HEAD)" "t-8 $t8"
 
     # ---- Send-BranchToBoard ---------------------------------------------------
     Write-Host "== Send-BranchToBoard"

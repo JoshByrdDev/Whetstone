@@ -383,6 +383,11 @@ function Get-WorktreeMap {
             $ref = $line.Substring(7).Trim()
             if ($ref -like 'refs/heads/*' -and $current) { $map[$ref.Substring(11)] = $current }
         }
+        # A worktree stopped mid-rebase is detached, but the branch is still its (Get-BranchWorktree).
+        elseif ($line -eq 'detached' -and $current) {
+            $rebasing = Get-RebasingBranch -Dir $current
+            if ($rebasing -and -not $map.ContainsKey($rebasing)) { $map[$rebasing] = $current }
+        }
     }
     return $map
 }
@@ -817,8 +822,26 @@ function Resolve-Worktree {
         $existing = (Get-WorktreeMap -RepoDir $RepoDir)[$branchName]
         if ($existing -and (Test-Path $existing)) {
             # Already has a home - including one the user moved or made themselves. Use it where it is.
+            $root = Get-FullPathKey $WorktreeRoot
+            $here = Get-FullPathKey $existing
+            $ours = [bool]($root -and $here.StartsWith("$root\"))
+
+            # A rebase or merge an earlier run left stopped: kept under a ref and aborted, so this
+            # phase starts on the branch and not on a detached HEAD halfway through rewriting it
+            # (Undo-StoppedGitOperation). A person's worktree is theirs to finish.
+            $stopped = $null
+            $op = Get-StoppedGitOperation -Dir $existing
+            if ($op -and -not $ours) {
+                return @{ ok = $false; reason = "a git $($op.kind) is stopped in the worktree at '$existing', which is outside this project's worktree root - finish or abort it there first" }
+            }
+            if ($op) {
+                $undo = Undo-StoppedGitOperation -Dir $existing -Why 'before a new phase started on it'
+                if (-not $undo.ok) { return @{ ok = $false; reason = $undo.reason } }
+                $stopped = $undo
+            }
+
             $dirty = git -C $existing status --porcelain --untracked-files=no 2>$null
-            if (-not $dirty) { return @{ ok = $true; path = $existing; branch = $branchName; created = $false } }
+            if (-not $dirty) { return @{ ok = $true; path = $existing; branch = $branchName; created = $false; stopped = $stopped } }
 
             # Uncommitted changes in one of the fleet's own worktrees are what a run killed before its
             # hand-off nets left behind (Save-WorkerLeftovers commits everything a run that ends
@@ -826,14 +849,12 @@ function Resolve-Worktree {
             # "discard and retry" reached only the next agent, which never started - so they are set
             # aside in a named stash, exactly as a worker host does (Update-BranchFromBoard), and
             # the caller says so on the ticket. A worktree outside the root is a person's: theirs to clean.
-            $root = Get-FullPathKey $WorktreeRoot
-            $here = Get-FullPathKey $existing
-            if (-not ($root -and $here.StartsWith("$root\"))) {
+            if (-not $ours) {
                 return @{ ok = $false; reason = "uncommitted changes in the worktree at '$existing', which is outside this project's worktree root - refusing to start a phase on a dirty tree someone else may be working in" }
             }
             $saved = Save-WorktreeLeftovers -Dir $existing -Branch $branchName -Why 'before a new phase started on it'
             if (-not $saved.ok) { return @{ ok = $false; reason = $saved.reason } }
-            return @{ ok = $true; path = $existing; branch = $branchName; created = $false
+            return @{ ok = $true; path = $existing; branch = $branchName; created = $false; stopped = $stopped
                       stash = $(if ($saved.sha) { $saved } else { $null }) }
         }
 
@@ -952,12 +973,24 @@ function Invoke-GitCommitFromFile {
 # produced by the worker that just ran, on this ticket's own branch. Untracked files are included
 # (-A) - a new migration or component is exactly the kind of file that gets left behind. Returns
 # $null when the tree was already clean (the normal case).
+#
+# Never over a rebase or merge the run left stopped. A stopped rebase's HEAD is detached, so a
+# commit there moves no branch: the branch stays where it was while that commit is what the hand-
+# back sends, and on a worker host the two machines then disagree about the branch for good. The
+# operation is kept under a ref and aborted instead (Undo-StoppedGitOperation), which leaves the
+# branch as it was before the operation began, and the answer says so in stopped.
 function Save-WorkerLeftovers {
     param([string]$WorkDir, [string]$TicketId, [string]$Title, [string]$IssueRef, [string]$Skill)
 
     # git writes progress to stderr; success is judged by $LASTEXITCODE, not by stderr being empty.
     $ErrorActionPreference = 'Continue'
     if (-not (Test-Path (Join-Path $WorkDir ".git"))) { return $null }
+
+    $undo = Undo-StoppedGitOperation -Dir $WorkDir -Why 'when the run that left it ended'
+    if (-not $undo.ok) {
+        return @{ ok = $false; files = 0; branch = "$(git -C $WorkDir rev-parse --abbrev-ref HEAD 2>$null)".Trim(); reason = $undo.reason }
+    }
+    if ($undo.kind) { return @{ ok = $true; files = 0; stopped = $undo } }
 
     Push-Location $WorkDir
     try {
@@ -2076,6 +2109,11 @@ if ($onHost -and $repoDir) {
                 -Comment "This run was on worker host ``$runHost``, whose copy of ``$recordedBranch`` cannot be brought level with the board host's without losing work: $($level.reason). Ticket blocked; no work was attempted. Compare the two machines' branches and keep the one that is right, then unblock."
         }
         Write-Log "  Worker host $runHost - '$recordedBranch' against the board host: $($level.state)"
+        if ($level.stopped) {
+            $st = $level.stopped
+            Write-Log "  Worker host $runHost - undid a stopped $($st.kind) on '$recordedBranch', kept as $($st.ref)."
+            Send-TicketComment -TicketId $ticketId -Body (Format-StoppedGitOperation -Stopped $st -Where " on worker host ``$runHost``")
+        }
         # Leftovers of an earlier run here - one killed before its hand-off nets - set aside rather
         # than blocking on them. Said on the ticket, because they are the only copy.
         if ($level.stash) {
@@ -2148,6 +2186,15 @@ if ($repoDir) {
     }
     # Leftovers of a run killed before its hand-off nets, set aside rather than blocking on them
     # (Resolve-Worktree). Said on the ticket, because the stash is the only copy of them.
+    $undone = @()
+    if ($wt.stopped) { $undone += @{ dir = ''; stopped = $wt.stopped } }
+    if ($wt.stoppeds) { $undone += @($wt.stoppeds) }
+    foreach ($one in $undone) {
+        $inRepo = if ($one.dir) { " (``$($one.dir)``)" } else { '' }
+        $where = if ($onHost) { " on worker host ``$runHost``" } else { '' }
+        Write-Log "  Undid a stopped $($one.stopped.kind) in the worktree$inRepo, kept as $($one.stopped.ref)."
+        Send-TicketComment -TicketId $ticketId -Body ((Format-StoppedGitOperation -Stopped $one.stopped -Where $where) + $inRepo)
+    }
     $setAside = @()
     if ($wt.stash) { $setAside += @{ dir = ''; stash = $wt.stash } }
     if ($wt.stashes) { $setAside += @($wt.stashes) }
@@ -2853,9 +2900,19 @@ function Invoke-HandOffNets {
 
     $leftovers = Save-WorkerLeftovers -WorkDir $workDir -TicketId $ticketId -Title $title `
         -IssueRef "$($Claim.issueCommitRef)" -Skill $skill
-    if ($leftovers -and $leftovers.ok) {
+    if ($leftovers -and $leftovers.stopped) {
+        $st = $leftovers.stopped
+        Write-Log "  ${in}WARNING: $skill left a $($st.kind) stopped - kept as $($st.ref) and aborted; '$($st.branch)' is at $($st.head)."
+        $where = if ($onHost) { " on worker host ``$runHost``" } else { '' }
+        Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase ended with a ``git $($st.kind)`` stopped on its conflicts, so nothing was committed and nothing it had got to is on the branch. $(Format-StoppedGitOperation -Stopped $st -Where $where)"
+    }
+    elseif ($leftovers -and $leftovers.ok) {
         Write-Log "  ${in}WARNING: $skill left $($leftovers.files) file(s) uncommitted - committed as $($leftovers.sha) on '$($leftovers.branch)'."
         Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase finished without committing its work. The heartbeat committed the $($leftovers.files) leftover file(s) to '$($leftovers.branch)' as $($leftovers.sha) so the next phase can run. Worth a look: this is one catch-all commit, not the atomic per-work-item commits the skill asks for."
+    }
+    elseif ($leftovers -and $leftovers.reason) {
+        Write-Log "  ${in}WARNING: $($leftovers.reason)."
+        Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase ended with its worktree in a state the heartbeat could not tidy: $($leftovers.reason). Nothing was committed. The next phase undoes it before it starts, or blocks and says why."
     }
     elseif ($leftovers) {
         Write-Log "  ${in}WARNING: $skill left $($leftovers.files) file(s) uncommitted and the safety-net commit FAILED."
@@ -3058,13 +3115,24 @@ if ($qaMirror) {
 # ticket, because the work now exists on one machine only and the next run, on either, would not
 # start from it.
 if ($onHost -and $repoDir -and -not $readsOnly -and $wt -and $wt.branch) {
-    $tip = "$(git -C $workDir rev-parse --verify --quiet HEAD 2>$null)".Trim()
+    # The branch, not HEAD: what the board host accepts is recorded here as agreed for the branch,
+    # so the two have to be the same commit (Send-BranchToBoard). A HEAD the run left somewhere else
+    # is kept under a ref and said, never sent.
+    $branchRef = "refs/heads/$($wt.branch)"
+    $tip = Get-RefSha -Dir $workDir -Ref $branchRef
+    $headSha = Get-RefSha -Dir $workDir -Ref HEAD
+    if ($headSha -and $headSha -ne $tip) {
+        $keptAs = "refs/whetstone/stopped/$($wt.branch)/$($headSha.Substring(0, 8))"
+        git -C $workDir update-ref $keptAs $headSha *> $null
+        Write-Log "  WARNING: HEAD ($headSha) is not on '$($wt.branch)' ($tip) - handing back the branch; HEAD kept as $keptAs."
+        Send-TicketComment -TicketId $ticketId -Body "This run on worker host ``$runHost`` ended with its worktree's HEAD at ``$($headSha.Substring(0, 8))``, which is not on ``$($wt.branch)``. The branch was handed back as it is, and that HEAD is kept on ``$runHost`` as ``$keptAs``. To look: ``git log --oneline $($wt.branch)..$keptAs`` in that clone."
+    }
     if ($tip -and $tip -eq $boardStartSha) {
         Write-Log "  Nothing new on '$($wt.branch)' - nothing to hand back."
     }
     else {
         $why = $null
-        $sent = Send-BranchToBoard -WorkDir $workDir -RunId $runId
+        $sent = Send-BranchToBoard -WorkDir $workDir -RunId $runId -Ref $branchRef
         if (-not $sent.ok) { $why = $sent.reason }
         else {
             $body = @{ runId = [int]$runId; branch = $wt.branch; sha = $sent.sha; incomingRef = $sent.ref; expectedOld = $boardStartSha } |

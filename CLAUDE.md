@@ -438,6 +438,14 @@ discoverable from the code:
 - **A run is named by its ticket lease.** `ClaimResult.RunId` is the ticket lease's own id. The
   branch accept route refuses a run whose lease has gone, and a runner kills such a run, so a run
   the orchestrator gave up on can never overwrite the next one's work.
+- **What is handed back is the branch, and a stopped rebase is never committed over.** A run that
+  ends mid-rebase has a detached HEAD, and a commit there moves no branch: once the hand-back sent
+  that HEAD and the clone recorded it as agreed, the clone's own branch disagreed with both for
+  good, and every later run there blocked as a divergence no answer could clear. So the leftover
+  net, `Resolve-Worktree` and the levelling all keep a stopped operation under
+  `refs/whetstone/stopped/` and abort it (`Undo-StoppedGitOperation`), the hand-back sends
+  `refs/heads/<branch>`, and a divergence resets when the board host has had the local tip before
+  (`Test-BoardHadCommit`, from the tracking ref's reflog).
 - **The worker host's clone calls the board host's repo `board`.** Not `hub`, which in `worker.ps1`
   means a project's main checkout. Its local base is a mirror of the board host's, so
   `Resolve-BaseRef` stays the same on both machines.

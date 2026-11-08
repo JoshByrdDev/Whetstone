@@ -30,6 +30,7 @@ foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Langu
     . ([scriptblock]::Create($fn.Extent.Text))
 }
 . (Join-Path $PSScriptRoot 'worker-repos.ps1')
+. (Join-Path $PSScriptRoot 'worker-board.ps1')
 # The one function of providers.ps1 these tests ask, which decides the prompt's conventions file.
 $providers = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'providers.ps1'), [ref]$null, [ref]$null)
 foreach ($fn in $providers.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Get-ConventionsFile' }, $false)) {
