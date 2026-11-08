@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { ConfirmStopModal } from './ConfirmStopModal';
 
 interface HeartbeatStatus {
   running: boolean;
@@ -14,6 +15,7 @@ export function HeartbeatControl() {
   const [status, setStatus] = useState<HeartbeatStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmStop, setConfirmStop] = useState(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -91,7 +93,7 @@ export function HeartbeatControl() {
       ) : (
         <>
           <button
-            onClick={isRunning ? handleStop : handleStart}
+            onClick={isRunning ? () => setConfirmStop(true) : handleStart}
             disabled={loading}
             className={`btn-act flex items-center gap-2 px-4 py-2 disabled:opacity-50 ${
               isRunning ? 'bg-red-500 text-void' : 'bg-emerald-500 text-void'
@@ -154,6 +156,7 @@ export function HeartbeatControl() {
           Refused to start: {status.startupError} (System → Setup check)
         </span>
       )}
+      {confirmStop && <ConfirmStopModal onConfirm={handleStop} onClose={() => setConfirmStop(false)} />}
     </div>
   );
 }
