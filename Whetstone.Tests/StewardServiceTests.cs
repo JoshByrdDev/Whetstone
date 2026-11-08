@@ -287,6 +287,31 @@ public partial class StewardServiceTests : IDisposable
         Assert.Contains("twice the open limit", r.Why);
     }
 
+    /// <summary>
+    /// The steward files to keep the fleet fed, so its status says what the queue can start: a
+    /// ticket waiting on another is not ready, one at review is the steward's own, and one being
+    /// worked is neither.
+    /// </summary>
+    [Fact]
+    public async Task The_status_says_how_much_of_the_queue_a_worker_could_start()
+    {
+        var head = await OpenTicket("Ready to plan", TicketPhase.NeedsSpeculation);
+        await OpenTicket("Ready to build", TicketPhase.NeedsImplementation);
+        await OpenTicket("Waits on the first", TicketPhase.NeedsSpeculation, waitsOn: head);
+        await OpenTicket("Being built", TicketPhase.Implementing);
+        await OpenTicket("Finished", TicketPhase.NeedsReview);
+        await OpenTicket("Later", TicketPhase.Backlog);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(Json(await In(s => s.StatusAsync("alpha"))));
+        var c = doc.RootElement.GetProperty("capacity");
+        Assert.Equal(2, c.GetProperty("readyToStart").GetInt32());
+        Assert.Equal(1, c.GetProperty("waitingOnAnother").GetInt32());
+        Assert.Equal(1, c.GetProperty("working").GetInt32());
+        Assert.Equal(1, c.GetProperty("atReviewOrGate").GetInt32());
+        // No meter in a test: it says so rather than guessing a number.
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, c.GetProperty("freeBerths").ValueKind);
+    }
+
     [Fact]
     public async Task The_same_title_is_not_filed_twice()
     {

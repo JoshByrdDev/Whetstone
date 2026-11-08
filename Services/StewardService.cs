@@ -114,12 +114,13 @@ public partial class StewardService
     private readonly IStewardProjectFlags? _projectFlags;
     private readonly NotificationSender? _notify;
     private readonly HeartbeatManager? _heartbeat;
+    private readonly CapacitySnapshot? _capacity;
 
     public StewardService(DashboardDbContext db, TicketService tickets, ProjectRegistry registry, IStewardGit git,
         ResourceLeaseService leases, TicketDependencyService? deps = null, IStewardProjectFlags? projectFlags = null,
-        NotificationSender? notify = null, HeartbeatManager? heartbeat = null)
-        => (_db, _tickets, _registry, _git, _leases, _deps, _projectFlags, _notify, _heartbeat)
-         = (db, tickets, registry, git, leases, deps, projectFlags, notify, heartbeat);
+        NotificationSender? notify = null, HeartbeatManager? heartbeat = null, CapacitySnapshot? capacity = null)
+        => (_db, _tickets, _registry, _git, _leases, _deps, _projectFlags, _notify, _heartbeat, _capacity)
+         = (db, tickets, registry, git, leases, deps, projectFlags, notify, heartbeat, capacity);
 
     public static string LeaseKey(string projectKey) => $"steward:{projectKey}";
 
@@ -514,6 +515,7 @@ public partial class StewardService
         {
             mode = cfg.StewardMode.ToString().ToLowerInvariant(),
             heartbeat = _heartbeat is null ? null : _heartbeat.IsRunning ? "running" : "stopped: nothing is worked until its owner starts it",
+            capacity = await CapacityAsync(all),
             limits = new
             {
                 createdToday = $"{created}/{cfg.Steward.CreatedPerDay}",
