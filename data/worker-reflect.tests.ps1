@@ -164,6 +164,32 @@ Check 'learned: NEW from the placement call is a note of its own' "$($r.Outcome)
 $r = Add-LearnedFact -MemoryDir $lmem -Key 'x' -Text '   ' -Stamp '2026-10-23 10:04' -ReflectCmd $learnCmd -RepoDir $root
 Check 'learned: nothing said, nothing placed' $r.Outcome 'none'
 
+# ---- finding near-duplicate notes ----
+# Two notes saying one thing are a pair; a note about something else pairs with neither. And it stays
+# quick with many notes: the pairwise scoring once took hours on a store of ~580, holding a worker
+# - and a fleet drain - long after its ticket was done.
+$cmem = Join-Path $root 'clusters'
+New-Item -ItemType Directory -Path $cmem -Force | Out-Null
+function Note([string]$key, [string]$body) {
+    [IO.File]::WriteAllText((Join-Path $cmem "$key.md"), "---`nname: $key`ndescription: `"$key`"`n---`n`n$body`n")
+}
+Note 'deploy-window' 'Deploys happen on tuesday mornings after the nightly backup finishes and the release captain signs off.'
+Note 'deploy-window-again' 'Deploys happen on tuesday mornings after the nightly backup finishes and the release captain signs off quickly.'
+Note 'stripe-mock-port' 'The local payment stand in listens on port twelve thousand one hundred eleven inside its container.'
+$pairs = @(Get-NoteClusters -MemoryDir $cmem)
+Check 'clusters: one pair found' $pairs.Count 1
+Check 'clusters: it is the two deploy notes' ((@($pairs[0].A, $pairs[0].B) | Sort-Object) -join ',') 'deploy-window,deploy-window-again'
+
+$words = 'alpha','bravo','charlie','delta','echo','foxtrot','golf','hotel','india','juliet','kilo','lima','mike','november','oscar','papa','quebec','romeo','sierra','tango','uniform','victor','whiskey','xray','yankee','zulu'
+for ($i = 0; $i -lt 400; $i++) {
+    $body = (0..30 | ForEach-Object { $words[($i * 7 + $_ * 13) % $words.Count] + "$($_ % 9)x$($i % 50)" }) -join ' '
+    Note "many-$i" $body
+}
+$sw = [Diagnostics.Stopwatch]::StartNew()
+[void](Get-NoteClusters -MemoryDir $cmem)
+$sw.Stop()
+Check 'clusters: 400 notes are scored in under a minute' ($sw.Elapsed.TotalSeconds -lt 60) $true
+
 Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item Env:FAKE_REPLY, Env:FAKE_WARN -ErrorAction SilentlyContinue
 
