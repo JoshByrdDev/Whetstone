@@ -289,10 +289,52 @@ function QuestionCard({ project, q, onAnswer, onSettled }: {
           <span style={{ color: 'var(--w-t600)' }}> - asked {ago(q.askedAt)}</span>
         </div>
         <DecisionSheet project={project} unit={q.unit} only={q.decisions} mode="answer" answering={q.key} onDone={onSettled} />
+        <OwnWords onAnswer={onAnswer} />
       </Panel>
     );
   }
   return <OptionsCard project={project} q={q} onAnswer={onAnswer} />;
+}
+
+/**
+ * A reply to the question itself rather than to the decisions it lists - "not now", "hold this
+ * slice". Without it, a question about decisions the owner is not ready to answer could not be
+ * answered at all, and stayed waiting on the page for good. Recorded like any answer: the steward
+ * reads it as a decision made, and the decisions it listed stay open.
+ */
+function OwnWords({ onAnswer }: { onAnswer: (answer: string) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const send = async () => {
+    setBusy(true); setFailed(null);
+    try { await onAnswer(text.trim()); }
+    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); setBusy(false); }
+  };
+
+  if (!open) return (
+    <div style={{ marginTop: 12 }}>
+      <GhostButton onClick={() => setOpen(true)}
+        title="Answer the question itself - not now, hold it, or anything else - and leave its decisions open">
+        Reply in your own words instead
+      </GhostButton>
+    </div>
+  );
+  return (
+    <div key="own-words" className="orbit-swap" style={{ marginTop: 12 }}>
+      <div style={label()}>Your reply to the question - its decisions stay open</div>
+      <textarea autoFocus value={text} onChange={e => setText(e.target.value)} rows={3}
+        placeholder="For example: not now - hold this slice and the ones after it. The steward reads it as a decision made."
+        aria-label="Your reply to the question"
+        className="mt-1 w-full resize-y rounded-lg border border-hair bg-panel px-2.5 py-1.5 text-[12.5px] text-gray-200 placeholder-gray-600 focus:border-gray-500 focus:outline-none" />
+      <div className="flex items-center justify-end gap-3 flex-wrap" style={{ marginTop: 8 }}>
+        <GhostButton onClick={() => { setOpen(false); setText(''); setFailed(null); }} disabled={busy}>Cancel</GhostButton>
+        <GhostButton tone="go" onClick={send} disabled={busy || !text.trim()}>{busy ? 'Recording' : 'Answer'}</GhostButton>
+      </div>
+      {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 6 }}>{failed}</div>}
+    </div>
+  );
 }
 
 function OptionsCard({ project, q, onAnswer }: {
