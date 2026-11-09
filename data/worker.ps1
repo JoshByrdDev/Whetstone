@@ -1702,8 +1702,14 @@ function ConvertFrom-ReflectOutput {
     $start = $Text.IndexOf('[')
     $end   = $Text.LastIndexOf(']')
     if ($start -lt 0 -or $end -le $start) { return $null }
-    try { return @($Text.Substring($start, $end - $start + 1) | ConvertFrom-Json) }
+    # The same list on 5.1 and 7. 5.1's ConvertFrom-Json hands a JSON array back as one object and 7
+    # enumerates it, so `[]` is an empty array on one and nothing at all on the other - and nothing
+    # reads as "no answer" above. The foreach flattens either shape, and the comma keeps an empty
+    # list from being unrolled into $null on the way out.
+    try { $parsed = $Text.Substring($start, $end - $start + 1) | ConvertFrom-Json }
     catch { return $null }
+    $items = @(foreach ($p in $parsed) { $p })
+    return , $items
 }
 
 # Write-MemoryNote moved to notes-store.ps1 when reflection gained a third outcome. Writing a fact
