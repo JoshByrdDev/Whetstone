@@ -116,6 +116,19 @@ Where the ticket *also* contains real code work, plan that alongside as normal; 
 
 **Never plan an item that runs any of it anywhere but here**, and never write a work item whose text instructs a later phase to do so. A later run reads those items as its orders, and an item that says "apply to production" is the single most likely way this rule gets broken - by a run that thought it was following instructions.
 
+### 3c. If the plan makes one place THE rule, find every place it already lives
+
+A plan that moves a rule to the server, extracts a shared helper, or says "this is now the one rule for X" is making a claim about every other copy of that rule - and the copy you found first is rarely the only one. A permission, an eligibility test or a status rule is usually written once as a query filter, again as an in-memory check, again on the write path and again in the client, and the copies drift: each was written by someone who found one of the others. Centralising the one you happened to read makes it authoritative, and turns every disagreement with the others into something the new code now promises is not there.
+
+When your plan contains such a step:
+
+- **Search for the rule by what it reads, not by its name.** Grep the fields it depends on (the flags, the role or owner ids, the status values) across the server and the client, write path included. The copy under a different name is the one you are looking for.
+- **Name each copy and say what it allows** - a short table in the hand-off comment: where it is, and which cases it answers differently from the others.
+- **Reuse an existing copy before writing a new one.** If one is already the canonical home (a rules or policy class, a named query expression), the plan builds on it.
+- **Where the copies disagree, the plan does not pick a winner silently.** Either the ticket's acceptance criteria settle which is right - then the item that centralises it also lines the others up, read and write - or they do not, and the disagreement is a question for the owner in your hand-off, not a choice made by whichever copy was read first. Never write "the one rule" in a comment while another copy still answers differently.
+
+If the plan centralises nothing, say nothing - like 3a, this is not a box to tick on every ticket.
+
 ### 4. Produce work items
 Break the requirement into concrete, ordered, implementable steps. Each item should be specific ("Add `ExportUsersToCsv` operation to `UserService`"), never vague ("Fix the bug").
 
