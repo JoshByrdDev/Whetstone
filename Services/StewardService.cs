@@ -1148,6 +1148,14 @@ public partial class StewardService
             return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. A branch is only rebased from here while it waits at NeedsReview: at any other time a worker may be in it.{await LeftReviewAsync(t)}");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rebase {t.Branch} onto the base");
 
+        // A rebase a killed run left stopped in this ticket's worktree holds the branch, and no run
+        // will start there again to clear it. At NeedsReview no run is in it, so it is cleared here -
+        // without moving the branch - and kept, rather than put to the owner as a stale worktree.
+        var (keptStopped, stuck) = await _git.ClearStoppedRebasesAsync(projectKey, t.Branch, ct);
+        foreach (var k in keptStopped)
+            await _tickets.AddCommentAsync(t.Id, TicketGitService.SayStoppedRebaseKept(k, t.Branch), AuthorKind.System);
+        if (stuck is not null) return Refuse("refused", stuck);
+
         var before = await _git.BranchChangeAsync(projectKey, t.Branch, ct);
         var r = await _git.RebaseAsync(projectKey, t.Branch, ct);
         if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files." +

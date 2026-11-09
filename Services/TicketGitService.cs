@@ -913,6 +913,13 @@ public partial class TicketGitService
         var (behind, _) = await CountAsync(repo, baseRef, branch, ct);
         if (behind == 0) return Fail($"'{branch}' is already based off the latest {baseRef} — nothing to rebase.");
 
+        // A worktree stopped mid-rebase on the branch is listed as detached, so it is not among the
+        // holders below, and git's own refusal ("already used by worktree") names no cause. Said here.
+        if ((await RebasingWorktreesAsync(repo, branch, ct)) is { Count: > 0 } stuck)
+            return Fail($"'{branch}' is stuck in the middle of a rebase in {stuck[0]}, left by a run that ended before finishing it. " +
+                        $"Clear it without moving the branch - git -C \"{stuck[0]}\" rebase --quit, then check '{branch}' out there again - " +
+                        "not with rebase --abort, which winds the branch back to where that rebase began.");
+
         var holders = _worktrees.List(repo).Where(w => w.Branch == branch).ToList();
         if (holders.Count > 1)
             return Fail($"'{branch}' is checked out in {holders.Count} worktrees at once. " +

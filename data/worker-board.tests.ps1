@@ -331,6 +331,31 @@ try {
     Check 'run ends mid-rebase: the comment names the ref' ((Format-StoppedGitOperation -Stopped $r.stopped) -match [regex]::Escape($r.stopped.ref)) $true
     Check 'clean tree, nothing stopped: still nothing to do' (Save-WorkerLeftovers -WorkDir $cwt -TicketId '5' -Title 'T5' -IssueRef '' -Skill 'implement') $null
 
+    # The branch moved on while a rebase sat stopped - a worker host's hand-back accepted here. An
+    # abort would wind it back to where the rebase began, past everything since: it must stay put.
+    Write-Host "== a stopped rebase on a branch that moved since"
+    $mv = New-Pair 'stopped-moved'
+    $null = Sync-BoardRefs -RepoDir $mv.clone -BaseBranch main
+    $mbt = New-BoardTicket -Pair $mv -Branch 't-7'
+    Add-Commit -Dir $mbt -File 'README.md' -Subject 'T7: the ticket'
+    $null = Sync-Branch -Pair $mv -Branch 't-7'
+    $mwt = New-CloneWorktree -Pair $mv -Branch 't-7'
+    Add-Commit -Dir $mv.board -File 'README.md' -Subject 'landed on the base meanwhile'
+    $null = Sync-BoardRefs -RepoDir $mv.clone -BaseBranch main
+    git -C $mwt rebase main *> $null
+    Check 'setup: stopped' (Get-StoppedGitOperation -Dir $mwt).kind 'rebase'
+    $began = Get-Sha $mv.clone t-7
+    $moved = "$(git -C $mv.clone commit-tree -p $began -m 'handed back meanwhile' "$(Get-Sha $mv.clone 't-7^{tree}')")".Trim()
+    git -C $mv.clone update-ref refs/heads/t-7 $moved *> $null
+    $mr = Undo-StoppedGitOperation -Dir $mwt
+    Check 'moved branch: cleared' "$($mr.ok) $($mr.kind) $($mr.moved)" 'True rebase True'
+    Check 'moved branch: not rewound' (Get-Sha $mv.clone t-7) $moved
+    Check 'moved branch: worktree on the branch as it stands' "$(git -C $mwt symbolic-ref --quiet --short HEAD) $(Get-Sha $mwt HEAD)" "t-7 $moved"
+    Check 'moved branch: no rebase left' (Get-StoppedGitOperation -Dir $mwt) $null
+    Check 'moved branch: worktree clean' "$(git -C $mwt status --porcelain)" ''
+    Check 'moved branch: what it had got to is kept' (((git -C $mwt show "$($mr.ref):README.md") -join "`n") -match '<<<<<<<') $true
+    Check 'moved branch: the comment says it was not rewound' ((Format-StoppedGitOperation -Stopped $mr) -match 'without rewinding') $true
+
     # A HEAD left off the branch is not what is handed back: the branch is.
     git -C $cwt checkout --quiet --detach main *> $null
     $r = Send-BranchToBoard -WorkDir $cwt -RunId 'run55' -Ref 'refs/heads/t-5'

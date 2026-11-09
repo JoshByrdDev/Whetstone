@@ -28,6 +28,7 @@ public interface IStewardGit
     Task<CheckTree> CheckTreeAsync(string projectKey, string branch, CancellationToken ct = default);
     Task<MergeResult> MergeAsync(string projectKey, string branch, string? title, string? description, CancellationToken ct = default);
     Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default);
+    Task<(IReadOnlyList<StoppedRebaseKept> Kept, string? Why)> ClearStoppedRebasesAsync(string projectKey, string branch, CancellationToken ct = default);
 }
 
 public partial class TicketGitService : IStewardGit

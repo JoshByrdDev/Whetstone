@@ -107,9 +107,11 @@ function Get-StoppedGitOperation {
 # HEAD through a scratch index, so the operation's own index is not touched before it is aborted,
 # and kept under refs/whetstone/stopped/<branch>/<short sha>. A stopped rebase's HEAD is part of
 # what is kept, which is what makes a commit made on its detached HEAD recoverable.
-# Refuses to abort when it could not keep that commit: the worktree is then the only copy.
-# Returns @{ ok; kind; branch; was; sha; ref; head; reason } - kind '' when nothing was stopped,
-# was the HEAD it stood on, head the commit the branch is at after the abort.
+# Refuses to abort when it could not keep that commit: the worktree is then the only copy. A rebase
+# whose branch has moved since it began is dropped with --quit rather than aborted (see below).
+# Returns @{ ok; kind; branch; was; sha; ref; head; moved; reason } - kind '' when nothing was
+# stopped, was the HEAD it stood on, head the commit the branch is at after it, moved $true when
+# the branch had moved and was left where it is.
 function Undo-StoppedGitOperation {
     param([string]$Dir, [string]$Why = 'before a new run started on it')
     $ErrorActionPreference = 'Continue'
@@ -152,7 +154,34 @@ function Undo-StoppedGitOperation {
                   reason = "a $($op.kind) is stopped in the worktree at $Dir, and keeping what it had got to as $ref failed" }
     }
 
-    git -C $Dir $op.kind --abort *> $null
+    # An abort puts the branch back where the rebase found it - by moving the ref, whatever it holds
+    # now. When something else moved the branch meanwhile (a worker host's hand-back accepted on the
+    # board host, while a killed run's rebase sat stopped here), that is a rewind past every commit
+    # since, so the rebase is dropped with --quit instead, which touches no ref, and the worktree is
+    # put on the branch as it stands.
+    $moved = $false
+    if ($op.branch -and ($op.kind -eq 'rebase' -or $op.kind -eq 'am')) {
+        $orig = ''
+        foreach ($state in 'rebase-merge', 'rebase-apply') {
+            $file = Join-Path (Get-GitDirPath -Dir $Dir -Name $state) 'orig-head'
+            if (Test-Path -LiteralPath $file) { $orig = "$(Get-Content -LiteralPath $file -TotalCount 1)".Trim(); break }
+        }
+        $now = Get-RefSha -Dir $Dir -Ref "refs/heads/$($op.branch)"
+        $moved = ($orig -and $now -and $orig -ne $now)
+    }
+    if ($moved) {
+        git -C $Dir $op.kind --quit *> $null
+        if (-not (Get-StoppedGitOperation -Dir $Dir)) {
+            git -C $Dir checkout --quiet --force $op.branch *> $null
+            if ($LASTEXITCODE -ne 0) {
+                return @{ ok = $false; kind = $op.kind; branch = $op.branch; sha = $sha; ref = $ref
+                          reason = "a $($op.kind) was stopped in the worktree at $Dir on a branch that has moved since; it was dropped, but the worktree could not be put back on '$($op.branch)' (what it had got to is kept as $ref)" }
+            }
+        }
+    }
+    else {
+        git -C $Dir $op.kind --abort *> $null
+    }
     if (Get-StoppedGitOperation -Dir $Dir) {
         return @{ ok = $false; kind = $op.kind; branch = $op.branch; sha = $sha; ref = $ref
                   reason = "a $($op.kind) is stopped in the worktree at $Dir and would not abort (what it had got to is kept as $ref)" }
@@ -164,7 +193,7 @@ function Undo-StoppedGitOperation {
         git -C $Dir clean -fdq *> $null
     }
     return @{ ok = $true; kind = $op.kind; branch = $op.branch; was = $was; sha = $sha; ref = $ref
-              head = (Get-RefSha -Dir $Dir -Ref HEAD) }
+              head = (Get-RefSha -Dir $Dir -Ref HEAD); moved = $moved }
 }
 
 # One line for a ticket comment on what Undo-StoppedGitOperation did. $Where names the machine.
@@ -174,8 +203,13 @@ function Format-StoppedGitOperation {
     $was = if ($s.was) { " on ``$($s.was.Substring(0, 8))``" } else { '' }
     $branch = if ($s.branch) { "``$($s.branch)``" } else { 'the branch' }
     $at = if ($s.head) { " at ``$($s.head.Substring(0, 8))``" } else { '' }
+    $done = if ($s.moved) {
+        "$branch had moved on since it began, so the $($s.kind) was dropped without rewinding it, and the worktree is on $branch as it stands$at. "
+    } else {
+        "It was aborted, so $branch is back where it was before that $($s.kind) began$at, and nothing was committed on top of it. "
+    }
     return "A ``git $($s.kind)`` was left stopped$was in this ticket's worktree$Where, by a run that ended before finishing it. " +
-        "It was aborted, so $branch is back where it was before that $($s.kind) began$at, and nothing was committed on top of it. " +
+        $done +
         "What it had got to - resolved files, unresolved ones and anything committed on its detached HEAD - is kept as ``$($s.ref)`` (``$($s.sha.Substring(0, 8))``)$Where. " +
         "To look: ``git show --stat $($s.ref)``. The next run redoes the $($s.kind) from the branch."
 }

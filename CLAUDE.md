@@ -443,7 +443,12 @@ discoverable from the code:
   that HEAD and the clone recorded it as agreed, the clone's own branch disagreed with both for
   good, and every later run there blocked as a divergence no answer could clear. So the leftover
   net, `Resolve-Worktree` and the levelling all keep a stopped operation under
-  `refs/whetstone/stopped/` and abort it (`Undo-StoppedGitOperation`), the hand-back sends
+  `refs/whetstone/stopped/` and abort it (`Undo-StoppedGitOperation`) - or, when the branch has
+  moved since the rebase began, drop it with `rebase --quit`, because an abort moves the branch back
+  to where the rebase found it and that is a rewind past every hand-back since. The board host does
+  the same for a rebase a killed run left in its own worktree (`ClearStoppedRebasesAsync`, from the
+  hand-back route and the steward's rebase), which `git worktree list` shows as detached, so nothing
+  that looks for the branch's worktree finds it. The hand-back sends
   `refs/heads/<branch>`, and a divergence resets when the board host has had the local tip before
   (`Test-BoardHadCommit`, from the tracking ref's reflog).
 - **The worker host's clone calls the board host's repo `board`.** Not `hub`, which in `worker.ps1`

@@ -579,6 +579,30 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rebase_a_killed_run_left_stopped_is_cleared_before_the_steward_rebases_and_said()
+    {
+        var id = await AtReview();
+        await Begin();
+        _git.Behind = 1;
+        _git.StoppedAnswer = (new[] { new StoppedRebaseKept("wt/ticket", "refs/whetstone/stopped/ticket/abcdef12", "abcdef1234567890") }, null);
+        Assert.Equal("rebased", (await In(s => s.RebaseAsync("alpha", id))).Answer);
+        await using var ctx = NewCtx();
+        Assert.Contains(ctx.Comments.Where(c => c.TicketId == id), c => c.Body.Contains("refs/whetstone/stopped/ticket/abcdef12"));
+    }
+
+    [Fact]
+    public async Task A_stopped_rebase_that_cannot_be_cleared_refuses_the_rebase()
+    {
+        var id = await AtReview();
+        await Begin();
+        _git.Behind = 1;
+        _git.StoppedAnswer = (Array.Empty<StoppedRebaseKept>(), "it may be a person's");
+        var r = await In(s => s.RebaseAsync("alpha", id));
+        Assert.Equal("refused", r.Answer);
+        Assert.Contains("a person's", r.Why);
+    }
+
+    [Fact]
     public async Task A_clearance_does_not_carry_over_a_change_the_resolver_did_not_make()
     {
         var id = await AtReview();
@@ -2155,6 +2179,12 @@ public partial class StewardServiceTests : IDisposable
 
         /// <summary>The change id of the branch's diff to some files alone, by the files joined with a newline; unset follows <see cref="ChangeId"/>.</summary>
         public Dictionary<string, string> PathsChangeIds = new();
+
+        /// <summary>What clearing a stuck rebase answers; a test sets it to have one kept or refused.</summary>
+        public (IReadOnlyList<StoppedRebaseKept> Kept, string? Why) StoppedAnswer = (Array.Empty<StoppedRebaseKept>(), null);
+
+        public Task<(IReadOnlyList<StoppedRebaseKept> Kept, string? Why)> ClearStoppedRebasesAsync(string projectKey, string branch, CancellationToken ct = default) =>
+            Task.FromResult(StoppedAnswer);
 
         public Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default) =>
             Task.FromResult<string?>(PathsChangeIds.TryGetValue(string.Join("\n", paths), out var id) ? id : $"paths-of-{ChangeId}");

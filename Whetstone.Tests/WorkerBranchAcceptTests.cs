@@ -182,6 +182,84 @@ public class WorkerBranchAcceptTests : IDisposable
         Assert.Contains("never committed", Git(_repo, "show", $"{r.SetAside.Sha}^3:half.txt"));
     }
 
+    /// <summary>A fleet worktree for <paramref name="branch"/> left stopped mid-rebase on a conflict with main.</summary>
+    private string StoppedRebase(string branch)
+    {
+        var wt = Path.Combine(_root, ".worktrees", "alpha", branch);
+        Git(_repo, "worktree", "add", "--quiet", "-b", branch, wt, "main");
+        Identity(wt);
+        File.WriteAllText(Path.Combine(wt, "README.md"), "the ticket's line\n");
+        Git(wt, "commit", "-qam", "the ticket");
+        File.WriteAllText(Path.Combine(_repo, "README.md"), "main's line\n");
+        Git(_repo, "commit", "-qam", "main moved");
+        Git(wt, "rebase", "main");
+        Assert.True(Directory.Exists(Path.Combine(_repo, ".git", "worktrees", branch, "rebase-merge")), "setup: the rebase stopped");
+        return wt;
+    }
+
+    // A run here was killed mid-rebase and the ticket went to a worker host. Its hand-back clears the
+    // rebase without rewinding the branch, and the worktree ends on the branch it hands back.
+    [Fact]
+    public async Task A_rebase_a_killed_run_left_stopped_here_is_kept_and_cleared_by_the_hand_back()
+    {
+        var wt = StoppedRebase("t-11");
+        FetchClone();
+        var old = Sha(_repo, "t-11");
+        var sha = HandBack("t-11", "from the worker host");
+
+        var r = await _svc.AcceptWorkerBranchAsync("alpha", "t-11", "refs/whetstone/incoming/run1", sha, old);
+        Assert.True(r.Ok, r.Why);
+        Assert.Equal(sha, Sha(_repo, "t-11"));
+        Assert.Equal(sha, Sha(wt, "HEAD"));
+        Assert.Equal("t-11", Git(wt, "symbolic-ref", "--short", "HEAD"));
+        Assert.False(Directory.Exists(Path.Combine(_repo, ".git", "worktrees", "t-11", "rebase-merge")));
+        var kept = Assert.Single(r.Stopped!);
+        Assert.StartsWith("refs/whetstone/stopped/t-11/", kept.Ref);
+        Assert.Contains("<<<<<<<", Git(_repo, "show", $"{kept.Ref}:README.md"));
+        Assert.Contains(kept.Ref, TicketGitService.SayStoppedRebaseKept(kept, "t-11"));
+    }
+
+    // The case that loses work: the branch moved on (an earlier hand-back) while a rebase sat stopped.
+    // An abort would wind it back to where the rebase began; clearing must leave it where it is.
+    [Fact]
+    public async Task Clearing_a_stopped_rebase_never_rewinds_a_branch_that_moved_since()
+    {
+        var wt = StoppedRebase("t-12");
+        var began = Sha(_repo, "t-12");
+        var moved = Git(_repo, "commit-tree", "-p", began, "-m", "handed back meanwhile", Sha(_repo, "t-12^{tree}"));
+        Git(_repo, "update-ref", "refs/heads/t-12", moved);
+
+        var refused = await _svc.RebaseAsync("alpha", "t-12");
+        Assert.False(refused.Ok);
+        Assert.Contains("stuck in the middle of a rebase", refused.Error);
+        Assert.Equal(moved, Sha(_repo, "t-12"));
+
+        var (kept, why) = await _svc.ClearStoppedRebasesAsync("alpha", "t-12");
+        Assert.Null(why);
+        Assert.Single(kept);
+        Assert.Equal(moved, Sha(_repo, "t-12"));
+        Assert.Equal(moved, Sha(wt, "HEAD"));
+        Assert.Equal("", Git(wt, "status", "--porcelain"));
+    }
+
+    [Fact]
+    public async Task A_stopped_rebase_outside_the_worktree_root_is_left_for_its_person()
+    {
+        var wt = Path.Combine(_root, "mine");
+        Git(_repo, "worktree", "add", "--quiet", "-b", "t-13", wt, "main");
+        Identity(wt);
+        File.WriteAllText(Path.Combine(wt, "README.md"), "the ticket's line\n");
+        Git(wt, "commit", "-qam", "the ticket");
+        File.WriteAllText(Path.Combine(_repo, "README.md"), "main's line\n");
+        Git(_repo, "commit", "-qam", "main moved");
+        Git(wt, "rebase", "main");
+
+        var (kept, why) = await _svc.ClearStoppedRebasesAsync("alpha", "t-13");
+        Assert.Empty(kept);
+        Assert.Contains("may be a person's", why);
+        Assert.True(Directory.Exists(Path.Combine(_repo, ".git", "worktrees", "mine", "rebase-merge")));
+    }
+
     [Fact]
     public async Task A_clean_hand_back_sets_nothing_aside()
     {

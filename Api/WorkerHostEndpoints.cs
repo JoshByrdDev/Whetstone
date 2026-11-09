@@ -165,6 +165,9 @@ public static class WorkerHostEndpoints
                 return Results.Conflict(new { error = $"Run {req.RunId} no longer holds ticket #{id} - it was released, and the ticket may be running elsewhere." });
 
             var r = await git.AcceptWorkerBranchAsync(ticket.ProjectKey, req.Branch, req.IncomingRef, req.Sha, req.ExpectedOld, ct);
+            // Said on the ticket, because the kept ref is the only copy of what the rebase had got to.
+            foreach (var k in r.Stopped ?? Array.Empty<StoppedRebaseKept>())
+                await tickets.AddCommentAsync(id, TicketGitService.SayStoppedRebaseKept(k, req.Branch), AuthorKind.System);
             // Said on the ticket, because the stash is the only copy of what was set aside.
             if (r.SetAside is { } s)
             {

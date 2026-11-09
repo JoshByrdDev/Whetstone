@@ -2,7 +2,9 @@ namespace Whetstone.Services;
 
 /// <summary>Outcome of taking a worker host's branch into the board host's repo. <c>Why</c> is set on a refusal.</summary>
 /// <param name="SetAside">Uncommitted files found in the board host's worktree and stashed before the move, or null.</param>
-public record BranchAcceptResult(bool Ok, string? Why, string? Moved = null, SetAsideStash? SetAside = null);
+/// <param name="Stopped">Rebases a run here left stopped on the branch, kept and cleared before the move.</param>
+public record BranchAcceptResult(bool Ok, string? Why, string? Moved = null, SetAsideStash? SetAside = null,
+    IReadOnlyList<StoppedRebaseKept>? Stopped = null);
 
 /// <summary>Leftovers moved into a named stash so a branch could move: the stash is the only copy of them.</summary>
 public record SetAsideStash(string Sha, string Message, IReadOnlyList<string> Files, string Path);
@@ -64,6 +66,12 @@ public partial class TicketGitService
                     ? $"'{branch}' was created on the board host while the worker host was working."
                     : $"'{branch}' moved on the board host while the worker host was working ({Short(expected)} -> {Short(current)}).");
 
+        // A run here killed mid-rebase left this machine's worktree detached on a rebase of the
+        // branch. The run that holds the ticket now is the worker host's, so nothing is in it: the
+        // rebase is cleared without moving the branch, which puts the worktree back on it below.
+        var (stopped, stuck) = await ClearStoppedRebasesAsync(projectKey, branch, ct);
+        if (stuck is not null) return new(false, stuck, Stopped: stopped);
+
         var holder = _worktrees.List(repo).FirstOrDefault(w => w.Branch == branch);
         string moved;
         if (holder is { IsMain: true })
@@ -97,7 +105,7 @@ public partial class TicketGitService
         }
 
         await GitAsync(repo, ct, "update-ref", "-d", incomingRef);
-        return new(true, null, moved, setAside);
+        return new(true, null, moved, setAside, stopped);
     }
 
     /// <summary>The paths in <c>git status --porcelain</c> output.</summary>
