@@ -762,14 +762,19 @@ public partial class StewardService
                 + "saying why, then set its outcomes and note anything for release as after a merge. If the work should be "
                 + "there and is not, send it back to NeedsImplementation saying so.");
 
+        // Behind first, before any flag is put to the owner. A rebase can change the change - the
+        // project's resolver renumbering a migration that collided - so an owner asked about a
+        // stale tip clears a change that is not the one that would merge, and was asked again
+        // after every rebase. Rebased first, the question is about the tip that merges.
+        if (change.Behind > 0)
+            return Refuse("behind", $"The base has moved by {change.Behind} commit(s) since this branch was last rebased. Rebase it, then merge again.");
+
         var flags = await FlagsAsync(cfg, t, change, ct);
         var cleared = await ClearedAsync(projectKey, t.Id, change, ct);
         if (flags.Where(f => f.Owner && !cleared.Contains(f.Flag)).ToList() is { Count: > 0 } owners)
             return Refuse("owner", "These are the owner's to decide, not yours. Ask, and leave the ticket unmerged.", owners);
         if (flags.Where(f => f.Blocks).ToList() is { Count: > 0 } blocking)
             return Refuse("not-proved", "The work is not proved yet. Send it back saying exactly what each of these says.", blocking);
-        if (change.Behind > 0)
-            return Refuse("behind", $"The base has moved by {change.Behind} commit(s) since this branch was last rebased. Rebase it, then merge again.");
 
         // The branch holds everything the base has, so its tip is exactly the tree the merge will
         // make: checking it in its own worktree is checking the result.
@@ -1061,16 +1066,67 @@ public partial class StewardService
             return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. A branch is only rebased from here while it waits at NeedsReview: at any other time a worker may be in it.{await LeftReviewAsync(t)}");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rebase {t.Branch} onto the base");
 
+        var before = await _git.BranchChangeAsync(projectKey, t.Branch, ct);
         var r = await _git.RebaseAsync(projectKey, t.Branch, ct);
         if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files." +
             (r.Error is { } e && e.Contains("resolver") ? $" {e}" : ""), r.ConflictedFiles);
-        return r.Ok
-            ? new StewardReply("rebased",
-                r.Resolved.Count > 0
-                    ? $"The project's rebase resolver settled {string.Join(", ", r.Resolved)}, so the change itself moved: its merge checks run again on the new tip. What it did: {string.Join(" | ", r.Output.Where(l => l.StartsWith("[rebase-resolve")))}"
-                    : null,
-                new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha, resolved = r.Resolved })
-            : Refuse("refused", r.Error ?? "The rebase was refused.");
+        if (!r.Ok) return Refuse("refused", r.Error ?? "The rebase was refused.");
+        if (r.Resolved.Count == 0)
+            return new StewardReply("rebased", null, new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha, resolved = r.Resolved });
+
+        var carried = await CarryClearancesAsync(projectKey, t.Id, before, r, ct);
+        return new StewardReply("rebased",
+            $"The project's rebase resolver settled {string.Join(", ", r.Resolved)}, so the change itself moved: its merge checks run again on the new tip. What it did: {string.Join(" | ", r.Output.Where(l => l.StartsWith("[rebase-resolve")))}"
+            + (carried.Count > 0 ? $" The owner's clearance of {string.Join(", ", carried)} carried over to the new tip, because the resolver's settling is not rework: do not ask about it again." : ""),
+            new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha, resolved = r.Resolved, clearancesCarried = carried });
+    }
+
+    /// <summary>
+    /// A rebase whose only conflicts the project's resolver settled - a migration that collided on
+    /// its number, renumbered with its SQL proved the same - changes the change's id without being
+    /// rework. A clearance the owner gave the change before it keeps holding after it, and the
+    /// record says so. Without this an owner's clearance lapsed at every renumber, and on a busy
+    /// base the next collision landed before the owner had cleared it again.
+    /// <para>
+    /// It rests on the resolver's contract (TicketGitService, RebaseResolverOf): it settles only
+    /// conflicts with one right answer, and what it stages does not change what the change does.
+    /// A rebase that conflicted on anything it declined never gets here - it was rolled back.
+    /// </para>
+    /// </summary>
+    private async Task<List<string>> CarryClearancesAsync(string projectKey, int ticketId, BranchChange? before, RebaseResult r, CancellationToken ct)
+    {
+        var carried = new List<string>();
+        if (string.IsNullOrEmpty(before?.ChangeId)) return carried;
+        var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId && x.ProjectKey == projectKey, ct);
+        var after = string.IsNullOrWhiteSpace(t?.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        if (string.IsNullOrEmpty(after?.ChangeId) || after.ChangeId == before.ChangeId) return carried;
+
+        var held = await _db.StewardClearances
+            .Where(c => c.ProjectKey == projectKey && c.TicketId == ticketId && c.ChangeId == before.ChangeId)
+            .ToListAsync(ct);
+        foreach (var c in held.Where(c => !NeverCleared.Contains(c.Flag)))
+        {
+            if (await _db.StewardClearances.AnyAsync(x => x.ProjectKey == projectKey && x.TicketId == ticketId
+                    && x.Flag == c.Flag && x.ChangeId == after.ChangeId, ct)) continue;
+            _db.StewardClearances.Add(new StewardClearance
+            {
+                ProjectKey = projectKey, TicketId = ticketId, Flag = c.Flag, ChangeId = after.ChangeId, Sha = after.Tip,
+            });
+            carried.Add(c.Flag);
+        }
+        if (carried.Count == 0) return carried;
+
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = ticketId,
+            Text = $"Ticket {ticketId}: the owner's clearance of {string.Join(", ", carried.Select(f => $"'{f}'"))} carried over a rebase"
+                + $" ({Short(r.PreviousSha)} to {Short(r.NewSha)}) whose only conflicts the project's resolver settled"
+                + $" ({string.Join(", ", r.Resolved)}). That is bookkeeping, not rework of what was cleared.",
+        });
+        await _db.SaveChangesAsync(ct);
+        return carried;
+
+        static string Short(string? sha) => string.IsNullOrEmpty(sha) ? "?" : sha[..Math.Min(7, sha.Length)];
     }
 
     /// <summary>

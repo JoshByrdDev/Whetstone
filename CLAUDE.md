@@ -46,7 +46,7 @@ its own nested git repo with its own remote:
 | Paths, ports, tracker, credentials, stack commands | `project.json` / `project.defaults.json` there |
 | A command only that repo makes dangerous | `data/projects/<key>/guard.ps1`, tested by a `guard.tests.ps1` beside it |
 | How the narrator says its product names and key prefix | `data/projects/<key>/pronounce.json` |
-| A rebase conflict that repo's tooling makes mechanical (two branches taking the same migration number) | `data/projects/<key>/rebase-resolve.ps1`, handed each stopped step of the board's rebase; it resolves and stages, or declines and the rebase aborts as before |
+| A rebase conflict that repo's tooling makes mechanical (two branches taking the same migration number) | `data/projects/<key>/rebase-resolve.ps1`, handed each stopped step of the board's rebase and of the heartbeat's start and hand-off rebases (`Update-BranchFromBase`); it resolves and stages, or declines and the rebase aborts as before. What it stages must not change what the change does - the owner's clearances ride over it |
 
 If a rule cannot be written without naming a repo, a script in it, or one of its hosts, it is not a
 rule for this repository. When the shared code needs an example, it uses a placeholder: `PROJ-123`
@@ -357,7 +357,7 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
 | A review gate the owner put a ticket on by hand is the owner's | `steward_approve` and `steward_send_back` pass a plan or a build only where a hand-off stopped it; the last move onto the gate being a person's refuses both (`OwnerPlacedAsync`). A declined expansion item is deleted from the plan, and every approval is a `Call` on the owner's record |
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
-| A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse. An answer to a question is prose and lifts nothing |
+| A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse; a rebase whose only conflicts the project's resolver settled is not rework, and carries it (`CarryClearancesAsync`, recorded as a call). A merge answers `behind` before it raises any flag, so the owner is asked about the tip that merges. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
 | What is decided, and whether it still is | the register (`StewardDecision`, docs/plans-as-slices.md section 3). Recording, replacing, withdrawing, and settling a pair the import flagged are REST routes with no tool behind them; `steward_decisions` only reads. A replacing is stored on the newer decision only, and a number is the project's for good |
 | Ideas are the owner's; a building slice's story changes only with an answer | committing a proposed idea, and rewording a story sentence, happen only on the owner's answer to a question; `steward_draft_unit` refuses a draft no idea stands for, and a story that does not check |

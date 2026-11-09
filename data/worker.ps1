@@ -1088,6 +1088,63 @@ function Test-CommitsPublished {
     return $null
 }
 
+# The project's rebase resolver (data/projects/<key>/rebase-resolve.ps1), or '' when it has none -
+# including on a worker host, whose project kit does not carry it, so a run there rebases as before.
+function Get-RebaseResolver {
+    param([string]$ProjectDir)
+    if (-not $ProjectDir) { return '' }
+    $p = Join-Path $ProjectDir 'rebase-resolve.ps1'
+    if (Test-Path -LiteralPath $p) { return $p }
+    return ''
+}
+
+# Whether the tree in the current directory is stopped in the middle of a rebase, either backend.
+function Test-RebaseInProgress {
+    foreach ($state in 'rebase-merge', 'rebase-apply') {
+        $d = (git rev-parse --git-path $state 2>$null)
+        if ($d -and (Test-Path $d)) { return $true }
+    }
+    return $false
+}
+
+# One stop of a rebase, handed to the project's resolver in the tree that is mid-rebase (the current
+# directory). Its contract is the board's (TicketGitService.RunRebaseResolverAsync): one JSON object
+# on stdin - conflicted, baseRef, branch, repo - and exit 0 having staged a resolution, or non-zero
+# having changed nothing, with its reason on stderr. Returns @{ ok; why; lines }.
+function Invoke-RebaseResolver {
+    param([string]$Resolver, [string[]]$Conflicted, [string]$BaseRef, [string]$Branch)
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = 'powershell.exe'
+        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Resolver`""
+        $psi.WorkingDirectory = (Get-Location).Path
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.EnvironmentVariables['WHETSTONE_BASE_REF'] = $BaseRef
+        $psi.EnvironmentVariables['GIT_EDITOR'] = 'true'
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $proc.StandardInput.Write((@{ conflicted = @($Conflicted); baseRef = $BaseRef; branch = $Branch; repo = '' } | ConvertTo-Json -Compress))
+        $proc.StandardInput.Close()
+        $out = $proc.StandardOutput.ReadToEndAsync()
+        $err = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit(600000)) {
+            try { $proc.Kill() } catch { }
+            return @{ ok = $false; why = 'it did not finish within ten minutes'; lines = @() }
+        }
+        $lines = @(($out.Result -replace "`r`n", "`n").Split("`n") | Where-Object { "$_".Trim() })
+        if ($proc.ExitCode -eq 0) { return @{ ok = $true; why = $null; lines = $lines } }
+        $why = "$($err.Result)".Trim()
+        if (-not $why) { $why = "exit code $($proc.ExitCode)" }
+        return @{ ok = $false; why = $why; lines = $lines }
+    }
+    catch {
+        return @{ ok = $false; why = "it could not be started: $($_.Exception.Message)"; lines = @() }
+    }
+}
+
 # Bring a finished ticket's branch up to date with the base it will be merged into.
 #
 # A branch is cut from the base when the ticket is speculated and never looks at it again, so by
@@ -1108,8 +1165,14 @@ function Test-CommitsPublished {
 #
 # Cheap because of the one-ticket-one-commit rule: by this point the branch is a single commit, so
 # the rebase is one patch and a conflict names exactly the files a human would look at anyway.
+#
+# -Resolver is the project's rebase-resolve.ps1 when it has one (Get-RebaseResolver): each stop of the rebase is handed to
+# it, as the board's rebase does (TicketGitService.RebaseAsync), and a stop it settles is continued.
+# The case it is for is two tickets taking the same migration number: without it the hand-off sent
+# the ticket back for a whole implement, QA and refine cycle only to be renumbered. A decline, or a
+# "resolved" that leaves a file unmerged, ends in the same abort as any conflict.
 function Update-BranchFromBase {
-    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally)
+    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally, [string]$Resolver = '')
 
     $ErrorActionPreference = 'Continue'
     if (-not (Test-Path (Join-Path $WorkDir ".git"))) { return $null }
@@ -1121,10 +1184,7 @@ function Update-BranchFromBase {
         if (git status --porcelain 2>$null) { return @{ ok = $false; reason = "working tree is not clean" } }
 
         # A rebase left half-finished by an earlier crash. Touching it would compound the mess.
-        foreach ($state in 'rebase-merge', 'rebase-apply') {
-            $dir = (git rev-parse --git-path $state 2>$null)
-            if ($dir -and (Test-Path $dir)) { return @{ ok = $false; reason = "a rebase is already in progress here" } }
-        }
+        if (Test-RebaseInProgress) { return @{ ok = $false; reason = "a rebase is already in progress here" } }
 
         # No origin means nothing to be stale against - unless the base moves locally, which on a
         # project that merges instead of raising a PR it does every time a ticket lands.
@@ -1162,21 +1222,46 @@ function Update-BranchFromBase {
         $backup = "refs/heads/$branch-prerebase"
         git update-ref $backup HEAD *> $null
 
-        git rebase $baseRef *> $null
-        if ($LASTEXITCODE -ne 0) {
+        git -c core.editor=true rebase $baseRef *> $null
+        $rebaseOk = ($LASTEXITCODE -eq 0)
+
+        $settled = @(); $said = @(); $declined = $null
+        if (-not $rebaseOk -and $Resolver -and (Test-Path -LiteralPath $Resolver)) {
+            for ($stop = 0; $stop -lt 50 -and (Test-RebaseInProgress); $stop++) {
+                $stopped = @(git diff --name-only --diff-filter=U 2>$null | Where-Object { $_ })
+                if ($stopped.Count -eq 0) { break }
+                $r = Invoke-RebaseResolver -Resolver $Resolver -Conflicted $stopped -BaseRef $baseRef -Branch $branch
+                $said += @($r.lines)
+                if (-not $r.ok) { $declined = $r.why; break }
+                if (@(git diff --name-only --diff-filter=U 2>$null | Where-Object { $_ }).Count -gt 0) {
+                    $declined = 'it exited as resolved but left files unmerged'; break
+                }
+                $settled += $stopped
+                git -c core.editor=true rebase --continue *> $null
+                if ($LASTEXITCODE -eq 0) { $rebaseOk = $true; break }
+            }
+        }
+
+        if (-not $rebaseOk) {
             # Conflicts. Name the files before unwinding - once the rebase is aborted the evidence
             # is gone, and "it conflicts" without saying where is not worth putting on a ticket.
             $conflicts = @(git diff --name-only --diff-filter=U 2>$null | Where-Object { $_ })
             git rebase --abort *> $null
             git reset --hard $backup *> $null
             git update-ref -d $backup *> $null
-            return @{ ok = $false; behind = $behind; base = $baseRef; conflicts = $conflicts; reason = "conflicts with $baseRef" }
+            # The resolver may have left files git does not track; the abort restores tracked ones only.
+            # The tree was clean going in (checked above), so nothing untracked here is anyone's work.
+            if ($said.Count -gt 0 -or $declined) { git clean -fdq -- . *> $null }
+            $why = "conflicts with $baseRef"
+            if ($declined) { $why += " (the project's rebase resolver declined: $declined)" }
+            return @{ ok = $false; behind = $behind; base = $baseRef; conflicts = $conflicts; reason = $why; declined = $declined }
         }
 
         git update-ref -d $backup *> $null
         return @{
             ok = $true; behind = $behind; rebased = $true; branch = $branch; base = $baseRef
             sha = (git rev-parse --short HEAD 2>$null)
+            resolved = @($settled | Select-Object -Unique); resolverSaid = @($said | Where-Object { $_ })
         }
     }
     finally { Pop-Location }
@@ -1210,10 +1295,11 @@ function Get-MergeConflicts {
 # stops on an intermediate commit while the whole merges cleanly leaves the branch as it was, and the
 # hand-off rebase takes it after the squash, as it always has.
 function Update-BranchAtStart {
-    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally)
-    $r = Update-BranchFromBase -WorkDir $WorkDir -BaseBranch $BaseBranch -RepoDir $RepoDir -MergeLocally $MergeLocally
+    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally, [string]$Resolver = '')
+    $r = Update-BranchFromBase -WorkDir $WorkDir -BaseBranch $BaseBranch -RepoDir $RepoDir -MergeLocally $MergeLocally -Resolver $Resolver
     if (-not $r) { return $null }
-    if ($r.ok) { return @{ rebased = [bool]$r.rebased; base = $r.base; behind = $r.behind; sha = $r.sha; conflicts = @() } }
+    if ($r.ok) { return @{ rebased = [bool]$r.rebased; base = $r.base; behind = $r.behind; sha = $r.sha; conflicts = @()
+                           resolved = @($r.resolved); resolverSaid = @($r.resolverSaid) } }
     if (-not $r.conflicts) { return @{ rebased = $false; base = $r.base; reason = $r.reason; conflicts = @() } }
     $whole = Get-MergeConflicts -WorkDir $WorkDir -BaseRef $r.base
     $files = if ($whole.ok) { @($whole.conflicts) } else { @($r.conflicts) }
@@ -2380,7 +2466,8 @@ if ($repoDir -and -not $multiRepo -and -not $readsOnly -and -not $reviewedOn -an
         $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
         if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the start rebase: $($resync.reason)" }
     }
-    $start = Update-BranchAtStart -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally
+    $start = Update-BranchAtStart -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally `
+        -Resolver (Get-RebaseResolver -ProjectDir $projectDataDir)
     # For the run's record: how far behind the base the branch started, and what became of that.
     $runDetail.startRebase = if (-not $start) { 'skipped' }
                              elseif ($start.rebased) { 'rebased' }
@@ -2390,7 +2477,9 @@ if ($repoDir -and -not $multiRepo -and -not $readsOnly -and -not $reviewedOn -an
     if ($start -and $null -ne $start.behind) { $runDetail.baseBehind = [int]$start.behind }
     if ($start -and $start.rebased) {
         Write-Log "  Rebased onto $($start.base) before this run ($($start.behind) commit(s) behind) -> $($start.sha)."
-        Send-TicketComment -TicketId $ticketId -Body "This branch was $($start.behind) commit(s) behind $($start.base), so the heartbeat rebased it before this $skill run. It replayed cleanly and is now $($start.sha)."
+        Send-TicketComment -TicketId $ticketId -Body ("This branch was $($start.behind) commit(s) behind $($start.base), so the heartbeat rebased it before this $skill run. " +
+            $(if (@($start.resolved).Count -gt 0) { "It conflicted only in $(@($start.resolved) -join ', '), which the project's rebase resolver settled: $(@($start.resolverSaid) -join ' ') It is now $($start.sha)." }
+              else { "It replayed cleanly and is now $($start.sha)." }))
     }
     elseif ($start -and $start.conflicts.Count -gt 0) {
         $files = ($start.conflicts | ForEach-Object { "- $_" }) -join "`n"
@@ -2992,13 +3081,16 @@ function Invoke-HandOffNets {
             if (-not $resync.ok) { Write-Log "  ${in}Could not refresh the board host's base before the rebase: $($resync.reason) - rebasing onto the base as of the start of the run." }
         }
         $rebase = Update-BranchFromBase -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir `
-            -MergeLocally $mergeLocally
+            -MergeLocally $mergeLocally -Resolver (Get-RebaseResolver -ProjectDir $projectDataDir)
         if ($rebase) {
             # The ref it measured against, when it got far enough to pick one.
             $baseName = if ($rebase.base) { $rebase.base } else { $effectiveBase }
             if ($rebase.ok -and $rebase.rebased) {
                 Write-Log "  ${in}Rebased '$($rebase.branch)' onto $baseName ($($rebase.behind) commit(s) behind) -> $($rebase.sha)."
-                Send-TicketComment -TicketId $ticketId -Body "${in}This branch was $($rebase.behind) commit(s) behind $baseName, so the heartbeat rebased it before hand-off. It replayed cleanly and the branch is now $($rebase.sha), sitting directly on top of the current base. What you review is what would merge."
+                $how = if (@($rebase.resolved).Count -gt 0) {
+                    "It conflicted only in $(@($rebase.resolved) -join ', '), which the project's rebase resolver settled: $(@($rebase.resolverSaid) -join ' ')"
+                } else { "It replayed cleanly." }
+                Send-TicketComment -TicketId $ticketId -Body "${in}This branch was $($rebase.behind) commit(s) behind $baseName, so the heartbeat rebased it before hand-off. $how The branch is now $($rebase.sha), sitting directly on top of the current base. What you review is what would merge."
             }
             elseif ($rebase.ok) {
                 Write-Log "  ${in}Branch is already up to date with $baseName."

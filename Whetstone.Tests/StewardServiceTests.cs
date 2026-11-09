@@ -443,6 +443,50 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal("behind", (await In(s => s.MergeAsync("alpha", id))).Answer);
     }
 
+    [Fact]
+    public async Task A_branch_behind_is_rebased_before_the_owner_is_asked_about_a_flag()
+    {
+        _git.Behind = 2;
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        Assert.Equal("behind", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+    }
+
+    [Fact]
+    public async Task A_clearance_carries_over_a_rebase_only_the_resolver_settled()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "migration-changes-existing-data"), flags);
+
+        // Another ticket's migration took this one's number; the resolver renumbered it.
+        _git.Behind = 1;
+        _git.RebaseResolves = new[] { "packages/db/migrations/meta/_journal.json" };
+        _git.ChangeIdAfterRebase = "change-renumbered";
+        var rebased = await In(s => s.RebaseAsync("alpha", id), flags);
+        Assert.Equal("rebased", rebased.Answer);
+        Assert.Contains("carried over", rebased.Why);
+        Assert.Contains(Entries(), e => e.Kind == StewardEntryKind.Call && e.TicketId == id && e.Text.Contains("carried over"));
+
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+    }
+
+    [Fact]
+    public async Task A_clearance_does_not_carry_over_a_change_the_resolver_did_not_make()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "migration-changes-existing-data"), flags);
+
+        _git.Behind = 1;
+        _git.ChangeIdAfterRebase = "change-moved";
+        Assert.Equal("rebased", (await In(s => s.RebaseAsync("alpha", id), flags)).Answer);
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+    }
+
     private void WithACheck() => Configure("full", """
         "plan": { "units": "docs/units" },
         "mergeChecks": [ { "name": "tests", "run": "run-tests" } ]
@@ -2077,7 +2121,18 @@ public partial class StewardServiceTests : IDisposable
             return Task.FromResult(new MergeResult(true, null, false, Array.Empty<string>(), branch, "main", "", "0123456789", false, 1, Array.Empty<string>()));
         }
 
-        public Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default) =>
-            Task.FromResult(new RebaseResult(true, null, false, Array.Empty<string>(), branch, "main", "a", "b", "", Array.Empty<string>()));
+        /// <summary>What the project's resolver settles on the next rebase, and the change's id after it.</summary>
+        public string[] RebaseResolves = Array.Empty<string>();
+        public string? ChangeIdAfterRebase;
+
+        public Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default)
+        {
+            Behind = 0;
+            if (ChangeIdAfterRebase is not null) ChangeId = ChangeIdAfterRebase;
+            return Task.FromResult(new RebaseResult(true, null, false, Array.Empty<string>(), branch, "main", "a", "b", "", Array.Empty<string>())
+            {
+                Resolved = RebaseResolves,
+            });
+        }
     }
 }

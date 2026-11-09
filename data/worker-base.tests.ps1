@@ -199,6 +199,60 @@ try {
     Check 'conflict with local main is reported' "$($rebase.ok) $($rebase.conflicts -join ',')" 'False README.md'
     Check 'conflict: branch left as it was' (Get-Sha $wt.path HEAD) $before
 
+    # ---- The project's rebase resolver, handed each stop ------------------------
+    # Stand-ins for a project's rebase-resolve.ps1: one settles a conflict by keeping the base's side
+    # (as the real one keeps the base's migration bookkeeping), one declines.
+    $resolvers = Join-Path $root 'resolvers'
+    New-Item -ItemType Directory -Path $resolvers -Force | Out-Null
+    $settles = Join-Path $resolvers 'settles.ps1'
+    Set-Content -Path $settles -Encoding ascii -Value @'
+$in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+foreach ($f in @($in.conflicted)) { git checkout --ours -- $f 2>$null; git add -- $f 2>$null }
+New-Item -ItemType File -Path 'made-by-resolver.tmp' -Force | Out-Null
+Remove-Item 'made-by-resolver.tmp'
+[Console]::Out.WriteLine("kept the base's side of $(@($in.conflicted) -join ',') onto $($in.baseRef)")
+exit 0
+'@
+    $declines = Join-Path $resolvers 'declines.ps1'
+    Set-Content -Path $declines -Encoding ascii -Value @'
+$null = [Console]::In.ReadToEnd()
+Set-Content -Path 'left-behind.tmp' -Value 'x'
+[Console]::Error.WriteLine('not only migration bookkeeping conflicts')
+exit 1
+'@
+
+    Write-Host "== Update-BranchFromBase with a resolver"
+    $res = New-Hub 'rebase-resolved'
+    $rw = New-TicketWorktree -Repo $res -Branch 't-6' -MergeLocally $true
+    Add-Commit -Dir $rw.path -File 'README.md' -Subject 'T6: takes the next number'
+    Add-Commit -Dir $rw.path -File 'own.txt' -Subject 'T6: its own work'
+    Add-Commit -Dir $res.hub -File 'README.md' -Subject 'a ticket merged first took it'
+    $rebase = Update-BranchFromBase -WorkDir $rw.path -BaseBranch 'main' -RepoDir $res.hub -MergeLocally $true -Resolver $settles
+    Check 'a stop the resolver settles is continued' "$($rebase.ok) $($rebase.rebased) $(@($rebase.resolved) -join ',')" 'True True README.md'
+    Check '... and what it said comes back' ((@($rebase.resolverSaid) -join ' ') -match "kept the base's side of README.md onto main") $true
+    Check '... and the rest of the branch replayed' (Test-Path (Join-Path $rw.path 'own.txt')) $true
+    git -C $rw.path merge-base --is-ancestor main HEAD; Check '... onto the base' $LASTEXITCODE 0
+    Check '... with nothing left mid-rebase' ((git -C $rw.path status --porcelain) -join '') ''
+
+    $dec = New-Hub 'rebase-declined'
+    $rw = New-TicketWorktree -Repo $dec -Branch 't-7' -MergeLocally $true
+    Add-Commit -Dir $rw.path -File 'README.md' -Subject 'T7: edits the readme'
+    $rbefore = Get-Sha $rw.path HEAD
+    Add-Commit -Dir $dec.hub -File 'README.md' -Subject 'so did a ticket merged first'
+    $rebase = Update-BranchFromBase -WorkDir $rw.path -BaseBranch 'main' -RepoDir $dec.hub -MergeLocally $true -Resolver $declines
+    Check 'a declined stop is a conflict' "$($rebase.ok) $($rebase.conflicts -join ',')" 'False README.md'
+    Check '... that says the resolver declined, and why' ($rebase.reason -match 'declined: not only migration bookkeeping') $true
+    Check '... with the branch as it was' (Get-Sha $rw.path HEAD) $rbefore
+    Check '... and nothing the resolver left behind' ((git -C $rw.path status --porcelain) -join '') ''
+
+    $none = New-Hub 'rebase-no-resolver'
+    $rw = New-TicketWorktree -Repo $none -Branch 't-8' -MergeLocally $true
+    Add-Commit -Dir $rw.path -File 'README.md' -Subject 'T8: edits the readme'
+    Add-Commit -Dir $none.hub -File 'README.md' -Subject 'so did a ticket merged first'
+    $rebase = Update-BranchFromBase -WorkDir $rw.path -BaseBranch 'main' -RepoDir $none.hub -MergeLocally $true `
+        -Resolver (Get-RebaseResolver -ProjectDir (Join-Path $root 'no-such-project'))
+    Check 'a project with no resolver conflicts as before' "$($rebase.ok) $($rebase.reason)" 'False conflicts with main'
+
     # ---- The rebase as an implement or QA run starts -----------------------------
     Write-Host "== Update-BranchAtStart"
     $start = Update-BranchAtStart -WorkDir $wt.path -BaseBranch 'main' -RepoDir $conflict.hub -MergeLocally $true
