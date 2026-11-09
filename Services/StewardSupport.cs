@@ -17,6 +17,8 @@ public interface IStewardGit
     Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default);
     Task<string?> FileAtBaseAsync(string projectKey, string path, CancellationToken ct = default);
     Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default);
+    /// <summary><see cref="BranchChange.ChangeId"/> of the branch's diff limited to <paramref name="paths"/>, or null.</summary>
+    Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default);
     Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default);
     Task<int> AheadOfBaseAsync(string projectKey, string from, CancellationToken ct = default);
     Task<SyncFromResult> SyncFromAsync(string projectKey, string from, bool dryRun, CancellationToken ct = default);

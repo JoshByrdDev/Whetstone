@@ -1187,6 +1187,12 @@ namespace Whetstone.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Paths")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PathsChangeId")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)

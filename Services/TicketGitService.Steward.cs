@@ -327,6 +327,24 @@ public partial class TicketGitService
     }
 
     /// <summary>
+    /// The change id of what <paramref name="branch"/> does to <paramref name="paths"/> alone, against
+    /// the same base ref as <see cref="BranchChangeAsync"/>. What a clearance of a flag about files
+    /// is tied to (<see cref="Whetstone.Models.StewardClearance.PathsChangeId"/>).
+    /// </summary>
+    public async Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        if (paths.Count == 0 || string.IsNullOrWhiteSpace(branch) || !IsGitRepo(repo)) return null;
+        if (!(await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}")).Ok) return null;
+        var baseRef = await BaseRefAsync(repo, cfg, baseBranch, ct);
+        if (baseRef is null) return null;
+        var args = new List<string> { "diff", "--no-renames", "--no-color", $"{baseRef}...{branch}", "--" };
+        args.AddRange(paths.Select(p => ":(literal)" + p));
+        var diff = await GitAsync(repo, ct, TimeSpan.FromSeconds(60), args.ToArray());
+        return diff.Ok && diff.Stdout.Trim().Length > 0 ? ChangeIdOf(diff.Stdout) : null;
+    }
+
+    /// <summary>
     /// A diff's identity across rebases, like <c>git patch-id</c>: the hunk headers' line numbers and
     /// the <c>index</c> lines' blob ids are what a rebase moves without changing the change.
     /// </summary>

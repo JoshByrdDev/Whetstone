@@ -395,6 +395,67 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_clearance_of_a_flag_about_files_holds_while_those_files_change_is_the_same()
+    {
+        // A rebase whose conflicts in other files were resolved by hand: the whole change moved,
+        // the change to the never-merged file the owner cleared did not.
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts" };
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change";
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal("cleared", (await In(s => s.OwnerClearsFlagAsync("alpha", id, "never-merged-here"))).Answer);
+
+        _git.ChangeId = "change-2";
+        _git.Tip = "tip-after-rebase";
+        var flags = await In(s => s.OwnerFlagsAsync("alpha", id));
+        Assert.Contains("\"cleared\":true", System.Text.Json.JsonSerializer.Serialize(flags.Data));
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Contains(Entries(), e => e.Kind == StewardEntryKind.Call && e.TicketId == id
+            && e.Text.Contains("still holds") && e.Text.Contains("infra/stack.ts"));
+    }
+
+    [Fact]
+    public async Task A_clearance_of_a_flag_about_files_lapses_when_those_files_are_reworked()
+    {
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts" };
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change";
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "never-merged-here"));
+
+        _git.ChangeId = "change-2";
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change-reworked";
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public async Task A_clearance_of_a_flag_about_files_lapses_when_it_names_another_file()
+    {
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts" };
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change";
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "never-merged-here"));
+
+        // The rework added a second never-merged file the owner has not seen.
+        _git.ChangeId = "change-2";
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts", "infra/dns.ts" };
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public void Only_a_flag_whose_every_detail_is_a_changed_file_is_about_files()
+    {
+        var change = new BranchChange(new[] { "infra/stack.ts", "src/a.ts" }, 0, 1, "", "main", "tip", "c");
+        Assert.Equal(new[] { "infra/stack.ts" }, StewardService.PathsOf(new StewardFlag("x", true, false, null, new[] { "infra/stack.ts" }), change));
+        Assert.Null(StewardService.PathsOf(new StewardFlag("x", true, false, null, new[] { "infra/stack.ts", "a plan item" }), change));
+        Assert.Null(StewardService.PathsOf(new StewardFlag("x", true, false), change));
+    }
+
+    [Fact]
     public async Task A_clearance_is_for_one_flag_and_only_one_that_is_raised()
     {
         var id = await AtReview();
@@ -2047,6 +2108,12 @@ public partial class StewardServiceTests : IDisposable
 
         public Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default) =>
             Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, Ahead, "1 file changed", "main", Tip, ChangeId));
+
+        /// <summary>The change id of the branch's diff to some files alone, by the files joined with a newline; unset follows <see cref="ChangeId"/>.</summary>
+        public Dictionary<string, string> PathsChangeIds = new();
+
+        public Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default) =>
+            Task.FromResult<string?>(PathsChangeIds.TryGetValue(string.Join("\n", paths), out var id) ? id : $"paths-of-{ChangeId}");
 
         public Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default) =>
             Task.FromResult<(string, bool, int)?>(("diff", false, 4));
