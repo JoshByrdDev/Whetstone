@@ -596,7 +596,7 @@ public partial class StewardService
     /// <summary>
     /// The files a flag is about, sorted, when it is a flag about files: every one of its details is
     /// a file the change touches (a never-merged path, an env file, a project's flag on a migration).
-    /// Null for any other flag, whose clearance stays tied to the whole change.
+    /// Null for any other flag.
     /// </summary>
     public static IReadOnlyList<string>? PathsOf(StewardFlag f, BranchChange change)
     {
@@ -606,64 +606,79 @@ public partial class StewardService
         return paths.All(files.Contains) ? paths : null;
     }
 
-    private static string PathsKey(IReadOnlyList<string> paths) => string.Join("\n", paths);
+    /// <summary>
+    /// Exactly what a flag asks the owner about, as one string - what a clearance of it is tied to
+    /// beside the whole change (<see cref="StewardClearance.About"/>). The flag's own
+    /// <see cref="StewardFlag.About"/> when it says one; for a flag about files, those files and the
+    /// change id of their diff alone; otherwise null, and the clearance holds for the whole change only.
+    /// </summary>
+    public async Task<string?> FingerprintAsync(string projectKey, Ticket t, StewardFlag f, BranchChange change, CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(f.About)) return "about:" + f.About.Trim();
+        if (PathsOf(f, change) is not { } paths || string.IsNullOrWhiteSpace(t.Branch)) return null;
+        var id = await _git.PathsChangeIdAsync(projectKey, t.Branch, paths, ct);
+        return id is null ? null : "files:" + string.Join("\n", paths) + "\n" + id;
+    }
+
+    /// <summary>What a flag is about, as the record says it to a person.</summary>
+    private static string Describe(StewardFlag f, BranchChange change) =>
+        !string.IsNullOrWhiteSpace(f.About) ? f.About.Trim()
+        : PathsOf(f, change) is { } paths ? "its change to " + string.Join(", ", paths)
+        : "the whole change";
 
     /// <summary>
-    /// The flags the owner has cleared for the change as it stands: for this exact change, or - for a
-    /// flag about files - for the same change to the same files, however the rest of the branch has
-    /// moved since. Those are also returned as <c>ByPaths</c>, for <see cref="RecordPathClearancesAsync"/>.
+    /// The flags the owner has cleared for the change as it stands: for this exact change, or for a
+    /// flag raised now about the same thing it was cleared for (<see cref="FingerprintAsync"/>),
+    /// however the rest of the branch has moved since. Those are also returned as <c>Carried</c>, for
+    /// <see cref="RecordCarriedClearancesAsync"/>.
     /// </summary>
-    private async Task<(HashSet<string> Cleared, List<StewardFlag> ByPaths)> ClearedAsync(string projectKey, Ticket t,
+    private async Task<(HashSet<string> Cleared, List<(StewardFlag Flag, string About)> Carried)> ClearedAsync(string projectKey, Ticket t,
         BranchChange change, IReadOnlyList<StewardFlag> flags, CancellationToken ct)
     {
         var cleared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var byPaths = new List<StewardFlag>();
-        if (string.IsNullOrEmpty(change.ChangeId)) return (cleared, byPaths);
+        var carried = new List<(StewardFlag, string)>();
+        if (string.IsNullOrEmpty(change.ChangeId)) return (cleared, carried);
         var held = await _db.StewardClearances.AsNoTracking()
             .Where(c => c.ProjectKey == projectKey && c.TicketId == t.Id).ToListAsync(ct);
         foreach (var c in held.Where(c => c.ChangeId == change.ChangeId && !NeverCleared.Contains(c.Flag))) cleared.Add(c.Flag);
 
         foreach (var f in flags.Where(f => f.Owner && !cleared.Contains(f.Flag) && !NeverCleared.Contains(f.Flag)))
         {
-            if (PathsOf(f, change) is not { } paths) continue;
-            var key = PathsKey(paths);
-            var earlier = held.Where(c => string.Equals(c.Flag, f.Flag, StringComparison.OrdinalIgnoreCase)
-                && c.Paths == key && !string.IsNullOrEmpty(c.PathsChangeId)).ToList();
-            if (earlier.Count == 0 || string.IsNullOrWhiteSpace(t.Branch)) continue;
-            var now = await _git.PathsChangeIdAsync(projectKey, t.Branch, paths, ct);
-            if (now is null || !earlier.Any(c => c.PathsChangeId == now)) continue;
+            var earlier = held.Where(c => string.Equals(c.Flag, f.Flag, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(c.About)).ToList();
+            if (earlier.Count == 0) continue;
+            var now = await FingerprintAsync(projectKey, t, f, change, ct);
+            if (now is null || !earlier.Any(c => c.About == now)) continue;
             cleared.Add(f.Flag);
-            byPaths.Add(f);
+            carried.Add((f, now));
         }
-        return (cleared, byPaths);
+        return (cleared, carried);
     }
 
     /// <summary>
-    /// A clearance that held by its files rather than by the whole change, written down for the change
-    /// as it now stands, with a line on the record saying why - so what was merged past is never only
-    /// an inference from two hashes.
+    /// A clearance that held by what its flag is about rather than by the whole change, written down
+    /// for the change as it now stands, with a line on the record saying why - so what was merged
+    /// past is never only an inference from two hashes.
     /// </summary>
-    private async Task RecordPathClearancesAsync(string projectKey, Ticket t, BranchChange change, List<StewardFlag> byPaths, CancellationToken ct)
+    private async Task RecordCarriedClearancesAsync(string projectKey, Ticket t, BranchChange change,
+        List<(StewardFlag Flag, string About)> carried, CancellationToken ct)
     {
-        if (byPaths.Count == 0 || string.IsNullOrEmpty(change.ChangeId)) return;
-        foreach (var f in byPaths)
+        if (carried.Count == 0 || string.IsNullOrEmpty(change.ChangeId)) return;
+        foreach (var (f, about) in carried)
         {
-            var paths = PathsOf(f, change)!;
             if (await _db.StewardClearances.AnyAsync(c => c.ProjectKey == projectKey && c.TicketId == t.Id
                     && c.Flag == f.Flag && c.ChangeId == change.ChangeId, ct)) continue;
             _db.StewardClearances.Add(new StewardClearance
             {
-                ProjectKey = projectKey, TicketId = t.Id, Flag = f.Flag, ChangeId = change.ChangeId!, Sha = change.Tip,
-                Paths = PathsKey(paths), PathsChangeId = await _git.PathsChangeIdAsync(projectKey, t.Branch!, paths, ct),
+                ProjectKey = projectKey, TicketId = t.Id, Flag = f.Flag, ChangeId = change.ChangeId!, Sha = change.Tip, About = about,
             });
         }
         _db.StewardEntries.Add(new StewardEntry
         {
             ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = t.Id,
-            Text = $"Ticket {t.Id}: the owner's clearance of {string.Join(", ", byPaths.Select(f => $"'{f.Flag}'"))} still holds"
+            Text = $"Ticket {t.Id}: the owner's clearance of {string.Join(", ", carried.Select(c => $"'{c.Flag.Flag}'"))} still holds"
                 + (change.Tip is { Length: >= 7 } tip ? $" at {tip[..7]}" : "")
-                + $": the branch moved since it was cleared, but its change to {string.Join(", ", byPaths.SelectMany(f => PathsOf(f, change)!).Distinct())}"
-                + " - the files the flag is about - is the same one the owner cleared.",
+                + ": the branch moved since it was cleared, but what the flag is about is the same as when the owner cleared it ("
+                + string.Join("; ", carried.Select(c => $"{c.Flag.Flag}: {Describe(c.Flag, change)}")) + ").",
         });
         await _db.SaveChangesAsync(ct);
     }
@@ -836,8 +851,8 @@ public partial class StewardService
             return Refuse("behind", $"The base has moved by {change.Behind} commit(s) since this branch was last rebased. Rebase it, then merge again.");
 
         var flags = await FlagsAsync(cfg, t, change, ct);
-        var (cleared, byPaths) = await ClearedAsync(projectKey, t, change, flags, ct);
-        await RecordPathClearancesAsync(projectKey, t, change, byPaths, ct);
+        var (cleared, carriedOver) = await ClearedAsync(projectKey, t, change, flags, ct);
+        await RecordCarriedClearancesAsync(projectKey, t, change, carriedOver, ct);
         if (flags.Where(f => f.Owner && !cleared.Contains(f.Flag)).ToList() is { Count: > 0 } owners)
             return Refuse("owner", "These are the owner's to decide, not yours. Ask, and leave the ticket unmerged.", owners);
         if (flags.Where(f => f.Blocks).ToList() is { Count: > 0 } blocking)
@@ -1178,7 +1193,7 @@ public partial class StewardService
             _db.StewardClearances.Add(new StewardClearance
             {
                 ProjectKey = projectKey, TicketId = ticketId, Flag = c.Flag, ChangeId = after.ChangeId, Sha = after.Tip,
-                Paths = c.Paths, PathsChangeId = c.PathsChangeId,
+                About = c.About,
             });
             carried.Add(c.Flag);
         }
@@ -2026,13 +2041,11 @@ public partial class StewardService
         if (!await _db.StewardClearances.AnyAsync(c => c.ProjectKey == projectKey && c.TicketId == ticketId
                 && c.Flag == raised.Flag && c.ChangeId == change.ChangeId, ct))
         {
-            // A flag about files is cleared for those files' change too, so rework elsewhere keeps it.
-            var paths = PathsOf(raised, change);
-            var pathsId = paths is null ? null : await _git.PathsChangeIdAsync(projectKey, t.Branch!, paths, ct);
+            // A flag that says what it is about is cleared for that too, so rework elsewhere keeps it.
+            var about = await FingerprintAsync(projectKey, t, raised, change, ct);
             _db.StewardClearances.Add(new StewardClearance
             {
-                ProjectKey = projectKey, TicketId = ticketId, Flag = raised.Flag, ChangeId = change.ChangeId, Sha = change.Tip,
-                Paths = pathsId is null ? null : PathsKey(paths!), PathsChangeId = pathsId,
+                ProjectKey = projectKey, TicketId = ticketId, Flag = raised.Flag, ChangeId = change.ChangeId, Sha = change.Tip, About = about,
             });
             // The record says so, where the owner reads back what was decided about this ticket.
             _db.StewardEntries.Add(new StewardEntry
@@ -2040,9 +2053,9 @@ public partial class StewardService
                 ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, TicketId = ticketId,
                 Text = $"Ticket {ticketId}: '{raised.Flag}' is cleared for its change as it stands"
                     + (change.Tip is { Length: >= 7 } tip ? $" (at {tip[..7]})" : "")
-                    + (pathsId is null
+                    + (about is null
                         ? ". It may be merged past this flag; rework lets the clearance lapse."
-                        : $". It may be merged past this flag while its change to {string.Join(", ", paths!)} stays the same; rework of those files lets the clearance lapse."),
+                        : $". It may be merged past this flag while what it is about stays the same ({Describe(raised, change)}); a change to that lets the clearance lapse."),
             });
             await StewardDue.MarkAsync(_db, projectKey, $"the owner cleared {raised.Flag} on #{ticketId}");
             await _db.SaveChangesAsync(ct);

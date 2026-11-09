@@ -447,6 +447,50 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_clearance_of_a_flag_that_says_what_it_is_about_holds_while_that_is_the_same()
+    {
+        // A new package, cleared; a rebase resolved a conflict by hand in a test file.
+        var flag = new StewardFlag("new-package-no-spec-names", Owner: true, Blocks: false, Detail: new[] { "qrcode" },
+            About: "packages/core/package.json dependencies qrcode@1.5.4");
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("cleared", (await In(s => s.OwnerClearsFlagAsync("alpha", id, flag.Flag), new FakeFlags(flag))).Answer);
+
+        _git.ChangeId = "change-2";
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id), new FakeFlags(flag))).Answer);
+        Assert.Contains(Entries(), e => e.Kind == StewardEntryKind.Call && e.TicketId == id
+            && e.Text.Contains("still holds") && e.Text.Contains("qrcode@1.5.4"));
+    }
+
+    [Fact]
+    public async Task A_clearance_of_a_flag_that_says_what_it_is_about_lapses_when_that_changes()
+    {
+        var flag = new StewardFlag("new-package-no-spec-names", Owner: true, Blocks: false, Detail: new[] { "qrcode" },
+            About: "packages/core/package.json dependencies qrcode@1.5.4");
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, flag.Flag), new FakeFlags(flag));
+
+        _git.ChangeId = "change-2";
+        var bumped = flag with { About = "packages/core/package.json dependencies qrcode@2.0.0" };
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), new FakeFlags(bumped))).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public async Task A_flag_that_says_nothing_about_what_it_is_about_still_lapses_with_the_change()
+    {
+        // Details that are not files, and no About: the whole change is what was cleared.
+        var flag = new StewardFlag("new-package-no-spec-names", Owner: true, Blocks: false, Detail: new[] { "qrcode" });
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, flag.Flag), new FakeFlags(flag));
+
+        _git.ChangeId = "change-2";
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), new FakeFlags(flag))).Answer);
+    }
+
+    [Fact]
     public void Only_a_flag_whose_every_detail_is_a_changed_file_is_about_files()
     {
         var change = new BranchChange(new[] { "infra/stack.ts", "src/a.ts" }, 0, 1, "", "main", "tip", "c");

@@ -1174,6 +1174,9 @@ namespace Whetstone.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("About")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("At")
                         .HasColumnType("TEXT");
 
@@ -1185,12 +1188,6 @@ namespace Whetstone.Migrations
                     b.Property<string>("Flag")
                         .IsRequired()
                         .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Paths")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PathsChangeId")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ProjectKey")
