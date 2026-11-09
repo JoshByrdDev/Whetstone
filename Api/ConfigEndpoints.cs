@@ -487,7 +487,7 @@ public static class ConfigEndpoints
                 await File.WriteAllTextAsync(temp, settings.ToJsonString());
                 var psi = new System.Diagnostics.ProcessStartInfo
                 {
-                    FileName = "powershell",
+                    FileName = Whetstone.Services.PowerShellHost.Exe,
                     UseShellExecute = false,
                     CreateNoWindow = true,
                     RedirectStandardOutput = true,

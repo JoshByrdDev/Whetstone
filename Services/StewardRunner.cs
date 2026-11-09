@@ -114,7 +114,7 @@ public sealed class StewardRunner
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "powershell",
+                FileName = PowerShellHost.Exe,
                 Arguments = $"-ExecutionPolicy Bypass -File \"{_script}\" -Project {projectKey} -Agent {WorkerHostConfig.StewardSlot}",
                 WorkingDirectory = _workingDir,
                 UseShellExecute = false,

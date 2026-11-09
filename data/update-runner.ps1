@@ -173,7 +173,7 @@ if ($task) {
 else {
     $runArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript)
     if ($hostFile -ine (Join-Path $DataRoot 'host.json')) { $runArgs += @('-HostFile', $hostFile) }
-    Start-Process -FilePath 'powershell' -ArgumentList $runArgs -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $PsHost -ArgumentList $runArgs -WindowStyle Hidden | Out-Null
     Write-Log "No scheduled task runs $RunnerScript, so the runner was started directly. It will not come back after a logoff - see docs/worker-host-setup.md, step 12."
 }
 

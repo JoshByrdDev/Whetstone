@@ -15,6 +15,9 @@ $worker = Join-Path $PSScriptRoot 'worker.ps1'
 
 function Write-Log { param([string]$Message) }
 function Invoke-WithMutex { param([string]$Name, [scriptblock]$Body, [int]$TimeoutMs) return & $Body }
+# What worker.ps1 gets from heartbeat-common.ps1, which the lifted functions do not load: the
+# PowerShell running these tests starts the project's rebase resolver.
+$PsHost = (Get-Process -Id $PID).Path
 
 $tree = [System.Management.Automation.Language.Parser]::ParseFile($worker, [ref]$null, [ref]$null)
 foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {

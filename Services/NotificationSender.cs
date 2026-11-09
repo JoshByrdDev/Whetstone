@@ -44,7 +44,7 @@ public class NotificationSender
             await File.WriteAllTextAsync(temp, message, new UTF8Encoding(false), ct);
             var psi = new ProcessStartInfo
             {
-                FileName = "powershell",
+                FileName = PowerShellHost.Exe,
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardOutput = true,

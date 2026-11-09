@@ -141,6 +141,40 @@ if ($null -ne (Get-Global 'heartbeatWorkers')) {
 if ($HeartbeatWorkers -lt 1)                    { $HeartbeatWorkers = 1 }
 if ($HeartbeatWorkers -gt $MaxHeartbeatWorkers) { $HeartbeatWorkers = $MaxHeartbeatWorkers }
 
+# --- Which PowerShell starts the fleet's own scripts ---
+#
+# psHost in the global config: 'auto' (the default) is PowerShell 7 where it is installed and Windows
+# PowerShell where it is not; 'powershell' pins 5.1, the way back if 7 misbehaves; 'pwsh' asks for 7
+# even where it cannot be found. Every Start-Process of a worker, steward, runner or hook asks here
+# rather than naming one. Written twice and the two must agree: here, and PowerShellHost in C#.
+function Get-PsHost {
+    $setting = "$(Get-Global 'psHost')".Trim().ToLowerInvariant()
+    if ($setting -eq 'powershell') { return 'powershell' }
+    $onWindows = ($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows
+    $pwsh = $null
+    if ($onWindows) {
+        # The running 7 itself where this is one; otherwise one on PATH, or in its standard install
+        # folder - a process started before 7 was installed still has the PATH it started with.
+        if ($PSVersionTable.PSEdition -eq 'Core') { try { $pwsh = (Get-Process -Id $PID).Path } catch { } }
+        if (-not $pwsh) {
+            $cmd = Get-Command 'pwsh.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd) { $pwsh = $cmd.Source }
+        }
+        if (-not $pwsh -and $env:ProgramFiles) {
+            $standard = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+            if (Test-Path -LiteralPath $standard) { $pwsh = $standard }
+        }
+    }
+    if ($pwsh) { return $pwsh }
+    if ($setting -eq 'pwsh' -or -not $onWindows) { return 'pwsh' }
+    return 'powershell'
+}
+$PsHost = Get-PsHost
+
+# The fleet's own processes, looked for by name: either PowerShell, because a heartbeat started on
+# one may find workers a previous one started on the other.
+$PsProcessFilter = "Name='powershell.exe' OR Name='pwsh.exe'"
+
 # Which Claude login a run spends: the config directory of the account Settings has switched to, or
 # $null for the CLI's own. The dashboard reads the same two keys the same way (ClaudeAccounts.cs),
 # and the two have to agree or its meter shows one account while the fleet spends another - so an

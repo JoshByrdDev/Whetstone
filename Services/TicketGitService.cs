@@ -1067,7 +1067,7 @@ public partial class TicketGitService
     {
         try
         {
-            var psi = new ProcessStartInfo("powershell")
+            var psi = new ProcessStartInfo(PowerShellHost.Exe)
             {
                 WorkingDirectory = dir,
                 UseShellExecute = false,

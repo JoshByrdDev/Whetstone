@@ -398,6 +398,9 @@ function New-AgentToolSetup {
     # file path and every edit would pay for a PowerShell start. A project asks when its guard.ps1
     # has a rule about $path - one whose repo is the thing the fleet itself runs from, say.
     $guardMatcher = 'Bash|PowerShell|.*navigate.*'
+    # The hooks run on the fleet's PowerShell (Get-PsHost in heartbeat-common.ps1), quoted because
+    # 7's standard path has a space in it. A caller that never loaded that file gets 5.1, as before.
+    $hookShell = if ($PsHost) { "`"$PsHost`"" } else { 'powershell' }
     if ($guardArgs -and (Test-ProjectGuardsEdits -Project $Project)) {
         $guardMatcher += '|Edit|Write|MultiEdit|NotebookEdit'
     }
@@ -408,7 +411,7 @@ function New-AgentToolSetup {
                 hooks   = @(
                     @{
                         type          = 'command'
-                        command       = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$guard`"$guardArgs"
+                        command       = "$hookShell -NoProfile -ExecutionPolicy Bypass -File `"$guard`"$guardArgs"
                         timeout       = 15
                         statusMessage = 'Checking this stays on the local machine'
                     }
@@ -432,7 +435,7 @@ function New-AgentToolSetup {
                 hooks   = @(
                     @{
                         type          = 'command'
-                        command       = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$augmentHook`""
+                        command       = "$hookShell -NoProfile -ExecutionPolicy Bypass -File `"$augmentHook`""
                         timeout       = 15
                         statusMessage = 'Logging Augment usage'
                     }

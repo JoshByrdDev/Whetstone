@@ -1115,7 +1115,7 @@ function Invoke-RebaseResolver {
     param([string]$Resolver, [string[]]$Conflicted, [string]$BaseRef, [string]$Branch)
     try {
         $psi = New-Object System.Diagnostics.ProcessStartInfo
-        $psi.FileName = 'powershell.exe'
+        $psi.FileName = $PsHost
         $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Resolver`""
         $psi.WorkingDirectory = (Get-Location).Path
         $psi.UseShellExecute = $false

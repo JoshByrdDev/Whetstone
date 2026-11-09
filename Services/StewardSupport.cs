@@ -97,7 +97,7 @@ public class StewardFlagScript : IStewardProjectFlags
 
         try
         {
-            var psi = new ProcessStartInfo("powershell")
+            var psi = new ProcessStartInfo(PowerShellHost.Exe)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
