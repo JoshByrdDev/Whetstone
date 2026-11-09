@@ -2200,6 +2200,12 @@ if ($onHost -and $repoDir) {
             Write-Log "  Worker host $runHost - undid a stopped $($st.kind) on '$recordedBranch', kept as $($st.ref)."
             Send-TicketComment -TicketId $ticketId -Body (Format-StoppedGitOperation -Stopped $st -Where " on worker host ``$runHost``")
         }
+        # Commits only this clone's branch had, kept here and on the board host before the reset.
+        if ($level.diverged) {
+            $dv = $level.diverged
+            Write-Log "  Worker host $runHost - '$recordedBranch' had diverged; kept its tip as $($dv.ref) (equivalent: $($dv.equivalent), on the board host: $($dv.onBoard))."
+            Send-TicketComment -TicketId $ticketId -Body (Format-DivergedCommits -Diverged $dv -Branch $recordedBranch -BoardSha $got.sha -Where " on worker host ``$runHost``")
+        }
         # Leftovers of an earlier run here - one killed before its hand-off nets - set aside rather
         # than blocking on them. Said on the ticket, because they are the only copy.
         if ($level.stash) {

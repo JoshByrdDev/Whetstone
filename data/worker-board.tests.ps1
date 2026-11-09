@@ -216,18 +216,73 @@ try {
     Check 'ahead: left alone' "$($r.ok) $($r.state)" 'True ahead'
     Check 'ahead: commit kept' (Get-Sha $u.clone t-1) $mine
 
-    # Diverged with a commit the board host never had: those commits exist nowhere else.
+    # Diverged with a commit the board host never had. Copying it to the board host fails: those
+    # commits exist nowhere else, so nothing moves.
     Add-Commit -Dir $bwt -File 'i.txt' -Subject 'T1: the board host moved on meanwhile'
-    $r = Sync-Branch -Pair $u -Branch 't-1'
-    Check 'diverged with unhanded commits: refused' "$($r.ok) $($r.state)" 'False diverged'
-    Check 'diverged with unhanded commits: kept' (Get-Sha $u.clone t-1) $mine
+    $boardUrl = "$(git -C $u.clone remote get-url board)".Trim()
+    git -C $u.clone remote set-url --push board (Join-Path $u.dir 'not-there') *> $null
     Add-Content -Path (Join-Path $cwt 'h.txt') -Value 'uncommitted' -Encoding ascii
     $stashes = @(git -C $cwt stash list).Count
     $r = Sync-Branch -Pair $u -Branch 't-1'
-    Check 'diverged and dirty: still refused' "$($r.ok) $($r.state)" 'False diverged'
-    Check 'diverged and dirty: nothing stashed' @(git -C $cwt stash list).Count $stashes
-    Check 'diverged and dirty: edits left where they are' ("$(git -C $cwt status --porcelain)" -match 'h.txt') $true
+    Check 'diverged, board copy fails: refused' "$($r.ok) $($r.state)" 'False diverged'
+    Check 'diverged, board copy fails: branch kept' (Get-Sha $u.clone t-1) $mine
+    Check 'diverged, board copy fails: nothing stashed' @(git -C $cwt stash list).Count $stashes
+    Check 'diverged, board copy fails: edits left where they are' ("$(git -C $cwt status --porcelain)" -match 'h.txt') $true
     git -C $cwt checkout --quiet -- . *> $null
+    git -C $u.clone remote set-url --push board $boardUrl *> $null
+
+    # The same with the board host reachable: kept on both machines, then reset - no longer a block.
+    $r = Sync-Branch -Pair $u -Branch 't-1'
+    Check 'diverged with unhanded commits: reset' "$($r.ok) $($r.state)" 'True reset'
+    Check "diverged with unhanded commits: the branch is the board host's" (Get-Sha $u.clone t-1) (Get-Sha $u.board t-1)
+    Check 'diverged with unhanded commits: worktree moved with it' (Get-Sha $cwt HEAD) (Get-Sha $u.board t-1)
+    Check 'diverged with unhanded commits: not equivalent' "$($r.diverged.equivalent) $($r.diverged.onBoard)" 'False True'
+    Check 'diverged with unhanded commits: kept here' (Get-Sha $u.clone $r.diverged.ref) $mine
+    Check 'diverged with unhanded commits: kept on the board host' (Get-Sha $u.board $r.diverged.ref) $mine
+    Check 'diverged with unhanded commits: names the commit' ("$($r.diverged.commits)" -match 'hand-back refused') $true
+    Check 'diverged with unhanded commits: the comment names the ref' `
+        ((Format-DivergedCommits -Diverged $r.diverged -Branch 't-1' -BoardSha (Get-Sha $u.board t-1)) -match [regex]::Escape($r.diverged.ref)) $true
+    Check 'diverged with unhanded commits: agreed now' (Get-Sha $u.clone (Get-AgreedRef 't-1')) (Get-Sha $u.board t-1)
+    Check 'diverged with unhanded commits: next sync is current' (Sync-Branch -Pair $u -Branch 't-1').state 'current'
+
+    # The same work under other commit ids: a hand-back the board host refused (its lease had gone),
+    # whose commits a later run there cherry-picked onto the branch. Nothing is only here.
+    Write-Host "== a refused hand-back redone on the board host"
+    $e = New-Pair 'equivalent'
+    $null = Sync-BoardRefs -RepoDir $e.clone -BaseBranch main
+    $bwt = New-BoardTicket -Pair $e -Branch 't-3'
+    Add-Commit -Dir $bwt -File 'f.txt' -Subject 'T3: the base of the ticket'
+    $null = Sync-Branch -Pair $e -Branch 't-3'
+    $cwt = New-CloneWorktree -Pair $e -Branch 't-3'
+    Add-Commit -Dir $cwt -File 'g.txt' -Subject 'T3: built on the worker host'
+    Add-Commit -Dir $cwt -File 'h.txt' -Subject 'T3: and its tests'
+    $sent = Send-BranchToBoard -WorkDir $cwt -RunId 'run33'      # refused: never accepted, never agreed
+    $workerTip = Get-Sha $e.clone t-3
+    git -C $bwt cherry-pick --quiet "$(Get-Sha $bwt HEAD)..$($sent.sha)" *> $null
+    Check 'setup: the board host has the same work under new ids' `
+        "$((Get-Sha $e.board t-3) -ne $workerTip) $((Get-Sha $e.board 't-3^{tree}') -eq (Get-Sha $e.clone 't-3^{tree}'))" 'True True'
+    $r = Sync-Branch -Pair $e -Branch 't-3'
+    Check 'redone on the board host: reset, not refused' "$($r.ok) $($r.state)" 'True reset'
+    Check "redone on the board host: the branch is the board host's" (Get-Sha $e.clone t-3) (Get-Sha $e.board t-3)
+    Check 'redone on the board host: read as equivalent' "$($r.diverged.equivalent) $($r.diverged.onBoard) $(@($r.diverged.commits).Count)" 'True False 0'
+    Check 'redone on the board host: old tip kept here' (Get-Sha $e.clone $r.diverged.ref) $workerTip
+    Check 'redone on the board host: comment says nothing was lost' `
+        ((Format-DivergedCommits -Diverged $r.diverged -Branch 't-3' -BoardSha (Get-Sha $e.board t-3)) -match 'nothing was lost') $true
+
+    # Squashed instead of cherry-picked: no patch matches, but the files are the same.
+    $q = New-Pair 'squashed'
+    $null = Sync-BoardRefs -RepoDir $q.clone -BaseBranch main
+    $bwt = New-BoardTicket -Pair $q -Branch 't-4'
+    Add-Commit -Dir $bwt -File 'f.txt' -Subject 'T4: the base of the ticket'
+    $null = Sync-Branch -Pair $q -Branch 't-4'
+    $cwt = New-CloneWorktree -Pair $q -Branch 't-4'
+    Add-Commit -Dir $cwt -File 'g.txt' -Subject 'T4: one'
+    Add-Commit -Dir $cwt -File 'g.txt' -Subject 'T4: two'
+    $sent = Send-BranchToBoard -WorkDir $cwt -RunId 'run44'
+    git -C $bwt merge --quiet --squash $sent.sha *> $null
+    git -C $bwt commit --quiet -m 'T4: one and two, squashed' *> $null
+    $r = Sync-Branch -Pair $q -Branch 't-4'
+    Check 'squashed on the board host: reset as equivalent' "$($r.ok) $($r.state) $($r.diverged.equivalent)" 'True reset True'
 
     # Diverged because the board host rebased what it already had: safe to take theirs.
     $d = New-Pair 'diverged'

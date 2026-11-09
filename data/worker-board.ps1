@@ -197,6 +197,70 @@ function Test-BoardHadCommit {
     return $false
 }
 
+# A branch here that has diverged from the board host's with commits the board host never had as
+# this branch, made safe to reset. Two ways that happens, and only the second loses anything:
+#
+#   the same work under other commit ids - a hand-back the board host refused (its run's lease had
+#     gone) whose commits a later run there cherry-picked or squashed onto the branch. Every local
+#     commit's patch is already on the board host's branch (git cherry), or the two tips hold the
+#     same files. equivalent = $true.
+#   work that is only here. The local tip is pushed to the board host as well, so it is on the
+#     machine people look at, not only this one.
+#
+# Either way the local tip is kept here as refs/whetstone/diverged/<branch>/<short sha> before the
+# caller resets, and the caller says so on the ticket (Format-DivergedCommits).
+# Returns @{ ok; sha; ref; equivalent; onBoard; commits; reason } - commits is "<short> <subject>"
+# for each commit whose patch the board host's branch does not have.
+function Save-DivergedCommits {
+    param([string]$RepoDir, [string]$Branch, [string]$Local, [string]$BoardSha)
+    $ErrorActionPreference = 'Continue'
+
+    $cherry = @(git -C $RepoDir cherry $BoardSha $Local 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        return @{ ok = $false; reason = "'$Branch' here has diverged from the board host's, and comparing the two failed" }
+    }
+    $commits = @($cherry | Where-Object { "$_" -like '+ *' } | ForEach-Object {
+        "$(git -C $RepoDir log -1 --format='%h %s' "$("$_".Substring(2).Trim())" 2>$null)".Trim()
+    })
+    $trees = @(git -C $RepoDir rev-parse "$Local^{tree}" "$BoardSha^{tree}" 2>$null)
+    $sameTree = ($trees.Count -eq 2) -and ("$($trees[0])".Trim() -eq "$($trees[1])".Trim())
+    $equivalent = ($commits.Count -eq 0) -or $sameTree
+
+    $ref = "refs/whetstone/diverged/$Branch/$($Local.Substring(0, 8))"
+    git -C $RepoDir update-ref $ref $Local *> $null
+    if ($LASTEXITCODE -ne 0) {
+        return @{ ok = $false; reason = "'$Branch' here has diverged from the board host's, and keeping its tip as $ref failed" }
+    }
+    $onBoard = $false
+    if (-not $equivalent) {
+        # Transport between two copies of one repo, as Send-BranchToBoard is: no pre-push hook.
+        git -C $RepoDir push --quiet --no-verify $BoardRemote "+${Local}:$ref" *> $null
+        if ($LASTEXITCODE -ne 0) {
+            return @{ ok = $false; sha = $Local; ref = $ref
+                      reason = "'$Branch' here has commits the board host never received, and the board host's branch has moved on without them; copying them to the board host as $ref failed, so they were left where they are" }
+        }
+        $onBoard = $true
+    }
+    return @{ ok = $true; sha = $Local; ref = $ref; equivalent = $equivalent; onBoard = $onBoard; commits = $commits }
+}
+
+# One ticket comment on what Save-DivergedCommits kept. $Where names the machine.
+function Format-DivergedCommits {
+    param($Diverged, [string]$Branch, [string]$BoardSha, [string]$Where = '')
+    $d = $Diverged
+    $short = $d.sha.Substring(0, 8)
+    $board = if ($BoardSha) { " at ``$($BoardSha.Substring(0, 8))``" } else { '' }
+    if ($d.equivalent) {
+        return "This ticket's ``$Branch``$Where had diverged from the board host's, but only in name: the board host's branch already has the same changes under other commits (a hand-back it did not accept, redone there). " +
+            "It was reset to the board host's$board, and nothing was lost. The old tip is kept as ``$($d.ref)`` (``$short``)$Where."
+    }
+    $list = (@($d.commits) | Select-Object -First 10 | ForEach-Object { "- ``$_``" }) -join "`n"
+    $more = if (@($d.commits).Count -gt 10) { "`n- ... and $(@($d.commits).Count - 10) more" } else { '' }
+    return "This ticket's ``$Branch``$Where had commits the board host's branch does not have, and the board host's branch had moved on without them, so this run starts from the board host's$board instead.`n`n$list$more`n`n" +
+        "They are not lost: the old tip is kept as ``$($d.ref)`` (``$short``) on the board host$(if ($Where) { ", and$Where" }). To look, on the board host: ``git log --oneline $BoardSha..$($d.ref)``. " +
+        "If they were wanted, ``git cherry-pick`` them onto the branch; otherwise nothing needs doing."
+}
+
 # Mirror the board host's view of the base into the clone: its LOCAL <base>, and its origin/*.
 #
 # With both mirrored, Resolve-BaseRef on the worker host answers exactly what it would on the board
@@ -272,12 +336,13 @@ function Get-BoardBranch {
 #   local behind              -> 'behind', fast-forwarded (the board host ran it since)
 #   local ahead               -> 'ahead', left alone: commits a refused hand-back left here, which
 #                                the next hand-back carries
-#   diverged                  -> 'reset' to the board host's commit, but ONLY when everything here
+#   diverged                  -> 'reset' to the board host's commit. Outright when everything here
 #                                was already on the board host: the local tip is the agreed commit,
 #                                or one this clone has seen as the board host's branch
 #                                (Test-BoardHadCommit) - a rebase over there, or a hand-back of a
-#                                commit the local branch never reached. Otherwise refused: those
-#                                commits exist nowhere else.
+#                                commit the local branch never reached. Otherwise only once the
+#                                local tip is kept here and on the board host (Save-DivergedCommits),
+#                                said in diverged; refused if that keeping fails.
 #
 # Before any of that, a rebase or merge an earlier run left stopped in the branch's worktree is
 # kept under a ref and aborted (Undo-StoppedGitOperation), and said in stopped.
@@ -285,12 +350,13 @@ function Get-BoardBranch {
 # A worktree holding the branch is moved with it. Anything uncommitted in it is set aside in a
 # stash first (Save-WorktreeLeftovers) rather than refusing. By the time a worktree is looked at,
 # every commit on the branch here is also on the board host ('current', 'behind', and a 'reset'
-# from the agreed commit), so what is uncommitted is all there is to keep - and in practice it is
-# what a run that was killed before its hand-off nets left behind. Refusing instead blocked the
-# ticket on every retry, with nobody able to clean a tree on another machine but a person there.
-# 'ahead' and a refused 'diverged' never reach the worktree, and are as they were.
-# Returns @{ ok; state; reason; stash; stopped } - stash is @{ sha; files; message } when something
-# was set aside, stopped is Undo-StoppedGitOperation's answer when an operation was undone.
+# from the agreed commit or after Save-DivergedCommits), so what is uncommitted is all there is to
+# keep - and in practice it is what a run that was killed before its hand-off nets left behind.
+# Refusing instead blocked the ticket on every retry, with nobody able to clean a tree on another
+# machine but a person there. 'ahead' and a refused 'diverged' never reach the worktree.
+# Returns @{ ok; state; reason; stash; stopped; diverged } - stash is @{ sha; files; message } when
+# something was set aside, stopped is Undo-StoppedGitOperation's answer when an operation was
+# undone, diverged is Save-DivergedCommits' answer when commits only here were kept before a reset.
 function Update-BranchFromBoard {
     param([string]$RepoDir, [string]$Branch, [string]$BoardSha)
     $ErrorActionPreference = 'Continue'
@@ -320,6 +386,7 @@ function Update-BranchFromBoard {
         }
 
         $behind = $false
+        $diverged = $null
         if ($local -eq $BoardSha) { $state = 'current' }
         else {
             git -C $RepoDir merge-base --is-ancestor $local $BoardSha *> $null
@@ -327,12 +394,16 @@ function Update-BranchFromBoard {
             if (-not $behind) {
                 git -C $RepoDir merge-base --is-ancestor $BoardSha $local *> $null
                 if ($LASTEXITCODE -eq 0) { return @{ ok = $true; state = 'ahead'; stopped = $stopped } }
-                # Safe to reset only when nothing here would be lost: the local tip is the agreed
-                # commit, or one the board host has had as this branch before it moved on.
+                # Safe to reset outright when nothing here would be lost: the local tip is the agreed
+                # commit, or one the board host has had as this branch before it moved on. Otherwise
+                # what is only here is kept on both machines first (Save-DivergedCommits) - refusing
+                # instead blocked the ticket until a person at this machine sorted the branch out.
                 if ((Get-RefSha -Dir $RepoDir -Ref $agreed) -ne $local -and
                     -not (Test-BoardHadCommit -RepoDir $RepoDir -Branch $Branch -Sha $local)) {
-                    return @{ ok = $false; state = 'diverged'; stopped = $stopped
-                              reason = "'$Branch' here has commits the board host never received, and the board host's branch has moved on without them" }
+                    $diverged = Save-DivergedCommits -RepoDir $RepoDir -Branch $Branch -Local $local -BoardSha $BoardSha
+                    if (-not $diverged.ok) {
+                        return @{ ok = $false; state = 'diverged'; stopped = $stopped; reason = $diverged.reason }
+                    }
                 }
             }
             $state = if ($behind) { 'behind' } else { 'reset' }
@@ -353,11 +424,11 @@ function Update-BranchFromBoard {
             else {
                 git -C $RepoDir update-ref "refs/heads/$Branch" $BoardSha $local *> $null
             }
-            if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = $state; reason = "could not move '$Branch' to the board host's commit"; stash = $stash; stopped = $stopped } }
+            if ($LASTEXITCODE -ne 0) { return @{ ok = $false; state = $state; reason = "could not move '$Branch' to the board host's commit"; stash = $stash; stopped = $stopped; diverged = $diverged } }
         }
 
         git -C $RepoDir update-ref $agreed $BoardSha *> $null
-        return @{ ok = $true; state = $state; stash = $stash; stopped = $stopped }
+        return @{ ok = $true; state = $state; stash = $stash; stopped = $stopped; diverged = $diverged }
     }
 }
 
