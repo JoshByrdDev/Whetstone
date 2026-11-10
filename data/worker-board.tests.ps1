@@ -141,6 +141,46 @@ try {
     $r = Sync-BoardRefs -RepoDir $nr.clone -BaseBranch main
     Check "no 'board' remote: refused" $r.ok $false
 
+    # ---- Sync-BoardRefs -MirrorSlices (docs/slice-branches.md) ---------------
+    Write-Host "== Sync-BoardRefs -MirrorSlices"
+    $sl = New-Pair 'slices'
+    git -C $sl.board branch 'slice/01-first' main *> $null
+    git -C $sl.board branch 'slice/02-second' main *> $null
+    git -C $sl.clone branch 'slice/09-own' main *> $null
+    $r = Sync-BoardRefs -RepoDir $sl.clone -BaseBranch main
+    Check 'no switch: synced' $r.ok $true
+    Check "no switch: the board host's slices are not fetched" (Get-Sha $sl.clone refs/heads/slice/01-first) ''
+    Check "no switch: the clone's own slice/ branch is left alone" ((Get-Sha $sl.clone refs/heads/slice/09-own) -ne '') $true
+
+    git -C $sl.clone branch -D 'slice/09-own' *> $null
+    Add-Commit -Dir $sl.board -File 'base.txt' -Subject 'base moves'
+    git -C $sl.board checkout --quiet 'slice/01-first' *> $null
+    Add-Commit -Dir $sl.board -File 's1.txt' -Subject 'S1: work on the slice'
+    git -C $sl.board checkout --quiet main *> $null
+    $r = Sync-BoardRefs -RepoDir $sl.clone -BaseBranch 'slice/01-first' -MirrorSlices
+    Check 'slice base: synced' $r.ok $true
+    Check 'slice base: mirrors the board host' (Get-Sha $sl.clone refs/heads/slice/01-first) (Get-Sha $sl.board slice/01-first)
+    Check 'slice base: every open slice is mirrored' (Get-Sha $sl.clone refs/heads/slice/02-second) (Get-Sha $sl.board slice/02-second)
+    Check 'slice base: Resolve-BaseRef agrees with the board host' `
+        (Resolve-BaseRef -RepoDir $sl.clone -BaseBranch 'slice/01-first' -MergeLocally $true) (Resolve-BaseRef -RepoDir $sl.board -BaseBranch 'slice/01-first' -MergeLocally $true)
+
+    $r = Sync-BoardRefs -RepoDir $sl.clone -BaseBranch main -MirrorSlices
+    Check 'project base with the switch: synced' $r.ok $true
+    Check 'project base with the switch: base mirrors the board host' (Get-Sha $sl.clone refs/heads/main) (Get-Sha $sl.board main)
+
+    # Released: the board host deletes the branch, and the mirror loses it too.
+    git -C $sl.board branch -D 'slice/02-second' *> $null
+    $r = Sync-BoardRefs -RepoDir $sl.clone -BaseBranch main -MirrorSlices
+    Check 'released slice: pruned from the mirror' (Get-Sha $sl.clone refs/heads/slice/02-second) ''
+    $r = Sync-BoardRefs -RepoDir $sl.clone -BaseBranch 'slice/02-second' -MirrorSlices
+    Check 'released slice as a base: refused' $r.ok $false
+    Check 'released slice as a base: says why' ("$($r.reason)" -like '*released or abandoned*') $true
+
+    git -C $sl.clone checkout --quiet --detach *> $null
+    git -C $sl.clone worktree add --quiet (Join-Path $sl.cloneWt 'held') 'slice/01-first' *> $null
+    $r = Sync-BoardRefs -RepoDir $sl.clone -BaseBranch main -MirrorSlices
+    Check 'a mirrored slice checked out in a clone worktree: refused' $r.ok $false
+
     # ---- Get-BoardBranch ------------------------------------------------------
     Write-Host "== Get-BoardBranch"
     $g = New-Pair 'get'

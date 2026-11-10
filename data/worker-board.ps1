@@ -306,9 +306,16 @@ function Format-DivergedCommits {
 # and the clone's main checkout is detached off it first if needed (a detach rewrites no file) -
 # git will not update a branch that is checked out. Called at the start of a run, and again before
 # the hand-off rebase so the rebase sees what landed on the board host meanwhile.
+#
+# With -MirrorSlices (a project with slice branches, docs/slice-branches.md) every open slice's
+# branch is mirrored too, as refs/heads/slice/*, and one the board host no longer has - released,
+# or deleted after it was abandoned - is pruned. $BaseBranch is then often a slice's branch itself:
+# a ticket of an open slice is based on it. Nothing on the worker host commits to a slice branch
+# either. Without the switch nothing under slice/ is touched, so a project that names its own
+# branches that way keeps them.
 # Returns @{ ok; reason }.
 function Sync-BoardRefs {
-    param([string]$RepoDir, [string]$BaseBranch)
+    param([string]$RepoDir, [string]$BaseBranch, [switch]$MirrorSlices)
     $ErrorActionPreference = 'Continue'
 
     return Invoke-WithMutex -Name "hub-$RepoDir" -TimeoutMs 900000 -Body {
@@ -317,7 +324,7 @@ function Sync-BoardRefs {
         }
 
         $head = "$(git -C $RepoDir symbolic-ref --quiet HEAD 2>$null)".Trim()
-        if ($head -eq "refs/heads/$BaseBranch") {
+        if ($head -eq "refs/heads/$BaseBranch" -or ($MirrorSlices -and $head.StartsWith('refs/heads/slice/'))) {
             git -C $RepoDir checkout --quiet --detach *> $null
             if ($LASTEXITCODE -ne 0) { return @{ ok = $false; reason = "could not detach the clone's main checkout off '$BaseBranch'" } }
         }
@@ -326,11 +333,27 @@ function Sync-BoardRefs {
             return @{ ok = $false; reason = "'$BaseBranch' is checked out in $holder - the clone's base is a mirror and must not be checked out" }
         }
 
-        git -C $RepoDir fetch --quiet --no-tags --prune $BoardRemote `
-            "+refs/heads/${BaseBranch}:refs/heads/$BaseBranch" `
-            "+refs/remotes/origin/*:refs/remotes/origin/*" *> $null
+        $sliceBase = $BaseBranch.StartsWith('slice/')
+        $specs = @()
+        # A slice base comes with the slice/* mirror; naming it twice is two updates of one ref.
+        if (-not ($MirrorSlices -and $sliceBase)) { $specs += "+refs/heads/${BaseBranch}:refs/heads/$BaseBranch" }
+        $specs += '+refs/remotes/origin/*:refs/remotes/origin/*'
+        if ($MirrorSlices) {
+            foreach ($b in @(git -C $RepoDir for-each-ref --format='%(refname:short)' refs/heads/slice/ 2>$null)) {
+                $h = Get-BranchWorktree -RepoDir $RepoDir -Branch "$b".Trim()
+                if ($h) { return @{ ok = $false; reason = "'$b' is checked out in $h - the clone's slice branches are mirrors and must not be checked out" } }
+            }
+            $specs += '+refs/heads/slice/*:refs/heads/slice/*'
+        }
+        git -C $RepoDir fetch --quiet --no-tags --prune $BoardRemote @specs *> $null
         if ($LASTEXITCODE -ne 0) {
             return @{ ok = $false; reason = "could not fetch '$BaseBranch' from the board host (unreachable, or it has no such branch)" }
+        }
+        if ($MirrorSlices -and $sliceBase) {
+            git -C $RepoDir rev-parse --verify --quiet "refs/heads/$BaseBranch" *> $null
+            if ($LASTEXITCODE -ne 0) {
+                return @{ ok = $false; reason = "the board host has no slice branch '$BaseBranch' (released or abandoned since the claim)" }
+            }
         }
         return @{ ok = $true }
     }

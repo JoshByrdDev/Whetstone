@@ -369,6 +369,9 @@ public static class TicketEndpoints
                         // Decides which ref the worker treats as the base: origin's when work
                         // leaves by pull request, the local one when it is merged here instead.
                         mergeInsteadOfPr = cfg.MergeInsteadOfPr && !cfg.IsTfvc,
+                        // Its open slices have branches of their own (docs/slice-branches.md): a
+                        // worker host mirrors every one of them, not the base alone.
+                        sliceBranches = cfg.SliceBranchesOn,
                         // Where the worker actually runs: its own worktree under this root, never
                         // projectPath itself (which is the human's checkout of the same repo).
                         worktreeRoot = cfg.ResolvedWorktreeRoot,

@@ -2138,6 +2138,8 @@ if (-not $repoDir) {
 
 # Per-project settings, falling back to the global defaults when unset.
 $effectiveBase   = Resolve-TicketBase -Claim $Claim -DefaultBase $BaseBranch
+# A project with slice branches (docs/slice-branches.md): a worker host mirrors all of them.
+$mirrorSlices    = [bool]$Claim.project.sliceBranches
 $projectPrefix   = "$($Claim.project.branchPrefix)".Trim()
 $effectivePrefix = if ($projectPrefix) { $projectPrefix } else { $BranchPrefix }
 # Delivery by a local merge rather than a pull request, which decides what "the base" is - see
@@ -2210,7 +2212,7 @@ $boardStartSha = ''
 if ($onHost -and $repoDir) {
     # Every run on a worker host, a review included: a review reads somebody's branch as the board
     # host's origin/* has it, and the mirror is how this clone has that at all.
-    $sync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+    $sync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase -MirrorSlices:$mirrorSlices
     if (-not $sync.ok) {
         Stop-CycleEarly -Reason "Could not sync with the board host ($runHost): $($sync.reason)" `
             -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $($sync.reason). No work was attempted; the ticket goes back to the queue."
@@ -2505,7 +2507,7 @@ if ($reviewedOn -and ($skill -in @('implement', 'qa-test'))) {
 }
 if ($repoDir -and -not $multiRepo -and -not $readsOnly -and -not $reviewedOn -and ($skill -in @('implement', 'qa-test')) -and $wt.path) {
     if ($onHost) {
-        $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+        $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase -MirrorSlices:$mirrorSlices
         if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the start rebase: $($resync.reason)" }
     }
     $start = Update-BranchAtStart -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally `
@@ -3077,7 +3079,7 @@ function Invoke-HandOffNets {
         }
         if ($skill -eq 'refine') {
             if ($onHost) {
-                $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+                $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase -MirrorSlices:$mirrorSlices
                 if (-not $resync.ok) { Write-Log "  ${in}Could not refresh the board host's base before the merge check: $($resync.reason)." }
             }
             $merges = Test-ReviewBranchMerges -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally
@@ -3119,7 +3121,7 @@ function Invoke-HandOffNets {
         # intermediate states squashing has already thrown away. On a worker host the mirrored
         # base is refreshed first, so the rebase sees what was merged on the board host meanwhile.
         if ($onHost) {
-            $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
+            $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase -MirrorSlices:$mirrorSlices
             if (-not $resync.ok) { Write-Log "  ${in}Could not refresh the board host's base before the rebase: $($resync.reason) - rebasing onto the base as of the start of the run." }
         }
         $rebase = Update-BranchFromBase -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir `

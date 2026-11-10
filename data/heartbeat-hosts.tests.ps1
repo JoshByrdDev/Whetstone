@@ -226,6 +226,19 @@ Check '... as UTF-8 bytes' "$($script:Orders[0].bytes) $($script:Orders[0].conte
 Check '... and its text arrives as it was written' ($script:Orders[0].body.claim.ticket.title -eq $title) $true
 Check '... and nothing is refunded' $script:Refunded.Count 0
 
+# A slice ticket (docs/slice-branches.md): the host takes its base from the claim, and is told to
+# mirror the project's slice branches. The order carries both as the board host claimed them.
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 1)
+$c = New-Claim 12
+$c | Add-Member -NotePropertyName baseBranch -NotePropertyValue 'slice/03-decks'
+$c.project | Add-Member -NotePropertyName sliceBranches -NotePropertyValue $true
+$script:Claims.Enqueue($c)
+$null = Get-WorkerHosts
+Check 'a slice ticket is ordered' (Start-Fill -LocalOpen $false) 1
+Check "... with the slice's branch as its base" $script:Orders[0].body.claim.baseBranch 'slice/03-decks'
+Check '... and the switch that mirrors every slice' $script:Orders[0].body.claim.project.sliceBranches $true
+
 Write-Host "== Start-Fill, order and mode"
 function New-Tickets { param([int]$Count) for ($i = 0; $i -lt $Count; $i++) { $script:Claims.Enqueue((New-Claim (11 + $i))) } }
 
