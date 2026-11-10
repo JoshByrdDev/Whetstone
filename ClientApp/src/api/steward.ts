@@ -423,6 +423,8 @@ export interface StewardRegister {
   due: number[];
   followUps: StewardFollowUp[];
   instructions: StewardInstruction[];
+  /** The project is on the old shape and could move to slice branches (docs/slice-branches.md, piece 8). */
+  switchable?: boolean;
 }
 
 export interface NewDecision {
@@ -476,3 +478,28 @@ export const closeStewardInstruction = (project: string, id: number, note?: stri
 /** A follow-up that is nothing to take up. */
 export const dropStewardFollowUp = (project: string, id: number) =>
   fetch(`/api/steward/followups/${id}/drop?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);
+
+/** What moving the project to slice branches would do, and what stops it yet. */
+export interface StewardSwitchView {
+  switched: boolean;
+  refusals: string[];
+  /** The base it is on now, and the one it moves to. */
+  from: string;
+  base: string;
+  conventions: string;
+  /** The slices whose work is in the base already: each is recorded released, and its decisions retire. */
+  released: { plan: string | null; unit: number; title: string }[];
+  /** The whole project's decisions in force: each one kept is a convention, the rest retire. */
+  projectWide: { number: number; rule: string; title: string | null }[];
+  /** The conventions file as first drafted, for the owner to shorten. */
+  draft: string;
+}
+
+export const getStewardSwitch = (project: string, base?: string) =>
+  fetch(`/api/steward/switch?${q(project)}${base ? `&base=${encodeURIComponent(base)}` : ''}`)
+    .then(json<{ answer: string; why: string | null; data: StewardSwitchView }>);
+
+/** The owner moves the project to slice branches. No tool reaches this. */
+export const switchStewardToSlices = (project: string, body: { base: string; conventions: string; text: string; keep: number[] }) =>
+  fetch(`/api/steward/switch?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) })
+    .then(json<{ answer: string; why: string | null; data: { base: string; from: string; at: string; conventions: string | null; released: number; conventionsKept: number; retired: number } }>);

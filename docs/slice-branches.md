@@ -243,6 +243,13 @@ The owner chose to finish the slices already in flight first. For a project on t
      for the owner to edit before it is committed (the steward drafts, the owner commits)
    - retires the decisions that were left in "the whole project" and not taken into the
      conventions
+
+   As built (piece 8): the draft is mechanical - one line per decision in force, a rule said
+   twice said once - and the shortening is the owner's, in the same form. A steward run is not
+   needed to switch, and nothing a steward can run reaches it. The register takes in what the
+   project kept one last time first, and never imports again. The plan being worked becomes the
+   slices' folder: its rows lose their plan key, so a draft goes on with the number it has, while
+   its tickets keep the key they were filed under, as history.
 4. **New slices** get a branch when they are agreed. Drafts that already exist become slices of
    the new shape as they are.
 

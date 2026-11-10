@@ -2317,6 +2317,16 @@ public partial class StewardServiceTests : IDisposable
         public List<string> Recut = new();
         public Dictionary<string, string> RecutRefusals = new();
 
+        public string? SwitchRefusal;
+        public readonly List<(string Base, string? File, string? Text)> Switched = new();
+        public Task<(string? Sha, string? Refusal)> SwitchBaseAsync(string projectKey, string newBase, string? file, string? text, string message,
+            bool dryRun, CancellationToken ct = default)
+        {
+            if (SwitchRefusal is not null) return Task.FromResult<(string?, string?)>((null, SwitchRefusal));
+            if (!dryRun) Switched.Add((newBase, file, text));
+            return Task.FromResult<(string?, string?)>((Head, null));
+        }
+
         public Task<(string? Sha, string? Refusal)> RecutSliceAsync(string projectKey, string slice, string parent, CancellationToken ct = default)
         {
             if (RecutRefusals.TryGetValue(slice, out var no)) return Task.FromResult<(string?, string?)>((null, no));

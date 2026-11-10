@@ -67,7 +67,8 @@ public partial class StewardService
         d.WithdrawnAt is not null ? new(Withdrawn, Array.Empty<(int, string)>())
         : replaced.TryGetValue(d.Number, out var by) ? new(Replaced, by)
         // The code is the decision now: a later slice that changes it simply decides again.
-        : !d.Convention && d.PlanUnit is { } u && replaced.Over.Contains((d.PlanKey ?? "", u)) ? new(Retired, Array.Empty<(int, string)>())
+        : !d.Convention && (d.RetiredAt is not null || d.PlanUnit is { } u && replaced.Over.Contains((d.PlanKey ?? "", u)))
+            ? new(Retired, Array.Empty<(int, string)>())
         : d.Provisional ? new(Provisional, Array.Empty<(int, string)>())
         : new(InForce, Array.Empty<(int, string)>());
 
@@ -586,6 +587,8 @@ public partial class StewardService
             next = await NextNumberAsync(projectKey, ct),
             // Every new decision is a slice's or a convention, and a slice's retires with it.
             sliceBranches = cfg.SliceBranchesOn,
+            // Not switched yet, and could be: the Steward page offers the switch (piece 8).
+            switchable = !cfg.SliceBranches && cfg.MergeInsteadOfPr && !cfg.IsTfvc && !cfg.IsMultiRepo,
             plan = cfg.Steward.Plan.Configured ? cfg.Steward.Plan.Key : null,
             units = titles.Where(t => t.Key.Item1 == cfg.Steward.Plan.Key).OrderBy(t => t.Key.Item2).Select(t => new { unit = t.Key.Item2, title = t.Value }),
             decisions = all.Select(d => Shape(d, StatusOf(d, replaced), titles)),

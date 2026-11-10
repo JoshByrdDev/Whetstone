@@ -221,7 +221,9 @@ function DecisionRow({ d, project, onChanged, onChange }: {
         )}
         {d.status === 'retired' && (
           <div style={{ font: `400 11.5px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 4 }}>
-            Retired with {d.appliesTo}: its slice is over, and its code is the decision now.
+            {d.unit == null
+              ? 'Retired at the switch to slice branches: not kept as a convention.'
+              : `Retired with ${d.appliesTo}: its slice is over, and its code is the decision now.`}
           </div>
         )}
         {d.withdrawn && (

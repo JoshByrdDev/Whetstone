@@ -583,6 +583,36 @@ public class SliceBranchTests : IDisposable
         return output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToArray();
     }
 
+    // ---- the switch (piece 8) ------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_switch_moves_the_hub_onto_the_new_base_only_once_the_old_one_is_merged_in()
+    {
+        // delta's base is an integration branch, checked out in the hub, with a commit main lacks.
+        WriteProject(Path.Combine(_root, "data"), "delta", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "develop", "mergeInsteadOfPr": true }""");
+        Git(_hub, "checkout", "-q", "-b", "develop");
+        Commit(_hub, "README.md", "integration work");
+
+        var (_, behind) = await _svc.SwitchBaseAsync("delta", "main", null, null, "", dryRun: true);
+        Assert.Contains("Merge develop into main first", behind);
+        Assert.Contains("no branch 'nope'", (await _svc.SwitchBaseAsync("delta", "nope", null, null, "", dryRun: true)).Refusal);
+
+        Git(_hub, "checkout", "-q", "main");
+        Git(_hub, "merge", "-q", "--ff-only", "develop");
+        Git(_hub, "checkout", "-q", "develop");
+        var (tip, ok) = await _svc.SwitchBaseAsync("delta", "main", null, null, "", dryRun: true);
+        Assert.Null(ok);
+        Assert.Equal(Rev("main"), tip);
+        Assert.Equal("develop", Lines("branch", "--show-current").Single());
+
+        var (sha, no) = await _svc.SwitchBaseAsync("delta", "main", "docs/conventions.md", "# Conventions\r\n\n- Whole cents.", "Slice branches: conventions", dryRun: false);
+        Assert.Null(no);
+        Assert.Equal("main", Lines("branch", "--show-current").Single());
+        Assert.Equal(Rev("main"), sha);
+        Assert.Equal("Slice branches: conventions", Lines("log", "-1", "--format=%s").Single());
+        Assert.Equal("# Conventions\n\n- Whole cents.\n", File.ReadAllText(Path.Combine(_hub, "docs", "conventions.md")));
+    }
+
     private static void WriteProject(string data, string key, string json)
     {
         Directory.CreateDirectory(Path.Combine(data, "projects", key));

@@ -55,4 +55,53 @@ public static class StewardPlanFile
         await File.WriteAllTextAsync(defaultsFile, root.ToJsonString(Out) + Environment.NewLine, ct);
         return null;
     }
+
+    /// <summary>
+    /// Switch a project's settings to slice branches (docs/slice-branches.md, piece 8): <c>sliceBranches</c>
+    /// on, the base pointed at <paramref name="baseBranch"/> in whichever file names it now, and the
+    /// plan around the slices gone - its key, name, charter and master, the past plans and
+    /// <c>syncFrom</c>. The plan's folder and its patterns stay: they are where the slices are, and
+    /// how they read. Returns why nothing was written, or null once both files are.
+    /// </summary>
+    public static async Task<string?> SwitchAsync(string defaultsFile, string localFile, string baseBranch, string? conventions,
+        CancellationToken ct = default)
+    {
+        var (defaults, no1) = await ReadAsync(defaultsFile, ct);
+        if (no1 is not null) return no1;
+        var (local, no2) = await ReadAsync(localFile, ct);
+        if (no2 is not null) return no2;
+
+        // The machine-local file wins when both say it, so that is the one to change.
+        if (local!["baseBranch"] is not null) local["baseBranch"] = baseBranch;
+        else defaults!["baseBranch"] = baseBranch;
+        defaults!["sliceBranches"] = true;
+        local.Remove("sliceBranches");
+
+        if (defaults["steward"] is not JsonObject steward) defaults["steward"] = steward = new JsonObject();
+        steward.Remove("syncFrom");
+        steward.Remove("pastPlans");
+        if (steward["plan"] is JsonObject plan)
+            foreach (var gone in new[] { "key", "name", "charter", "master" }) plan.Remove(gone);
+        if (!string.IsNullOrWhiteSpace(conventions)) steward["conventions"] = conventions;
+
+        await File.WriteAllTextAsync(defaultsFile, defaults.ToJsonString(Out) + Environment.NewLine, ct);
+        if (File.Exists(localFile)) await File.WriteAllTextAsync(localFile, local.ToJsonString(Out) + Environment.NewLine, ct);
+        return null;
+    }
+
+    private static async Task<(JsonObject? Root, string? Refusal)> ReadAsync(string file, CancellationToken ct)
+    {
+        try
+        {
+            return (File.Exists(file)
+                ? JsonNode.Parse(await File.ReadAllTextAsync(file, ct),
+                    documentOptions: new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true }) as JsonObject ?? new()
+                : new(), null);
+        }
+        catch (JsonException) { return (null, $"{file} is not valid JSON, so it was left alone."); }
+    }
+
+    /// <summary>Whether both files can be read, before anything else is changed.</summary>
+    public static async Task<string?> CheckAsync(string defaultsFile, string localFile, CancellationToken ct = default) =>
+        (await ReadAsync(defaultsFile, ct)).Refusal ?? (await ReadAsync(localFile, ct)).Refusal;
 }

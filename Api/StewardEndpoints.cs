@@ -271,6 +271,34 @@ public static class StewardEndpoints
                 : Results.BadRequest(new { answer = "documents-only", why = $"The plan's documents are in the repo, but the project's settings were not changed: {failed}" });
         });
 
+        // The switch to slice branches (docs/slice-branches.md, piece 8): what it would do, then the
+        // owner doing it. No tool reaches either. The settings are written once the board has done
+        // its part, and the decisions file is written in the new shape after that.
+        app.MapGet("/api/steward/switch", async (string? project, string? @base, ProjectRegistry registry, StewardService steward,
+            CancellationToken ct) =>
+        {
+            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
+            return Results.Ok(await steward.SwitchViewAsync(project!, @base, ct));
+        });
+        app.MapPost("/api/steward/switch", async (string? project, StewardSwitch body, ProjectRegistry registry, DashboardPaths paths,
+            StewardService steward, CancellationToken ct) =>
+        {
+            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
+            var defaults = paths.ProjectConfigDefaults(project!);
+            var local = paths.ProjectConfig(project!);
+            // Settings that cannot be read stop the switch before the board has moved anything.
+            if (await StewardPlanFile.CheckAsync(defaults, local, ct) is { } bad) return Results.BadRequest(new { answer = "bad-settings", why = bad });
+            var r = await steward.OwnerSwitchesAsync(project!, body, ct);
+            if (r.Answer != "switched") return Results.BadRequest(r);
+            var made = JsonSerializer.SerializeToElement(r.Data, Json);
+            var failed = await StewardPlanFile.SwitchAsync(defaults, local, made.GetProperty("base").GetString()!,
+                made.TryGetProperty("conventions", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null, ct);
+            if (failed is not null)
+                return Results.BadRequest(new { answer = "settings-not-written", why = $"The repo and the register are switched, but the project's settings were not: {failed}" });
+            var exported = await steward.AfterSwitchAsync(project!, ct);
+            return Results.Ok(new { r.Answer, why = exported, r.Data });
+        });
+
         // The register of decisions: every decision with its status, and the pairs the import
         // thinks may disagree. Everything that changes it is the owner's, with no tool behind it.
         app.MapGet("/api/steward/decisions", async (string? project, StewardService steward, CancellationToken ct) =>

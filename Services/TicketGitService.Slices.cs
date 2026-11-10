@@ -355,6 +355,63 @@ public partial class TicketGitService
     /// <summary>Where <paramref name="branch"/> is checked out, in the hub or any worktree of it, or null.</summary>
     private string? CheckedOutElsewhere(string repo, string branch) =>
         _worktrees.List(repo).FirstOrDefault(w => w.Branch == branch)?.Path;
+
+    /// <summary>
+    /// The git half of switching a project to slice branches (docs/slice-branches.md, "Moving a
+    /// project that already exists"): the hub moves off the old base - an integration branch, as a
+    /// rule - onto <paramref name="newBase"/>, and the conventions file is committed there. Refused
+    /// while the hub is not clean on the old base, and while the old base has a commit the new one
+    /// does not: the owner's last merge of the old shape comes first, by hand. Nothing on the old
+    /// base is rewritten, and the branch is kept. With <paramref name="dryRun"/> only the checks
+    /// run; the answer is then the new base's tip.
+    /// </summary>
+    public async Task<(string? Sha, string? Refusal)> SwitchBaseAsync(string projectKey, string newBase, string? file, string? text,
+        string message, bool dryRun, CancellationToken ct = default)
+    {
+        var (_, repo, oldBase) = HubOf(projectKey);
+        newBase = newBase.Trim();
+        if (newBase.Length == 0) return (null, "Name the branch that becomes the base.");
+        if (await HubNotWritableAsync(repo, oldBase, ct) is { } no) return (null, no);
+        if (await ShaAsync(repo, $"refs/heads/{newBase}", ct) is not { } tip) return (null, $"There is no branch '{newBase}' in {repo}.");
+        if (newBase != oldBase)
+        {
+            var left = await GitAsync(repo, ct, "rev-list", "--count", $"refs/heads/{newBase}..refs/heads/{oldBase}");
+            if (!left.Ok) return (null, Explain(left, $"could not compare {oldBase} with {newBase}"));
+            if (int.TryParse(left.Stdout.Trim(), out var n) && n > 0)
+                return (null, $"{oldBase} has {n} commit{(n == 1 ? "" : "s")} that {newBase} does not. Merge {oldBase} into {newBase} first, by hand: that is the last merge of the old shape.");
+            if (CheckedOutElsewhere(repo, newBase) is { } held && !SamePath(held, repo))
+                return (null, $"{newBase} is checked out in {held}. The hub has to have it.");
+        }
+        if (dryRun) return (tip, null);
+
+        if (newBase != oldBase)
+        {
+            var co = await GitAsync(repo, ct, "checkout", "--quiet", newBase);
+            if (!co.Ok) return (null, Explain(co, $"could not check out {newBase}"));
+        }
+        if (string.IsNullOrWhiteSpace(file) || text is null) return (await ShaAsync(repo, "HEAD", ct), null);
+
+        var rel = file.Replace('\\', '/').TrimStart('/');
+        var full = Path.GetFullPath(Path.Combine(repo, rel));
+        if (!full.StartsWith(Path.GetFullPath(repo) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            return (null, $"'{file}' is outside the repo.");
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        await File.WriteAllTextAsync(full, text.Replace("\r\n", "\n").TrimEnd() + "\n", ct);
+        await GitAsync(repo, ct, "add", "--", rel);
+        if (!(await GitAsync(repo, ct, "diff", "--cached", "--quiet", "--", rel)).Ok)
+        {
+            var commit = await GitAsync(repo, ct, "commit", "-m", message, "--", rel);
+            if (!commit.Ok)
+            {
+                await GitAsync(repo, ct, "reset", "--quiet", "--", rel);
+                return (null, Explain(commit, $"switched to {newBase}, but could not commit {rel}"));
+            }
+        }
+        return (await ShaAsync(repo, "HEAD", ct), null);
+    }
+
+    private static bool SamePath(string a, string b) =>
+        string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>The first half of a slice's release: why it cannot go, or the tip and files its checks run on.</summary>

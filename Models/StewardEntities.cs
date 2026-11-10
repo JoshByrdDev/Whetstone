@@ -556,6 +556,13 @@ public class StewardDecision
     /// <summary>When the owner promoted it into the project's conventions file.</summary>
     public DateTime? PromotedAt { get; set; }
 
+    /// <summary>
+    /// Retired by the switch to slice branches (docs/slice-branches.md, piece 8): a decision for the
+    /// whole project the owner did not keep as a convention, or one of an earlier plan's slices with
+    /// nothing to derive it from. A slice's decisions retire with their slice and are never written here.
+    /// </summary>
+    public DateTime? RetiredAt { get; set; }
+
     public List<StewardDecisionReplace> Replaces { get; set; } = new();
 }
 

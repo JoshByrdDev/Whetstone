@@ -1279,6 +1279,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime>("RecordedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("RetiredAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Rule")
                         .IsRequired()
                         .HasColumnType("TEXT");

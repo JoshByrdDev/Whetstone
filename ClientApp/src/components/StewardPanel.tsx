@@ -8,6 +8,7 @@ import { ActivityFeed } from './ActivityFeed';
 import { Markdown } from './Markdown';
 import { StewardPlan } from './StewardPlan';
 import { NewPlan } from './StewardNewPlan';
+import { StewardSwitch } from './StewardSwitch';
 import { StewardRecord } from './StewardRecord';
 import { StewardDecisions } from './StewardDecisions';
 import { StewardTicketFlags } from './StewardTicketFlags';
@@ -34,7 +35,7 @@ import type {
  */
 
 /** The page's views, in the order of how often each is the reason somebody came. */
-type View = 'now' | 'plan' | 'decisions' | 'record' | 'new';
+type View = 'now' | 'plan' | 'decisions' | 'record' | 'new' | 'switch';
 
 const MODES: { id: StewardMode; label: string; says: string }[] = [
   { id: 'off', label: 'Off', says: 'No steward. Nothing runs.' },
@@ -194,6 +195,11 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 New plan
               </Chip>
             )}
+            {register?.switchable && (
+              <Chip on={view === 'switch'} onClick={() => show('switch')} title="Move this project to slices with a branch each: done once, by you">
+                Switch to slices
+              </Chip>
+            )}
           </div>
 
           {view === 'now' && (
@@ -247,6 +253,13 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 project={page.project} onStarted={async () => { setPlanKey(null); await load(); }}
                 has={(plan?.plan?.units?.length ?? 0) > 0 || (plan?.plan?.plans?.length ?? 0) > 0 || !!plan?.master || !!plan?.charter}
               />
+            </div>
+          )}
+
+          {/* Not gated on switchable: once it has switched, what it did stays on screen. */}
+          {view === 'switch' && (
+            <div key="switch" className="orbit-swap">
+              <StewardSwitch project={page.project} onSwitched={load} />
             </div>
           )}
 
