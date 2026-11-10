@@ -516,6 +516,17 @@ public class StewardDecision
     public DateTime ChangedAt { get; set; } = DateTime.UtcNow;
     public DateTime? DeliveredAt { get; set; }
 
+    /// <summary>
+    /// The steward thinks this outlives its slice - a rule about money, data, or how every page
+    /// behaves - and says why (docs/slice-branches.md, section 4, "Promoting at release"). Only a
+    /// suggestion: the owner ticks what is kept when releasing the slice.
+    /// </summary>
+    public DateTime? PromoteSuggestedAt { get; set; }
+    public string? PromoteWhy { get; set; }
+
+    /// <summary>When the owner promoted it into the project's conventions file.</summary>
+    public DateTime? PromotedAt { get; set; }
+
     public List<StewardDecisionReplace> Replaces { get; set; } = new();
 }
 

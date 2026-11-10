@@ -453,6 +453,8 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
   const [sure, setSure] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
+  // The decisions ticked to keep, starting on the steward's suggestions.
+  const [keep, setKeep] = useState<Set<number>>(() => new Set((unit.decisions ?? []).filter(d => d.suggested && !d.promoted).map(d => d.number)));
   const run = async (act: () => Promise<unknown>) => {
     setBusy(true); setFailed(null);
     try { await act(); await onChanged(); setSure(false); }
@@ -526,11 +528,15 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
   if (unit.stage === 'released') {
     return (
       <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 12 }}>
-        <span style={{ font: `400 12px ${BODY}`, color: 'var(--w-t400)' }}>Released {ago(unit.releasedAt)}.</span>
-        <GhostButton disabled={busy} onClick={() => run(() => setStewardUnitReleased(project, unit.unit, false))}
-          title="Put it back to built: it has not gone out after all">
-          Not released after all
-        </GhostButton>
+        <span style={{ font: `400 12px ${BODY}`, color: 'var(--w-t400)' }}>
+          Released {ago(unit.releasedAt)}{unit.releasedByMerge ? ', merged into the base here. Taking it back is a revert, by hand' : ''}.
+        </span>
+        {!unit.releasedByMerge && (
+          <GhostButton disabled={busy} onClick={() => run(() => setStewardUnitReleased(project, unit.unit, false))}
+            title="Put it back to built: it has not gone out after all">
+            Not released after all
+          </GhostButton>
+        )}
         {failed && <span style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c }}>{failed}</span>}
       </div>
     );
@@ -541,6 +547,56 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
   const seeNotes = notes && (
     <GhostButton onClick={() => onNotes(unit.unit)} title="This unit's notes, in the record">Read its notes</GhostButton>
   );
+
+  if (unit.stage === 'built' && unit.sliceBranch) {
+    const decisions = (unit.decisions ?? []).filter(d => !d.promoted);
+    const ticked = decisions.filter(d => keep.has(d.number)).map(d => d.number);
+    const flip = (n: number) => setKeep(was => {
+      const next = new Set(was);
+      if (!next.delete(n)) next.add(n);
+      return next;
+    });
+    return box(r.outstanding > 0 ? TIER.gate.c : TIER.done.c, (
+      <>
+        {say(r.outstanding > 0
+          ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b> still to tick off{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
+          : <>Every outcome is done and nothing for its release is outstanding{r.toKnow > 0 ? ` (${r.toKnow} to know, which go out with it)` : ''}. Releasing merges <span style={{ font: `400 12px ${MONO}` }}>{unit.sliceBranch}</span> into the base here: it is brought up to the base first and the merge checks run on it, and nothing is pushed.</>)}
+        {r.outstanding === 0 && unit.conventions && decisions.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ font: `400 12px ${BODY}`, color: 'var(--w-t400)', marginBottom: 6 }}>
+              Tick the decisions that outlive this slice. Each goes into <span style={{ font: `400 11.5px ${MONO}` }}>{unit.conventions}</span> in the release's own commit; the rest retire with it.
+            </div>
+            <div className="flex flex-col gap-1.5">
+              {decisions.map(d => (
+                <label key={d.number} className="flex items-start gap-2.5 cursor-pointer group">
+                  <input type="checkbox" checked={keep.has(d.number)} disabled={busy} onChange={() => flip(d.number)}
+                    className="mt-[3px] w-3.5 h-3.5 flex-none rounded accent-amber-500 cursor-pointer disabled:cursor-default" />
+                  <span className="min-w-0" style={{ font: `400 12.5px/1.45 ${BODY}`, color: 'var(--w-t200)' }}>
+                    <span style={{ font: `400 11.5px ${MONO}`, color: 'var(--w-t400)' }}>#{d.number}</span> {d.title ? <b>{d.title}. </b> : null}{d.rule}
+                    {d.suggested && <span className="block" style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t400)' }}>The steward suggests keeping it{d.why ? `: ${d.why}` : '.'}</span>}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
+          {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole unit">Read the report first</GhostButton>}
+          {seeNotes}
+          {r.outstanding === 0 && (sure
+            ? (
+              <>
+                <GhostButton tone="go" disabled={busy} onClick={() => run(() => setStewardUnitReleased(project, unit.unit, true, ticked))}>
+                  {busy ? 'Merging' : `Yes, merge slice ${unit.unit} into the base${ticked.length > 0 ? ` and keep ${ticked.length}` : ''}`}
+                </GhostButton>
+                <GhostButton disabled={busy} onClick={() => setSure(false)}>Not yet</GhostButton>
+              </>
+            )
+            : <GhostButton tone="go" onClick={() => setSure(true)}>Release it</GhostButton>)}
+        </div>
+      </>
+    ));
+  }
 
   if (unit.stage === 'built') {
     return box(r.outstanding > 0 ? TIER.gate.c : TIER.done.c, (

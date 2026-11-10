@@ -353,6 +353,18 @@ public class StewardTools
         [Description("Optional short name for its note, lowercase with hyphens, like visit-day-read.")] string? key = null) =>
         s.LearnedAsync(project, fact, key);
 
+    [McpServerTool(Name = "steward_suggest_promote"), Description(
+        "Mark a decision of an open slice as one that outlives the slice: a rule about money, data, or how every page must " +
+        "behave, rather than how this slice's feature works. Only a suggestion - when the owner releases the slice they see " +
+        "its decisions with yours marked, and tick what goes into the project's conventions file. Mark few. withdraw takes " +
+        "a mark back. Refused on a project with no conventions file.")]
+    public static Task<StewardReply> SuggestPromote(StewardService s,
+        [Description("The project key.")] string project,
+        [Description("The decision, by number.")] int decision,
+        [Description("Why it outlives its slice, in a line.")] string? why = null,
+        [Description("Take the mark back instead.")] bool withdraw = false) =>
+        s.SuggestPromoteAsync(project, decision, why, withdraw);
+
     [McpServerTool(Name = "steward_note_for_release"), Description(
         "After merging a ticket that leaves the owner something to read before the base branch is released: a migration and " +
         "what it adds, a line a worker wrote for the owner's own documents (copy it as written, with the file and section it " +

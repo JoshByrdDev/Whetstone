@@ -2289,6 +2289,24 @@ public partial class StewardServiceTests : IDisposable
             return Task.FromResult(dryRun && r.Answer is "merged" or "conflict" ? r with { Answer = "proposed" } : r);
         }
 
+        /// <summary>What readying a slice's release answers; null readies it with <see cref="ReleaseFiles"/>.</summary>
+        public SliceReleasePrep? ReleasePrep;
+        public string[] ReleaseFiles = { "src/cards.ts" };
+        /// <summary>Each release merged: the slice, its message, and the lines added to the conventions.</summary>
+        public List<(string Slice, string Message, string? Conventions, IReadOnlyList<string> Lines)> Released = new();
+        public string? ReleaseRefusal;
+
+        public Task<SliceReleasePrep> PrepareSliceReleaseAsync(string projectKey, string slice, CancellationToken ct = default) =>
+            Task.FromResult(ReleasePrep ?? new SliceReleasePrep(null, Array.Empty<string>(), ReleaseFiles, "slice-tip", "main"));
+
+        public Task<(string? Sha, string? Refusal)> ReleaseSliceAsync(string projectKey, string slice, string sliceTip, string message,
+            string? conventionsPath, IReadOnlyList<string> conventionLines, CancellationToken ct = default)
+        {
+            if (ReleaseRefusal is not null) return Task.FromResult<(string?, string?)>((null, ReleaseRefusal));
+            Released.Add((slice, message, conventionsPath, conventionLines));
+            return Task.FromResult<(string?, string?)>(("release-sha", null));
+        }
+
         public Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default)
         {
             if (CutRefusal is not null) return Task.FromResult<(string?, string?)>((null, CutRefusal));

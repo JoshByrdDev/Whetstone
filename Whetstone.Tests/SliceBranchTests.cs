@@ -417,6 +417,88 @@ public class SliceBranchTests : IDisposable
         Assert.Contains("git log --oneline main..HEAD", plain);
     }
 
+    // ---- piece 3: release ----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Releasing_merges_the_slice_into_the_local_base_with_the_conventions_and_drops_its_branch()
+    {
+        await LayOutAsync();
+        var originBefore = Rev("origin/main");
+        var prep = await _svc.PrepareSliceReleaseAsync("alpha", Slice);
+        Assert.Null(prep.Refusal);
+        // Brought up to the base first, so the release's tree is the slice's own.
+        Assert.Equal(0, Run(_hub, "merge-base", "--is-ancestor", "main", Slice).Code);
+        Assert.Equal(Rev(Slice), prep.SliceTip);
+        Assert.Contains("cards.txt", prep.Files);
+        Assert.DoesNotContain("fix.txt", prep.Files);
+        var baseTip = Rev("main");
+
+        var (sha, no) = await _svc.ReleaseSliceAsync("alpha", Slice, prep.SliceTip!, "Slice 13: cards\n\nReleases it.",
+            "docs/conventions.md", new[] { "- Prices are whole cents. (#4)" });
+        Assert.Null(no);
+        Assert.Equal(sha, Rev("main"));
+        Assert.Equal(new[] { baseTip, prep.SliceTip! }, Lines("rev-list", "--parents", "-n", "1", "main").Single().Split(' ').Skip(1));
+        Assert.Equal("Slice 13: cards", Lines("log", "-1", "--format=%s", "main").Single());
+        // The conventions line is in the release's own commit, and the hub's files and index agree with it.
+        var conventions = string.Join("\n", Lines("show", "main:docs/conventions.md"));
+        Assert.StartsWith("# Conventions", conventions);
+        Assert.EndsWith("- Prices are whole cents. (#4)", conventions);
+        Assert.Equal(new[] { "docs/conventions.md" }, Lines("diff", "--name-only", $"{prep.SliceTip}", "main"));
+        Assert.True(File.Exists(Path.Combine(_hub, "cards.txt")));
+        Assert.True(File.Exists(Path.Combine(_hub, "docs", "conventions.md")));
+        Assert.Empty(Lines("status", "--porcelain"));
+        Assert.NotEqual(0, Run(_hub, "rev-parse", "--verify", "--quiet", $"refs/heads/{Slice}").Code);
+        // Never pushed.
+        Assert.Equal(originBefore, Rev("origin/main"));
+    }
+
+    [Fact]
+    public async Task A_second_release_appends_to_the_conventions_the_first_wrote()
+    {
+        await LayOutAsync();
+        Directory.CreateDirectory(Path.Combine(_hub, "docs"));
+        Commit(_hub, "docs/conventions.md", "- Everything is local. (#1)");
+        var prep = await _svc.PrepareSliceReleaseAsync("alpha", Slice);
+        var (_, no) = await _svc.ReleaseSliceAsync("alpha", Slice, prep.SliceTip!, "Slice 13: cards", "docs/conventions.md",
+            new[] { "- Prices are whole cents. (#4)" });
+        Assert.Null(no);
+        Assert.Equal(new[] { "- Everything is local. (#1)", "- Prices are whole cents. (#4)" }, Lines("show", "main:docs/conventions.md"));
+    }
+
+    [Fact]
+    public async Task A_base_or_a_slice_that_moves_after_the_checks_is_not_released_over()
+    {
+        await LayOutAsync();
+        var prep = await _svc.PrepareSliceReleaseAsync("alpha", Slice);
+        OnBranch(Slice, "late.txt", "S3: landed while the checks ran");
+        var (sha, no) = await _svc.ReleaseSliceAsync("alpha", Slice, prep.SliceTip!, "Slice 13: cards", null, Array.Empty<string>());
+        Assert.Null(sha);
+        Assert.Contains("moved while it was being checked", no);
+
+        prep = await _svc.PrepareSliceReleaseAsync("alpha", Slice);
+        Commit(_hub, "late-base.txt", "M2: landed on the base while the checks ran");
+        var baseTip = Rev("main");
+        (sha, no) = await _svc.ReleaseSliceAsync("alpha", Slice, prep.SliceTip!, "Slice 13: cards", null, Array.Empty<string>());
+        Assert.Null(sha);
+        Assert.Contains("main moved", no);
+        Assert.Equal(baseTip, Rev("main"));
+        Assert.Equal(prep.SliceTip, Rev(Slice));
+    }
+
+    [Fact]
+    public async Task A_hub_off_its_base_or_with_changes_is_not_released_into()
+    {
+        await LayOutAsync();
+        File.AppendAllText(Path.Combine(_hub, "README.md"), "half-done\n");
+        var dirty = await _svc.PrepareSliceReleaseAsync("alpha", Slice);
+        Assert.Contains("uncommitted change", dirty.Refusal);
+        Git(_hub, "checkout", "--", "README.md");
+
+        Git(_hub, "checkout", "-q", "-b", "mine");
+        var off = await _svc.PrepareSliceReleaseAsync("alpha", Slice);
+        Assert.Contains("not 'main'", off.Refusal);
+    }
+
     // ---- plumbing ----------------------------------------------------------------------------
 
     private async Task SeedAsync()

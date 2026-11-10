@@ -201,6 +201,14 @@ export interface StewardPlanUnitView {
   stage: UnitStage;
   agreedAt?: string | null;
   releasedAt?: string | null;
+  /** The slice's own branch while it is open; releasing it is then the board's merge into the base. */
+  sliceBranch?: string | null;
+  /** Released by the board's merge: taking it back is a revert, by hand. */
+  releasedByMerge?: boolean;
+  /** The conventions file a release promotes decisions into, for a slice with a branch. */
+  conventions?: string | null;
+  /** A slice-branch slice's decisions, with the steward's suggestions to promote. */
+  decisions?: StewardSliceDecision[] | null;
   /** Why a draft cannot be agreed from the board, when it cannot. */
   cannotAgree?: string | null;
   /** What its release still asks, by kind; null for a unit nobody has agreed. */
@@ -210,6 +218,12 @@ export interface StewardPlanUnitView {
   openDecisions?: number[];
   text: string;
   groups: { heading: string; outcomes: StewardPlanOutcome[] }[];
+}
+
+/** A decision of a slice, as its release shows it: the steward marks the ones it thinks outlive the slice. */
+export interface StewardSliceDecision {
+  number: number; title?: string | null; rule: string;
+  suggested: boolean; why?: string | null; promoted: boolean;
 }
 
 /** One choice a unit's spec leaves open, as the spec writes it. */
@@ -281,10 +295,13 @@ export const getStewardPlan = (project: string, plan?: string | null) =>
 export const agreeStewardUnit = (project: string, unit: number) =>
   fetch(`/api/steward/plan/units/${unit}/agree?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);
 
-/** Say a unit's work has been released, or take that back. */
-export const setStewardUnitReleased = (project: string, unit: number, released: boolean) =>
+/**
+ * Say a unit's work has been released, or take that back. For a slice with a branch of its own,
+ * releasing is the board's merge of it into the local base, and `promote` is the decisions to keep.
+ */
+export const setStewardUnitReleased = (project: string, unit: number, released: boolean, promote?: number[]) =>
   fetch(`/api/steward/plan/units/${unit}/released?${q(project)}`, {
-    method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ released }),
+    method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ released, promote }),
   }).then(json<{ answer: string }>);
 
 /** Start a new plan: its documents into the repo, and the project pointed at it. */

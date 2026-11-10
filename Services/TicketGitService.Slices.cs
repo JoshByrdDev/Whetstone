@@ -180,6 +180,138 @@ public partial class TicketGitService
         }
     }
 
+    /// <summary>
+    /// The first half of releasing a slice (docs/slice-branches.md, "Releasing a slice", step 2):
+    /// the hub made ready for a merge into its base, exactly as a ticket's merge makes it, and the
+    /// slice's branch brought up to that base. What it answers is what the release's checks run on:
+    /// the slice's tip, which now holds everything the base has, so its tree is the release's.
+    /// </summary>
+    public async Task<SliceReleasePrep> PrepareSliceReleaseAsync(string projectKey, string slice, CancellationToken ct = default)
+    {
+        var (_, repo, baseBranch) = HubOf(projectKey);
+        var none = Array.Empty<string>();
+        SliceReleasePrep No(string why, IReadOnlyList<string>? files = null) => new(why, files ?? none, none, null, baseBranch);
+        if (!IsGitRepo(repo)) return No($"There is no git repo at '{repo}'.");
+        if (await TipAsync(repo, slice, ct) is null) return No($"The slice's branch '{slice}' does not exist in {repo}.");
+        if (CheckedOutElsewhere(repo, slice) is { } holder)
+            return No($"'{slice}' is checked out in {holder}. Switch that tree off it first: releasing deletes the branch.");
+
+        var output = new List<string>();
+        var prep = await PrepareBaseForMergeAsync(repo, baseBranch, output, ct);
+        if (prep.Error is not null) return No(prep.Error);
+
+        var sync = await SyncSliceAsync(projectKey, slice, dryRun: false, ct);
+        if (sync.Answer == "conflict")
+            return No($"{slice} cannot take {baseBranch} without a conflict ({sync.Why}). Resolve it on the slice's branch, then release again.", sync.Files);
+        if (sync.Answer is not ("merged" or "up-to-date"))
+            return No(sync.Why ?? $"could not bring {slice} up to {baseBranch}");
+
+        var tip = await TipAsync(repo, slice, ct);
+        var files = (await GitAsync(repo, ct, "diff", "--name-only", $"refs/heads/{baseBranch}...refs/heads/{slice}")).Stdout
+            .Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+        if (files.Count == 0) return No($"{slice} changes nothing that {baseBranch} does not already have.");
+        return new(null, none, files, tip, baseBranch);
+    }
+
+    /// <summary>
+    /// The second half of releasing a slice (step 3): <paramref name="slice"/>, still at
+    /// <paramref name="sliceTip"/> - the tip its checks passed on - merged into the hub's local
+    /// base with <c>--no-ff</c>, and its branch deleted. Never pushed.
+    /// <para>
+    /// <paramref name="conventionLines"/>, when there are any, are appended to
+    /// <paramref name="conventionsPath"/> in the merge commit itself (section 4, "Promoting at
+    /// release"), so the release and what it promoted are one commit.
+    /// </para>
+    /// <para>
+    /// The commit is made without a checkout and the hub then fast-forwarded to it, so a hub that
+    /// moved, or a file git will not overwrite, leaves the base where it was. A base that moved since
+    /// the slice was brought up to it is refused rather than merged unchecked.
+    /// </para>
+    /// </summary>
+    public async Task<(string? Sha, string? Refusal)> ReleaseSliceAsync(string projectKey, string slice, string sliceTip,
+        string message, string? conventionsPath, IReadOnlyList<string> conventionLines, CancellationToken ct = default)
+    {
+        var (_, repo, baseBranch) = HubOf(projectKey);
+        if (!IsGitRepo(repo)) return (null, $"There is no git repo at '{repo}'.");
+        if (await TipAsync(repo, slice, ct) != sliceTip)
+            return (null, $"{slice} moved while it was being checked. Nothing was merged; release it again.");
+        if (CheckedOutElsewhere(repo, slice) is { } holder)
+            return (null, $"'{slice}' is checked out in {holder}. Switch that tree off it first: releasing deletes the branch.");
+        var output = new List<string>();
+        var prep = await PrepareBaseForMergeAsync(repo, baseBranch, output, ct);
+        if (prep.Error is not null) return (null, prep.Error);
+        var baseTip = await TipAsync(repo, baseBranch, ct);
+        if (baseTip is null) return (null, $"The base branch '{baseBranch}' is not a local branch in {repo}.");
+        if (!(await GitAsync(repo, ct, "merge-base", "--is-ancestor", baseTip, sliceTip)).Ok)
+            return (null, $"{baseBranch} moved while {slice} was being checked. Nothing was merged; release it again, so the checks run on what it merges into.");
+
+        // The slice holds the whole base, so the merge's tree is the slice's own.
+        var tree = (await GitAsync(repo, ct, "rev-parse", $"{sliceTip}^{{tree}}")).Stdout.Trim();
+        if (tree.Length == 0) return (null, $"could not read {slice}'s tree");
+        if (conventionLines.Count > 0)
+        {
+            if (string.IsNullOrWhiteSpace(conventionsPath)) return (null, "The project names no conventions file to promote decisions into.");
+            var (withLines, no) = await AppendToTreeAsync(repo, sliceTip, tree, conventionsPath.Replace('\\', '/').Trim('/'), conventionLines, ct);
+            if (withLines is null) return (null, no);
+            tree = withLines;
+        }
+
+        var commit = await GitAsync(repo, ct, "commit-tree", tree, "-p", baseTip, "-p", sliceTip, "-m", message);
+        if (!commit.Ok || commit.Stdout.Trim() is not { Length: > 0 } sha)
+            return (null, Explain(commit, "could not write the release's merge commit"));
+
+        if (await HeldRefusalAsync(repo, $"{baseTip}..{sha}", null, "the release", ct) is { } held) return (null, held);
+        var forward = await GitAsync(repo, ct, TimeSpan.FromMinutes(5), "merge", "--ff-only", sha);
+        if (!forward.Ok) return (null, Explain(forward, $"could not move {baseBranch} to the release; it was left where it was"));
+        if (await TipAsync(repo, baseBranch, ct) != sha)
+            return (null, $"{baseBranch} did not end at the release's commit {Short(sha)}. Look at {repo} before anything else merges.");
+
+        var drop = await GitAsync(repo, ct, "update-ref", "-d", $"refs/heads/{slice}", sliceTip);
+        if (!drop.Ok) _log.LogWarning("Released {Slice} as {Sha} but could not delete its branch: {Why}", slice, Short(sha), drop.Stderr.Trim());
+        _log.LogInformation("Released {Slice} into {Base} in {Repo}: {Previous} -> {New}", slice, baseBranch, repo, Short(baseTip), Short(sha));
+        return (sha, null);
+    }
+
+    /// <summary>
+    /// <paramref name="tree"/> with <paramref name="lines"/> appended to the file at
+    /// <paramref name="path"/> as it is in <paramref name="at"/> - made, if there is none - written
+    /// through a throwaway index so neither the hub's index nor its files are touched.
+    /// </summary>
+    private async Task<(string? Tree, string? Refusal)> AppendToTreeAsync(string repo, string at, string tree, string path,
+        IReadOnlyList<string> lines, CancellationToken ct)
+    {
+        var shown = await GitAsync(repo, ct, "show", $"{at}:{path}");
+        var text = shown.Ok ? shown.Stdout.Replace("\r\n", "\n") : ConventionsHeader;
+        if (text.Length > 0 && !text.EndsWith('\n')) text += "\n";
+        text += string.Join("", lines.Select(l => l.TrimEnd() + "\n"));
+
+        var scratch = Path.Combine(Path.GetTempPath(), "whetstone-release-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(scratch);
+        try
+        {
+            var file = Path.Combine(scratch, "file");
+            await File.WriteAllTextAsync(file, text, new System.Text.UTF8Encoding(false), ct);
+            var blob = await GitAsync(repo, ct, "hash-object", "-w", $"--path={path}", file);
+            if (!blob.Ok) return (null, Explain(blob, $"could not write {path}"));
+            var env = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = Path.Combine(scratch, "index") };
+            Task<RunResult> Git(params string[] args) => RunAsync("git", repo, TimeSpan.FromSeconds(30), env, ct, args);
+            var read = await Git("read-tree", tree);
+            if (!read.Ok) return (null, Explain(read, "could not read the release's tree"));
+            var put = await Git("update-index", "--add", "--cacheinfo", $"100644,{blob.Stdout.Trim()},{path}");
+            if (!put.Ok) return (null, Explain(put, $"could not add {path} to the release"));
+            var written = await Git("write-tree");
+            return written.Ok && written.Stdout.Trim() is { Length: > 0 } t ? (t, null) : (null, Explain(written, "could not write the release's tree"));
+        }
+        finally
+        {
+            try { Directory.Delete(scratch, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>What a conventions file starts as when a release is the first thing to promote into it.</summary>
+    public const string ConventionsHeader =
+        "# Conventions\n\nRules every slice keeps. Each came from a decision (#n), promoted when its slice was released, or from the owner's own edit.\n\n";
+
     private async Task<string?> TipAsync(string repo, string branch, CancellationToken ct) =>
         await TipOfRevAsync(repo, $"refs/heads/{branch}", ct);
 
@@ -193,3 +325,6 @@ public partial class TicketGitService
     private string? CheckedOutElsewhere(string repo, string branch) =>
         _worktrees.List(repo).FirstOrDefault(w => w.Branch == branch)?.Path;
 }
+
+/// <summary>The first half of a slice's release: why it cannot go, or the tip and files its checks run on.</summary>
+public record SliceReleasePrep(string? Refusal, IReadOnlyList<string> Conflicted, IReadOnlyList<string> Files, string? SliceTip, string BaseBranch);

@@ -39,6 +39,18 @@ public interface IStewardGit
     /// <paramref name="dryRun"/>, only how far behind it is (docs/slice-branches.md, section 2).
     /// </summary>
     Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, CancellationToken ct = default);
+    /// <summary>
+    /// Ready a slice's release: the hub fenced as for any merge into the base, and the slice brought
+    /// up to the base. Its tip and the files it changes, for the checks.
+    /// </summary>
+    Task<SliceReleasePrep> PrepareSliceReleaseAsync(string projectKey, string slice, CancellationToken ct = default);
+    /// <summary>
+    /// Merge a readied slice, still at <paramref name="sliceTip"/>, into the local base with
+    /// <c>--no-ff</c>, with <paramref name="conventionLines"/> appended to the conventions file in
+    /// the same commit, and delete its branch. Never pushes.
+    /// </summary>
+    Task<(string? Sha, string? Refusal)> ReleaseSliceAsync(string projectKey, string slice, string sliceTip, string message,
+        string? conventionsPath, IReadOnlyList<string> conventionLines, CancellationToken ct = default);
 }
 
 public partial class TicketGitService : IStewardGit

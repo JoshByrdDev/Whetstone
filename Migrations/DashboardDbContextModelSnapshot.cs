@@ -1251,6 +1251,15 @@ namespace Whetstone.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("PromoteSuggestedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PromoteWhy")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("PromotedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("Provisional")
                         .HasColumnType("INTEGER");
 

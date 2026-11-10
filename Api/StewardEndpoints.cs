@@ -11,7 +11,7 @@ public record StewardAnswerRequest(string? Answer, IReadOnlyList<int>? Replaces 
 public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
-public record StewardUnitReleased(bool? Released);
+public record StewardUnitReleased(bool? Released, int[]? Promote = null);
 public record StewardReverse(string? Because);
 public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
@@ -233,7 +233,7 @@ public static class StewardEndpoints
         app.MapPut("/api/steward/plan/units/{unit:int}/released", async (int unit, string? project, StewardUnitReleased body,
             StewardService steward, CancellationToken ct) =>
         {
-            var r = await steward.OwnerReleasesUnitAsync(project ?? "", unit, body.Released ?? true, ct);
+            var r = await steward.OwnerReleasesUnitAsync(project ?? "", unit, body.Released ?? true, body.Promote, ct);
             return r.Answer is "released" or "recorded" ? Results.Ok(r) : Results.BadRequest(r);
         });
 

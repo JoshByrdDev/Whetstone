@@ -2350,10 +2350,18 @@ public partial class StewardService
         var notes = await UnitNotesAsync(projectKey, which, isWorking, plan, rows, all, track: false, ct);
         var current = isWorking ? StewardProgress.Current(plan, states) : null;
         var moved = await MovedSlicesAsync(projectKey, which, plan, ct);
+        // A slice released by the board's merge shows its decisions, to tick the ones kept.
+        var sliceDecisions = cfg.SliceBranchesOn
+            ? await _db.StewardDecisions.AsNoTracking()
+                .Where(d => d.ProjectKey == projectKey && d.PlanKey == which.Key && d.PlanUnit != null && d.WithdrawnAt == null)
+                .OrderBy(d => d.Number).ToListAsync(ct)
+            : new List<StewardDecision>();
 
         return new StewardReply("plan", null, new
         {
             plans,
+            // Where a release promotes decisions to; null when the project has no such file.
+            conventions = cfg.SliceBranchesOn && cfg.Steward.Conventions.Length > 0 ? cfg.Steward.Conventions : null,
             // Agreed slices whose number or file changed since: tickets and outcomes carry those.
             moved = moved.Values,
             plan = new { which.Key, name = which.DisplayName, working = isWorking, which.UnitsDir },
@@ -2367,7 +2375,10 @@ public partial class StewardService
                 var left = notes.Of(u.Number).Where(n => n.HandledAt is null).ToList();
                 int Left(StewardReleaseKind k) => left.Count(n => (n.Release ?? StewardReleaseKind.Note) == k);
                 var outstanding = left.Count(Outstanding);
-                var earlier = plan.Where(x => x.Number < u.Number && !x.Agreed).Select(x => x.Number).ToList();
+                // With slice branches a slice's number is only its id, so nothing has to be agreed first.
+                var earlier = cfg.SliceBranchesOn ? new List<int>()
+                    : plan.Where(x => x.Number < u.Number && !x.Agreed).Select(x => x.Number).ToList();
+                var sliceBranch = SliceBranches.BaseFor(cfg, u.Number, row);
                 return new
                 {
                     unit = u.Number,
@@ -2387,6 +2398,16 @@ public partial class StewardService
                     story = SliceStory.Find(u.Text)?.Text,
                     agreedAt = row?.AgreedAt,
                     releasedAt = row?.ReleasedAt,
+                    // The slice's own branch while it is open: releasing it is then the board's merge.
+                    sliceBranch,
+                    // Released by the board's merge of its branch: a revert by hand, not a record to take back.
+                    releasedByMerge = row?.ReleasedAt is not null && cfg.SliceBranchesOn && !string.IsNullOrWhiteSpace(row.Branch),
+                    conventions = sliceBranch is not null && cfg.Steward.Conventions.Length > 0 ? cfg.Steward.Conventions : null,
+                    decisions = sliceBranch is null ? null : sliceDecisions.Where(d => d.PlanUnit == u.Number).Select(d => new
+                    {
+                        d.Number, d.Title, d.Rule,
+                        suggested = d.PromoteSuggestedAt is not null, why = d.PromoteWhy, promoted = d.PromotedAt is not null,
+                    }),
                     // Why a draft cannot be agreed from here, or null when it can (or is not a draft).
                     cannotAgree = u.Idea ? "An idea is drafted before it is agreed: the steward expands it when its turn comes."
                         : !u.Draft ? null
@@ -2590,8 +2611,15 @@ public partial class StewardService
     /// that is something to do (a migration, something to set up, something theirs) ticked off.
     /// What was only to know goes out with it and is ticked off here.
     /// </para>
+    /// <para>
+    /// On a project with slice branches, a slice that has one is the exception: the board makes
+    /// the merge into the local base itself, on this press, and still never pushes
+    /// (<see cref="ReleaseSliceAsync"/>). <paramref name="promote"/> is the slice's decisions the
+    /// owner ticked to keep, appended to the conventions file in the release's own commit.
+    /// </para>
     /// </summary>
-    public async Task<StewardReply> OwnerReleasesUnitAsync(string projectKey, int unit, bool released, CancellationToken ct = default)
+    public async Task<StewardReply> OwnerReleasesUnitAsync(string projectKey, int unit, bool released,
+        IReadOnlyList<int>? promote = null, CancellationToken ct = default)
     {
         var cfg = Config(projectKey);
         if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
@@ -2603,6 +2631,9 @@ public partial class StewardService
         var row = await UnitRowAsync(projectKey, p.Key, unit, ct);
         if (!released)
         {
+            // The board merged it: there is no record to take back, only a merge to revert by hand.
+            if (row.ReleasedAt is not null && cfg.SliceBranchesOn && !string.IsNullOrWhiteSpace(row.Branch))
+                return Refuse("merged", $"Unit {unit} was released by merging {row.Branch} into the base ({row.ReleasedSha?[..Math.Min(7, row.ReleasedSha.Length)]}). Taking that back is a revert, and it is yours to make by hand.");
             (row.ReleasedAt, row.ReleasedSha) = (null, null);
             await _db.SaveChangesAsync(ct);
             return new StewardReply("recorded");
@@ -2620,6 +2651,12 @@ public partial class StewardService
         var outstanding = notes.Count(Outstanding);
         if (outstanding > 0)
             return Refuse("notes-outstanding", $"{outstanding} note{(outstanding == 1 ? "" : "s")} for this release - a migration, something to set up, something yours to do - {(outstanding == 1 ? "is" : "are")} not ticked off.");
+
+        // A slice with a branch of its own is released by the board's merge of it into the local base.
+        if (SliceBranches.BaseFor(cfg, unit, row) is { } slice)
+            return await ReleaseSliceAsync(cfg, u, row, slice, notes, promote ?? Array.Empty<int>(), mine, ct);
+        if (promote is { Count: > 0 })
+            return Refuse("no-slice-branch", $"Unit {unit} has no branch of its own, so its release is not the board's merge and promotes nothing. Promote from the Steward page instead.");
 
         var now = DateTime.UtcNow;
         foreach (var n in notes.Where(n => n.HandledAt is null)) n.HandledAt = now;

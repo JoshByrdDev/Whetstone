@@ -156,6 +156,13 @@ public class StewardConfig
     /// </summary>
     public string[] NeverMerge { get; init; } = Array.Empty<string>();
 
+    /// <summary>
+    /// The conventions file (docs/slice-branches.md, section 4): the rules every slice keeps, edited
+    /// by the owner and appended to only by a release. Never merged by the steward, whether or not
+    /// <see cref="NeverMerge"/> names it. Empty: the project has none, and nothing is promoted.
+    /// </summary>
+    public string Conventions { get; init; } = "";
+
     public StewardCheck[] MergeChecks { get; init; } = Array.Empty<StewardCheck>();
 
     /// <summary>
@@ -170,6 +177,7 @@ public class StewardConfig
     public bool IsNeverMerged(string path)
     {
         var p = path.Replace('\\', '/');
+        if (Conventions.Length > 0 && string.Equals(p, Conventions, StringComparison.OrdinalIgnoreCase)) return true;
         return NeverMerge.Any(n =>
         {
             var rule = n.Replace('\\', '/');
@@ -215,6 +223,7 @@ public class StewardConfig
             SendBacksPerTicket = Int(limits, "sendBacksPerTicket", d.SendBacksPerTicket, 0, 20),
             SyncFrom = Str(s, "syncFrom"),
             DecisionsFile = Str(s, "decisionsFile").Replace('\\', '/').TrimStart('/'),
+            Conventions = Str(s, "conventions").Replace('\\', '/').Trim('/'),
             Plan = PlanFrom(plan),
             PastPlans = s.TryGetProperty("pastPlans", out var past) && past.ValueKind == JsonValueKind.Array
                 ? past.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object).Select(PlanFrom)

@@ -1371,47 +1371,11 @@ public partial class TicketGitService
         var exists = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
         if (!exists.Ok) return Fail($"Branch '{branch}' does not exist in {repo}.");
 
-        var head = (await GitAsync(repo, ct, "symbolic-ref", "--quiet", "--short", "HEAD")).Stdout.Trim();
-        if (head != baseBranch)
-            return Fail($"{repo} is on '{(head.Length > 0 ? head : "a detached HEAD")}', not '{baseBranch}'. " +
-                        $"Switch it back to {baseBranch} first — this merges there and will not move your checkout.");
-
-        if ((await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).Ok)
-            return Fail($"A merge is already in progress in {repo}. Finish or abort that one first.");
-
-        // Untracked files are left alone: git refuses by itself if the merge would overwrite one.
-        var tracked = await GitAsync(repo, ct, "status", "--porcelain", "--untracked-files=no");
-        var dirty = tracked.Stdout.Split('\n').Count(l => l.Trim().Length > 0);
-        if (dirty > 0)
-            return Fail($"{dirty} uncommitted change{(dirty == 1 ? "" : "s")} in {repo}. Commit or stash them before merging.");
-
-        // Land on top of what origin has, when there is an origin to ask.
-        var hasOrigin = (await GitAsync(repo, ct, "remote", "get-url", "origin")).Ok;
+        var prep = await PrepareBaseForMergeAsync(repo, baseBranch, output, ct);
+        fastForwarded = prep.FastForwarded;
+        if (prep.Error is not null) return Fail(prep.Error);
+        var hasOriginBase = prep.HasOriginBase;
         var originBase = $"origin/{baseBranch}";
-        var hasOriginBase = false;
-        if (hasOrigin)
-        {
-            var fetch = await GitAsync(repo, ct, TimeSpan.FromSeconds(90), "fetch", "origin", baseBranch);
-            if (!fetch.Ok) output.Add($"[dashboard] {Explain(fetch, "could not fetch from origin")}");
-            hasOriginBase = (await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/remotes/{originBase}")).Ok;
-        }
-        if (hasOriginBase)
-        {
-            var (localOnly, remoteOnly) = await CountAsync(repo, baseBranch, originBase, ct);
-            if (remoteOnly > 0 && localOnly > 0)
-                return Fail($"Your local {baseBranch} and {originBase} have diverged ({localOnly} and {remoteOnly} commits " +
-                            "of their own). Reconcile them by hand before merging a ticket on top.");
-            if (remoteOnly > 0)
-            {
-                if (await HeldRefusalAsync(repo, baseBranch, originBase, $"bringing {baseBranch} up to {originBase}", ct) is { } held)
-                    return Fail(held);
-                output.Add($"git merge --ff-only {originBase}");
-                var ff = await GitAsync(repo, ct, TimeSpan.FromMinutes(2), "merge", "--ff-only", originBase);
-                AddLines(output, ff);
-                if (!ff.Ok) return Fail(Explain(ff, $"could not fast-forward {baseBranch} to {originBase}"));
-                fastForwarded = true;
-            }
-        }
 
         var (_, ahead) = await CountAsync(repo, baseBranch, branch, ct);
         if (ahead == 0) return Fail($"'{branch}' has no commits that {baseBranch} does not already have.");
@@ -1500,6 +1464,62 @@ public partial class TicketGitService
         {
             HasOrigin = hasOriginBase,
         };
+    }
+
+    private record BasePrep(string? Error, bool FastForwarded, bool HasOriginBase);
+
+    /// <summary>
+    /// The fence every merge into the hub's base goes through, the ticket's and a slice's release
+    /// alike: the hub on the base with no tracked changes and no merge in progress, and a local base
+    /// behind origin fast-forwarded first; one diverged from origin is refused.
+    /// </summary>
+    private async Task<BasePrep> PrepareBaseForMergeAsync(string repo, string baseBranch, List<string> output, CancellationToken ct)
+    {
+        var ff = false;
+        var hasOriginBase = false;
+        BasePrep Prep(string error) => new(error, ff, hasOriginBase);
+        var head = (await GitAsync(repo, ct, "symbolic-ref", "--quiet", "--short", "HEAD")).Stdout.Trim();
+        if (head != baseBranch)
+            return Prep($"{repo} is on '{(head.Length > 0 ? head : "a detached HEAD")}', not '{baseBranch}'. " +
+                        $"Switch it back to {baseBranch} first — this merges there and will not move your checkout.");
+
+        if ((await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).Ok)
+            return Prep($"A merge is already in progress in {repo}. Finish or abort that one first.");
+
+        // Untracked files are left alone: git refuses by itself if the merge would overwrite one.
+        var tracked = await GitAsync(repo, ct, "status", "--porcelain", "--untracked-files=no");
+        var dirty = tracked.Stdout.Split('\n').Count(l => l.Trim().Length > 0);
+        if (dirty > 0)
+            return Prep($"{dirty} uncommitted change{(dirty == 1 ? "" : "s")} in {repo}. Commit or stash them before merging.");
+
+        // Land on top of what origin has, when there is an origin to ask.
+        var hasOrigin = (await GitAsync(repo, ct, "remote", "get-url", "origin")).Ok;
+        var originBase = $"origin/{baseBranch}";
+        if (hasOrigin)
+        {
+            var fetch = await GitAsync(repo, ct, TimeSpan.FromSeconds(90), "fetch", "origin", baseBranch);
+            if (!fetch.Ok) output.Add($"[dashboard] {Explain(fetch, "could not fetch from origin")}");
+            hasOriginBase = (await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/remotes/{originBase}")).Ok;
+        }
+        if (hasOriginBase)
+        {
+            var (localOnly, remoteOnly) = await CountAsync(repo, baseBranch, originBase, ct);
+            if (remoteOnly > 0 && localOnly > 0)
+                return Prep($"Your local {baseBranch} and {originBase} have diverged ({localOnly} and {remoteOnly} commits " +
+                            "of their own). Reconcile them by hand before merging a ticket on top.");
+            if (remoteOnly > 0)
+            {
+                if (await HeldRefusalAsync(repo, baseBranch, originBase, $"bringing {baseBranch} up to {originBase}", ct) is { } held)
+                    return Prep(held);
+                output.Add($"git merge --ff-only {originBase}");
+                var forward = await GitAsync(repo, ct, TimeSpan.FromMinutes(2), "merge", "--ff-only", originBase);
+                AddLines(output, forward);
+                if (!forward.Ok) return Prep(Explain(forward, $"could not fast-forward {baseBranch} to {originBase}"));
+                ff = true;
+            }
+        }
+
+        return new(null, ff, hasOriginBase);
     }
 
     // ---- remote hosts -------------------------------------------------------
