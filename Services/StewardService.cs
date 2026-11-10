@@ -2440,6 +2440,7 @@ public partial class StewardService
                     cannotAgree = u.Idea ? "An idea is drafted before it is agreed: the steward expands it when its turn comes."
                         : !u.Draft ? null
                         : ParentOf(cfg, u.Number, u.Text, rows).No is { } noParent ? noParent.Why
+                        : InFlight(cfg, rows) is { } full ? full.Why
                         : !isWorking ? "This plan is finished: nothing is filed against it."
                         : earlier.Count > 0 ? $"Unit {earlier[0]} comes first and is not agreed."
                         : TicketGitService.MarkAgreed(which, u.Text, DateTime.Now) is null
@@ -2573,6 +2574,8 @@ public partial class StewardService
             var (parentRow, noParent) = ParentOf(cfg, unit, text,
                 await _db.StewardUnits.AsNoTracking().Where(x => x.ProjectKey == projectKey && x.Plan == p.Key).ToListAsync(ct));
             if (noParent is not null) return noParent;
+            if (InFlight(cfg, await _db.StewardUnits.AsNoTracking().Where(x => x.ProjectKey == projectKey && x.Plan == p.Key).ToListAsync(ct)) is { } full)
+                return full;
             parent = parentRow;
             if (TicketGitService.MarkAgreed(p, text, DateTime.Now) is not { } marked)
                 return Refuse("not-by-rule", $"The status line of {u.File} is not written the way the board can rewrite. Mark it agreed in the file and commit that.");
@@ -2717,6 +2720,9 @@ public partial class StewardService
     {
         var cfg = Config(projectKey);
         if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        // A project with slice branches has slices and no plan around them (docs/slice-branches.md, section 1).
+        if (cfg.SliceBranchesOn)
+            return Refuse("slice-branches", $"{cfg.DisplayName} has slice branches: there is no plan to start. A new slice is an idea in {cfg.Steward.Plan.UnitsDir}, numbered after the last.");
         key = key?.Trim().ToLowerInvariant() ?? "";
         name = name?.Trim() ?? "";
         if (!StewardPlan.IsKey(key)) return Refuse("bad-request", "The key is the plan's short name: lowercase letters, digits and hyphens, 40 at most.");

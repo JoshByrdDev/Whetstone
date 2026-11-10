@@ -173,6 +173,37 @@ public class StewardConfig
     /// </summary>
     public bool ParallelChecks { get; init; }
 
+    /// <summary>
+    /// The folder of slice specs on a project with slice branches (<c>steward.slices</c>,
+    /// docs/slice-branches.md section 1), which stands in for <c>plan.units</c>. Empty: the plan's
+    /// folder is read instead, so a project switches without renaming anything.
+    /// </summary>
+    public string Slices { get; init; } = "";
+
+    /// <summary>How many slices may be open at once - agreed and neither released nor abandoned (section 3). The owner's.</summary>
+    public int SlicesInFlight { get; init; } = 3;
+
+    /// <summary>
+    /// This config as a project with slice branches reads it (docs/slice-branches.md, section 1):
+    /// slices with no plan around them. The plan's key and name, its charter and master, past plans
+    /// and <see cref="SyncFrom"/> are gone - so every count is by slice number alone, and a row
+    /// that still carries an old plan's key is history no count reads. What was written stays in
+    /// the file for the migration to read.
+    /// </summary>
+    public StewardConfig ForSlices() => new()
+    {
+        CreatedPerDay = CreatedPerDay, OpenAtOnce = OpenAtOnce, SendBacksPerTicket = SendBacksPerTicket,
+        SyncFrom = "", DecisionsFile = DecisionsFile, Conventions = Conventions,
+        Plan = Plan with
+        {
+            UnitsDir = Slices.Length > 0 ? Slices : Plan.UnitsDir,
+            Key = "", Name = "", Charter = "", Master = "",
+        },
+        PastPlans = Array.Empty<StewardPlan>(),
+        NeverMerge = NeverMerge, MergeChecks = MergeChecks, ParallelChecks = ParallelChecks,
+        Slices = Slices, SlicesInFlight = SlicesInFlight,
+    };
+
     /// <summary>Whether <paramref name="path"/> is one the steward may not merge a change to.</summary>
     public bool IsNeverMerged(string path)
     {
@@ -232,6 +263,8 @@ public class StewardConfig
             NeverMerge = StrArray(s, "neverMerge"),
             MergeChecks = Checks(s),
             ParallelChecks = s.TryGetProperty("parallelChecks", out var par) && par.ValueKind == JsonValueKind.True,
+            Slices = Str(s, "slices").Replace('\\', '/').Trim('/'),
+            SlicesInFlight = Int(s, "slicesInFlight", d.SlicesInFlight, 1, 50),
         };
     }
 

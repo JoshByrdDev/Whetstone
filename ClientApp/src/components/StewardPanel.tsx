@@ -174,8 +174,9 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
             <Chip on={view === 'now'} onClick={() => show('now')} title="What is waiting on you, and what it is doing">
               Now{waitingCount > 0 ? ` ${waitingCount}` : ''}
             </Chip>
-            <Chip on={view === 'plan'} onClick={() => show('plan')} title="The plan it works from, and how far each part is">
-              The plan
+            <Chip on={view === 'plan'} onClick={() => show('plan')}
+              title={register?.sliceBranches ? 'The slices it works from, and how far each is' : 'The plan it works from, and how far each part is'}>
+              {register?.sliceBranches ? 'The slices' : 'The plan'}
             </Chip>
             <Chip on={view === 'decisions'} onClick={() => show('decisions')}
               title={`The register: what is decided and whether it still is${pairs > 0 ? ` - ${pairs} pair${pairs === 1 ? '' : 's'} that may disagree` : ''}`}>
@@ -187,9 +188,12 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 : ''}`}>
               The record{recordCount > 0 ? ` ${recordCount}` : ''}
             </Chip>
-            <Chip on={view === 'new'} onClick={() => show('new')} title="Start the project's next plan, once this one is finished">
-              New plan
-            </Chip>
+            {/* Slices with no plan around them: there is no next plan to start (docs/slice-branches.md). */}
+            {!register?.sliceBranches && (
+              <Chip on={view === 'new'} onClick={() => show('new')} title="Start the project's next plan, once this one is finished">
+                New plan
+              </Chip>
+            )}
           </div>
 
           {view === 'now' && (
@@ -237,7 +241,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
             </div>
           )}
 
-          {view === 'new' && (
+          {view === 'new' && !register?.sliceBranches && (
             <div key="new" className="orbit-swap">
               <NewPlan
                 project={page.project} onStarted={async () => { setPlanKey(null); await load(); }}

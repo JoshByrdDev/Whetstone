@@ -20,6 +20,20 @@ public partial class StewardService
     private record OpenSlice(int Unit, string Branch, string? From);
 
     /// <summary>
+    /// Agreeing one more slice would open more than the project builds at once (docs/slice-branches.md,
+    /// section 3): open is agreed with its branch, and neither released nor abandoned. Ideas and
+    /// drafts never count.
+    /// </summary>
+    private static StewardReply? InFlight(ProjectConfig cfg, IEnumerable<StewardUnit> rows)
+    {
+        if (!cfg.SliceBranchesOn) return null;
+        var open = rows.Where(r => r.Branch != null && r.ReleasedAt == null && r.AbandonedAt == null).Select(r => r.Unit).Order().ToList();
+        var most = cfg.Steward.SlicesInFlight;
+        return open.Count < most ? null
+            : Refuse("in-flight", $"{open.Count} slice{(open.Count == 1 ? " is" : "s are")} open ({string.Join(", ", open)}), as many as {cfg.DisplayName} builds at once (slicesInFlight {most}). Release or abandon one before agreeing another.");
+    }
+
+    /// <summary>
     /// The project's open slices - agreed, cut, neither released nor abandoned - parents before the
     /// slices built on them, so a run brings a parent up to the base before its child takes it.
     /// Empty on a project without slice branches.

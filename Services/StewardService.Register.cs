@@ -94,12 +94,26 @@ public partial class StewardService
         return Math.Max(Math.Max(inRegister, inSpecs), pending) + 1;
     }
 
-    /// <summary>The first read or write of a project's register builds it from what the project already had.</summary>
+    /// <summary>
+    /// The first read or write of a project's register builds it from what the project already had.
+    /// A project with slice branches imports nothing (docs/slice-branches.md, section 4): the
+    /// migration that switched it took in what there was, once, and a project switched from its
+    /// start has nothing to take in. Its register starts as it is.
+    /// </summary>
     private async Task EnsureRegisterAsync(ProjectConfig cfg, CancellationToken ct)
     {
         var s = await _db.StewardStates.AsNoTracking().FirstOrDefaultAsync(x => x.ProjectKey == cfg.Name, ct);
-        if (s?.RegisterBuiltAt is null) await BuildRegisterAsync(cfg, ct);
+        if (s?.RegisterBuiltAt is not null) return;
+        if (!cfg.SliceBranchesOn) { await BuildRegisterAsync(cfg, ct); return; }
+        var state = await StewardDue.StateAsync(_db, cfg.Name);
+        state.RegisterBuiltAt ??= DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
     }
+
+    /// <summary>The import and its pairs are gone on a project with slice branches.</summary>
+    private static StewardReply? NoImport(ProjectConfig cfg) => cfg.SliceBranchesOn
+        ? Refuse("slice-branches", $"{cfg.DisplayName} has slice branches: nothing is imported into its register again, and there are no pairs to settle. Record a decision for its slice, or as a convention.")
+        : null;
 
     /// <summary>
     /// What a question was about: its unit (or the slice it said) when it named one, else its
@@ -327,6 +341,7 @@ public partial class StewardService
     public async Task<StewardReply> OwnerBuildsRegisterAsync(string projectKey, CancellationToken ct = default)
     {
         if (Config(projectKey) is not { } cfg) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        if (NoImport(cfg) is { } no) return no;
         var report = await BuildRegisterAsync(cfg, ct);
         var exported = await ExportDecisionsAsync(cfg, ct);
         return new StewardReply("built", exported, report);
@@ -423,6 +438,7 @@ public partial class StewardService
     public async Task<StewardReply> OwnerSettlesConflictAsync(string projectKey, int id, bool replaces, string? why, CancellationToken ct = default)
     {
         if (Config(projectKey) is not { } cfg) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        if (NoImport(cfg) is { } no) return no;
         var c = await _db.StewardDecisionConflicts.FirstOrDefaultAsync(x => x.Id == id && x.ProjectKey == projectKey, ct);
         if (c is null) return Refuse("bad-request", $"No pair {id} is waiting.");
         if (c.Settled is not null) return Refuse("bad-request", $"That pair was settled on {c.SettledAt:yyyy-MM-dd}.");
@@ -562,7 +578,7 @@ public partial class StewardService
         var all = await RegisterAsync(projectKey, track: false, ct);
         var replaced = await IndexAsync(projectKey, all, ct);
         var titles = await UnitTitlesAsync(cfg, ct);
-        var pairs = await _db.StewardDecisionConflicts.AsNoTracking()
+        var pairs = cfg.SliceBranchesOn ? new List<StewardDecisionConflict>() : await _db.StewardDecisionConflicts.AsNoTracking()
             .Where(c => c.ProjectKey == projectKey && c.Settled == null).OrderBy(c => c.Older).ThenBy(c => c.Newer).ToListAsync(ct);
         var built = await BuiltUnitsAsync(cfg, ct);
         return new StewardReply("register", null, new

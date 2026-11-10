@@ -361,7 +361,21 @@ public class ProjectConfig
     /// How this project's steward works: its limits, its plan, what its merge checks and refuses.
     /// See <see cref="StewardConfig"/>.
     /// </summary>
-    public StewardConfig Steward { get; init; } = new();
+    /// <summary>
+    /// The steward's settings as the project is worked. With <see cref="SliceBranchesOn"/> they are
+    /// read as slices with no plan around them (<see cref="StewardConfig.ForSlices"/>): this is the
+    /// one place that happens, so nothing downstream asks which shape it is in to count a unit.
+    /// </summary>
+    public StewardConfig Steward
+    {
+        get => SliceBranchesOn ? _sliced ??= _steward.ForSlices() : _steward;
+        init { _steward = value; _sliced = null; }
+    }
+    private StewardConfig _steward = new();
+    private StewardConfig? _sliced;
+
+    /// <summary>The steward's settings exactly as written, plan and all: for the migration to read, and nothing else.</summary>
+    public StewardConfig StewardAsWritten => _steward;
 
     /// <summary>
     /// The mode as written in the project's config (<c>stewardMode</c>). What the steward may
