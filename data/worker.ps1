@@ -322,6 +322,22 @@ function Test-BranchRef {
 #
 # Asks whatever repo it is pointed at; a worktree shares the hub's refs, so either gives the same
 # answer. Does not fetch. Returns $null when the base exists nowhere.
+# Which BRANCH this ticket's work is based on, before Resolve-BaseRef says which ref of it: the
+# ticket's own when the claim names one (a ticket of an open slice, on a project with slice
+# branches - docs/slice-branches.md), else the project's baseBranch, else the global one. The board
+# works the same answer out for the diff a person reviews and its own rebase (ForTicketAsync and
+# SliceBranches.BaseFor in Services/), and tells it here rather than leaving it to be worked out, so
+# a worker host is told it too. A claim from an app without slice branches carries no baseBranch,
+# and means exactly what it always meant.
+function Resolve-TicketBase {
+    param($Claim, [string]$DefaultBase)
+    $ticketBase = "$($Claim.baseBranch)".Trim()
+    if ($ticketBase) { return $ticketBase }
+    $projectBase = "$($Claim.project.baseBranch)".Trim()
+    if ($projectBase) { return $projectBase }
+    return $DefaultBase
+}
+
 function Resolve-BaseRef {
     param([string]$RepoDir, [string]$BaseBranch, [bool]$MergeLocally)
 
@@ -2121,8 +2137,7 @@ if (-not $repoDir) {
 }
 
 # Per-project settings, falling back to the global defaults when unset.
-$projectBase     = "$($Claim.project.baseBranch)".Trim()
-$effectiveBase   = if ($projectBase) { $projectBase } else { $BaseBranch }
+$effectiveBase   = Resolve-TicketBase -Claim $Claim -DefaultBase $BaseBranch
 $projectPrefix   = "$($Claim.project.branchPrefix)".Trim()
 $effectivePrefix = if ($projectPrefix) { $projectPrefix } else { $BranchPrefix }
 # Delivery by a local merge rather than a pull request, which decides what "the base" is - see
@@ -2176,7 +2191,7 @@ if ($claudeChoice -and $claudeChoice.gated -and "$($claudeChoice.refused)" -and 
 
 # The repos this project's code is in, in config order: the set of one for a project that is one
 # repo, built from the same keys as $effectiveBase above. See Get-RepoMembers.
-$repoMembers = @(Get-RepoMembers -Project $Claim.project -DefaultBase $BaseBranch)
+$repoMembers = @(Get-RepoMembers -Project $Claim.project -DefaultBase $BaseBranch -TicketBase "$($Claim.baseBranch)")
 $multiRepo   = Test-MultiRepo $repoMembers
 # The members with their worktrees' paths, once the workspace exists. Empty for a project of one.
 $workMembers = @()

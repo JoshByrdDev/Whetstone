@@ -170,6 +170,7 @@ builder.Services.AddSingleton<GitWorktreeService>();
 if (!isolation.On) builder.Services.AddHostedService<WorktreeReaper>();
 // The human's own git moves on a ticket: check its branch out in the hub repo, and raise its PR.
 // Separate from the worktree service above because it targets the user's checkout, not the agents'.
+builder.Services.AddSingleton<ITicketBases, TicketBases>();
 builder.Services.AddSingleton<TicketGitService>();
 builder.Services.AddSingleton<ResourcePathGate>();
 // Start/stop for each project's local stack. Takes the same lease the qa-test phase takes, so a

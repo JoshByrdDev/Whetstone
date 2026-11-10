@@ -146,6 +146,19 @@ try {
     Check 'several are several' (Test-MultiRepo $several) $true
     Check 'one named repo is several too' (Test-MultiRepo @($several[1])) $true
 
+    # A ticket based on its own branch (an open slice's, docs/slice-branches.md) is based on it in
+    # every repo it writes to; a read-only repo keeps its own base, because it is only ever read.
+    $sliceOne = @(Get-RepoMembers -Project ([pscustomobject]@{ projectPath = 'C:\Repos\Alpha'; baseBranch = 'develop' }) `
+        -DefaultBase 'trunk' -TicketBase 'slice/13-cards')
+    Check 'ticket base: the set of one takes it' $sliceOne[0].baseBranch 'slice/13-cards'
+    $sliceSeveral = @(Get-RepoMembers -Project ([pscustomobject]@{
+        projectPath = 'C:\Repos\Alpha'; baseBranch = 'develop'
+        repos = @([pscustomobject]@{ dir = 'alpha-api'; baseBranch = 'main' }, [pscustomobject]@{ dir = 'alpha-infra'; readOnly = $true })
+    }) -DefaultBase 'trunk' -TicketBase 'slice/13-cards')
+    Check 'ticket base: a writable member takes it over its own' $sliceSeveral[0].baseBranch 'slice/13-cards'
+    Check 'ticket base: a read-only member keeps its own' $sliceSeveral[1].baseBranch 'develop'
+    Check 'no ticket base: as before' (@(Get-RepoMembers -Project ([pscustomobject]@{ projectPath = 'C:\Repos\Alpha'; baseBranch = 'develop' }) -DefaultBase 'trunk' -TicketBase '')[0].baseBranch) 'develop'
+
     # ---- The set of one is Resolve-Worktree ------------------------------------
     Write-Host "== the set of one"
     $soloHub = New-Member -Project (Join-Path $root 'solo') -Name 'repo'

@@ -29,6 +29,11 @@ public interface IStewardGit
     Task<MergeResult> MergeAsync(string projectKey, string branch, string? title, string? description, CancellationToken ct = default);
     Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default);
     Task<(IReadOnlyList<StoppedRebaseKept> Kept, string? Why)> ClearStoppedRebasesAsync(string projectKey, string branch, CancellationToken ct = default);
+    /// <summary>
+    /// Cut a slice's branch from the base's local tip, or find it already cut (docs/slice-branches.md,
+    /// section 2). The sha it points at, or the refusal.
+    /// </summary>
+    Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default);
 }
 
 public partial class TicketGitService : IStewardGit

@@ -1694,6 +1694,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("AgreedFile")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Branch")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Plan")
                         .IsRequired()
                         .HasMaxLength(64)

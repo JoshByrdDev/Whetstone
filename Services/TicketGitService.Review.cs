@@ -37,6 +37,7 @@ public partial class TicketGitService
         {
             var target = WriteTargetOf(cfg, dir.Length == 0 ? null : dir, out var notHere);
             if (target is null) return (null, notHere);
+            target = (await ForTicketAsync(cfg, target, branch, ct))!;
             if (resolved.Any(r => string.Equals(r.Dir, target.Dir, StringComparison.OrdinalIgnoreCase)))
                 return (null, $"'{target.Dir}' is named twice.");
             if (!IsGitRepo(target.Path)) return (null, $"{cfg.DisplayName} has no git repo at '{target.Path}'.");

@@ -242,7 +242,13 @@ public class TicketService
     /// resource it holds beside the ticket itself. 0 for a run that holds none, and for every run on
     /// a resource whose capacity is one, which is every run unless capacity was raised for it.
     /// </para>
-    public record ClaimResult(Ticket Ticket, string Skill, bool Resumed, string[] Leases, int RunId = 0, int StackSlot = 0);
+    /// <param name="BaseBranch">
+    /// The branch the ticket is based on when it is not the project's: its open slice's branch
+    /// (docs/slice-branches.md). Null for the project's base. Filled by the claim route, which knows
+    /// the project's config.
+    /// </param>
+    public record ClaimResult(Ticket Ticket, string Skill, bool Resumed, string[] Leases, int RunId = 0, int StackSlot = 0,
+        string? BaseBranch = null);
 
     /// <summary>
     /// Claim the single most urgent workable ticket across all projects (or a filtered

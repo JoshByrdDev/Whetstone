@@ -159,6 +159,7 @@ public partial class TicketGitService
             new(target.Dir, target.ReadOnly, false, 0, 0, baseRef, worktree);
 
         if (target.ReadOnly || string.IsNullOrWhiteSpace(branch) || !IsGitRepo(target.Path)) return Untouched();
+        target = (await ForTicketAsync(cfg, target, branch, ct))!;
         if (!(await GitAsync(target.Path, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}")).Ok) return Untouched();
 
         var worktree = SharedWorktree(target.Path, branch);

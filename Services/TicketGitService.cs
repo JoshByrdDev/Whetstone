@@ -292,11 +292,43 @@ public partial class TicketGitService
     private readonly GitWorktreeService _worktrees;
     private readonly ILogger<TicketGitService> _log;
 
-    public TicketGitService(ProjectRegistry registry, GitWorktreeService worktrees, ILogger<TicketGitService> log)
+    public TicketGitService(ProjectRegistry registry, GitWorktreeService worktrees, ILogger<TicketGitService> log,
+        ITicketBases? bases = null)
     {
         _registry = registry;
         _worktrees = worktrees;
         _log = log;
+        _bases = bases;
+    }
+
+    /// <summary>
+    /// Which branch a ticket is based on, where that is not the project's (a ticket of an open
+    /// slice, docs/slice-branches.md). Null in tests that do not need it, and then every ticket is
+    /// based on the project's base.
+    /// </summary>
+    private readonly ITicketBases? _bases;
+
+    /// <summary>
+    /// <paramref name="target"/> with its base the ticket's own: the branch of the open slice the
+    /// ticket on <paramref name="branch"/> belongs to, or the project's base as before. Only a
+    /// writable repo of a project with slice branches can be re-based; anything else is returned
+    /// as it came. Every git action about one ticket's branch asks this rather than reading the
+    /// project's base directly, the same way the worker takes its base from the claim.
+    /// </summary>
+    private async Task<RepoTarget?> ForTicketAsync(ProjectConfig cfg, RepoTarget? target, string? branch, CancellationToken ct)
+    {
+        if (target is null || target.ReadOnly || _bases is null || !cfg.SliceBranchesOn || string.IsNullOrWhiteSpace(branch))
+            return target;
+        var slice = await _bases.BaseOfBranchAsync(cfg, branch.Trim(), ct);
+        return slice is null || slice == target.BaseBranch ? target : target with { BaseBranch = slice };
+    }
+
+    /// <summary>The ticket's base branch on <paramref name="branch"/>: its slice's, or the project's.</summary>
+    public async Task<string> TicketBaseBranchAsync(string projectKey, string? branch, CancellationToken ct = default)
+    {
+        var cfg = _registry.GetProjectConfig(projectKey);
+        var target = await ForTicketAsync(cfg, TargetsOf(cfg).FirstOrDefault(t => !t.ReadOnly), branch, ct);
+        return target?.BaseBranch ?? ResolveBaseBranch(cfg);
     }
 
     // ---- checkout -----------------------------------------------------------
@@ -444,6 +476,7 @@ public partial class TicketGitService
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var target = TargetOf(cfg, member, out var notHere);
+        target = await ForTicketAsync(cfg, target, branch, ct);
         var repo = target?.Path ?? cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
         var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
 
@@ -509,6 +542,7 @@ public partial class TicketGitService
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var target = TargetOf(cfg, member, out var notHere);
+        target = await ForTicketAsync(cfg, target, branch, ct);
         var repo = target?.Path ?? "";
         var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
 
@@ -540,6 +574,9 @@ public partial class TicketGitService
     private async Task<(bool Fetched, string? Error)> FetchAsync(
         string repo, string baseBranch, string branch, CancellationToken ct)
     {
+        // A slice branch is local only: origin has nothing of it to fetch, and the question of
+        // whether it is current is about the local branch, which is current by being read.
+        if (SliceBranches.IsSliceBranch(baseBranch)) return (true, null);
         var fetch = await GitAsync(repo, ct, TimeSpan.FromSeconds(90), "fetch", "origin", baseBranch, branch, "--prune");
         if (fetch.Ok) return (true, null);
 
@@ -881,6 +918,7 @@ public partial class TicketGitService
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var target = WriteTargetOf(cfg, member, out var notHere);
+        target = await ForTicketAsync(cfg, target, branch, ct);
         var repo = target?.Path ?? "";
         var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
         var baseRef = baseBranch;
@@ -903,8 +941,12 @@ public partial class TicketGitService
         // base is refreshed first. A fetch that fails is not fatal — the local base is still a real
         // commit to sit on — but it is said out loud, because "rebased" would otherwise imply more
         // than happened.
-        var fetch = await GitAsync(repo, ct, TimeSpan.FromSeconds(90), "fetch", "origin", baseBranch);
-        if (!fetch.Ok) output.Add($"[dashboard] {Explain(fetch, "could not fetch from origin")}");
+        // A slice branch is local only, and current by being read.
+        if (!SliceBranches.IsSliceBranch(baseBranch))
+        {
+            var fetch = await GitAsync(repo, ct, TimeSpan.FromSeconds(90), "fetch", "origin", baseBranch);
+            if (!fetch.Ok) output.Add($"[dashboard] {Explain(fetch, "could not fetch from origin")}");
+        }
 
         if (await BaseRefAsync(repo, cfg, baseBranch, ct) is not { } resolved)
             return Fail($"Base branch '{baseBranch}' does not exist locally or on origin.");
@@ -1165,6 +1207,7 @@ public partial class TicketGitService
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var target = WriteTargetOf(cfg, member, out var notHere);
+        target = await ForTicketAsync(cfg, target, branch, ct);
         var repo = target?.Path ?? "";
         var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
         var output = new List<string>();
@@ -1243,6 +1286,7 @@ public partial class TicketGitService
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var target = WriteTargetOf(cfg, member, out var notHere);
+        target = await ForTicketAsync(cfg, target, branch, ct);
         var repo = target?.Path ?? "";
         var baseBranch = target?.BaseBranch ?? ResolveBaseBranch(cfg);
         var output = new List<string>();

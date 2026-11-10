@@ -333,6 +333,22 @@ public class ProjectConfig
     public bool MergeInsteadOfPr { get; init; }
 
     /// <summary>
+    /// Each agreed slice gets a branch of its own off the base, its tickets fork from it and merge
+    /// into it, and it reaches the base as one piece when its owner releases it
+    /// (docs/slice-branches.md). As written in the config (<c>sliceBranches</c>); what applies is
+    /// <see cref="SliceBranchesOn"/>. Off unless set, and a project that has not switched runs
+    /// exactly as it did before slice branches existed.
+    /// </summary>
+    public bool SliceBranches { get; init; }
+
+    /// <summary>
+    /// Whether this project's slices really get branches: only where delivery is a local merge, as
+    /// a slice branch is local and the fleet never pushes; never on TFVC, whose one writer is the
+    /// human; and not on a project of several repos, which has no steward to agree a slice.
+    /// </summary>
+    public bool SliceBranchesOn => SliceBranches && MergeInsteadOfPr && !IsTfvc && !IsMultiRepo;
+
+    /// <summary>
     /// This project's stack can run more than once on one machine at the same time: its skill or
     /// conventions say how a run on stack slot N (<c>WHETSTONE_STACK_SLOT</c>) picks its own compose
     /// project and ports. Only then may a worker host's <c>qaLeases</c> above 1 apply to it - without
@@ -621,6 +637,7 @@ public class ProjectRegistry
             SkipClassroomAnalysisByDefault = cfg.TryGetValue("skipClassroomAnalysisByDefault", out var sca)
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
+            SliceBranches = cfg.TryGetValue("sliceBranches", out var sb) && sb.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
             ResourcePaths = GetStrArrayMap(cfg, "resourcePaths"),

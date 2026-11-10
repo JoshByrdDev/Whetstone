@@ -69,9 +69,9 @@ function New-Hub {
 function Get-Sha { param([string]$Dir, [string]$Ref) return (git -C $Dir rev-parse $Ref 2>$null) }
 
 function New-TicketWorktree {
-    param($Repo, [string]$Branch, [bool]$MergeLocally, [string]$Skill = 'speculate')
+    param($Repo, [string]$Branch, [bool]$MergeLocally, [string]$Skill = 'speculate', [string]$Base = 'main')
     return Resolve-Worktree -RepoDir $Repo.hub -WorktreeRoot $Repo.wt -Skill $Skill -TicketId '1' `
-        -RecordedBranch $Branch -IssueBranchToken '' -BaseBranch 'main' -BranchPrefix '' `
+        -RecordedBranch $Branch -IssueBranchToken '' -BaseBranch $Base -BranchPrefix '' `
         -CopyFiles @() -Setup @() -ReviewBranch '' -MergeLocally $MergeLocally
 }
 
@@ -475,6 +475,66 @@ exit 1
     $template = Get-Content -Path (Join-Path $PSScriptRoot 'heartbeat-prompt.md') -Raw
     Check 'the template ends with the skill' ($template.TrimEnd().EndsWith('{{SKILL_TEXT}}')) $true
     Check '... and the worktree note sits on the working-directory line' ($template -match 'git switch` here\.\{\{WORKTREE_NOTE\}\}\r?\n') $true
+
+    # ---- A ticket's base is its slice's (docs/slice-branches.md, section 2) -------
+    # The board decides which branch (SliceBranches.BaseFor) and names it on the claim; the worker
+    # takes it from there, and every git action below already asks Resolve-BaseRef of whatever
+    # branch it is handed. A slice branch is local only, so it resolves to the local ref.
+    Write-Host "== the ticket's base"
+    $proj = [pscustomobject]@{ baseBranch = 'main' }
+    Check 'open slice: the claim names its branch' `
+        (Resolve-TicketBase -Claim ([pscustomobject]@{ baseBranch = 'slice/13-cards'; project = $proj }) -DefaultBase 'trunk') 'slice/13-cards'
+    Check 'no slice: the claim names none, so the project base' `
+        (Resolve-TicketBase -Claim ([pscustomobject]@{ baseBranch = $null; project = $proj }) -DefaultBase 'trunk') 'main'
+    Check 'released slice: the claim names none, so the project base' `
+        (Resolve-TicketBase -Claim ([pscustomobject]@{ baseBranch = ''; project = $proj }) -DefaultBase 'trunk') 'main'
+    Check 'a claim from before slice branches: the project base' `
+        (Resolve-TicketBase -Claim ([pscustomobject]@{ project = $proj }) -DefaultBase 'trunk') 'main'
+    Check 'no project base either: the global one' `
+        (Resolve-TicketBase -Claim ([pscustomobject]@{ project = [pscustomobject]@{} }) -DefaultBase 'trunk') 'trunk'
+
+    $sl = New-Hub 'slice'
+    Add-Commit -Dir $sl.hub -File 'agreed.md' -Subject 'Unit 13 of the plan, agreed by its owner'
+    git -C $sl.hub branch --no-track slice/13-cards main *> $null
+    # An earlier ticket of the slice, merged into the slice branch and not the base. The hub stays
+    # on main, as a person's checkout would.
+    $sw = Join-Path $root 'slice-merge-wt'
+    git -C $sl.hub worktree add $sw slice/13-cards *> $null
+    Add-Commit -Dir $sw -File 'cards.txt' -Subject 'an earlier ticket of slice 13'
+    git -C $sl.hub worktree remove --force $sw *> $null
+    git -C $sl.hub push origin main *> $null
+
+    Check 'slice branch, merge project with origin -> the local slice branch' `
+        (Resolve-BaseRef -RepoDir $sl.hub -BaseBranch 'slice/13-cards' -MergeLocally $true) 'slice/13-cards'
+    Check 'slice branch has no origin ref, so even a PR reading resolves local' `
+        (Resolve-BaseRef -RepoDir $sl.hub -BaseBranch 'slice/13-cards' -MergeLocally $false) 'slice/13-cards'
+
+    $wt = New-TicketWorktree -Repo $sl -Branch 't-13a' -MergeLocally $true -Base 'slice/13-cards'
+    Check 'open slice: worktree is created' $wt.ok $true
+    Check 'open slice: forks from the slice tip' (Get-Sha $wt.path HEAD) (Get-Sha $sl.hub 'slice/13-cards')
+    Check 'open slice: the slice''s earlier work is in the worktree' (Test-Path (Join-Path $wt.path 'cards.txt')) $true
+
+    Add-Commit -Dir $wt.path -File 'mine.txt' -Subject 'T13a: first'
+    Add-Commit -Dir $wt.path -File 'mine.txt' -Subject 'T13a: second'
+    $squash = Compress-TicketCommits -WorkDir $wt.path -TicketId '1' -Title 'Cards' -IssueRef '' `
+        -BaseBranch 'slice/13-cards' -Summary 'Adds cards.' -MergeLocally $true
+    Check 'open slice: the squash folds only the ticket''s own commits' $squash.from 2
+    Check 'open slice: one commit past the slice branch' (git -C $wt.path rev-list --count slice/13-cards..HEAD) 1
+
+    # The base moves (a ticket of no slice lands) and so does the slice (another of its tickets).
+    Add-Commit -Dir $sl.hub -File 'base-only.txt' -Subject 'a fix to released work, on the base'
+    $sw2 = Join-Path $root 'slice-merge-wt2'
+    git -C $sl.hub worktree add $sw2 slice/13-cards *> $null
+    Add-Commit -Dir $sw2 -File 'more-cards.txt' -Subject 'another ticket of slice 13'
+    git -C $sl.hub worktree remove --force $sw2 *> $null
+    $rebase = Update-BranchFromBase -WorkDir $wt.path -BaseBranch 'slice/13-cards' -RepoDir $sl.hub -MergeLocally $true
+    Check 'open slice: the hand-off rebase is onto the slice branch' "$($rebase.rebased) $($rebase.base) $($rebase.behind)" 'True slice/13-cards 1'
+    Check 'open slice: the slice''s new work arrived' (Test-Path (Join-Path $wt.path 'more-cards.txt')) $true
+    Check 'open slice: the base''s own work did not (it reaches the slice by its sync)' (Test-Path (Join-Path $wt.path 'base-only.txt')) $false
+
+    $plain = New-TicketWorktree -Repo $sl -Branch 't-14' -MergeLocally $true
+    Check 'no slice, same project: forks from the base' (Get-Sha $plain.path HEAD) (Get-Sha $sl.hub main)
+    Check 'no slice: none of the slice''s work is in it' (Test-Path (Join-Path $plain.path 'cards.txt')) $false
 }
 finally {
     # Worktree .git files are read-only on Windows; -Force is what removes them.

@@ -418,6 +418,14 @@ public class StewardUnit
 
     /// <summary>The base branch's head when it was released: what "released" meant that day.</summary>
     public string? ReleasedSha { get; set; }
+
+    /// <summary>
+    /// Its own branch (<c>slice/13-cards</c>), on a project with slice branches: cut from the base
+    /// when the owner agreed it, and the base of every ticket of it until it is released
+    /// (docs/slice-branches.md, section 2). Null on a project without them, and for a slice agreed
+    /// before its project switched.
+    /// </summary>
+    public string? Branch { get; set; }
 }
 
 /// <summary>Where a <see cref="StewardDecision"/> came from.</summary>

@@ -160,6 +160,37 @@ public partial class TicketGitService
         return GitDirs[repo] = dir;
     }
 
+    /// <summary>
+    /// Cut <paramref name="branch"/> - a slice's own branch - from the base's local tip in the hub.
+    /// <para>
+    /// The local tip, because a slice branch is only made on a project that merges locally, where
+    /// the local base is what every ticket lands on and origin's may be dozens of merges behind
+    /// (<see cref="BaseRefAsync"/>). Only a ref is written, so nothing about the hub's checkout or
+    /// its working tree has to be asked first. A branch already there is taken as cut - an agreement
+    /// pressed twice, or one cut by hand - however far it has moved since, and never reset: a slice
+    /// branch has tickets merged into it.
+    /// </para>
+    /// </summary>
+    public async Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default)
+    {
+        var (_, repo, baseBranch) = HubOf(projectKey);
+        if (!IsGitRepo(repo)) return (null, $"There is no git repo at '{repo}'.");
+        if (!branch.StartsWith(SliceBranches.Prefix, StringComparison.Ordinal)
+            || !(await GitAsync(repo, ct, "check-ref-format", "--branch", branch)).Ok)
+            return (null, $"'{branch}' is not a slice branch's name.");
+
+        var have = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}");
+        if (have.Ok && have.Stdout.Trim() is { Length: > 0 } existing) return (existing, null);
+
+        var tip = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{baseBranch}");
+        if (!tip.Ok || tip.Stdout.Trim() is not { Length: > 0 } sha)
+            return (null, $"The base branch '{baseBranch}' is not a local branch in {repo}, so there is nothing to cut '{branch}' from.");
+        var cut = await GitAsync(repo, ct, "branch", "--no-track", branch, sha);
+        if (!cut.Ok) return (null, Explain(cut, $"could not cut '{branch}'"));
+        _log.LogInformation("Cut {Branch} from {Base} at {Sha} in {Repo}", branch, baseBranch, sha, repo);
+        return (sha, null);
+    }
+
     /// <summary>The base branch's head in the hub, or null when it cannot be read.</summary>
     public async Task<string?> BaseHeadAsync(string projectKey, CancellationToken ct = default)
     {

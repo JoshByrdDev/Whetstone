@@ -170,7 +170,7 @@ public static class TicketEndpoints
         // Atomically claim the next ticket for the one global heartbeat: most-progressed
         // workable ticket across all projects (or the given subset). Locks it into its "-ing"
         // phase and returns everything the orchestrator needs to launch the worker.
-        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments) =>
+        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments, DashboardDbContext db) =>
         {
             bool SkillExists(string projectKey, string skill) => File.Exists(paths.SkillFile(projectKey, skill));
 
@@ -292,6 +292,9 @@ public static class TicketEndpoints
 
             var key = result.Ticket.ProjectKey;
             var cfg = registry.GetProjectConfig(key);
+            // The ticket's own base: its open slice's branch, on a project with slice branches.
+            // Told to the worker rather than left for it to work out, so a worker host is told too.
+            result = result with { BaseBranch = await SliceBranches.ForTicketAsync(db, cfg, result.Ticket) };
             var tracker = trackers.For(key);
             var r = await resolver.ResolveAsync(result.Ticket);
 
@@ -341,6 +344,10 @@ public static class TicketEndpoints
                     resumed = result.Resumed,
                     runId = result.RunId,
                     stackSlot = result.StackSlot,
+                    // The branch this ticket is forked from and measured against when it is not the
+                    // project's (an open slice's, docs/slice-branches.md); null means project.baseBranch,
+                    // as every claim before slice branches meant.
+                    baseBranch = result.BaseBranch,
                     leases = result.Leases,
                     issueChanges,
                     // How this project's tracker wants its issue named in a branch and in a commit

@@ -33,16 +33,19 @@
 # and copy keys - exactly what Resolve-Worktree was always given. A member's base falls back to the
 # project's, then to $DefaultBase (the global one).
 function Get-RepoMembers {
-    param($Project, [string]$DefaultBase)
+    param($Project, [string]$DefaultBase, [string]$TicketBase = '')
 
     $projectBase = "$($Project.baseBranch)".Trim()
     if (-not $projectBase) { $projectBase = $DefaultBase }
+    # A ticket based on its own branch (an open slice's - see Resolve-TicketBase in worker.ps1) is
+    # based on it in every repo it can write to; a read-only repo is only read, at its own base.
+    $TicketBase = "$TicketBase".Trim()
     $members = New-Object System.Collections.Generic.List[object]
 
     $repos = @($Project.repos | Where-Object { $_ })
     if ($repos.Count -eq 0) {
         [void]$members.Add(@{
-            dir = ''; hub = "$($Project.projectPath)"; baseBranch = $projectBase
+            dir = ''; hub = "$($Project.projectPath)"; baseBranch = $(if ($TicketBase) { $TicketBase } else { $projectBase })
             setup = @($Project.worktreeSetup | Where-Object { $_ }); copy = @($Project.worktreeCopyFiles | Where-Object { $_ })
             readOnly = $false
         })
@@ -55,6 +58,7 @@ function Get-RepoMembers {
         if (-not $hub) { $hub = Join-Path "$($Project.projectPath)" $dir }
         $base = "$($r.baseBranch)".Trim()
         if (-not $base) { $base = $projectBase }
+        if ($TicketBase -and $r.readOnly -ne $true) { $base = $TicketBase }
         [void]$members.Add(@{
             dir = $dir; hub = $hub; baseBranch = $base
             setup = @($r.worktreeSetup | Where-Object { $_ }); copy = @($r.worktreeCopyFiles | Where-Object { $_ })

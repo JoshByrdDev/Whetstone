@@ -2477,6 +2477,10 @@ public partial class StewardService
             if (!u.Draft) return Refuse("not-a-draft", $"{u.File} does not say it is a draft, so there is nothing here to agree by rule. Mark it agreed in the file and commit that.");
             if (plan.FirstOrDefault(x => x.Number < unit && !x.Agreed) is { } earlier)
                 return Refuse("not-next", $"Unit {earlier.Number} comes first and is not agreed. Units are worked in order.");
+            // A slice branch is cut from the base's local tip once the agreement is committed. A base
+            // that is not a local branch has nothing to cut it from, so the agreement waits too.
+            if (cfg.SliceBranchesOn && await _git.BaseHeadAsync(projectKey, ct) is null)
+                return Refuse("no-base", $"{cfg.DisplayName} has slice branches, and its base is not a local branch to cut unit {unit}'s from.");
             if (TicketGitService.MarkAgreed(p, text, DateTime.Now) is not { } marked)
                 return Refuse("not-by-rule", $"The status line of {u.File} is not written the way the board can rewrite. Mark it agreed in the file and commit that.");
             text = marked;
@@ -2490,10 +2494,25 @@ public partial class StewardService
         if (no is not null) return Refuse("refused", no);
 
         var summary = $"Unit {unit}: {(n == 0 ? "agreed" : $"{(agree ? "agreed, and " : "")}decided {string.Join("; ", said)}")}. Written into {u.File} at {sha}.";
+        string? sliceBranch = null, sliceRefusal = null;
         if (agree)
         {
             var row = await UnitRowAsync(projectKey, p.Key, unit, ct);
             (row.AgreedAt, row.AgreedFile) = (DateTime.UtcNow, u.File);
+            // Agreeing is the moment a slice's branch is cut, on a project with slice branches
+            // (docs/slice-branches.md, section 2): from the base's tip, which now holds the agreement.
+            if (cfg.SliceBranchesOn)
+            {
+                var name = row.Branch ?? SliceBranches.NameFor(unit, u.File);
+                var (cutAt, no2) = await _git.CutSliceBranchAsync(projectKey, name, ct);
+                if (cutAt is not null) row.Branch = sliceBranch = name;
+                else
+                {
+                    // The agreement is committed and stands; the reply says the branch is missing.
+                    // The base was there a moment ago (asked before the commit), so this is rare.
+                    sliceRefusal = no2;
+                }
+            }
         }
         // The register holds each decision's status; the spec keeps the words, written once, above.
         foreach (var (number, title, rule) in each)
@@ -2521,6 +2540,7 @@ public partial class StewardService
         {
             file = u.File, commit = sha, decided = said,
             open = UnitDecisions.Open(text).Select(d => d.Number),
+            sliceBranch, sliceBranchRefused = sliceRefusal,
         });
     }
 

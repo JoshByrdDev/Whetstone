@@ -2274,6 +2274,17 @@ public partial class StewardServiceTests : IDisposable
         public Task<(IReadOnlyList<StoppedRebaseKept> Kept, string? Why)> ClearStoppedRebasesAsync(string projectKey, string branch, CancellationToken ct = default) =>
             Task.FromResult(StoppedAnswer);
 
+        /// <summary>Slice branches cut, in order; <see cref="CutRefusal"/> refuses every cut instead.</summary>
+        public List<string> Cut = new();
+        public string? CutRefusal;
+
+        public Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default)
+        {
+            if (CutRefusal is not null) return Task.FromResult<(string?, string?)>((null, CutRefusal));
+            Cut.Add(branch);
+            return Task.FromResult<(string?, string?)>((Head, null));
+        }
+
         public Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default) =>
             Task.FromResult<string?>(PathsChangeIds.TryGetValue(string.Join("\n", paths), out var id) ? id : $"paths-of-{ChangeId}");
 
