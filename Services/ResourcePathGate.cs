@@ -33,7 +33,7 @@ public class ResourcePathGate
     public ResourcePathGate(TicketGitService git, ProjectRegistry registry)
         : this(async (project, branch) =>
         {
-            var (files, error) = await git.ChangedFilesAsync(project, branch);
+            var (files, error) = await git.ChangedFilesAsync(project, branch, branch: branch);
             return error is null ? files.Select(f => f.Path).ToList() : null;
         }, registry.GetProjectConfig, () => DateTime.UtcNow) { }
 

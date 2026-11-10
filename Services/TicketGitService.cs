@@ -1743,8 +1743,14 @@ public partial class TicketGitService
     /// instead: a unit report's range, whose end is the base itself and so has nothing against it.
     /// </para>
     /// </summary>
+    /// <para>
+    /// With <paramref name="branch"/>, the ticket the diff is of: it is measured against that ticket's
+    /// base, which on a project with slice branches is its open slice's branch, so a slice ticket's
+    /// diff is its own change and not the whole slice's (<see cref="ForTicketAsync"/>).
+    /// </para>
     public async Task<FileDiff> FileDiffAsync(string projectKey, string headRef, string path,
-        CancellationToken ct = default, string? fromRef = null, IReadOnlyDictionary<string, string>? repoHeads = null)
+        CancellationToken ct = default, string? fromRef = null, IReadOnlyDictionary<string, string>? repoHeads = null,
+        string? branch = null)
     {
         FileDiff Fail(string error) => new(path, "", 0, 0, false, error);
 
@@ -1755,6 +1761,7 @@ public partial class TicketGitService
         if (CleanRepoPath(path) is not { } named) return Fail($"'{path}' is not a path inside the repo.");
         if (SplitRepoPath(cfg, named, out var notHere) is not { } split) return Fail(notHere!);
         var (target, clean) = split;
+        if (fromRef is null) target = (await ForTicketAsync(cfg, target, branch, ct))!;
         var repo = target.Path;
         if (!IsGitRepo(repo)) return Fail($"{cfg.DisplayName} has no git repo at '{repo}'.");
         if (string.IsNullOrWhiteSpace(headRef)) return Fail("This analysis is not pinned to a commit.");
@@ -1828,9 +1835,13 @@ public partial class TicketGitService
     /// in every writable repo; a commit is in the one that made it.
     /// </para>
     /// </summary>
+    /// <para>
+    /// With <paramref name="branch"/>, the ticket the files are of, measured against that ticket's
+    /// base as <see cref="FileDiffAsync"/> is.
+    /// </para>
     public async Task<(IReadOnlyList<(string Path, int Added, int Removed)> Files, string? Error)> ChangedFilesAsync(
         string projectKey, string headRef, CancellationToken ct = default, string? fromRef = null,
-        IReadOnlyDictionary<string, string>? repoHeads = null)
+        IReadOnlyDictionary<string, string>? repoHeads = null, string? branch = null)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var none = Array.Empty<(string, int, int)>();
@@ -1839,6 +1850,7 @@ public partial class TicketGitService
         if (!cfg.IsMultiRepo)
         {
             var only = TargetOf(cfg, null, out _)!;
+            if (fromRef is null) only = (await ForTicketAsync(cfg, only, branch, ct))!;
             if (!IsGitRepo(only.Path)) return (none, $"{cfg.DisplayName} has no git repo at '{only.Path}'.");
             var error = await ChangedFilesInAsync(only, headRef, fromRef, files, ct);
             return error is null ? (files, null) : (none, error);

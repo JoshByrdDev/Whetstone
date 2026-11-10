@@ -84,6 +84,7 @@ public class SliceBranchTests : IDisposable
     [InlineData(4, @"docs\units\4-Sign In & Out.md", "slice/04-sign-in-out")]
     [InlineData(7, "units/seven.md", "slice/07-seven")]
     [InlineData(12, "12.md", "slice/12")]
+    [InlineData(3, "docs/units/03-u3.md", "slice/03-u3")]
     public void A_slice_branch_is_named_for_its_number_and_spec(int number, string file, string want) =>
         Assert.Equal(want, SliceBranches.NameFor(number, file));
 
@@ -379,6 +380,41 @@ public class SliceBranchTests : IDisposable
         Assert.Equal(sliceTip, Lines("rev-list", "--parents", "-n", "1", Slice).Single().Split(' ')[1]);
         Assert.Equal(Lines("show", "main:fix.txt"), Lines("show", $"{Slice}:fix.txt"));
         Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("whetstone-slice-sync"));
+    }
+
+    // ---- the Classroom and analysis read a slice ticket's own change -----------------------------
+
+    [Fact]
+    public async Task A_slice_tickets_changed_files_and_diff_are_its_own_not_the_whole_slices()
+    {
+        await LayOutAsync();
+        var head = Rev("t-13");
+
+        var (own, error) = await _svc.ChangedFilesAsync("alpha", head, branch: "t-13");
+        Assert.Null(error);
+        Assert.Equal(new[] { "mine.txt" }, own.Select(f => f.Path));
+        var earlier = await _svc.FileDiffAsync("alpha", head, "cards.txt", branch: "t-13");
+        Assert.Null(earlier.Error);
+        Assert.Equal("", earlier.Patch);
+        Assert.Equal(1, (await _svc.FileDiffAsync("alpha", head, "mine.txt", branch: "t-13")).Added);
+
+        // Named by no ticket, or on a project without the switch, it is measured against the base as before.
+        var (whole, _) = await _svc.ChangedFilesAsync("alpha", head);
+        Assert.Equal(new[] { "cards.txt", "mine.txt" }, whole.Select(f => f.Path).OrderBy(p => p));
+        var (bravo, _) = await _svc.ChangedFilesAsync("bravo", Rev("b-13"), branch: "b-13");
+        Assert.Equal(new[] { "cards.txt", "mine.txt" }, bravo.Select(f => f.Path).OrderBy(p => p));
+    }
+
+    [Fact]
+    public void The_analysis_run_is_told_to_read_against_the_tickets_base()
+    {
+        var cfg = _registry.GetProjectConfig("alpha");
+        var t = new Ticket { ProjectKey = "alpha", Title = "Cards", Branch = "t-13", PlanUnit = 13 };
+        var empty = DescriptionSegmenter.Compose(new[] { new DescriptionSegmenter.Source(null, null, null) });
+        var slice = AnalysisRunner.BuildPrompt(t, cfg, AnalysisLens.Full, _hub, "Cards", "d", empty, Array.Empty<Whetstone.Services.Tracker.IssueRef>(), Slice);
+        Assert.Contains($"git log --oneline {Slice}..HEAD", slice);
+        var plain = AnalysisRunner.BuildPrompt(t, cfg, AnalysisLens.Full, _hub, "Cards", "d", empty, Array.Empty<Whetstone.Services.Tracker.IssueRef>());
+        Assert.Contains("git log --oneline main..HEAD", plain);
     }
 
     // ---- plumbing ----------------------------------------------------------------------------

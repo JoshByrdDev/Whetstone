@@ -225,7 +225,7 @@ public class WalkthroughService
             .GroupBy(x => x.name, StringComparer.OrdinalIgnoreCase).Select(g => g.First())
             .ToList();
 
-        var (changed, changedError) = await _git.ChangedFilesAsync(t.ProjectKey, commit, ct, repoHeads: repoHeads);
+        var (changed, changedError) = await _git.ChangedFilesAsync(t.ProjectKey, commit, ct, repoHeads: repoHeads, branch: t.Branch);
         if (changedError is not null) return (null, changedError);
 
         var prompt = WalkthroughPrompt.Build(t, a, doc, resolved.Title, description,
@@ -241,7 +241,7 @@ public class WalkthroughService
         {
             if (!patches.TryGetValue(path, out var p))
             {
-                var diff = await _git.FileDiffAsync(t.ProjectKey, commit, path, ct, repoHeads: repoHeads);
+                var diff = await _git.FileDiffAsync(t.ProjectKey, commit, path, ct, repoHeads: repoHeads, branch: t.Branch);
                 var (text, textError) = await _git.FileAtAsync(t.ProjectKey, commit, path, ct, repoHeads);
                 p = (text, diff.Error is null ? diff.Patch : null, diff.Error ?? textError);
                 if (diff.Truncated) p = (text, null, "its diff is too large to show from");

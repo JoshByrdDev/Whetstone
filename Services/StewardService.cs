@@ -2510,7 +2510,9 @@ public partial class StewardService
         {
             if (u.Agreed) return Refuse("already-agreed", $"{u.File} is already agreed.");
             if (!u.Draft) return Refuse("not-a-draft", $"{u.File} does not say it is a draft, so there is nothing here to agree by rule. Mark it agreed in the file and commit that.");
-            if (plan.FirstOrDefault(x => x.Number < unit && !x.Agreed) is { } earlier)
+            // With slice branches a slice's number is only its id, given in the order slices were made:
+            // each is agreed and built on its own branch, so none waits for an earlier one to be agreed.
+            if (!cfg.SliceBranchesOn && plan.FirstOrDefault(x => x.Number < unit && !x.Agreed) is { } earlier)
                 return Refuse("not-next", $"Unit {earlier.Number} comes first and is not agreed. Units are worked in order.");
             // A slice branch is cut from the base's local tip once the agreement is committed. A base
             // that is not a local branch has nothing to cut it from, so the agreement waits too.

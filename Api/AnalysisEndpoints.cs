@@ -158,7 +158,7 @@ public static class AnalysisEndpoints
             // commit is looked up from its path instead (AnalysisPin).
             var head = a.HeadSha ?? a.Branch ?? t.Branch ?? "";
             return Results.Ok(await git.FileDiffAsync(t.ProjectKey, head, path, ct,
-                repoHeads: AnalysisPin.HeadsFrom(a.RepoHeadsJson)));
+                repoHeads: AnalysisPin.HeadsFrom(a.RepoHeadsJson), branch: a.Branch ?? t.Branch));
         });
 
         // Join the queue. Named "generate" still because that is what the button says and what the

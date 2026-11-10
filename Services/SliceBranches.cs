@@ -39,8 +39,9 @@ public static class SliceBranches
     public static string NameFor(int number, string file)
     {
         var stem = Path.GetFileNameWithoutExtension(file.Replace('\\', '/').Split('/').Last()) ?? "";
-        // The number is in the name already in the usual layout; it is taken out so it is not written twice.
-        var rest = Regex.Replace(stem, $@"(?<!\d)0*{number}(?!\d)", "", RegexOptions.None, TimeSpan.FromSeconds(1));
+        // The number leads the name in the usual layout; it is taken out so it is not written twice,
+        // and only there - "03-u3" keeps its "u3".
+        var rest = Regex.Replace(stem, $@"^0*{number}(?!\d)", "", RegexOptions.None, TimeSpan.FromSeconds(1));
         var slug = Regex.Replace(rest.ToLowerInvariant(), "[^a-z0-9]+", "-").Trim('-');
         if (slug.Length > 40) slug = slug[..40].TrimEnd('-');
         return $"{Prefix}{number:00}{(slug.Length > 0 ? "-" + slug : "")}";

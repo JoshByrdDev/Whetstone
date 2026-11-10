@@ -152,8 +152,11 @@ public class AnalysisRunner : IAnalysisExecutor
             reqs = new Requirements(map.Segments, map.Dropped,
                 DescriptionSegmenter.Fingerprint(resolved.Description));
 
+            // The ticket's own base: its open slice's branch on a project with slice branches, so the
+            // run reads the ticket's change and not the whole slice's (docs/slice-branches.md).
+            var ticketBase = await SliceBranches.ForTicketAsync(db, cfg, ticket, ct);
             prompt = BuildPrompt(ticket, cfg, lens, readDir, resolved.Title, resolved.Description,
-                map, siblings);
+                map, siblings, ticketBase);
         }
         catch (OperationCanceledException)
         {
@@ -407,7 +410,7 @@ public class AnalysisRunner : IAnalysisExecutor
     /// </summary>
     public static string BuildPrompt(Ticket t, ProjectConfig cfg, AnalysisLens lens, string readDir,
         string? effectiveTitle, string? effectiveDescription,
-        DescriptionSegmenter.Result map, IReadOnlyList<IssueRef> siblings)
+        DescriptionSegmenter.Result map, IReadOnlyList<IssueRef> siblings, string? ticketBase = null)
     {
         string P(string path) => path.Replace('\\', '/');
 
@@ -607,7 +610,8 @@ public class AnalysisRunner : IAnalysisExecutor
 
         var label = string.IsNullOrWhiteSpace(cfg.LearningLabel) ? "the domain" : cfg.LearningLabel;
         var display = string.IsNullOrWhiteSpace(cfg.DisplayName) ? t.ProjectKey : cfg.DisplayName;
-        var baseBranch = string.IsNullOrWhiteSpace(cfg.BaseBranch) ? "main" : cfg.BaseBranch;
+        var baseBranch = !string.IsNullOrWhiteSpace(ticketBase) ? ticketBase
+            : string.IsNullOrWhiteSpace(cfg.BaseBranch) ? "main" : cfg.BaseBranch;
 
         // A project of several repos is read from its workspace, which is a folder of repos rather
         // than a repo: each has its own base, git runs inside one, and a file is named with its

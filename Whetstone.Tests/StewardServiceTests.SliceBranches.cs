@@ -32,6 +32,17 @@ public partial class StewardServiceTests
     }
 
     [Fact]
+    public async Task With_slice_branches_a_slice_is_agreed_whether_or_not_an_earlier_one_is()
+    {
+        _git.More[3] = ("docs/units/03-third.md", "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n");
+        // Without the switch, units are agreed in order: unit 2 is still a draft.
+        Assert.Equal("not-next", (await In(s => s.OwnerAgreesUnitAsync("alpha", 3))).Answer);
+        SwitchToSliceBranches();
+        Assert.Equal("agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 3))).Answer);
+        Assert.Equal(new[] { "slice/03-third" }, _git.Cut);
+    }
+
+    [Fact]
     public async Task Without_the_switch_agreeing_cuts_nothing()
     {
         Assert.Equal("agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 2))).Answer);
