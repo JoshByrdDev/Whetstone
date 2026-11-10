@@ -93,6 +93,21 @@ $cases = @(
     @{ Expect='deny'; Tool='Bash'; Cmd='psql -h db.production.internal -U postgres -c "delete from users"' },
     @{ Expect='deny'; Tool='Bash'; Cmd='git push origin jb/PROJ-123' },
     @{ Expect='deny'; Tool='Bash'; Cmd='ssh deploy@app-01 "systemctl restart app"' },
+    # --- a Mac's spellings: a word that runs the next command, and rsync ---
+    @{ Expect='deny'; Tool='Bash'; Cmd='sudo ssh deploy@app-01' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='sudo -E git push origin main' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='nohup ssh -N -L 1433:db:1433 deploy@app-01 &' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='env AWS_PROFILE=prod aws s3 ls' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='cd dist && time scp -r . deploy@app-01:/srv/app' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='rsync -av ./dist/ deploy@app-01:/srv/app/' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='rsync -a app-01.example.com:backups/ ./restore/' },
+    @{ Expect='deny'; Tool='Bash'; Cmd='rsync -a rsync://mirror.example.com/pkgs/ ./pkgs/' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='rsync -a ./src/ ./build/' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='rsync -a --delete /Users/pat/projects/app/ /Users/pat/backup/app/' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='rsync -a C:\src\app\ D:\backup\app\' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='sudo docker compose down' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='time dotnet test backend/tests/App.Tests' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='env NODE_ENV=test npm test' },
     @{ Expect='deny'; Tool='Bash'; Cmd='curl -X DELETE https://app.example.com/api/v1/customers/42' },
     @{ Expect='deny'; Tool='Bash'; Cmd='dotnet ef database update --connection "Server=app-prod.database.windows.net;Database=AppCore"' },
     @{ Expect='deny'; Tool='Bash'; Cmd='gh workflow run deploy.yml' },
@@ -212,7 +227,8 @@ function Invoke-Hook {
     $hookArgs = if ($Case.Args) { $Case.Args } else { $DefaultArgs }
     # The board's address, as worker.ps1 sets it for a run on a worker host - and only then.
     if ($Case.Board) { $env:WHETSTONE_BOARD_HOST = $Case.Board } else { Remove-Item Env:WHETSTONE_BOARD_HOST -ErrorAction SilentlyContinue }
-    $out = "$($json | & powershell -NoProfile -ExecutionPolicy Bypass -File $Script @hookArgs)"
+    # On the PowerShell running these tests, so the guard is proven on 5.1 and on 7 by running them on each.
+    $out = "$($json | & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File $Script @hookArgs)"
     Remove-Item Env:WHETSTONE_BOARD_HOST -ErrorAction SilentlyContinue
     if (-not $out.Trim()) { return 'none' }
     # Two decisions in one answer is not valid JSON, and the harness would read it as none.

@@ -163,7 +163,9 @@ function Invoke-WorkspaceSetup {
     }
 
     # What a job needs from worker.ps1, sent as text: a job is another process and has none of it.
-    $defs = @('Initialize-Worktree', 'Get-GitUsrBin', 'Invoke-SetupCommand', 'Format-OutputTail', 'Get-SetupFailedMarker' | ForEach-Object {
+    # Stop-ProcessTree is process-table.ps1's, and reads its $OnWindows, which is sent first.
+    $defs = @("`$OnWindows = `$$([bool]$OnWindows)") + @('Initialize-Worktree', 'Get-GitUsrBin', 'Invoke-SetupCommand', 'Get-SetupShell',
+        'Stop-ProcessTree', 'Format-OutputTail', 'Get-SetupFailedMarker' | ForEach-Object {
         "function $_ {`n$((Get-Command $_ -CommandType Function).ScriptBlock)`n}"
     })
     $block = {

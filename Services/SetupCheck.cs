@@ -31,7 +31,9 @@ public class SetupCheckService
         Func<string?> HeartbeatStartupError,
         Func<bool> PlaywrightInstalled,
         // Null while the API-credits setting is off, which needs nothing on this machine.
-        Func<(int Keys, string? RunnerUnavailable)?>? ApiCredits = null);
+        Func<(int Keys, string? RunnerUnavailable)?>? ApiCredits = null,
+        // Where PowerShell 7 is, on PATH or in its install folder; null asks the fleet's PATH alone.
+        Func<string?>? Pwsh = null);
 
     private static readonly Dictionary<string, (string Name, string Install)> Clis = new()
     {
@@ -54,7 +56,9 @@ public class SetupCheckService
             () => File.Exists(paths.PlaywrightMcpCli),
             () => ClaudeApiCredits.Read(registry.GetGlobalConfig()) is { Enabled: true } s
                 ? (s.Keys.Count, ClaudeApiCredits.RunnerUnavailable(paths))
-                : null))
+                : null,
+            () => PowerShellHost.FindPwsh(Environment.GetEnvironmentVariable("PATH"),
+                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles))))
     { }
 
     public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Probe probe) =>
@@ -111,6 +115,9 @@ public class SetupCheckService
                 missing: $"These roles run on it and will fail: {needs}. The heartbeat refuses to start without it.",
                 install + ". Or move those roles to another provider in Settings."));
         }
+
+        // ---- PowerShell 7: what the fleet runs on where it is installed ----
+        items.Add(PowerShell7(probe));
 
         // ---- git, and who its commits are by ----
         var git = Tool(probe, "git", "git", required: true,
@@ -230,6 +237,21 @@ public class SetupCheckService
                 $"Installed at {later}, but after Whetstone started, so neither it nor the heartbeat can see it yet.",
                 "Restart Whetstone (Start-Whetstone.bat). Stop the heartbeat first.");
         return new SetupItem(exe, label, required ? "missing" : "warn", required, missing, fix);
+    }
+
+    // Not required: without it the fleet runs on Windows PowerShell 5.1, as it always has. It is the
+    // one the scripts are proven on for a worker host that is not Windows, and the one the board
+    // picks when it is here (PowerShellHost); psHost: powershell in config.json pins 5.1.
+    private static SetupItem PowerShell7(Probe probe)
+    {
+        const string label = "PowerShell 7 (pwsh)";
+        const string found = "The heartbeat, every worker and the guard hook run on it.";
+        const string missing = "The fleet runs on Windows PowerShell 5.1 instead. Every script runs on both; 7 is the one a Mac worker host has.";
+        const string fix = "winget install --id Microsoft.PowerShell --installer-type wix (the MSI, not the Store build), then restart Whetstone.";
+        if (probe.Pwsh is null) return Tool(probe, "pwsh", label, required: false, found, missing, fix);
+        return probe.Pwsh() is { } at
+            ? new SetupItem("pwsh", label, "ok", false, $"{found} {at}", null)
+            : new SetupItem("pwsh", label, "warn", false, missing, fix);
     }
 
     private static SetupItem Identity(Probe probe, IReadOnlyList<(string Key, string Path)> projects)

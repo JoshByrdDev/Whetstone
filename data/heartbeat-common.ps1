@@ -141,6 +141,39 @@ if ($null -ne (Get-Global 'heartbeatWorkers')) {
 if ($HeartbeatWorkers -lt 1)                    { $HeartbeatWorkers = 1 }
 if ($HeartbeatWorkers -gt $MaxHeartbeatWorkers) { $HeartbeatWorkers = $MaxHeartbeatWorkers }
 
+# --- Which PowerShell starts the fleet's own scripts ---
+#
+# psHost in the global config: 'auto' (the default) is PowerShell 7 where it is installed and Windows
+# PowerShell where it is not; 'powershell' pins 5.1, the way back if 7 misbehaves; 'pwsh' asks for 7
+# even where it cannot be found. Every Start-Process of a worker, steward, runner or hook asks here
+# rather than naming one. Written twice and the two must agree: here, and PowerShellHost in C#.
+function Get-PsHost {
+    $setting = "$(Get-Global 'psHost')".Trim().ToLowerInvariant()
+    if ($setting -eq 'powershell') { return 'powershell' }
+    $onWindows = ($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows
+    $pwsh = $null
+    if ($onWindows) {
+        # The running 7 itself where this is one; otherwise one on PATH, or in its standard install
+        # folder - a process started before 7 was installed still has the PATH it started with.
+        if ($PSVersionTable.PSEdition -eq 'Core') { try { $pwsh = (Get-Process -Id $PID).Path } catch { } }
+        if (-not $pwsh) {
+            $cmd = Get-Command 'pwsh.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd) { $pwsh = $cmd.Source }
+        }
+        if (-not $pwsh -and $env:ProgramFiles) {
+            $standard = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+            if (Test-Path -LiteralPath $standard) { $pwsh = $standard }
+        }
+    }
+    if ($pwsh) { return $pwsh }
+    if ($setting -eq 'pwsh' -or -not $onWindows) { return 'pwsh' }
+    return 'powershell'
+}
+$PsHost = Get-PsHost
+
+# The machine's processes, on any OS: Get-ProcessTable and Stop-ProcessTree.
+. (Join-Path $PSScriptRoot 'process-table.ps1')
+
 # Which Claude login a run spends: the config directory of the account Settings has switched to, or
 # $null for the CLI's own. The dashboard reads the same two keys the same way (ClaudeAccounts.cs),
 # and the two have to agree or its meter shows one account while the fleet spends another - so an
@@ -164,7 +197,7 @@ function Get-ClaudeProfilePath {
     param([string]$ConfigDir)
     if ($ConfigDir) { return [IO.Path]::Combine($ConfigDir, '.claude.json') }
     if ($env:CLAUDE_CONFIG_DIR) { return [IO.Path]::Combine($env:CLAUDE_CONFIG_DIR, '.claude.json') }
-    return [IO.Path]::Combine($env:USERPROFILE, '.claude.json')
+    return [IO.Path]::Combine($(if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }), '.claude.json')
 }
 
 # Where a login's credentials are: the same folder as its profile, except for the CLI's own login,
@@ -173,7 +206,7 @@ function Get-ClaudeCredentialsPath {
     param([string]$ConfigDir)
     if ($ConfigDir) { return [IO.Path]::Combine($ConfigDir, '.credentials.json') }
     if ($env:CLAUDE_CONFIG_DIR) { return [IO.Path]::Combine($env:CLAUDE_CONFIG_DIR, '.credentials.json') }
-    return [IO.Path]::Combine($env:USERPROFILE, '.claude', '.credentials.json')
+    return [IO.Path]::Combine($(if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }), '.claude', '.credentials.json')
 }
 
 # Who a profile file says its login is, as @{ uuid; email }, or $null. Cached by the file's time:
@@ -509,8 +542,8 @@ function Stop-DescendantAgent {
     param([int]$RootPid, [string[]]$Pattern)
     if (-not $Pattern) { $Pattern = $script:AgentProcessPattern }
     if (-not $Pattern) { $Pattern = @('claude*') }
-    try { $procs = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop }
-    catch { return }
+    $procs = @(Get-ProcessTable)
+    if (-not $procs) { return }
     $childrenOf = @{}
     foreach ($p in $procs) {
         $k = [int]$p.ParentProcessId
@@ -559,7 +592,9 @@ function Start-AgentWatchdog {
     if (-not $Pattern) { $Pattern = @('claude*') }
     Set-Content -Path $ActivityFile -Value '' -Encoding ASCII
     Start-Job -ScriptBlock {
-        param($timeoutSec, $stallSec, $rootPid, $patterns, $activity)
+        param($timeoutSec, $stallSec, $rootPid, $patterns, $activity, $tableScript)
+        # A job is a process of its own, which has to load the process table for itself.
+        . $tableScript
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $verdict = $null
         while (-not $verdict) {
@@ -572,7 +607,8 @@ function Start-AgentWatchdog {
             }
         }
         Set-Content -Path "$activity.verdict" -Value "$verdict $([math]::Round($quiet, 1))" -Encoding ASCII
-        try { $procs = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop } catch { return }
+        $procs = @(Get-ProcessTable)
+        if (-not $procs) { return }
         $childrenOf = @{}
         foreach ($p in $procs) { $k = [int]$p.ParentProcessId; if (-not $childrenOf.ContainsKey($k)) { $childrenOf[$k] = @() }; $childrenOf[$k] += $p }
         # Walk from the root; once a process matches the pattern, it and everything under it goes.
@@ -590,7 +626,7 @@ function Start-AgentWatchdog {
             }
         }
         foreach ($k in $kill) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
-    } -ArgumentList $TimeoutSeconds, $StallSeconds, $RootPid, $Pattern, $ActivityFile
+    } -ArgumentList $TimeoutSeconds, $StallSeconds, $RootPid, $Pattern, $ActivityFile, (Join-Path $PSScriptRoot 'process-table.ps1')
 }
 
 # Marks the agent's stream as alive. Called for every line the pipeline reads; writes at most every

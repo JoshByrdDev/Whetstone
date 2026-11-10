@@ -422,6 +422,8 @@ Check 'a relative -File counts as ours, as before' (Test-RunsScript -CommandLine
 Check 'no -File at all is not a run' (Test-RunsScript -CommandLine 'powershell worker.ps1' -Script $mine) $false
 Check 'no command line is not a run' (Test-RunsScript -CommandLine '' -Script $mine) $false
 Check "the board's own launch of its heartbeat" (Test-RunsScript -CommandLine '"powershell" -ExecutionPolicy Bypass -File "C:\Whetstone\data\heartbeat.ps1"' -Script 'C:\Whetstone\data\heartbeat.ps1') $true
+Check "the same launch on PowerShell 7" (Test-RunsScript -CommandLine '"C:\Program Files\PowerShell\7\pwsh.exe" -ExecutionPolicy Bypass -File "C:\Whetstone\data\heartbeat.ps1"' -Script 'C:\Whetstone\data\heartbeat.ps1') $true
+Check 'a worker started on 7 is ours' (Test-RunsScript -CommandLine '"C:\Program Files\PowerShell\7\pwsh.exe" -ExecutionPolicy Bypass -File C:\Whetstone\data\worker.ps1 -Agent 2' -Script $mine) $true
 
 # ---- A refusal's reason ----------------------------------------------------------------------
 # The API answers a refusal with {"error": ...}, sent chunked. PowerShell 5.1 leaves ErrorDetails
