@@ -16,7 +16,7 @@
 # same "hub-<repo>" mutex worker.ps1 uses, because the ref namespace is shared by every agent on
 # the repo. Invoke-WithMutex comes from heartbeat-common.ps1.
 #
-# Tests: powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
+# Tests: pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 # ============================================================

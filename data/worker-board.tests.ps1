@@ -9,7 +9,7 @@
 # What the board host's accept route does is simulated here with update-ref; the route itself is
 # the API's and is tested there.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

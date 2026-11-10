@@ -12,8 +12,8 @@
 # notifications, the Claude login, docker stacks, pushes. See Services/QaIsolation.cs. It will
 # not start at all over a checkout's data or on 5338.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/qa-copy.ps1          # build, seed, start
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/qa-copy.ps1 -Stop    # stop this worktree's copy
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/qa-copy.ps1          # build, seed, start
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/qa-copy.ps1 -Stop    # stop this worktree's copy
 #
 # API on -Port (5340), the client's Vite dev server on -VitePort (5341) proxying to it. Never
 # 5338 or 5173: those are the live instance and the dev server that proxies to it.
@@ -313,4 +313,4 @@ Write-Host "  API       http://localhost:$Port   (PID $($state.apiPid))"
 if ($state.vitePid) { Write-Host "  Client    http://localhost:$VitePort   (dev server, proxies to $Port)" }
 Write-Host "  Data      $DataRoot"
 Write-Host "  Projects  alpha, bravo, charlie (placeholders; charlie is several repos)"
-Write-Host "  Stop      powershell -NoProfile -ExecutionPolicy Bypass -File data/qa-copy.ps1 -Stop"
+Write-Host "  Stop      pwsh -NoProfile -ExecutionPolicy Bypass -File data/qa-copy.ps1 -Stop"

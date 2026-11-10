@@ -35,12 +35,12 @@ public class SetupCheckTests
     }
 
     [Fact]
-    public void Without_powershell_7_the_fleet_runs_on_5_1_and_says_so()
+    public void Without_powershell_7_the_fleet_cannot_start_and_says_so()
     {
         var item = Item(SetupCheckService.Evaluate(Machine(missing: new[] { "pwsh" }), AllClaude, Array.Empty<(string, string)>()), "pwsh");
-        Assert.Equal("warn", item.State);
-        Assert.False(item.Required);
-        Assert.Contains("5.1", item.Detail);
+        Assert.Equal("missing", item.State);
+        Assert.True(item.Required);
+        Assert.Contains("not a fallback", item.Detail);
         Assert.Contains("wix", item.Fix);
     }
 

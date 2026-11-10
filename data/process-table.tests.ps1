@@ -3,7 +3,7 @@
 # A Mac's half is read from ps, which this Windows machine cannot run, so it is driven with a Mac's
 # own output; the rest runs against this machine's real processes.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/process-table.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/process-table.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

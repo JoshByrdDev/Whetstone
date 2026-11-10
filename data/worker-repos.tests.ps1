@@ -5,7 +5,7 @@
 # worker.ps1 cannot be dot-sourced, so its functions are lifted out of its syntax tree as
 # worker-base.tests.ps1 does, with Write-Log collected here so a test can read what was logged.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-repos.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-repos.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

@@ -179,14 +179,14 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
     `worktreeRoot` per project is optional. It defaults to `D:\src\.worktrees\alpha`, beside the
     clone, as on the board host.
 
-    Check: run `powershell -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -Once`. The
+    Check: run `pwsh -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -Once`. The
     board's **Heartbeat** page then lists `bravo-host` under *Worker hosts* as having checked in.
     Click **Add**. It is added switched off, with no projects. If it was added by name in step 5,
     it shows "switched off" with a fresh check-in and its commit instead.
 
 12. **Start it at logon.** In Task Scheduler, create a task:
     - Trigger: at log on of this user.
-    - Action: `powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1`
+    - Action: `pwsh.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1`
     - Select "Run only when user is logged on". The CLI's login and the share's stored credential
       are this user's.
     - Clear "Stop the task if it runs longer than...".

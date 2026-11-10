@@ -14,7 +14,7 @@
 # under it, which is the same lesson the live instance taught (CLAUDE.md, "Build and run"). Start
 # it at logon from Task Scheduler - see docs/worker-host-setup.md.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File data/runner.ps1 [-HostFile <path>]
+# Usage: pwsh -ExecutionPolicy Bypass -File data/runner.ps1 [-HostFile <path>]
 # Stop:  create data/runner.stop. It takes nothing new and exits once its runs have finished.
 #
 # It keeps itself on the board host's commit. The board gives work only to a runner on its exact

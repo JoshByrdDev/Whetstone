@@ -10,7 +10,7 @@
 # hung off the single orchestrator that root was shared - one agent timing out would have killed the
 # other two mid-sentence. Here the root is $PID, which is this agent and nothing else.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File worker.ps1 -ClaimFile <path> -Agent <1..N>
+# Usage: pwsh -ExecutionPolicy Bypass -File worker.ps1 -ClaimFile <path> -Agent <1..N>
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 # ============================================================

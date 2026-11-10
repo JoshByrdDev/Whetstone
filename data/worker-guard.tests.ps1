@@ -227,8 +227,10 @@ function Invoke-Hook {
     $hookArgs = if ($Case.Args) { $Case.Args } else { $DefaultArgs }
     # The board's address, as worker.ps1 sets it for a run on a worker host - and only then.
     if ($Case.Board) { $env:WHETSTONE_BOARD_HOST = $Case.Board } else { Remove-Item Env:WHETSTONE_BOARD_HOST -ErrorAction SilentlyContinue }
-    # On the PowerShell running these tests, so the guard is proven on 5.1 and on 7 by running them on each.
-    $out = "$($json | & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File $Script @hookArgs)"
+    # Always on PowerShell 7, the only shell the fleet starts the guard on: this one where it is 7,
+    # pwsh otherwise, so running the tests from Windows PowerShell still proves what workers run.
+    $guardShell = if ($PSVersionTable.PSEdition -eq 'Core') { (Get-Process -Id $PID).Path } else { 'pwsh' }
+    $out = "$($json | & $guardShell -NoProfile -ExecutionPolicy Bypass -File $Script @hookArgs)"
     Remove-Item Env:WHETSTONE_BOARD_HOST -ErrorAction SilentlyContinue
     if (-not $out.Trim()) { return 'none' }
     # Two decisions in one answer is not valid JSON, and the harness would read it as none.

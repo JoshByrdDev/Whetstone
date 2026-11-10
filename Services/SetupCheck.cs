@@ -116,7 +116,7 @@ public class SetupCheckService
                 install + ". Or move those roles to another provider in Settings."));
         }
 
-        // ---- PowerShell 7: what the fleet runs on where it is installed ----
+        // ---- PowerShell 7: what the fleet runs on ----
         items.Add(PowerShell7(probe));
 
         // ---- git, and who its commits are by ----
@@ -239,19 +239,18 @@ public class SetupCheckService
         return new SetupItem(exe, label, required ? "missing" : "warn", required, missing, fix);
     }
 
-    // Not required: without it the fleet runs on Windows PowerShell 5.1, as it always has. It is the
-    // one the scripts are proven on for a worker host that is not Windows, and the one the board
-    // picks when it is here (PowerShellHost); psHost: powershell in config.json pins 5.1.
+    // Required: the fleet runs on PowerShell 7 and nothing else, on Windows and macOS alike
+    // (PowerShellHost). Windows PowerShell 5.1 is not a fallback.
     private static SetupItem PowerShell7(Probe probe)
     {
         const string label = "PowerShell 7 (pwsh)";
         const string found = "The heartbeat, every worker and the guard hook run on it.";
-        const string missing = "The fleet runs on Windows PowerShell 5.1 instead. Every script runs on both; 7 is the one a Mac worker host has.";
-        const string fix = "winget install --id Microsoft.PowerShell --installer-type wix (the MSI, not the Store build), then restart Whetstone.";
-        if (probe.Pwsh is null) return Tool(probe, "pwsh", label, required: false, found, missing, fix);
+        const string missing = "The heartbeat, workers, steward and guard hook cannot start without it. Windows PowerShell 5.1 is not a fallback.";
+        const string fix = "winget install --id Microsoft.PowerShell --installer-type wix (the MSI, not the Store build), then restart Whetstone. On a Mac: brew install powershell.";
+        if (probe.Pwsh is null) return Tool(probe, "pwsh", label, required: true, found, missing, fix);
         return probe.Pwsh() is { } at
-            ? new SetupItem("pwsh", label, "ok", false, $"{found} {at}", null)
-            : new SetupItem("pwsh", label, "warn", false, missing, fix);
+            ? new SetupItem("pwsh", label, "ok", true, $"{found} {at}", null)
+            : new SetupItem("pwsh", label, "missing", true, missing, fix);
     }
 
     private static SetupItem Identity(Probe probe, IReadOnlyList<(string Key, string Path)> projects)

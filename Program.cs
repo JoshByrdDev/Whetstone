@@ -258,7 +258,6 @@ if (isolation.On)
 app.MapGet("/api/qa-isolation", (DashboardPaths p) => Results.Ok(new { isolated = isolation.On, dataRoot = isolation.On ? p.DataRoot : null }));
 
 var paths = app.Services.GetRequiredService<DashboardPaths>();
-PowerShellHost.UseConfig(paths);
 var registry = app.Services.GetRequiredService<ProjectRegistry>();
 // Every project-scoped endpoint takes ?project= and is refused without it.
 //

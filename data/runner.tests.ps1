@@ -6,7 +6,7 @@
 # runner.ps1 cannot be dot-sourced (it starts a loop), so its functions are lifted out of its
 # syntax tree, as worker-base.tests.ps1 does for worker.ps1.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 
@@ -425,23 +425,19 @@ exit 3
     # Get-PsHost is heartbeat-common.ps1's too. Mirrors PowerShellHost in C#.
     Write-Host "== Get-PsHost"
     . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Get-PsHost' }, $false) | Select-Object -First 1).Extent.Text))
-    $script:PsSetting = 'powershell'
-    function Get-Global { param([string]$Key) if ($Key -eq 'psHost') { return $script:PsSetting } return $null }
-    Check 'psHost powershell pins 5.1, whatever runs this' (Get-PsHost) 'powershell'
-    $script:PsSetting = $null
-    $auto = Get-PsHost
+    function Get-Global { param([string]$Key) if ($Key -eq 'psHost') { return 'powershell' } return $null }
+    $got = Get-PsHost
+    Check 'never Windows PowerShell, whatever an old psHost setting says' ($got -notmatch '(?i)(^|[\\/])powershell(\.exe)?$') $true
     if ($PSVersionTable.PSEdition -eq 'Core') {
-        Check 'auto, run on 7: this very PowerShell' $auto $Self
+        Check 'run on 7: this very PowerShell' $got $Self
     }
     else {
         $installed = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
         $want = if (Get-Command 'pwsh.exe' -CommandType Application -ErrorAction SilentlyContinue) { 'a pwsh.exe' }
-                elseif (Test-Path -LiteralPath $installed) { 'a pwsh.exe' } else { 'powershell' }
-        $got = if ($auto -like '*pwsh.exe') { 'a pwsh.exe' } else { $auto }
-        Check 'auto, run on 5.1: 7 where it is installed, else 5.1' $got $want
+                elseif (Test-Path -LiteralPath $installed) { 'a pwsh.exe' } else { 'pwsh' }
+        $shown = if ($got -like '*pwsh.exe') { 'a pwsh.exe' } else { $got }
+        Check 'run on 5.1: 7 where it is installed, else pwsh by name' $shown $want
     }
-    $script:PsSetting = 'PWSH '
-    Check 'the setting is read whatever its case and spacing' ((Get-PsHost) -ne 'powershell') $true
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.

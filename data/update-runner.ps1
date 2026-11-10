@@ -13,7 +13,7 @@
 # do - so this is also how a change to the runner's supervisor lines takes effect without a logon.
 #
 # Usage: double-click Update-Runner.bat, or
-#        powershell -ExecutionPolicy Bypass -File data/update-runner.ps1 [-WaitMinutes 60]
+#        pwsh -ExecutionPolicy Bypass -File data/update-runner.ps1 [-WaitMinutes 60]
 #
 # Never from a Claude session: the runner it starts would belong to that session's tree.
 #

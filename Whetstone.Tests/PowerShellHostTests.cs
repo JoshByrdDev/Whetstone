@@ -4,9 +4,9 @@ using Xunit;
 namespace Whetstone.Tests;
 
 /// <summary>
-/// Which PowerShell the board starts the fleet's scripts on. 7 where it is installed, 5.1 where it
-/// is not, and <c>psHost: powershell</c> as the way back - the same rule as Get-PsHost in
-/// heartbeat-common.ps1, which runner.tests.ps1 pins for the scripts' half.
+/// Which PowerShell the board starts the fleet's scripts on: 7, found by path where it can be and
+/// named where it cannot, never 5.1 - the same rule as Get-PsHost in heartbeat-common.ps1, which
+/// runner.tests.ps1 pins for the scripts' half.
 /// </summary>
 public class PowerShellHostTests : IDisposable
 {
@@ -22,15 +22,10 @@ public class PowerShellHostTests : IDisposable
     private const string Seven = @"C:\Program Files\PowerShell\7\pwsh.exe";
 
     [Theory]
-    [InlineData(null, Seven, true, Seven)]
-    [InlineData("auto", Seven, true, Seven)]
-    [InlineData(null, null, true, "powershell")]
-    [InlineData(" Powershell ", Seven, true, "powershell")]
-    [InlineData("pwsh", null, true, "pwsh")]
-    [InlineData(null, null, false, "pwsh")]
-    [InlineData("anything else", null, true, "powershell")]
-    public void Chooses_seven_where_installed_and_the_setting_pins_it(string? setting, string? pwsh, bool windows, string want) =>
-        Assert.Equal(want, PowerShellHost.Choose(setting, pwsh, windows));
+    [InlineData(Seven, Seven)]
+    [InlineData(null, "pwsh")]
+    public void Chooses_seven_and_never_falls_back_to_windows_powershell(string? pwsh, string want) =>
+        Assert.Equal(want, PowerShellHost.Choose(pwsh));
 
     [Fact]
     public void Finds_seven_on_path()

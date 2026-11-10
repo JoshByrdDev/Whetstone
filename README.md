@@ -146,7 +146,7 @@ headroom is left.
 **New machine? Start with [`docs/setup.md`](docs/setup.md)** — everything a fresh install needs,
 which parts are optional, and how to check each one, since several fail silently when missing.
 
-Requirements: Windows, the .NET 9 SDK, Windows PowerShell 5.1, git with a `user.name`/`user.email`,
+Requirements: Windows or macOS, the .NET 9 SDK, PowerShell 7 (`pwsh`), git with a `user.name`/`user.email`,
 Node (QA drives a browser through `npx`), and at least one agent CLI signed in (`claude`, `codex` or
 `gemini`). Voicing Classroom walkthroughs also needs `npm install` once in `data/narrator/`.
 
@@ -168,11 +168,11 @@ dotnet test Whetstone.Tests -c Release
 ```
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-guard.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-guard.tests.ps1
 ```
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
 ```
 
 ## Status

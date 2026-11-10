@@ -5,7 +5,7 @@
 # worker.ps1 cannot be dot-sourced - it is a script that works a claim - so the function is lifted
 # out of its syntax tree, as in worker-tracking.tests.ps1.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-experiment.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-experiment.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

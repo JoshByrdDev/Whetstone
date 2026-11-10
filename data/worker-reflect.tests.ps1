@@ -9,7 +9,7 @@
 # worker.ps1 cannot be dot-sourced - it is a script that works a claim - so its functions are lifted
 # out of its syntax tree and defined here, as worker-base.tests.ps1 does.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-reflect.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-reflect.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

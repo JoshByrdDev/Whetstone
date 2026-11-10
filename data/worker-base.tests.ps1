@@ -6,7 +6,7 @@
 # out of its syntax tree and defined here, with the two things they borrow from
 # heartbeat-common.ps1 stubbed.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

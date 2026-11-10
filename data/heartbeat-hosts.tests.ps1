@@ -2,7 +2,7 @@
 # board host API: filling them, reading their runs back, giving up on them, and adopting them at
 # startup before the lease reset.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/heartbeat-hosts.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/heartbeat-hosts.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

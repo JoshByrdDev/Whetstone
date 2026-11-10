@@ -49,10 +49,16 @@ $ErrorActionPreference = 'Stop'
 
 function Write-Decision {
     param([string]$Decision, [string]$Reason)
-    $inner = @{ hookEventName = 'PreToolUse'; permissionDecision = $Decision }
-    if ($Reason) { $inner['permissionDecisionReason'] = $Reason }
-    $out = @{ hookSpecificOutput = $inner }
-    [Console]::Out.Write((ConvertTo-Json $out -Depth 6 -Compress))
+    # Written by hand rather than with ConvertTo-Json: the first JSON cmdlet loads a module, and that
+    # is a quarter of a second on every tool call a worker makes. The reason is the only free text,
+    # escaped here with nothing but a regex, so this still answers on any PowerShell: a guard that
+    # cannot print its decision has allowed the call, because the hook reads silence as allow.
+    $json = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"' + $Decision + '"'
+    if ($Reason) {
+        $escaped = [regex]::Replace($Reason, '[\\"\u0000-\u001f\u007f-￿]', { param($m) '\u{0:x4}' -f [int][char]$m.Value })
+        $json += ',"permissionDecisionReason":"' + $escaped + '"'
+    }
+    [Console]::Out.Write($json + '}}')
     [Console]::Out.Flush()
     # Not 'exit': called from a project's dot-sourced guard.ps1, 'exit' ends only that file
     # and this one carries on to print a second decision - an allow, after the deny.
@@ -86,18 +92,22 @@ $command = $null
 $url     = $null
 $path    = $null
 try {
-    $raw = [Console]::In.ReadToEnd()
-    $payload = $raw | ConvertFrom-Json
-    $tool = "$($payload.tool_name)"
-    $ti = $payload.tool_input
-    if ($ti) {
-        if ($ti.PSObject.Properties['command']) { $command = "$($ti.command)" }
-        if ($ti.PSObject.Properties['url'])     { $url     = "$($ti.url)" }
-        # The file an edit tool is about to write. Only a project that asks for its edits to be
-        # guarded (guardEdits in its config - see providers.ps1) sends those calls here at all.
-        if ($ti.PSObject.Properties['file_path'])         { $path = "$($ti.file_path)" }
-        elseif ($ti.PSObject.Properties['notebook_path']) { $path = "$($ti.notebook_path)" }
+    # System.Text.Json rather than ConvertFrom-Json, for the same reason Write-Decision builds its
+    # own: no module to load. PowerShell 7 only, which is all the fleet runs on.
+    $doc = [System.Text.Json.JsonDocument]::Parse([Console]::In.ReadToEnd()).RootElement
+    $ti = @{}
+    foreach ($jp in $doc.EnumerateObject()) {
+        if ($jp.Name -eq 'tool_name') { $tool = $jp.Value.ToString() }
+        elseif ($jp.Name -eq 'tool_input' -and $jp.Value.ValueKind -eq 'Object') {
+            foreach ($jq in $jp.Value.EnumerateObject()) { $ti[$jq.Name] = $jq.Value.ToString() }
+        }
     }
+    if ($ti.ContainsKey('command')) { $command = $ti['command'] }
+    if ($ti.ContainsKey('url'))     { $url     = $ti['url'] }
+    # The file an edit tool is about to write. Only a project that asks for its edits to be
+    # guarded (guardEdits in its config - see providers.ps1) sends those calls here at all.
+    if ($ti.ContainsKey('file_path'))         { $path = $ti['file_path'] }
+    elseif ($ti.ContainsKey('notebook_path')) { $path = $ti['notebook_path'] }
 }
 catch {
     Deny "the guard could not read this tool call, so it cannot clear it ($($_.Exception.Message))"
@@ -166,19 +176,20 @@ $c = "$command"
 # It should do nothing but test those and refuse. A project file that will not load denies the
 # call - the same bargain as everything below.
 function Invoke-ProjectGuards {
-    if (-not $ProjectsDir) { $ProjectsDir = Join-Path $PSScriptRoot 'projects' }
+    # [IO.Path] and [IO.File] rather than Join-Path and Test-Path, which load a module of their own.
+    if (-not $ProjectsDir) { $ProjectsDir = [IO.Path]::Combine($PSScriptRoot, 'projects') }
     $projectGuards = @()
     if ($Project) {
         if ($Project -notmatch '^[A-Za-z0-9._-]+$') {
             Deny "the guard was started for a project whose name it cannot trust ('$Project'), so it cannot clear this call"
         }
-        $projectGuards = @(Join-Path (Join-Path $ProjectsDir $Project) 'guard.ps1')
+        $projectGuards = @([IO.Path]::Combine($ProjectsDir, $Project, 'guard.ps1'))
     }
-    elseif (Test-Path $ProjectsDir) {
-        $projectGuards = @(Get-ChildItem -Path $ProjectsDir -Directory | ForEach-Object { Join-Path $_.FullName 'guard.ps1' })
+    elseif ([IO.Directory]::Exists($ProjectsDir)) {
+        $projectGuards = @([IO.Directory]::GetDirectories($ProjectsDir) | ForEach-Object { [IO.Path]::Combine($_, 'guard.ps1') })
     }
     foreach ($projectGuard in $projectGuards) {
-        if (-not (Test-Path $projectGuard)) { continue }
+        if (-not [IO.File]::Exists($projectGuard)) { continue }
         try { . $projectGuard }
         catch {
             Deny "a project's own guard rules ($projectGuard) could not be loaded, so this call cannot be cleared ($($_.Exception.Message))"
@@ -337,7 +348,7 @@ if ($c -match '(?i)ftp://') {
 # pending changes until they choose to check it in. The rule lives in tfvc-guard.ps1 because
 # such a repo's interactive sessions can run it as a hook too. Fails closed like the rest of
 # this file: a rule that cannot load clears nothing.
-try { . (Join-Path $PSScriptRoot 'tfvc-guard.ps1') }
+try { . ([IO.Path]::Combine($PSScriptRoot, 'tfvc-guard.ps1')) }
 catch {
     Write-Decision -Decision 'deny' -Reason "BLOCKED: the TFVC rule (tfvc-guard.ps1) could not be loaded, so this call cannot be cleared ($($_.Exception.Message))."
 }
