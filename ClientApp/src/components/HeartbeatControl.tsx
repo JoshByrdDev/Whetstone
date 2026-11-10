@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ConfirmStopModal } from './ConfirmStopModal';
+import { ConfirmStopModal, fleetHasWorkOut } from './ConfirmStopModal';
 
 interface HeartbeatStatus {
   running: boolean;
@@ -93,7 +93,9 @@ export function HeartbeatControl() {
       ) : (
         <>
           <button
-            onClick={isRunning ? () => setConfirmStop(true) : handleStart}
+            onClick={isRunning
+              ? async () => { if (await fleetHasWorkOut()) setConfirmStop(true); else handleStop(); }
+              : handleStart}
             disabled={loading}
             className={`btn-act flex items-center gap-2 px-4 py-2 disabled:opacity-50 ${
               isRunning ? 'bg-red-500 text-void' : 'bg-emerald-500 text-void'

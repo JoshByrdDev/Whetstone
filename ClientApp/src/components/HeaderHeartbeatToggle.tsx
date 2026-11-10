@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePop } from '../hooks/usePop';
-import { ConfirmStopModal } from './ConfirmStopModal';
+import { ConfirmStopModal, fleetHasWorkOut } from './ConfirmStopModal';
 
 interface HeartbeatStatus {
   running: boolean;
@@ -156,7 +156,10 @@ export function HeaderHeartbeatToggle() {
   return (
     <div className="flex items-center gap-1.5">
       <button
-        onClick={() => setConfirmStop(true)}
+        onClick={async () => {
+          if (await fleetHasWorkOut()) setConfirmStop(true);
+          else call('/api/heartbeat/stop', 'Failed to stop heartbeat');
+        }}
         disabled={loading}
         title={error ?? 'Stop heartbeat and every worker now'}
         className={`${btnBase} ${
