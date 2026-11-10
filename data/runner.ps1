@@ -168,7 +168,7 @@ function Get-OwnCommit {
 # orchestrator's Find-OrphanAgents uses, plus the -RunId the runner stamped on them.
 function Find-SurvivingRuns {
     $found = @{}
-    $procs = @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
+    $procs = @(Get-ProcessTable -Shells |
         Where-Object {
             # This checkout's worker.ps1 only: the machine may also run a board of its own, whose
             # workers are its business and not this runner's. See Test-RunsScript.
@@ -193,7 +193,7 @@ function Stop-Run {
     $target = if ($Run.Process) { $Run.Process.Id } else { $Run.Pid }
     if (-not $target) { return }
     Write-Log "  Killing run $($Run.RunId) (ticket #$($Run.TicketId), pid $target): $Why"
-    & taskkill /PID $target /T /F *> $null
+    Stop-ProcessTree -Id $target
 }
 
 function Start-Run {
@@ -239,7 +239,7 @@ function Start-Run {
 
     $psArgs = @("-ExecutionPolicy", "Bypass", "-File", $WorkerScript, "-ClaimFile", $claimFile,
                 "-Agent", "$slot", "-TicketId", "$ticket", "-RunId", "$($Order.runId)")
-    try { $proc = Start-Process -FilePath "powershell" -ArgumentList $psArgs -PassThru -WindowStyle Hidden }
+    try { $proc = Start-Process -FilePath $PsHost -ArgumentList $psArgs -PassThru -WindowStyle Hidden }
     catch {
         Write-Log "  Could not launch worker for ticket #${ticket}: $($_.Exception.Message)"
         Send-LeaseRelease -TicketId $ticket -Reason "worker host $($HostCfg.name) could not launch a worker"
@@ -396,7 +396,7 @@ function Remove-OldBackups {
 function Test-SupervisorAlive {
     param([int]$SupervisorPid)
     if ($SupervisorPid -le 0) { return $false }
-    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$SupervisorPid" -ErrorAction SilentlyContinue
+    $p = Get-ProcessTable -Id $SupervisorPid
     if (-not $p) { return $false }
     return (Test-RunsScript -CommandLine $p.CommandLine -Script (Join-Path $DataRoot 'runner.ps1'))
 }
@@ -407,7 +407,7 @@ function Test-SupervisorAlive {
 function Invoke-RunnerSupervisor {
     param([string[]]$ChildArgs, [int]$PauseSeconds = 2)
     while ($true) {
-        $child = Start-Process -FilePath 'powershell' -ArgumentList $ChildArgs -PassThru -WindowStyle Hidden
+        $child = Start-Process -FilePath $PsHost -ArgumentList $ChildArgs -PassThru -WindowStyle Hidden
         try { $null = $child.Handle } catch { }
         $child.WaitForExit()
         $code = $child.ExitCode
@@ -551,7 +551,7 @@ while ($true) {
             Write-Log "No supervisor is waiting to restart this runner - starting a new one on the updated code."
             $restart = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path)
             if ($HostFile) { $restart += @('-HostFile', $HostFile) }
-            Start-Process -FilePath 'powershell' -ArgumentList $restart -WindowStyle Hidden | Out-Null
+            Start-Process -FilePath $PsHost -ArgumentList $restart -WindowStyle Hidden | Out-Null
             exit 0
         }
         if ($result.state -eq 'missing') {

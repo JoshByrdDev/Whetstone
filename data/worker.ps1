@@ -383,6 +383,11 @@ function Get-WorktreeMap {
             $ref = $line.Substring(7).Trim()
             if ($ref -like 'refs/heads/*' -and $current) { $map[$ref.Substring(11)] = $current }
         }
+        # A worktree stopped mid-rebase is detached, but the branch is still its (Get-BranchWorktree).
+        elseif ($line -eq 'detached' -and $current) {
+            $rebasing = Get-RebasingBranch -Dir $current
+            if ($rebasing -and -not $map.ContainsKey($rebasing)) { $map[$rebasing] = $current }
+        }
     }
     return $map
 }
@@ -447,6 +452,17 @@ function Initialize-Worktree {
     return $null
 }
 
+# The shell a setup command runs in: cmd on Windows (/d skips AutoRun), sh everywhere else. A
+# project's setup commands are written for its machine's shell, so a project worked on a Mac has
+# sh commands in its project.json. The parentheses and 2>&1 mean the same in both.
+function Get-SetupShell {
+    # Asked here rather than read from process-table.ps1, which a test lifting this may not load.
+    param([string]$Script, [bool]$Windows = (($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows))
+    if ($Windows) { return @{ Exe = 'cmd.exe'; Args = "/d /s /c `"$Script`""; Name = 'cmd' } }
+    # An array, which 7 quotes as one argument; a single string would be split again.
+    return @{ Exe = '/bin/sh'; Args = @('-c', $Script); Name = 'sh' }
+}
+
 # Run one worktree setup command, for at most $TimeoutMinutes. Returns @{ code; timedOut; output }.
 #
 # Its own process, not a pipeline in this one, for two reasons. A command still running at the limit
@@ -464,8 +480,9 @@ function Invoke-SetupCommand {
     $output = New-Object System.Collections.Generic.List[string]
     $reader = $null
     try {
-        # /d skips AutoRun; the parentheses take the 2>&1 to every command in "a && b".
-        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/d /s /c `"( $Command ) 2>&1`"" -WorkingDirectory $WorkDir `
+        # The parentheses take the 2>&1 to every command in "a && b".
+        $shell = Get-SetupShell -Script "( $Command ) 2>&1"
+        $p = Start-Process -FilePath $shell.Exe -ArgumentList $shell.Args -WorkingDirectory $WorkDir `
             -RedirectStandardOutput $outFile -RedirectStandardInput $inFile -NoNewWindow -PassThru
         try { $null = $p.Handle } catch { }
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
@@ -482,7 +499,7 @@ function Invoke-SetupCommand {
             if ((Get-Date) -ge $deadline) {
                 $timedOut = $true
                 Write-Log "      (still running after $TimeoutMinutes min - stopping it and everything it started)"
-                & taskkill /PID $p.Id /T /F *> $null
+                Stop-ProcessTree -Id $p.Id
                 $null = $p.WaitForExit(15000)
                 if ($reader) { while ($null -ne ($line = $reader.ReadLine())) { [void]$output.Add($line) } }
                 break
@@ -552,15 +569,16 @@ function Start-BackgroundSetup {
 
     $base = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-setup-" + [guid]::NewGuid().ToString('N'))
     [IO.File]::WriteAllText("$base.in", '')
-    # One cmd running each command in turn and stopping at the first that fails, as the foreground
-    # loop does. /d skips AutoRun; each command's 2>&1 is inside its own parentheses.
+    # One shell running each command in turn and stopping at the first that fails, as the foreground
+    # loop does. Each command's 2>&1 is inside its own parentheses.
     $chain = ($commands | ForEach-Object { "( $_ ) 2>&1" }) -join ' && '
     $gitUsrBin = Get-GitUsrBin
     $savedPath = $env:PATH
     try {
         Set-Content -Path $marker -Value "starting: $($commands -join ' && ')" -Encoding ascii
         if ($gitUsrBin -and ($env:PATH -split ';') -notcontains $gitUsrBin) { $env:PATH = "$env:PATH;$gitUsrBin" }
-        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/d /s /c `"$chain`"" -WorkingDirectory $Path `
+        $shell = Get-SetupShell -Script $chain
+        $p = Start-Process -FilePath $shell.Exe -ArgumentList $shell.Args -WorkingDirectory $Path `
             -RedirectStandardOutput "$base.out" -RedirectStandardInput "$base.in" -NoNewWindow -PassThru
         try { $null = $p.Handle } catch { }
         Set-Content -Path $marker -Value "background pid=$($p.Id): $($commands -join ' && ')" -Encoding ascii
@@ -590,7 +608,7 @@ function Wait-BackgroundSetup {
     $tookSec = [math]::Round(((Get-Date) - $Job.started).TotalSeconds)
     try {
         if (-not $done) {
-            & taskkill /PID $p.Id /T /F *> $null
+            Stop-ProcessTree -Id $p.Id
             $null = $p.WaitForExit(15000)
             Set-Content -Path $Job.marker -Value ($Job.commands -join ' && ') -Encoding ascii
             Write-Log "  Background setup still running after $TimeoutMinutes min - stopped it; the next phase sets the worktree up again."
@@ -621,9 +639,9 @@ function Wait-OrphanSetup {
     $m = [regex]::Match("$(Get-Content $Marker -Raw -ErrorAction SilentlyContinue)", 'background pid=(\d+)')
     if (-not $m.Success) { return }
     $p = Get-Process -Id ([int]$m.Groups[1].Value) -ErrorAction SilentlyContinue
-    if (-not $p -or $p.ProcessName -ne 'cmd') { return }
+    if (-not $p -or $p.ProcessName -notin 'cmd', 'sh') { return }
     Write-Log "  A background setup from an earlier run is still going (pid $($p.Id)) - waiting for it before setting up again"
-    if (-not $p.WaitForExit([int]($TimeoutMinutes * 60000))) { & taskkill /PID $p.Id /T /F *> $null }
+    if (-not $p.WaitForExit([int]($TimeoutMinutes * 60000))) { Stop-ProcessTree -Id $p.Id }
 }
 
 # The name of the branch a ticket owns: the one it already has, else one from its linked issue, else
@@ -817,11 +835,40 @@ function Resolve-Worktree {
         $existing = (Get-WorktreeMap -RepoDir $RepoDir)[$branchName]
         if ($existing -and (Test-Path $existing)) {
             # Already has a home - including one the user moved or made themselves. Use it where it is.
-            $dirty = git -C $existing status --porcelain --untracked-files=no 2>$null
-            if ($dirty) {
-                return @{ ok = $false; reason = "uncommitted changes in the worktree at '$existing' - refusing to start a phase on a dirty tree" }
+            $root = Get-FullPathKey $WorktreeRoot
+            $here = Get-FullPathKey $existing
+            $ours = [bool]($root -and $here.StartsWith("$root\"))
+
+            # A rebase or merge an earlier run left stopped: kept under a ref and aborted, so this
+            # phase starts on the branch and not on a detached HEAD halfway through rewriting it
+            # (Undo-StoppedGitOperation). A person's worktree is theirs to finish.
+            $stopped = $null
+            $op = Get-StoppedGitOperation -Dir $existing
+            if ($op -and -not $ours) {
+                return @{ ok = $false; reason = "a git $($op.kind) is stopped in the worktree at '$existing', which is outside this project's worktree root - finish or abort it there first" }
             }
-            return @{ ok = $true; path = $existing; branch = $branchName; created = $false }
+            if ($op) {
+                $undo = Undo-StoppedGitOperation -Dir $existing -Why 'before a new phase started on it'
+                if (-not $undo.ok) { return @{ ok = $false; reason = $undo.reason } }
+                $stopped = $undo
+            }
+
+            $dirty = git -C $existing status --porcelain --untracked-files=no 2>$null
+            if (-not $dirty) { return @{ ok = $true; path = $existing; branch = $branchName; created = $false; stopped = $stopped } }
+
+            # Uncommitted changes in one of the fleet's own worktrees are what a run killed before its
+            # hand-off nets left behind (Save-WorkerLeftovers commits everything a run that ends
+            # normally leaves). Refusing them blocked the ticket on every retry - an answer of
+            # "discard and retry" reached only the next agent, which never started - so they are set
+            # aside in a named stash, exactly as a worker host does (Update-BranchFromBoard), and
+            # the caller says so on the ticket. A worktree outside the root is a person's: theirs to clean.
+            if (-not $ours) {
+                return @{ ok = $false; reason = "uncommitted changes in the worktree at '$existing', which is outside this project's worktree root - refusing to start a phase on a dirty tree someone else may be working in" }
+            }
+            $saved = Save-WorktreeLeftovers -Dir $existing -Branch $branchName -Why 'before a new phase started on it'
+            if (-not $saved.ok) { return @{ ok = $false; reason = $saved.reason } }
+            return @{ ok = $true; path = $existing; branch = $branchName; created = $false; stopped = $stopped
+                      stash = $(if ($saved.sha) { $saved } else { $null }) }
         }
 
         $wtPath = Join-Path $WorktreeRoot $dirName
@@ -939,12 +986,24 @@ function Invoke-GitCommitFromFile {
 # produced by the worker that just ran, on this ticket's own branch. Untracked files are included
 # (-A) - a new migration or component is exactly the kind of file that gets left behind. Returns
 # $null when the tree was already clean (the normal case).
+#
+# Never over a rebase or merge the run left stopped. A stopped rebase's HEAD is detached, so a
+# commit there moves no branch: the branch stays where it was while that commit is what the hand-
+# back sends, and on a worker host the two machines then disagree about the branch for good. The
+# operation is kept under a ref and aborted instead (Undo-StoppedGitOperation), which leaves the
+# branch as it was before the operation began, and the answer says so in stopped.
 function Save-WorkerLeftovers {
     param([string]$WorkDir, [string]$TicketId, [string]$Title, [string]$IssueRef, [string]$Skill)
 
     # git writes progress to stderr; success is judged by $LASTEXITCODE, not by stderr being empty.
     $ErrorActionPreference = 'Continue'
     if (-not (Test-Path (Join-Path $WorkDir ".git"))) { return $null }
+
+    $undo = Undo-StoppedGitOperation -Dir $WorkDir -Why 'when the run that left it ended'
+    if (-not $undo.ok) {
+        return @{ ok = $false; files = 0; branch = "$(git -C $WorkDir rev-parse --abbrev-ref HEAD 2>$null)".Trim(); reason = $undo.reason }
+    }
+    if ($undo.kind) { return @{ ok = $true; files = 0; stopped = $undo } }
 
     Push-Location $WorkDir
     try {
@@ -1042,6 +1101,63 @@ function Test-CommitsPublished {
     return $null
 }
 
+# The project's rebase resolver (data/projects/<key>/rebase-resolve.ps1), or '' when it has none -
+# including on a worker host, whose project kit does not carry it, so a run there rebases as before.
+function Get-RebaseResolver {
+    param([string]$ProjectDir)
+    if (-not $ProjectDir) { return '' }
+    $p = Join-Path $ProjectDir 'rebase-resolve.ps1'
+    if (Test-Path -LiteralPath $p) { return $p }
+    return ''
+}
+
+# Whether the tree in the current directory is stopped in the middle of a rebase, either backend.
+function Test-RebaseInProgress {
+    foreach ($state in 'rebase-merge', 'rebase-apply') {
+        $d = (git rev-parse --git-path $state 2>$null)
+        if ($d -and (Test-Path $d)) { return $true }
+    }
+    return $false
+}
+
+# One stop of a rebase, handed to the project's resolver in the tree that is mid-rebase (the current
+# directory). Its contract is the board's (TicketGitService.RunRebaseResolverAsync): one JSON object
+# on stdin - conflicted, baseRef, branch, repo - and exit 0 having staged a resolution, or non-zero
+# having changed nothing, with its reason on stderr. Returns @{ ok; why; lines }.
+function Invoke-RebaseResolver {
+    param([string]$Resolver, [string[]]$Conflicted, [string]$BaseRef, [string]$Branch)
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $PsHost
+        $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Resolver`""
+        $psi.WorkingDirectory = (Get-Location).Path
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.RedirectStandardInput = $true
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.EnvironmentVariables['WHETSTONE_BASE_REF'] = $BaseRef
+        $psi.EnvironmentVariables['GIT_EDITOR'] = 'true'
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        $proc.StandardInput.Write((@{ conflicted = @($Conflicted); baseRef = $BaseRef; branch = $Branch; repo = '' } | ConvertTo-Json -Compress))
+        $proc.StandardInput.Close()
+        $out = $proc.StandardOutput.ReadToEndAsync()
+        $err = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit(600000)) {
+            try { $proc.Kill() } catch { }
+            return @{ ok = $false; why = 'it did not finish within ten minutes'; lines = @() }
+        }
+        $lines = @(($out.Result -replace "`r`n", "`n").Split("`n") | Where-Object { "$_".Trim() })
+        if ($proc.ExitCode -eq 0) { return @{ ok = $true; why = $null; lines = $lines } }
+        $why = "$($err.Result)".Trim()
+        if (-not $why) { $why = "exit code $($proc.ExitCode)" }
+        return @{ ok = $false; why = $why; lines = $lines }
+    }
+    catch {
+        return @{ ok = $false; why = "it could not be started: $($_.Exception.Message)"; lines = @() }
+    }
+}
+
 # Bring a finished ticket's branch up to date with the base it will be merged into.
 #
 # A branch is cut from the base when the ticket is speculated and never looks at it again, so by
@@ -1062,8 +1178,14 @@ function Test-CommitsPublished {
 #
 # Cheap because of the one-ticket-one-commit rule: by this point the branch is a single commit, so
 # the rebase is one patch and a conflict names exactly the files a human would look at anyway.
+#
+# -Resolver is the project's rebase-resolve.ps1 when it has one (Get-RebaseResolver): each stop of the rebase is handed to
+# it, as the board's rebase does (TicketGitService.RebaseAsync), and a stop it settles is continued.
+# The case it is for is two tickets taking the same migration number: without it the hand-off sent
+# the ticket back for a whole implement, QA and refine cycle only to be renumbered. A decline, or a
+# "resolved" that leaves a file unmerged, ends in the same abort as any conflict.
 function Update-BranchFromBase {
-    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally)
+    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally, [string]$Resolver = '')
 
     $ErrorActionPreference = 'Continue'
     if (-not (Test-Path (Join-Path $WorkDir ".git"))) { return $null }
@@ -1075,10 +1197,7 @@ function Update-BranchFromBase {
         if (git status --porcelain 2>$null) { return @{ ok = $false; reason = "working tree is not clean" } }
 
         # A rebase left half-finished by an earlier crash. Touching it would compound the mess.
-        foreach ($state in 'rebase-merge', 'rebase-apply') {
-            $dir = (git rev-parse --git-path $state 2>$null)
-            if ($dir -and (Test-Path $dir)) { return @{ ok = $false; reason = "a rebase is already in progress here" } }
-        }
+        if (Test-RebaseInProgress) { return @{ ok = $false; reason = "a rebase is already in progress here" } }
 
         # No origin means nothing to be stale against - unless the base moves locally, which on a
         # project that merges instead of raising a PR it does every time a ticket lands.
@@ -1116,21 +1235,46 @@ function Update-BranchFromBase {
         $backup = "refs/heads/$branch-prerebase"
         git update-ref $backup HEAD *> $null
 
-        git rebase $baseRef *> $null
-        if ($LASTEXITCODE -ne 0) {
+        git -c core.editor=true rebase $baseRef *> $null
+        $rebaseOk = ($LASTEXITCODE -eq 0)
+
+        $settled = @(); $said = @(); $declined = $null
+        if (-not $rebaseOk -and $Resolver -and (Test-Path -LiteralPath $Resolver)) {
+            for ($stop = 0; $stop -lt 50 -and (Test-RebaseInProgress); $stop++) {
+                $stopped = @(git diff --name-only --diff-filter=U 2>$null | Where-Object { $_ })
+                if ($stopped.Count -eq 0) { break }
+                $r = Invoke-RebaseResolver -Resolver $Resolver -Conflicted $stopped -BaseRef $baseRef -Branch $branch
+                $said += @($r.lines)
+                if (-not $r.ok) { $declined = $r.why; break }
+                if (@(git diff --name-only --diff-filter=U 2>$null | Where-Object { $_ }).Count -gt 0) {
+                    $declined = 'it exited as resolved but left files unmerged'; break
+                }
+                $settled += $stopped
+                git -c core.editor=true rebase --continue *> $null
+                if ($LASTEXITCODE -eq 0) { $rebaseOk = $true; break }
+            }
+        }
+
+        if (-not $rebaseOk) {
             # Conflicts. Name the files before unwinding - once the rebase is aborted the evidence
             # is gone, and "it conflicts" without saying where is not worth putting on a ticket.
             $conflicts = @(git diff --name-only --diff-filter=U 2>$null | Where-Object { $_ })
             git rebase --abort *> $null
             git reset --hard $backup *> $null
             git update-ref -d $backup *> $null
-            return @{ ok = $false; behind = $behind; base = $baseRef; conflicts = $conflicts; reason = "conflicts with $baseRef" }
+            # The resolver may have left files git does not track; the abort restores tracked ones only.
+            # The tree was clean going in (checked above), so nothing untracked here is anyone's work.
+            if ($said.Count -gt 0 -or $declined) { git clean -fdq -- . *> $null }
+            $why = "conflicts with $baseRef"
+            if ($declined) { $why += " (the project's rebase resolver declined: $declined)" }
+            return @{ ok = $false; behind = $behind; base = $baseRef; conflicts = $conflicts; reason = $why; declined = $declined }
         }
 
         git update-ref -d $backup *> $null
         return @{
             ok = $true; behind = $behind; rebased = $true; branch = $branch; base = $baseRef
             sha = (git rev-parse --short HEAD 2>$null)
+            resolved = @($settled | Select-Object -Unique); resolverSaid = @($said | Where-Object { $_ })
         }
     }
     finally { Pop-Location }
@@ -1164,10 +1308,11 @@ function Get-MergeConflicts {
 # stops on an intermediate commit while the whole merges cleanly leaves the branch as it was, and the
 # hand-off rebase takes it after the squash, as it always has.
 function Update-BranchAtStart {
-    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally)
-    $r = Update-BranchFromBase -WorkDir $WorkDir -BaseBranch $BaseBranch -RepoDir $RepoDir -MergeLocally $MergeLocally
+    param([string]$WorkDir, [string]$BaseBranch, [string]$RepoDir, [bool]$MergeLocally, [string]$Resolver = '')
+    $r = Update-BranchFromBase -WorkDir $WorkDir -BaseBranch $BaseBranch -RepoDir $RepoDir -MergeLocally $MergeLocally -Resolver $Resolver
     if (-not $r) { return $null }
-    if ($r.ok) { return @{ rebased = [bool]$r.rebased; base = $r.base; behind = $r.behind; sha = $r.sha; conflicts = @() } }
+    if ($r.ok) { return @{ rebased = [bool]$r.rebased; base = $r.base; behind = $r.behind; sha = $r.sha; conflicts = @()
+                           resolved = @($r.resolved); resolverSaid = @($r.resolverSaid) } }
     if (-not $r.conflicts) { return @{ rebased = $false; base = $r.base; reason = $r.reason; conflicts = @() } }
     $whole = Get-MergeConflicts -WorkDir $WorkDir -BaseRef $r.base
     $files = if ($whole.ok) { @($whole.conflicts) } else { @($r.conflicts) }
@@ -1570,8 +1715,14 @@ function ConvertFrom-ReflectOutput {
     $start = $Text.IndexOf('[')
     $end   = $Text.LastIndexOf(']')
     if ($start -lt 0 -or $end -le $start) { return $null }
-    try { return @($Text.Substring($start, $end - $start + 1) | ConvertFrom-Json) }
+    # The same list on 5.1 and 7. 5.1's ConvertFrom-Json hands a JSON array back as one object and 7
+    # enumerates it, so `[]` is an empty array on one and nothing at all on the other - and nothing
+    # reads as "no answer" above. The foreach flattens either shape, and the comma keeps an empty
+    # list from being unrolled into $null on the way out.
+    try { $parsed = $Text.Substring($start, $end - $start + 1) | ConvertFrom-Json }
     catch { return $null }
+    $items = @(foreach ($p in $parsed) { $p })
+    return , $items
 }
 
 # Write-MemoryNote moved to notes-store.ps1 when reflection gained a third outcome. Writing a fact
@@ -2063,6 +2214,17 @@ if ($onHost -and $repoDir) {
                 -Comment "This run was on worker host ``$runHost``, whose copy of ``$recordedBranch`` cannot be brought level with the board host's without losing work: $($level.reason). Ticket blocked; no work was attempted. Compare the two machines' branches and keep the one that is right, then unblock."
         }
         Write-Log "  Worker host $runHost - '$recordedBranch' against the board host: $($level.state)"
+        if ($level.stopped) {
+            $st = $level.stopped
+            Write-Log "  Worker host $runHost - undid a stopped $($st.kind) on '$recordedBranch', kept as $($st.ref)."
+            Send-TicketComment -TicketId $ticketId -Body (Format-StoppedGitOperation -Stopped $st -Where " on worker host ``$runHost``")
+        }
+        # Commits only this clone's branch had, kept here and on the board host before the reset.
+        if ($level.diverged) {
+            $dv = $level.diverged
+            Write-Log "  Worker host $runHost - '$recordedBranch' had diverged; kept its tip as $($dv.ref) (equivalent: $($dv.equivalent), on the board host: $($dv.onBoard))."
+            Send-TicketComment -TicketId $ticketId -Body (Format-DivergedCommits -Diverged $dv -Branch $recordedBranch -BoardSha $got.sha -Where " on worker host ``$runHost``")
+        }
         # Leftovers of an earlier run here - one killed before its hand-off nets - set aside rather
         # than blocking on them. Said on the ticket, because they are the only copy.
         if ($level.stash) {
@@ -2133,6 +2295,28 @@ if ($repoDir) {
         Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
         exit 0
     }
+    # Leftovers of a run killed before its hand-off nets, set aside rather than blocking on them
+    # (Resolve-Worktree). Said on the ticket, because the stash is the only copy of them.
+    $undone = @()
+    if ($wt.stopped) { $undone += @{ dir = ''; stopped = $wt.stopped } }
+    if ($wt.stoppeds) { $undone += @($wt.stoppeds) }
+    foreach ($one in $undone) {
+        $inRepo = if ($one.dir) { " (``$($one.dir)``)" } else { '' }
+        $where = if ($onHost) { " on worker host ``$runHost``" } else { '' }
+        Write-Log "  Undid a stopped $($one.stopped.kind) in the worktree$inRepo, kept as $($one.stopped.ref)."
+        Send-TicketComment -TicketId $ticketId -Body ((Format-StoppedGitOperation -Stopped $one.stopped -Where $where) + $inRepo)
+    }
+    $setAside = @()
+    if ($wt.stash) { $setAside += @{ dir = ''; stash = $wt.stash } }
+    if ($wt.stashes) { $setAside += @($wt.stashes) }
+    foreach ($one in $setAside) {
+        $s = $one.stash
+        $inRepo = if ($one.dir) { " of ``$($one.dir)``" } else { '' }
+        $names = (@($s.files) | Select-Object -First 10 | ForEach-Object { "- $_" }) -join "`n"
+        $more = if (@($s.files).Count -gt 10) { "`n- ... and $(@($s.files).Count - 10) more" } else { '' }
+        Write-Log "  Set aside $(@($s.files).Count) uncommitted file(s) in the worktree$inRepo as stash $($s.sha)."
+        Send-TicketComment -TicketId $ticketId -Body "Found $(@($s.files).Count) uncommitted file(s) in this ticket's worktree$inRepo, left by an earlier run that stopped before it could commit them. They were set aside in a stash rather than blocking the ticket, and this run starts from the branch's last commit.`n`n$names$more`n`nThey are kept as stash ``$($s.sha)`` (``git stash list`` shows it as: $($s.message)). To look: ``git stash show -p --include-untracked $($s.sha)``. To take them back: ``git stash apply $($s.sha)`` in the worktree. Nothing needs doing unless something in them was wanted."
+    }
     if ($wt.path) {
         $workDir = $wt.path
         # The install speculate left running beside its agent (Start-BackgroundSetup). Waited for
@@ -2194,9 +2378,11 @@ $requiredServers = @('tickets')
 if ($repoDir -and (Get-Command auggie -ErrorAction SilentlyContinue)) {
     $mcpServers.auggie = @{
         type    = "stdio"
-        command = "cmd"
-        args    = @("/c", "auggie", "--mcp", "-w", $workDir, "--wait-for-indexing")
+        command = "auggie"
+        args    = @("--mcp", "-w", $workDir, "--wait-for-indexing")
     }
+    # An npm-installed CLI is a .cmd shim on Windows, which only cmd can start.
+    if ($OnWindows) { $mcpServers.auggie.args = @("/c", "auggie") + $mcpServers.auggie.args; $mcpServers.auggie.command = "cmd" }
     Write-Log "  Augment codebase-retrieval enabled ($workDir)"
 }
 # QA needs a real browser. Without it the qa-test skill quietly degrades to reading source code,
@@ -2242,8 +2428,8 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
         Write-Log "  Playwright not installed in data/playwright-mcp - falling back to npx, which can be slow to start"
         $mcpServers.playwright = @{
             type    = "stdio"
-            command = "cmd"
-            args    = @("/c", "npx", "--yes", "@playwright/mcp@latest") + $pwArgs
+            command = $(if ($OnWindows) { "cmd" } else { "npx" })
+            args    = $(if ($OnWindows) { @("/c", "npx") } else { @() }) + @("--yes", "@playwright/mcp@latest") + $pwArgs
         }
     }
     # Required, not optional: Part B of qa-test is browser work and the skill blocks the ticket
@@ -2307,7 +2493,8 @@ if ($repoDir -and -not $multiRepo -and -not $readsOnly -and -not $reviewedOn -an
         $resync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
         if (-not $resync.ok) { Write-Log "  Could not refresh the board host's base before the start rebase: $($resync.reason)" }
     }
-    $start = Update-BranchAtStart -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally
+    $start = Update-BranchAtStart -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir -MergeLocally $mergeLocally `
+        -Resolver (Get-RebaseResolver -ProjectDir $projectDataDir)
     # For the run's record: how far behind the base the branch started, and what became of that.
     $runDetail.startRebase = if (-not $start) { 'skipped' }
                              elseif ($start.rebased) { 'rebased' }
@@ -2317,7 +2504,9 @@ if ($repoDir -and -not $multiRepo -and -not $readsOnly -and -not $reviewedOn -an
     if ($start -and $null -ne $start.behind) { $runDetail.baseBehind = [int]$start.behind }
     if ($start -and $start.rebased) {
         Write-Log "  Rebased onto $($start.base) before this run ($($start.behind) commit(s) behind) -> $($start.sha)."
-        Send-TicketComment -TicketId $ticketId -Body "This branch was $($start.behind) commit(s) behind $($start.base), so the heartbeat rebased it before this $skill run. It replayed cleanly and is now $($start.sha)."
+        Send-TicketComment -TicketId $ticketId -Body ("This branch was $($start.behind) commit(s) behind $($start.base), so the heartbeat rebased it before this $skill run. " +
+            $(if (@($start.resolved).Count -gt 0) { "It conflicted only in $(@($start.resolved) -join ', '), which the project's rebase resolver settled: $(@($start.resolverSaid) -join ' ') It is now $($start.sha)." }
+              else { "It replayed cleanly and is now $($start.sha)." }))
     }
     elseif ($start -and $start.conflicts.Count -gt 0) {
         $files = ($start.conflicts | ForEach-Object { "- $_" }) -join "`n"
@@ -2827,9 +3016,19 @@ function Invoke-HandOffNets {
 
     $leftovers = Save-WorkerLeftovers -WorkDir $workDir -TicketId $ticketId -Title $title `
         -IssueRef "$($Claim.issueCommitRef)" -Skill $skill
-    if ($leftovers -and $leftovers.ok) {
+    if ($leftovers -and $leftovers.stopped) {
+        $st = $leftovers.stopped
+        Write-Log "  ${in}WARNING: $skill left a $($st.kind) stopped - kept as $($st.ref) and aborted; '$($st.branch)' is at $($st.head)."
+        $where = if ($onHost) { " on worker host ``$runHost``" } else { '' }
+        Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase ended with a ``git $($st.kind)`` stopped on its conflicts, so nothing was committed and nothing it had got to is on the branch. $(Format-StoppedGitOperation -Stopped $st -Where $where)"
+    }
+    elseif ($leftovers -and $leftovers.ok) {
         Write-Log "  ${in}WARNING: $skill left $($leftovers.files) file(s) uncommitted - committed as $($leftovers.sha) on '$($leftovers.branch)'."
         Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase finished without committing its work. The heartbeat committed the $($leftovers.files) leftover file(s) to '$($leftovers.branch)' as $($leftovers.sha) so the next phase can run. Worth a look: this is one catch-all commit, not the atomic per-work-item commits the skill asks for."
+    }
+    elseif ($leftovers -and $leftovers.reason) {
+        Write-Log "  ${in}WARNING: $($leftovers.reason)."
+        Send-TicketComment -TicketId $ticketId -Body "${in}The $skill phase ended with its worktree in a state the heartbeat could not tidy: $($leftovers.reason). Nothing was committed. The next phase undoes it before it starts, or blocks and says why."
     }
     elseif ($leftovers) {
         Write-Log "  ${in}WARNING: $skill left $($leftovers.files) file(s) uncommitted and the safety-net commit FAILED."
@@ -2909,13 +3108,16 @@ function Invoke-HandOffNets {
             if (-not $resync.ok) { Write-Log "  ${in}Could not refresh the board host's base before the rebase: $($resync.reason) - rebasing onto the base as of the start of the run." }
         }
         $rebase = Update-BranchFromBase -WorkDir $workDir -BaseBranch $effectiveBase -RepoDir $repoDir `
-            -MergeLocally $mergeLocally
+            -MergeLocally $mergeLocally -Resolver (Get-RebaseResolver -ProjectDir $projectDataDir)
         if ($rebase) {
             # The ref it measured against, when it got far enough to pick one.
             $baseName = if ($rebase.base) { $rebase.base } else { $effectiveBase }
             if ($rebase.ok -and $rebase.rebased) {
                 Write-Log "  ${in}Rebased '$($rebase.branch)' onto $baseName ($($rebase.behind) commit(s) behind) -> $($rebase.sha)."
-                Send-TicketComment -TicketId $ticketId -Body "${in}This branch was $($rebase.behind) commit(s) behind $baseName, so the heartbeat rebased it before hand-off. It replayed cleanly and the branch is now $($rebase.sha), sitting directly on top of the current base. What you review is what would merge."
+                $how = if (@($rebase.resolved).Count -gt 0) {
+                    "It conflicted only in $(@($rebase.resolved) -join ', '), which the project's rebase resolver settled: $(@($rebase.resolverSaid) -join ' ')"
+                } else { "It replayed cleanly." }
+                Send-TicketComment -TicketId $ticketId -Body "${in}This branch was $($rebase.behind) commit(s) behind $baseName, so the heartbeat rebased it before hand-off. $how The branch is now $($rebase.sha), sitting directly on top of the current base. What you review is what would merge."
             }
             elseif ($rebase.ok) {
                 Write-Log "  ${in}Branch is already up to date with $baseName."
@@ -3032,13 +3234,24 @@ if ($qaMirror) {
 # ticket, because the work now exists on one machine only and the next run, on either, would not
 # start from it.
 if ($onHost -and $repoDir -and -not $readsOnly -and $wt -and $wt.branch) {
-    $tip = "$(git -C $workDir rev-parse --verify --quiet HEAD 2>$null)".Trim()
+    # The branch, not HEAD: what the board host accepts is recorded here as agreed for the branch,
+    # so the two have to be the same commit (Send-BranchToBoard). A HEAD the run left somewhere else
+    # is kept under a ref and said, never sent.
+    $branchRef = "refs/heads/$($wt.branch)"
+    $tip = Get-RefSha -Dir $workDir -Ref $branchRef
+    $headSha = Get-RefSha -Dir $workDir -Ref HEAD
+    if ($headSha -and $headSha -ne $tip) {
+        $keptAs = "refs/whetstone/stopped/$($wt.branch)/$($headSha.Substring(0, 8))"
+        git -C $workDir update-ref $keptAs $headSha *> $null
+        Write-Log "  WARNING: HEAD ($headSha) is not on '$($wt.branch)' ($tip) - handing back the branch; HEAD kept as $keptAs."
+        Send-TicketComment -TicketId $ticketId -Body "This run on worker host ``$runHost`` ended with its worktree's HEAD at ``$($headSha.Substring(0, 8))``, which is not on ``$($wt.branch)``. The branch was handed back as it is, and that HEAD is kept on ``$runHost`` as ``$keptAs``. To look: ``git log --oneline $($wt.branch)..$keptAs`` in that clone."
+    }
     if ($tip -and $tip -eq $boardStartSha) {
         Write-Log "  Nothing new on '$($wt.branch)' - nothing to hand back."
     }
     else {
         $why = $null
-        $sent = Send-BranchToBoard -WorkDir $workDir -RunId $runId
+        $sent = Send-BranchToBoard -WorkDir $workDir -RunId $runId -Ref $branchRef
         if (-not $sent.ok) { $why = $sent.reason }
         else {
             $body = @{ runId = [int]$runId; branch = $wt.branch; sha = $sent.sha; incomingRef = $sent.ref; expectedOld = $boardStartSha } |

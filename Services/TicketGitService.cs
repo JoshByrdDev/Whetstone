@@ -192,7 +192,15 @@ public record RebaseResult(
     string? NewSha,
     /// <summary>The working tree the rebase ran in — the hub, or the worktree that holds the branch.</summary>
     string RanIn,
-    IReadOnlyList<string> Output);
+    IReadOnlyList<string> Output)
+{
+    /// <summary>
+    /// Files that conflicted and were settled by the project's <c>rebase-resolve.ps1</c>. Empty for a
+    /// rebase that replayed cleanly. Not empty means the change itself moved, so its merge checks
+    /// run again on the new tip like any other.
+    /// </summary>
+    public IReadOnlyList<string> Resolved { get; init; } = Array.Empty<string>();
+}
 
 /// <summary>
 /// Outcome of merging a ticket's branch into the base in the hub, on a project that does not raise
@@ -905,6 +913,13 @@ public partial class TicketGitService
         var (behind, _) = await CountAsync(repo, baseRef, branch, ct);
         if (behind == 0) return Fail($"'{branch}' is already based off the latest {baseRef} — nothing to rebase.");
 
+        // A worktree stopped mid-rebase on the branch is listed as detached, so it is not among the
+        // holders below, and git's own refusal ("already used by worktree") names no cause. Said here.
+        if ((await RebasingWorktreesAsync(repo, branch, ct)) is { Count: > 0 } stuck)
+            return Fail($"'{branch}' is stuck in the middle of a rebase in {stuck[0]}, left by a run that ended before finishing it. " +
+                        $"Clear it without moving the branch - git -C \"{stuck[0]}\" rebase --quit, then check '{branch}' out there again - " +
+                        "not with rebase --abort, which winds the branch back to where that rebase began.");
+
         var holders = _worktrees.List(repo).Where(w => w.Branch == branch).ToList();
         if (holders.Count > 1)
             return Fail($"'{branch}' is checked out in {holders.Count} worktrees at once. " +
@@ -959,10 +974,35 @@ public partial class TicketGitService
         var rebase = await GitAsync(dir, ct, TimeSpan.FromMinutes(5), args.ToArray());
         AddLines(output, rebase);
 
+        // A project can carry a resolver for the conflicts that are bookkeeping rather than judgement
+        // - two branches that each took the next migration number. It is handed each stop in turn,
+        // and either resolves and stages it or declines; a decline ends in the same abort as before.
+        var settled = new List<string>();
+        string? declined = null;
+        if (!rebase.Ok && RebaseResolverOf(projectKey) is { } resolver)
+        {
+            for (var stop = 0; stop < 50 && await RebaseInProgressAsync(dir, ct); stop++)
+            {
+                var stopped = await ConflictedPathsAsync(dir, ct);
+                if (stopped.Count == 0) break;
+                var r = await RunRebaseResolverAsync(resolver, dir, baseRef, branch, member, stopped, ct);
+                output.AddRange(r.Lines.Select(l => $"[{Path.GetFileName(resolver)}] {l}"));
+                if (!r.Ok) { declined = r.Why; break; }
+                if ((await ConflictedPathsAsync(dir, ct)).Count > 0) { declined = "it exited as resolved but left files unmerged"; break; }
+                settled.AddRange(stopped);
+
+                var next = await GitAsync(dir, ct, TimeSpan.FromMinutes(5), "-c", "core.editor=true", "rebase", "--continue");
+                AddLines(output, next);
+                rebase = next;
+                if (next.Ok) break;
+            }
+        }
+
         if (!rebase.Ok)
         {
             // Read the conflicts before the abort, because after it there is nothing left to read.
             var conflicts = await ConflictedPathsAsync(dir, ct);
+            if (declined is not null) output.Add($"[dashboard] the project's rebase resolver declined: {declined}");
 
             if (await RebaseInProgressAsync(dir, ct))
             {
@@ -988,7 +1028,8 @@ public partial class TicketGitService
                 var word = conflicts.Count == 1 ? "file" : "files";
                 return new RebaseResult(false,
                     $"Rebasing onto {baseRef} conflicts in {conflicts.Count} {word}. Nothing was changed — " +
-                    "this one needs deciding by hand.",
+                    "this one needs deciding by hand." +
+                    (declined is not null ? $" The project's rebase resolver looked and declined: {declined}" : ""),
                     true, conflicts, branch, baseRef, previous, previous, dir, output);
             }
 
@@ -998,10 +1039,83 @@ public partial class TicketGitService
         await RestoreHeadAsync();
 
         var rebased = (await GitAsync(repo, ct, "rev-parse", branch)).Stdout.Trim();
-        _log.LogInformation("Rebased {Branch} onto {BaseRef} in {Dir}: {Previous} -> {New}",
-            branch, baseRef, dir, Short(previous), Short(rebased));
+        _log.LogInformation("Rebased {Branch} onto {BaseRef} in {Dir}: {Previous} -> {New}{Resolved}",
+            branch, baseRef, dir, Short(previous), Short(rebased),
+            settled.Count > 0 ? $" (resolver settled {string.Join(", ", settled.Distinct())})" : "");
 
-        return new RebaseResult(true, null, false, noFiles, branch, baseRef, previous, rebased, dir, output);
+        return new RebaseResult(true, null, false, noFiles, branch, baseRef, previous, rebased, dir, output)
+        {
+            Resolved = settled.Distinct().ToList(),
+        };
+    }
+
+    /// <summary>
+    /// <c>data/projects/&lt;key&gt;/rebase-resolve.ps1</c>, when the project has one. It is the
+    /// project's to write because what counts as a conflict with only one right answer - a migration
+    /// renumber, a generated lockfile - is a fact about that repo's tooling.
+    /// </summary>
+    private string? RebaseResolverOf(string projectKey)
+    {
+        var script = Path.Combine(_registry.Paths.ProjectDir(projectKey), "rebase-resolve.ps1");
+        return File.Exists(script) ? script : null;
+    }
+
+    private record ResolverRun(bool Ok, string? Why, IReadOnlyList<string> Lines);
+
+    /// <summary>
+    /// Run the resolver at one stopped step, in the tree that is mid-rebase. It reads one JSON object
+    /// on stdin (<c>conflicted</c>, <c>baseRef</c>, <c>branch</c>, <c>repo</c>), and exits 0 having
+    /// staged a resolution, or non-zero having changed nothing, with its reason on stderr. Anything
+    /// it leaves untracked after a decline is its own to clean: the abort that follows restores the
+    /// tracked files only.
+    /// </summary>
+    private static async Task<ResolverRun> RunRebaseResolverAsync(string script, string dir, string baseRef,
+        string branch, string? member, IReadOnlyList<string> conflicted, CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo(PowerShellHost.Exe)
+            {
+                WorkingDirectory = dir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardInput = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8,
+            };
+            foreach (var a in new[] { "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script }) psi.ArgumentList.Add(a);
+            psi.Environment["WHETSTONE_BASE_REF"] = baseRef;
+            psi.Environment["GIT_EDITOR"] = "true";
+
+            using var proc = Process.Start(psi)!;
+            await proc.StandardInput.WriteAsync(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                conflicted, baseRef, branch, repo = member ?? "",
+            }));
+            proc.StandardInput.Close();
+
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromMinutes(10));
+            var stdout = proc.StandardOutput.ReadToEndAsync(cts.Token);
+            var stderr = proc.StandardError.ReadToEndAsync(cts.Token);
+            try { await proc.WaitForExitAsync(cts.Token); }
+            catch (OperationCanceledException)
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                return new(false, "it did not finish within ten minutes", Array.Empty<string>());
+            }
+            var lines = (await stdout).Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var err = (await stderr).Trim();
+            return proc.ExitCode == 0
+                ? new(true, null, lines)
+                : new(false, err.Length > 0 ? err : $"exit code {proc.ExitCode}", lines);
+        }
+        catch (Exception ex)
+        {
+            return new(false, $"it could not be started: {ex.Message}", Array.Empty<string>());
+        }
     }
 
     /// <summary>Whether this tree is sitting in the middle of a rebase, either backend.</summary>

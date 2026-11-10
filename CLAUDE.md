@@ -46,6 +46,7 @@ its own nested git repo with its own remote:
 | Paths, ports, tracker, credentials, stack commands | `project.json` / `project.defaults.json` there |
 | A command only that repo makes dangerous | `data/projects/<key>/guard.ps1`, tested by a `guard.tests.ps1` beside it |
 | How the narrator says its product names and key prefix | `data/projects/<key>/pronounce.json` |
+| A rebase conflict that repo's tooling makes mechanical (two branches taking the same migration number) | `data/projects/<key>/rebase-resolve.ps1`, handed each stopped step of the board's rebase and of the heartbeat's start and hand-off rebases (`Update-BranchFromBase`); it resolves and stages, or declines and the rebase aborts as before. What it stages must not change what the change does - the owner's clearances ride over it |
 
 If a rule cannot be written without naming a repo, a script in it, or one of its hosts, it is not a
 rule for this repository. When the shared code needs an example, it uses a placeholder: `PROJ-123`
@@ -356,7 +357,7 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
 | A review gate the owner put a ticket on by hand is the owner's | `steward_approve` and `steward_send_back` pass a plan or a build only where a hand-off stopped it; the last move onto the gate being a person's refuses both (`OwnerPlacedAsync`). A declined expansion item is deleted from the plan, and every approval is a `Call` on the owner's record |
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
-| A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse. An answer to a question is prose and lifts nothing |
+| A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse, except that a flag which says what it is about - its own `about` (a project's flag script can send one: the packages and versions, say), or the diff of the files it names - is cleared for that and holds while it is the same; a rebase whose only conflicts the project's resolver settled is not rework, and carries it (`CarryClearancesAsync`, recorded as a call). A merge answers `behind` before it raises any flag, so the owner is asked about the tip that merges. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
 | What is decided, and whether it still is | the register (`StewardDecision`, docs/plans-as-slices.md section 3). Recording, replacing, withdrawing, and settling a pair the import flagged are REST routes with no tool behind them; `steward_decisions` only reads. A replacing is stored on the newer decision only, and a number is the project's for good |
 | Ideas are the owner's; a building slice's story changes only with an answer | committing a proposed idea, and rewording a story sentence, happen only on the owner's answer to a question; `steward_draft_unit` refuses a draft no idea stands for, and a story that does not check |
@@ -437,6 +438,19 @@ discoverable from the code:
 - **A run is named by its ticket lease.** `ClaimResult.RunId` is the ticket lease's own id. The
   branch accept route refuses a run whose lease has gone, and a runner kills such a run, so a run
   the orchestrator gave up on can never overwrite the next one's work.
+- **What is handed back is the branch, and a stopped rebase is never committed over.** A run that
+  ends mid-rebase has a detached HEAD, and a commit there moves no branch: once the hand-back sent
+  that HEAD and the clone recorded it as agreed, the clone's own branch disagreed with both for
+  good, and every later run there blocked as a divergence no answer could clear. So the leftover
+  net, `Resolve-Worktree` and the levelling all keep a stopped operation under
+  `refs/whetstone/stopped/` and abort it (`Undo-StoppedGitOperation`) - or, when the branch has
+  moved since the rebase began, drop it with `rebase --quit`, because an abort moves the branch back
+  to where the rebase found it and that is a rewind past every hand-back since. The board host does
+  the same for a rebase a killed run left in its own worktree (`ClearStoppedRebasesAsync`, from the
+  hand-back route and the steward's rebase), which `git worktree list` shows as detached, so nothing
+  that looks for the branch's worktree finds it. The hand-back sends
+  `refs/heads/<branch>`, and a divergence resets when the board host has had the local tip before
+  (`Test-BoardHadCommit`, from the tracking ref's reflog).
 - **The worker host's clone calls the board host's repo `board`.** Not `hub`, which in `worker.ps1`
   means a project's main checkout. Its local base is a mirror of the board host's, so
   `Resolve-BaseRef` stays the same on both machines.

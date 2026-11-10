@@ -70,7 +70,7 @@ function Release-StewardRun {
 # with no notes store keeps them on the board, where its owner sees them.
 function Invoke-StewardLearnedFold {
     param([string]$MemoryDir, [string]$RepoDir)
-    try { $queue = @(Invoke-RestMethod -Uri "$DashboardUrl/api/steward/learned?project=$Project" -TimeoutSec 15) }
+    try { $queue = ConvertTo-RestList (Invoke-RestMethod -Uri "$DashboardUrl/api/steward/learned?project=$Project" -TimeoutSec 15) }
     catch { Write-Log "  Could not read the learned facts: $($_.Exception.Message)"; return }
     $queue = @($queue | Where-Object { $_ -and $_.text })
     if ($queue.Count -eq 0) { return }

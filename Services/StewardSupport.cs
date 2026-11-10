@@ -17,6 +17,8 @@ public interface IStewardGit
     Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default);
     Task<string?> FileAtBaseAsync(string projectKey, string path, CancellationToken ct = default);
     Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default);
+    /// <summary><see cref="BranchChange.ChangeId"/> of the branch's diff limited to <paramref name="paths"/>, or null.</summary>
+    Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default);
     Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default);
     Task<int> AheadOfBaseAsync(string projectKey, string from, CancellationToken ct = default);
     Task<SyncFromResult> SyncFromAsync(string projectKey, string from, bool dryRun, CancellationToken ct = default);
@@ -26,6 +28,7 @@ public interface IStewardGit
     Task<CheckTree> CheckTreeAsync(string projectKey, string branch, CancellationToken ct = default);
     Task<MergeResult> MergeAsync(string projectKey, string branch, string? title, string? description, CancellationToken ct = default);
     Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default);
+    Task<(IReadOnlyList<StoppedRebaseKept> Kept, string? Why)> ClearStoppedRebasesAsync(string projectKey, string branch, CancellationToken ct = default);
 }
 
 public partial class TicketGitService : IStewardGit
@@ -43,7 +46,14 @@ public partial class TicketGitService : IStewardGit
 /// <param name="Blocks">The work is not proved yet. The steward sends it back; it does not ask.</param>
 /// <param name="Say">What to tell whoever acts on it, in a sentence.</param>
 /// <param name="Detail">The files, packages or items it is about.</param>
-public record StewardFlag(string Flag, bool Owner, bool Blocks, string? Say = null, IReadOnlyList<string>? Detail = null);
+/// <param name="About">
+/// Exactly what the owner is asked about, as one string that changes when that does and not
+/// otherwise - the packages and their versions, say. An owner's clearance of the flag holds while
+/// it is raised with the same <c>About</c>, however the rest of the branch moves. Without one, a
+/// flag whose every detail is a changed file is about those files' own diff; any other flag is
+/// about the whole change (<see cref="StewardService.FingerprintAsync"/>).
+/// </param>
+public record StewardFlag(string Flag, bool Owner, bool Blocks, string? Say = null, IReadOnlyList<string>? Detail = null, string? About = null);
 
 /// <summary>What a project's own flag script is told about the ticket it is asked to look at.</summary>
 public record StewardFlagInput(
@@ -68,7 +78,7 @@ public interface IStewardProjectFlags
 /// <para>
 /// The script reads one JSON object on stdin (<see cref="StewardFlagInput"/>) and writes a JSON
 /// array of flags on stdout: <c>[{ "flag": "...", "owner": true, "blocks": false, "say": "...",
-/// "detail": ["..."] }]</c>.
+/// "detail": ["..."], "about": "..." }]</c>. <c>about</c> is optional: see <see cref="StewardFlag.About"/>.
 /// </para>
 /// </summary>
 public class StewardFlagScript : IStewardProjectFlags
@@ -88,7 +98,7 @@ public class StewardFlagScript : IStewardProjectFlags
 
         try
         {
-            var psi = new ProcessStartInfo("powershell")
+            var psi = new ProcessStartInfo(PowerShellHost.Exe)
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,

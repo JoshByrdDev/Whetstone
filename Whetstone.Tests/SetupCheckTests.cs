@@ -35,6 +35,23 @@ public class SetupCheckTests
     }
 
     [Fact]
+    public void Without_powershell_7_the_fleet_runs_on_5_1_and_says_so()
+    {
+        var item = Item(SetupCheckService.Evaluate(Machine(missing: new[] { "pwsh" }), AllClaude, Array.Empty<(string, string)>()), "pwsh");
+        Assert.Equal("warn", item.State);
+        Assert.False(item.Required);
+        Assert.Contains("5.1", item.Detail);
+        Assert.Contains("wix", item.Fix);
+    }
+
+    [Fact]
+    public void Powershell_7_in_its_install_folder_counts_though_path_predates_it()
+    {
+        var probe = Machine(missing: new[] { "pwsh" }) with { Pwsh = () => @"C:\Program Files\PowerShell\7\pwsh.exe" };
+        Assert.Equal("ok", Item(SetupCheckService.Evaluate(probe, AllClaude, Array.Empty<(string, string)>()), "pwsh").State);
+    }
+
+    [Fact]
     public void A_browser_not_installed_warns_that_qa_falls_back_to_npx()
     {
         var items = SetupCheckService.Evaluate(Machine(browser: false), AllClaude, Array.Empty<(string, string)>());

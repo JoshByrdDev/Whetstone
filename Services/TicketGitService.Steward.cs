@@ -47,6 +47,40 @@ public static class CheckFailures
         @"\bExpected[: ]|\bReceived:|\berror (TS|CS)\d+|\b[1-9]\d* (failed|failing)\b|^\s*Error:|\bFailed [A-Za-z_.]+\b",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    /// <summary>A line that names one failing test: a runner's FAIL / not ok line, or a failure bullet.</summary>
+    private static readonly System.Text.RegularExpressions.Regex Head = new(
+        @"^\s*(FAIL|FAILED|not ok)\b|^\s*[●✕✗×❌]\s",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>What a failure other than a slow test prints: an assertion, a compiler error, an error
+    /// thrown (a crashed worker included), unless it is the slow pattern's own "Error: Test timed out".</summary>
+    private static readonly System.Text.RegularExpressions.Regex Real = new(
+        @"AssertionError|Assertion failed|\bExpected[: ]|\bReceived:|\berror (TS|CS)\d+|^\s*\w*Error\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Whether every failing test in <paramref name="failures"/> (as <see cref="Pick"/> chose them)
+    /// failed only by running out of its own time: each one names <paramref name="slowFault"/> on its
+    /// line or the two after it, and nothing in them is an assertion, a compiler error or another error
+    /// thrown. False when no
+    /// failing test is named at all - then there is nothing to say it was only slow.
+    /// </summary>
+    public static bool OnlySlow(IReadOnlyList<string>? failures, string slowFault)
+    {
+        if (failures is not { Count: > 0 } f || string.IsNullOrWhiteSpace(slowFault)) return false;
+        var slow = new System.Text.RegularExpressions.Regex(slowFault, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var heads = 0;
+        for (var i = 0; i < f.Count; i++)
+        {
+            if (Real.IsMatch(f[i]) && !slow.IsMatch(f[i])) return false;
+            if (!Head.IsMatch(f[i])) continue;
+            heads++;
+            var named = Enumerable.Range(i, 3).Where(j => j < f.Count).Any(j => slow.IsMatch(f[j]));
+            if (!named) return false;
+        }
+        return heads > 0;
+    }
+
     /// <summary>
     /// Each line that names a failure, with the line after it for context, in order, each cut to a
     /// readable length and the whole held to <paramref name="max"/> lines.
@@ -327,6 +361,24 @@ public partial class TicketGitService
     }
 
     /// <summary>
+    /// The change id of what <paramref name="branch"/> does to <paramref name="paths"/> alone, against
+    /// the same base ref as <see cref="BranchChangeAsync"/>. What a clearance of a flag about files
+    /// is tied to (<see cref="Whetstone.Models.StewardClearance.PathsChangeId"/>).
+    /// </summary>
+    public async Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default)
+    {
+        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        if (paths.Count == 0 || string.IsNullOrWhiteSpace(branch) || !IsGitRepo(repo)) return null;
+        if (!(await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}")).Ok) return null;
+        var baseRef = await BaseRefAsync(repo, cfg, baseBranch, ct);
+        if (baseRef is null) return null;
+        var args = new List<string> { "diff", "--no-renames", "--no-color", $"{baseRef}...{branch}", "--" };
+        args.AddRange(paths.Select(p => ":(literal)" + p));
+        var diff = await GitAsync(repo, ct, TimeSpan.FromSeconds(60), args.ToArray());
+        return diff.Ok && diff.Stdout.Trim().Length > 0 ? ChangeIdOf(diff.Stdout) : null;
+    }
+
+    /// <summary>
     /// A diff's identity across rebases, like <c>git patch-id</c>: the hunk headers' line numbers and
     /// the <c>index</c> lines' blob ids are what a rebase moves without changing the change.
     /// </summary>
@@ -522,7 +574,11 @@ public partial class TicketGitService
     public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout,
         IReadOnlyDictionary<string, string>? env = null, CancellationToken ct = default)
     {
-        var r = await RunAsync("cmd.exe", dir, timeout, env, ct, "/d", "/c", command);
+        // The machine's own shell, as a project's stack commands are run (ProjectStackService):
+        // a project's checks are written for the machine it is worked on.
+        var r = OperatingSystem.IsWindows()
+            ? await RunAsync("cmd.exe", dir, timeout, env, ct, "/d", "/c", command)
+            : await RunAsync("/bin/sh", dir, timeout, env, ct, "-c", command);
         var lines = $"{r.Stdout}\n{r.Stderr}".Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0).ToList();
         return new CheckRun(r.Ok, r.ExitCode == -1 && r.Stderr.Contains("did not finish"),
             string.Join("\n", lines.Skip(Math.Max(0, lines.Count - 40))),

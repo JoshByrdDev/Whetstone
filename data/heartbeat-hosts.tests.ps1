@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Continue'
 # config and starts a provider), so its functions are lifted out of it as they stand: that one,
 # and how a refusal's reason is read.
 $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
-foreach ($lifted in 'ConvertTo-JsonBody', 'Get-ApiError') {
+foreach ($lifted in 'ConvertTo-JsonBody', 'Get-ApiError', 'ConvertTo-RestList') {
     . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq $lifted }, $false) | Select-Object -First 1).Extent.Text))
 }
 $JsonContentType = 'application/json; charset=utf-8'
@@ -422,6 +422,8 @@ Check 'a relative -File counts as ours, as before' (Test-RunsScript -CommandLine
 Check 'no -File at all is not a run' (Test-RunsScript -CommandLine 'powershell worker.ps1' -Script $mine) $false
 Check 'no command line is not a run' (Test-RunsScript -CommandLine '' -Script $mine) $false
 Check "the board's own launch of its heartbeat" (Test-RunsScript -CommandLine '"powershell" -ExecutionPolicy Bypass -File "C:\Whetstone\data\heartbeat.ps1"' -Script 'C:\Whetstone\data\heartbeat.ps1') $true
+Check "the same launch on PowerShell 7" (Test-RunsScript -CommandLine '"C:\Program Files\PowerShell\7\pwsh.exe" -ExecutionPolicy Bypass -File "C:\Whetstone\data\heartbeat.ps1"' -Script 'C:\Whetstone\data\heartbeat.ps1') $true
+Check 'a worker started on 7 is ours' (Test-RunsScript -CommandLine '"C:\Program Files\PowerShell\7\pwsh.exe" -ExecutionPolicy Bypass -File C:\Whetstone\data\worker.ps1 -Agent 2' -Script $mine) $true
 
 # ---- A refusal's reason ----------------------------------------------------------------------
 # The API answers a refusal with {"error": ...}, sent chunked. PowerShell 5.1 leaves ErrorDetails
@@ -494,6 +496,18 @@ $script:Claims.Enqueue((New-Claim 33))
 $null = Get-WorkerHosts
 $null = Start-Fill -LocalOpen $false
 Check 'otherwise the claim names only the phases on another provider' (@($script:ClaimSkills[0]) -join ',') 'review-pr'
+
+# ---- A JSON list read from the dashboard ---------------------------------------------------
+# Windows PowerShell hands a JSON array over as one object, so @() around it is a list of one - the
+# whole array - and a property read on it reads every element at once. ConvertFrom-Json does the
+# same as Invoke-RestMethod, so it stands in for the board here.
+$listed = ConvertTo-RestList (ConvertFrom-Json '[{"id":1,"key":"first"},{"id":2,"key":"second"}]')
+Check 'a JSON list of two is two items' $listed.Count 2
+Check 'and each item is one item, not every key at once' (@($listed | ForEach-Object { $_.key }) -join ',') 'first,second'
+$one = ConvertTo-RestList (ConvertFrom-Json '[{"id":7,"key":"only"}]')
+Check 'a JSON list of one is one item' $one.Count 1
+Check 'whose key is its own' $one[0].key 'only'
+Check 'an empty answer is an empty list' (ConvertTo-RestList $null).Count 0
 
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "ALL $($script:total) CHECKS PASSED" -ForegroundColor Green }

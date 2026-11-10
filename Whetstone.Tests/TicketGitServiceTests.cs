@@ -529,6 +529,99 @@ public class TicketGitServiceTests : IDisposable
         Assert.DoesNotContain("rebase in progress", Run(_repo, "git", "status"));
     }
 
+    /// <summary>Both sides change README.md, the conflict the resolver tests hand to the script.</summary>
+    private string BranchThatConflictsOnTheReadme()
+    {
+        Git(_repo, "checkout", "-b", "jb/ALPHA-1", "main");
+        Write("README.md", "our version\n");
+        Write("a.txt", "work\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "ours");
+        var before = Sha("jb/ALPHA-1");
+
+        Git(_repo, "checkout", "main");
+        Write("README.md", "their version\n");
+        Git(_repo, "add", "-A");
+        Git(_repo, "commit", "-m", "theirs");
+        Git(_repo, "push", "origin", "main");
+        Git(_repo, "reset", "--hard", "HEAD~1");
+        return before;
+    }
+
+    private void Resolver(string body) =>
+        File.WriteAllText(Path.Combine(_data, "projects", "alpha", "rebase-resolve.ps1"), body);
+
+    /// <summary>
+    /// A conflict the project knows has one right answer (in practice, two branches that took the
+    /// same migration number) is settled by its resolver, and the rebase finishes instead of
+    /// sending the ticket round a whole build to do it.
+    /// </summary>
+    [Fact]
+    public async Task A_project_resolver_settles_a_conflict_and_the_rebase_finishes()
+    {
+        BranchThatConflictsOnTheReadme();
+        Resolver("""
+            $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+            if (@($in.conflicted) -notcontains 'README.md') { [Console]::Error.WriteLine('not mine'); exit 1 }
+            if (-not $env:WHETSTONE_BASE_REF) { [Console]::Error.WriteLine('no base ref'); exit 1 }
+            Set-Content -Path README.md -Value 'both versions' -Encoding ascii
+            git add README.md
+            Write-Output 'kept both versions of README.md'
+            exit 0
+            """);
+
+        var r = await _svc.RebaseAsync("alpha", "jb/ALPHA-1");
+
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal(new[] { "README.md" }, r.Resolved);
+        Assert.Contains(r.Output, l => l.Contains("kept both versions"));
+        Assert.Equal("main", CurrentBranch());
+        Assert.Equal("both versions", Run(_repo, "git", "show", "jb/ALPHA-1:README.md").Trim());
+        Assert.Equal("work", Run(_repo, "git", "show", "jb/ALPHA-1:a.txt").Trim());
+        Assert.DoesNotContain("rebase in progress", Run(_repo, "git", "status"));
+    }
+
+    [Fact]
+    public async Task A_resolver_that_declines_leaves_the_branch_exactly_where_it_was()
+    {
+        var before = BranchThatConflictsOnTheReadme();
+        Resolver("""
+            [Console]::In.ReadToEnd() | Out-Null
+            [Console]::Error.WriteLine('this conflict is about the code')
+            exit 1
+            """);
+
+        var r = await _svc.RebaseAsync("alpha", "jb/ALPHA-1");
+
+        Assert.False(r.Ok);
+        Assert.True(r.Conflicted);
+        Assert.Empty(r.Resolved);
+        Assert.Contains("this conflict is about the code", r.Error);
+        Assert.Equal(before, Sha("jb/ALPHA-1"));
+        Assert.Equal("main", CurrentBranch());
+        Assert.Empty(Run(_repo, "git", "status", "--porcelain").Trim());
+        Assert.DoesNotContain("rebase in progress", Run(_repo, "git", "status"));
+    }
+
+    /// <summary>Saying "resolved" is not enough: a file still unmerged means the abort runs.</summary>
+    [Fact]
+    public async Task A_resolver_that_leaves_a_file_unmerged_is_treated_as_declining()
+    {
+        var before = BranchThatConflictsOnTheReadme();
+        Resolver("""
+            [Console]::In.ReadToEnd() | Out-Null
+            exit 0
+            """);
+
+        var r = await _svc.RebaseAsync("alpha", "jb/ALPHA-1");
+
+        Assert.False(r.Ok);
+        Assert.True(r.Conflicted);
+        Assert.Contains("unmerged", r.Error);
+        Assert.Equal(before, Sha("jb/ALPHA-1"));
+        Assert.DoesNotContain("rebase in progress", Run(_repo, "git", "status"));
+    }
+
     [Fact]
     public async Task Refuses_to_rebase_while_the_tree_holding_the_branch_is_dirty()
     {

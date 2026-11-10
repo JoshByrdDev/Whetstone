@@ -204,7 +204,7 @@ public class HeartbeatManager
             {
                 StartInfo = new ProcessStartInfo
                 {
-                    FileName = "powershell",
+                    FileName = PowerShellHost.Exe,
                     Arguments = $"-ExecutionPolicy Bypass -File \"{_scriptPath}\"",
                     WorkingDirectory = _workingDir,
                     UseShellExecute = false,

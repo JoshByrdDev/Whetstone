@@ -95,6 +95,13 @@ and the leftovers are what a run killed before its hand-off nets left. Refusing 
 ticket on every retry, and nothing but a person at that machine could clean the tree. `ahead` and a
 refused `diverged` never touch the worktree.
 
+The board host's half is the same rule. When the accept route moves a branch that a board host
+worktree holds, uncommitted files there are what a run on the board host left when it was stopped,
+before the ticket went to a worker host. The branch-tip check has already proved every commit is
+in the hand-back, and the ticket never starts here again, so nothing else would clean that tree.
+Inside the project's worktree root they are stashed and named on the ticket (`AcceptWorkerBranchAsync`).
+Outside it the tree may be a person's, so the hand-back is refused, naming the files.
+
 After that, `Resolve-Worktree` sees a local branch and runs unchanged. Worktrees on the worker host
 are kept between runs, which keeps `node_modules` and friends warm. The board host's
 `WorktreeReaper` never sees them. The runner reaps a worker host worktree once its ticket is Done

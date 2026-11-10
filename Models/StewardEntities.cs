@@ -351,6 +351,13 @@ public class StewardOutcome
 /// branch's diff against its base with line numbers and blob ids left out, so a rebase that changes
 /// nothing of the ticket's own keeps it, and any rework of the change lets it lapse.
 /// </para>
+/// <para>
+/// A flag that says what it is about - its own <see cref="Services.StewardFlag.About"/>, or the
+/// diff of the files it names - is cleared for that, not for the whole branch: the clearance also
+/// records it (<see cref="About"/>) and keeps holding while the flag is raised with the same one,
+/// whatever else the branch reworked. A rebase whose conflicts were resolved by hand in other files
+/// lapsed it otherwise, and the owner was asked to clear what they had already read, unchanged.
+/// </para>
 /// </summary>
 public class StewardClearance
 {
@@ -363,6 +370,9 @@ public class StewardClearance
 
     /// <summary>See <see cref="Services.BranchChange.ChangeId"/>.</summary>
     public string ChangeId { get; set; } = "";
+
+    /// <summary>What the flag was about when it was cleared (<see cref="Services.StewardService.FingerprintAsync"/>), or null for a flag about the whole change.</summary>
+    public string? About { get; set; }
 
     /// <summary>The branch's tip when it was cleared, so the record can say which commit was seen.</summary>
     public string? Sha { get; set; }

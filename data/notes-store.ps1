@@ -57,6 +57,8 @@ $script:NoteStopWords = @(
     'before','over','under','both','each','more','most','some','any','all','run','runs','ran','use',
     'used','uses','using','make','makes','made','get','gets','got','set','sets','one','two','way'
 ) | ForEach-Object { $_.ToLowerInvariant() }
+# Looked up once per token of every note: a set, not a scan of the list above.
+$script:NoteStopSet = New-Object 'System.Collections.Generic.HashSet[string]' (,[string[]]$script:NoteStopWords)
 
 # Give the store its own history. The parent repo ignores .claude entirely, so a nested repo here is
 # invisible to it - no submodule, no pollution of the parent's status, and `git -C` never walks up.
@@ -127,7 +129,7 @@ function Get-NoteTokens {
     foreach ($m in [regex]::Matches($lower, '[a-z0-9_]{3,}')) {
         $t = $m.Value.Trim('_')
         if ($t.Length -lt 3) { continue }
-        if ($script:NoteStopWords -contains $t) { continue }
+        if ($script:NoteStopSet.Contains($t)) { continue }
         [void]$set.Add($t)
     }
     return $set
@@ -629,6 +631,85 @@ function Get-StaleNotes {
 # the duplicate this system actually produces is caught at write time by Resolve-FactPlacement, and
 # what remains here is a backstop for stores that predate it. When the index is too big and nothing
 # here is mergeable, Invoke-NoteStoreMaintenance asks a human once rather than merging on a hunch.
+if (-not ('WhetstoneNotePairs' -as [type])) {
+    Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+
+public class WhetstoneNotePair
+{
+    public string A; public string B; public double Score;
+}
+
+public static class WhetstoneNotePairs
+{
+    // TF-IDF cosine over token SETS: a shared token adds its weight squared, and each note's norm is
+    // the root of its own tokens' squared weights. weight = ln(total / docFreq) + 1.
+    public static List<WhetstoneNotePair> Score(string[] names, string[][] tokens,
+        Dictionary<string, int> docFreq, double total, double threshold)
+    {
+        int n = names.Length;
+        var weights = new Dictionary<string, double>[n];
+        var norm = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            var w = new Dictionary<string, double>(StringComparer.Ordinal);
+            double s = 0.0;
+            foreach (var x in tokens[i])
+            {
+                if (w.ContainsKey(x)) continue;
+                double v = Math.Log(total / (double)docFreq[x]) + 1.0;
+                w[x] = v * v;
+                s += v * v;
+            }
+            weights[i] = w;
+            norm[i] = Math.Sqrt(s);
+        }
+
+        var outp = new List<WhetstoneNotePair>();
+        for (int i = 0; i < n; i++)
+        {
+            if (norm[i] <= 0) continue;
+            for (int j = i + 1; j < n; j++)
+            {
+                if (norm[j] <= 0) continue;
+                // Walk the smaller set, look up in the larger: the sum is the same either way.
+                var small = weights[i].Count <= weights[j].Count ? weights[i] : weights[j];
+                var large = ReferenceEquals(small, weights[i]) ? weights[j] : weights[i];
+                double dot = 0.0;
+                foreach (var kv in small)
+                    if (large.ContainsKey(kv.Key)) dot += kv.Value;
+                if (dot <= 0) continue;
+                double cos = dot / (norm[i] * norm[j]);
+                if (cos >= threshold)
+                    outp.Add(new WhetstoneNotePair { A = names[i], B = names[j], Score = Math.Round(cos, 3) });
+            }
+        }
+        // Best first; equal scores keep the order they were found in.
+        var ordered = new List<WhetstoneNotePair>(outp.Count);
+        var idx = new int[outp.Count];
+        for (int k = 0; k < idx.Length; k++) idx[k] = k;
+        Array.Sort(idx, (x, y) => { int c = outp[y].Score.CompareTo(outp[x].Score); return c != 0 ? c : x.CompareTo(y); });
+        foreach (var k in idx) ordered.Add(outp[k]);
+        return ordered;
+    }
+}
+'@
+}
+
+# Every pair of notes scored by TF-IDF cosine, those at or over the threshold returned as A/B/Score.
+function Get-NotePairScores {
+    param([string[]]$Names, [hashtable]$Tokens, [hashtable]$DocFreq, [double]$Total, [double]$Threshold)
+
+    $df = New-Object 'System.Collections.Generic.Dictionary[string,int]' ([StringComparer]::Ordinal)
+    # get_Keys(), never .Keys - a token called "keys" would shadow the property.
+    foreach ($k in $DocFreq.get_Keys()) { $df[$k] = [int]$DocFreq[$k] }
+    $sets = New-Object 'string[][]' $Names.Count
+    for ($i = 0; $i -lt $Names.Count; $i++) { $sets[$i] = [string[]]@($Tokens[$Names[$i]]) }
+    # The comma keeps the list one object: unrolled, every pair would go down the pipeline singly.
+    return ,[WhetstoneNotePairs]::Score([string[]]$Names, $sets, $df, $Total, $Threshold)
+}
+
 function Get-NoteClusters {
     param([string]$MemoryDir, [double]$Threshold = 0.45, [int]$Max = 3)
 
@@ -652,44 +733,23 @@ function Get-NoteClusters {
     if ($names.Count -lt 3) { return @() }
     $total = [double]$notes.Count
 
-    $norm = @{}
-    foreach ($k in $names) {
-        $s = 0.0
-        foreach ($x in $tokens[$k]) {
-            $w = [Math]::Log($total / [double]$docFreq[$x]) + 1.0
-            $s += ($w * $w)
-        }
-        $norm[$k] = [Math]::Sqrt($s)
-    }
-
-    $pairs = @()
-    for ($i = 0; $i -lt $names.Count; $i++) {
-        for ($j = $i + 1; $j -lt $names.Count; $j++) {
-            $a = $names[$i]; $b = $names[$j]
-            if ($norm[$a] -le 0 -or $norm[$b] -le 0) { continue }
-            $dot = 0.0
-            foreach ($x in $tokens[$a]) {
-                if ($tokens[$b] -contains $x) {
-                    $w = [Math]::Log($total / [double]$docFreq[$x]) + 1.0
-                    $dot += ($w * $w)
-                }
-            }
-            if ($dot -le 0) { continue }
-            $cos = $dot / ($norm[$a] * $norm[$b])
-            if ($cos -ge $Threshold) {
-                $pairs += [pscustomobject]@{ A = $a; B = $b; Score = [Math]::Round($cos, 3) }
-            }
-        }
-    }
+    # Every pair is scored, so the work grows with the square of the store. Written as a script loop
+    # with -contains on arrays it took hours on a store of ~580 notes - a worker sat in it long after
+    # its ticket was done, holding up a fleet drain. The same arithmetic in compiled code takes
+    # seconds; only the scoring moved, and the pairs it finds are the ones the loop found. They come
+    # back best first and are walked as they are: a store full of copies of one note can put tens of
+    # thousands of pairs over the threshold, and wrapping each in a script object cost more than
+    # scoring them.
+    $pairs = Get-NotePairScores -Names $names -Tokens $tokens -DocFreq $docFreq -Total ([double]$notes.Count) -Threshold $Threshold
 
     # Each note may appear in at most one merge per pass: a merge rewrites both sides, so a note
     # cannot be in two of them. A three-note topic collapses over two passes, which is fine.
     $used = New-Object System.Collections.Generic.HashSet[string]
     $out = @()
-    foreach ($p in ($pairs | Sort-Object Score -Descending)) {
+    foreach ($p in $pairs) {
         if ($used.Contains($p.A) -or $used.Contains($p.B)) { continue }
         [void]$used.Add($p.A); [void]$used.Add($p.B)
-        $out += $p
+        $out += [pscustomobject]@{ A = $p.A; B = $p.B; Score = $p.Score }
         if ($out.Count -ge $Max) { break }
     }
     return $out

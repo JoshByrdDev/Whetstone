@@ -1174,6 +1174,9 @@ namespace Whetstone.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("About")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("At")
                         .HasColumnType("TEXT");
 

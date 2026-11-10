@@ -11,6 +11,12 @@
 # ASCII ONLY - see heartbeat-common.ps1.
 
 $ErrorActionPreference = 'Continue'
+# The PowerShell running these tests starts the processes they watch, so a run under 7 proves the
+# runner finds and starts 7's processes, and a run under 5.1 proves 5.1's.
+$Self = (Get-Process -Id $PID).Path
+# What runner.ps1 gets from heartbeat-common.ps1, which the lifted functions do not load.
+$PsHost = $Self
+. (Join-Path $PSScriptRoot 'process-table.ps1')
 $runner = Join-Path $PSScriptRoot 'runner.ps1'
 
 function Write-Log { param([string]$Message) }
@@ -119,7 +125,7 @@ try {
     $done = Start-Process -FilePath 'cmd' -ArgumentList '/c', 'exit 7' -PassThru -WindowStyle Hidden
     try { $null = $done.Handle } catch { }
     $done.WaitForExit()
-    $live = Start-Process -FilePath 'powershell' -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 30' -PassThru -WindowStyle Hidden
+    $live = Start-Process -FilePath $Self -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 30' -PassThru -WindowStyle Hidden
     try {
         $now = Get-Date
         $runs = @{
@@ -263,8 +269,8 @@ try {
     New-Item -ItemType Directory -Path (Split-Path $elsewhere) -Force | Out-Null
     Set-Content -Path $elsewhere -Value 'Start-Sleep 30' -Encoding ascii
     Check 'no runner running: none found' @(Get-RunnerProcesses).Count 0
-    $p1 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
-    $p2 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $elsewhere) -PassThru -WindowStyle Hidden
+    $p1 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
+    $p2 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $elsewhere) -PassThru -WindowStyle Hidden
     try {
         Start-Sleep -Milliseconds 800
         $found = @(Get-RunnerProcesses)
@@ -280,8 +286,8 @@ try {
     $otherRunner = Join-Path $otherCheckout 'data\runner.ps1'
     New-Item -ItemType Directory -Path (Split-Path $otherRunner) -Force | Out-Null
     Set-Content -Path $otherRunner -Value 'Start-Sleep 30' -Encoding ascii
-    $p3 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherRunner) -PassThru -WindowStyle Hidden
-    $p4 = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
+    $p3 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherRunner) -PassThru -WindowStyle Hidden
+    $p4 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
     try {
         Start-Sleep -Milliseconds 800
         $others = @(Find-OtherRunners)
@@ -324,8 +330,8 @@ exit 3
     $otherScript = Join-Path $DataRoot 'something-else.ps1'
     Set-Content -Path $fakeRunner -Value 'Start-Sleep 30' -Encoding ascii
     Set-Content -Path $otherScript -Value 'Start-Sleep 30' -Encoding ascii
-    $sup = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeRunner) -PassThru -WindowStyle Hidden
-    $other = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherScript) -PassThru -WindowStyle Hidden
+    $sup = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeRunner) -PassThru -WindowStyle Hidden
+    $other = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherScript) -PassThru -WindowStyle Hidden
     try {
         Start-Sleep -Milliseconds 800
         Check 'a live supervisor running this runner.ps1' (Test-SupervisorAlive -SupervisorPid $sup.Id) $true
@@ -414,6 +420,28 @@ exit 3
     Check 'no account under its limits: the run is not refused here' "$(Set-ClaimClaudeAccount -Claim $claim -Order $order -Logins $logins)" ''
     Check '... the worker is told why, to turn a Claude phase down' $claim.claudeAccount.refused 'A weekly 85% >= 80%'
     Check '... with no folder' "$($claim.claudeAccount.configDir)" ''
+
+    # ---- Which PowerShell the fleet starts ---------------------------------------------
+    # Get-PsHost is heartbeat-common.ps1's too. Mirrors PowerShellHost in C#.
+    Write-Host "== Get-PsHost"
+    . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Get-PsHost' }, $false) | Select-Object -First 1).Extent.Text))
+    $script:PsSetting = 'powershell'
+    function Get-Global { param([string]$Key) if ($Key -eq 'psHost') { return $script:PsSetting } return $null }
+    Check 'psHost powershell pins 5.1, whatever runs this' (Get-PsHost) 'powershell'
+    $script:PsSetting = $null
+    $auto = Get-PsHost
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        Check 'auto, run on 7: this very PowerShell' $auto $Self
+    }
+    else {
+        $installed = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+        $want = if (Get-Command 'pwsh.exe' -CommandType Application -ErrorAction SilentlyContinue) { 'a pwsh.exe' }
+                elseif (Test-Path -LiteralPath $installed) { 'a pwsh.exe' } else { 'powershell' }
+        $got = if ($auto -like '*pwsh.exe') { 'a pwsh.exe' } else { $auto }
+        Check 'auto, run on 5.1: 7 where it is installed, else 5.1' $got $want
+    }
+    $script:PsSetting = 'PWSH '
+    Check 'the setting is read whatever its case and spacing' ((Get-PsHost) -ne 'powershell') $true
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.

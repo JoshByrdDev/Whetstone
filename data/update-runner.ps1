@@ -37,7 +37,7 @@ $ErrorActionPreference = 'Continue'
 
 # The runner processes running this checkout's runner.ps1: the supervisor and the runner itself.
 function Get-RunnerProcesses {
-    @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue |
+    @(Get-ProcessTable -Shells |
         Where-Object { $_.ProcessId -ne $PID -and (Test-RunsScript -CommandLine $_.CommandLine -Script $RunnerScript) })
 }
 
@@ -69,10 +69,10 @@ function Find-OtherRunners {
     foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
         foreach ($a in @($t.Actions)) { $lines += "$($a.Execute) $($a.Arguments)" }
     }
-    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe' OR Name='pwsh.exe'" -ErrorAction SilentlyContinue)) { $lines += "$($p.CommandLine)" }
+    foreach ($p in @(Get-ProcessTable -Shells)) { $lines += "$($p.CommandLine)" }
     $found = @()
     foreach ($l in $lines) {
-        if ($l -notmatch '-File\s+(?:"([^"]+\\data\\runner\.ps1)"|(\S+\\data\\runner\.ps1))') { continue }
+        if ($l -notmatch '-File\s+(?:"([^"]+[\\/]data[\\/]runner\.ps1)"|(\S+[\\/]data[\\/]runner\.ps1))') { continue }
         $file = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
         try { $file = [IO.Path]::GetFullPath($file) } catch { continue }
         if ($file -ieq $mine) { continue }
@@ -173,7 +173,7 @@ if ($task) {
 else {
     $runArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript)
     if ($hostFile -ine (Join-Path $DataRoot 'host.json')) { $runArgs += @('-HostFile', $hostFile) }
-    Start-Process -FilePath 'powershell' -ArgumentList $runArgs -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $PsHost -ArgumentList $runArgs -WindowStyle Hidden | Out-Null
     Write-Log "No scheduled task runs $RunnerScript, so the runner was started directly. It will not come back after a logoff - see docs/worker-host-setup.md, step 12."
 }
 

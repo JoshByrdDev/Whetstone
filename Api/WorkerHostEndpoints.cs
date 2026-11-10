@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Whetstone.Models;
 using Whetstone.Services;
 
 namespace Whetstone.Api;
@@ -164,6 +165,20 @@ public static class WorkerHostEndpoints
                 return Results.Conflict(new { error = $"Run {req.RunId} no longer holds ticket #{id} - it was released, and the ticket may be running elsewhere." });
 
             var r = await git.AcceptWorkerBranchAsync(ticket.ProjectKey, req.Branch, req.IncomingRef, req.Sha, req.ExpectedOld, ct);
+            // Said on the ticket, because the kept ref is the only copy of what the rebase had got to.
+            foreach (var k in r.Stopped ?? Array.Empty<StoppedRebaseKept>())
+                await tickets.AddCommentAsync(id, TicketGitService.SayStoppedRebaseKept(k, req.Branch), AuthorKind.System);
+            // Said on the ticket, because the stash is the only copy of what was set aside.
+            if (r.SetAside is { } s)
+            {
+                var names = string.Join("\n", s.Files.Take(10).Select(f => $"- `{f}`"));
+                var more = s.Files.Count > 10 ? $"\n- and {s.Files.Count - 10} more" : "";
+                await tickets.AddCommentAsync(id,
+                    $"The board host's own worktree for this ticket, `{s.Path}`, had {s.Files.Count} uncommitted file(s), left by an earlier run here that stopped before it could commit them. " +
+                    $"The worker host's hand-back already carries every commit of this branch, so they were set aside in a stash rather than blocking it, and the worktree now matches the branch.\n\n{names}{more}\n\n" +
+                    $"They are kept as stash `{s.Sha}` (`git stash list` shows it as: {s.Message}). To look: `git stash show -p --include-untracked {s.Sha}`. Nothing needs doing unless something in them was wanted.",
+                    AuthorKind.System);
+            }
             return r.Ok ? Results.Ok(new { accepted = true, moved = r.Moved }) : Results.Conflict(new { error = r.Why });
         });
 

@@ -141,7 +141,12 @@ function Test-LocalHost {
 # A token counts only where a command can start: beginning of the line, or after a shell
 # separator. Matching the bare word anywhere would trip over a path or a string that
 # happens to contain 'az'.
-$sep = '(?:^|[\r\n;]|&&|\|\||\||&|\(|\bthen\b|\bdo\b|\bexec\b)\s*'
+#
+# A command can also start after a word that only runs the next one: 'sudo ssh host' is ssh. On a
+# Mac or Linux worker host that is an everyday spelling, and without it every rule below is one
+# 'sudo ' away from passing. Their own flags ('sudo -E') and env's assignments are skipped too.
+$prefix = '(?:(?:sudo|doas|nohup|time|command|caffeinate|nice)(?:\s+-\S+)*\s+|env(?:\s+-\S+)*(?:\s+\w+=\S*)*\s+)*'
+$sep = '(?:^|[\r\n;]|&&|\|\||\||&|\(|\bthen\b|\bdo\b|\bexec\b)\s*' + $prefix
 
 $c = "$command"
 
@@ -309,6 +314,14 @@ foreach ($m in [regex]::Matches($c, '(?i)(?:^|[\s\\/"' + [char]39 + '&;|(])adb(?
 # job. There is no ticket that makes it an unattended agent's work.
 if ($c -match '(?i)winscp\.(?:exe|com)\b') {
     Deny "WinSCP - a file transfer to or from another machine"
+}
+# rsync comes with macOS. Between two folders on this machine it is a copy; with a host: or an
+# rsync:// it is a transfer to or from another machine. A drive letter (C:\) is not a host.
+if ($c -match ($sep + 'rsync\b([^\r\n;&|]*)')) {
+    $rsyncArgs = $Matches[1]
+    if ($rsyncArgs -match '(?i)rsync://' -or $rsyncArgs -match '(?:^|\s)["'']?(?:[\w.-]+@)?[A-Za-z0-9][\w.-]+:(?![\\/]{2})') {
+        Deny "rsync to or from another machine"
+    }
 }
 if ($c -match ($sep + 'ftp\b')) {
     Deny "the ftp client"

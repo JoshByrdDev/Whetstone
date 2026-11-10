@@ -32,7 +32,7 @@ function Test-RemoteSlot { param([int]$Slot) return $Slot -gt $MaxHeartbeatWorke
 # "do not know", which every caller reads as "change nothing" - never as "there are none".
 function Get-WorkerHosts {
     try {
-        $script:LastHosts = @(Invoke-RestMethod -Uri "$DashboardUrl/api/hosts" -Method Get -TimeoutSec 10)
+        $script:LastHosts = ConvertTo-RestList (Invoke-RestMethod -Uri "$DashboardUrl/api/hosts" -Method Get -TimeoutSec 10)
     }
     catch {
         # A 404 is an app not yet restarted onto worker hosts, which therefore has none. Read as

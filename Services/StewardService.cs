@@ -114,12 +114,13 @@ public partial class StewardService
     private readonly IStewardProjectFlags? _projectFlags;
     private readonly NotificationSender? _notify;
     private readonly HeartbeatManager? _heartbeat;
+    private readonly CapacitySnapshot? _capacity;
 
     public StewardService(DashboardDbContext db, TicketService tickets, ProjectRegistry registry, IStewardGit git,
         ResourceLeaseService leases, TicketDependencyService? deps = null, IStewardProjectFlags? projectFlags = null,
-        NotificationSender? notify = null, HeartbeatManager? heartbeat = null)
-        => (_db, _tickets, _registry, _git, _leases, _deps, _projectFlags, _notify, _heartbeat)
-         = (db, tickets, registry, git, leases, deps, projectFlags, notify, heartbeat);
+        NotificationSender? notify = null, HeartbeatManager? heartbeat = null, CapacitySnapshot? capacity = null)
+        => (_db, _tickets, _registry, _git, _leases, _deps, _projectFlags, _notify, _heartbeat, _capacity)
+         = (db, tickets, registry, git, leases, deps, projectFlags, notify, heartbeat, capacity);
 
     public static string LeaseKey(string projectKey) => $"steward:{projectKey}";
 
@@ -514,10 +515,13 @@ public partial class StewardService
         {
             mode = cfg.StewardMode.ToString().ToLowerInvariant(),
             heartbeat = _heartbeat is null ? null : _heartbeat.IsRunning ? "running" : "stopped: nothing is worked until its owner starts it",
+            capacity = await CapacityAsync(all),
             limits = new
             {
                 createdToday = $"{created}/{cfg.Steward.CreatedPerDay}",
-                open = $"{open.Count}/{cfg.Steward.OpenAtOnce}",
+                open = await OpenCountAsync(all) is var oc
+                    ? $"{oc.Counted}/{cfg.Steward.OpenAtOnce} workable ({oc.Say()}); {oc.Total}/{OpenCeiling(cfg.Steward)} in all"
+                    : "",
                 sendBacksPerTicket = cfg.Steward.SendBacksPerTicket,
             },
             plan = plan.Count == 0
@@ -589,14 +593,94 @@ public partial class StewardService
     /// </summary>
     private static readonly HashSet<string> NeverCleared = new(StringComparer.OrdinalIgnoreCase) { "project-flags-did-not-run" };
 
-    /// <summary>The flags the owner has cleared for this exact change of the ticket's.</summary>
-    private async Task<HashSet<string>> ClearedAsync(string projectKey, int ticketId, BranchChange change, CancellationToken ct)
+    /// <summary>
+    /// The files a flag is about, sorted, when it is a flag about files: every one of its details is
+    /// a file the change touches (a never-merged path, an env file, a project's flag on a migration).
+    /// Null for any other flag.
+    /// </summary>
+    public static IReadOnlyList<string>? PathsOf(StewardFlag f, BranchChange change)
     {
-        if (string.IsNullOrEmpty(change.ChangeId)) return new();
-        var names = await _db.StewardClearances.AsNoTracking()
-            .Where(c => c.ProjectKey == projectKey && c.TicketId == ticketId && c.ChangeId == change.ChangeId)
-            .Select(c => c.Flag).ToListAsync(ct);
-        return names.Where(n => !NeverCleared.Contains(n)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (f.Detail is not { Count: > 0 } detail) return null;
+        var files = change.Files.Select(p => p.Replace('\\', '/')).ToHashSet(StringComparer.Ordinal);
+        var paths = detail.Select(p => p.Replace('\\', '/')).Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.Ordinal).ToList();
+        return paths.All(files.Contains) ? paths : null;
+    }
+
+    /// <summary>
+    /// Exactly what a flag asks the owner about, as one string - what a clearance of it is tied to
+    /// beside the whole change (<see cref="StewardClearance.About"/>). The flag's own
+    /// <see cref="StewardFlag.About"/> when it says one; for a flag about files, those files and the
+    /// change id of their diff alone; otherwise null, and the clearance holds for the whole change only.
+    /// </summary>
+    public async Task<string?> FingerprintAsync(string projectKey, Ticket t, StewardFlag f, BranchChange change, CancellationToken ct)
+    {
+        if (!string.IsNullOrWhiteSpace(f.About)) return "about:" + f.About.Trim();
+        if (PathsOf(f, change) is not { } paths || string.IsNullOrWhiteSpace(t.Branch)) return null;
+        var id = await _git.PathsChangeIdAsync(projectKey, t.Branch, paths, ct);
+        return id is null ? null : "files:" + string.Join("\n", paths) + "\n" + id;
+    }
+
+    /// <summary>What a flag is about, as the record says it to a person.</summary>
+    private static string Describe(StewardFlag f, BranchChange change) =>
+        !string.IsNullOrWhiteSpace(f.About) ? f.About.Trim()
+        : PathsOf(f, change) is { } paths ? "its change to " + string.Join(", ", paths)
+        : "the whole change";
+
+    /// <summary>
+    /// The flags the owner has cleared for the change as it stands: for this exact change, or for a
+    /// flag raised now about the same thing it was cleared for (<see cref="FingerprintAsync"/>),
+    /// however the rest of the branch has moved since. Those are also returned as <c>Carried</c>, for
+    /// <see cref="RecordCarriedClearancesAsync"/>.
+    /// </summary>
+    private async Task<(HashSet<string> Cleared, List<(StewardFlag Flag, string About)> Carried)> ClearedAsync(string projectKey, Ticket t,
+        BranchChange change, IReadOnlyList<StewardFlag> flags, CancellationToken ct)
+    {
+        var cleared = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var carried = new List<(StewardFlag, string)>();
+        if (string.IsNullOrEmpty(change.ChangeId)) return (cleared, carried);
+        var held = await _db.StewardClearances.AsNoTracking()
+            .Where(c => c.ProjectKey == projectKey && c.TicketId == t.Id).ToListAsync(ct);
+        foreach (var c in held.Where(c => c.ChangeId == change.ChangeId && !NeverCleared.Contains(c.Flag))) cleared.Add(c.Flag);
+
+        foreach (var f in flags.Where(f => f.Owner && !cleared.Contains(f.Flag) && !NeverCleared.Contains(f.Flag)))
+        {
+            var earlier = held.Where(c => string.Equals(c.Flag, f.Flag, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(c.About)).ToList();
+            if (earlier.Count == 0) continue;
+            var now = await FingerprintAsync(projectKey, t, f, change, ct);
+            if (now is null || !earlier.Any(c => c.About == now)) continue;
+            cleared.Add(f.Flag);
+            carried.Add((f, now));
+        }
+        return (cleared, carried);
+    }
+
+    /// <summary>
+    /// A clearance that held by what its flag is about rather than by the whole change, written down
+    /// for the change as it now stands, with a line on the record saying why - so what was merged
+    /// past is never only an inference from two hashes.
+    /// </summary>
+    private async Task RecordCarriedClearancesAsync(string projectKey, Ticket t, BranchChange change,
+        List<(StewardFlag Flag, string About)> carried, CancellationToken ct)
+    {
+        if (carried.Count == 0 || string.IsNullOrEmpty(change.ChangeId)) return;
+        foreach (var (f, about) in carried)
+        {
+            if (await _db.StewardClearances.AnyAsync(c => c.ProjectKey == projectKey && c.TicketId == t.Id
+                    && c.Flag == f.Flag && c.ChangeId == change.ChangeId, ct)) continue;
+            _db.StewardClearances.Add(new StewardClearance
+            {
+                ProjectKey = projectKey, TicketId = t.Id, Flag = f.Flag, ChangeId = change.ChangeId!, Sha = change.Tip, About = about,
+            });
+        }
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = t.Id,
+            Text = $"Ticket {t.Id}: the owner's clearance of {string.Join(", ", carried.Select(c => $"'{c.Flag.Flag}'"))} still holds"
+                + (change.Tip is { Length: >= 7 } tip ? $" at {tip[..7]}" : "")
+                + ": the branch moved since it was cleared, but what the flag is about is the same as when the owner cleared it ("
+                + string.Join("; ", carried.Select(c => $"{c.Flag.Flag}: {Describe(c.Flag, change)}")) + ").",
+        });
+        await _db.SaveChangesAsync(ct);
     }
 
     /// <summary>A finished ticket's record, what it changed, and what about it a merge has to weigh.</summary>
@@ -624,8 +708,9 @@ public partial class StewardService
         if (t is null) return no!;
 
         var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        var raised = change is null ? new List<StewardFlag>() : await FlagsAsync(cfg!, t, change, ct);
         var lastBackward = await _tickets.LastBackwardAtAsync(t.Id);
-        var said = t.Comments.Where(c => c.Author != AuthorKind.System).OrderBy(c => c.CreatedAt).ToList();
+        var said =t.Comments.Where(c => c.Author != AuthorKind.System).OrderBy(c => c.CreatedAt).ToList();
 
         var notes = await OpenNotesAsync(projectKey, t.Id, ct);
         var qa = t.QaItems.OrderBy(q => q.Order).ToList();
@@ -677,9 +762,9 @@ public partial class StewardService
             {
                 ["sentBackBefore"] = await SendBacksAsync(t.Id),
                 ["changed"] = change is null ? "this ticket has no branch" : change,
-                ["flags"] = change is null ? new List<StewardFlag>() : await FlagsAsync(cfg!, t, change, ct),
+                ["flags"] = raised,
                 // Owner flags the owner has cleared for this change as it stands: merge does not stop on these.
-                ["clearedByOwner"] = change is null ? new List<string>() : (await ClearedAsync(projectKey, t.Id, change, ct)).ToList(),
+                ["clearedByOwner"] = change is null ? new List<string>() : (await ClearedAsync(projectKey, t, change, raised, ct)).Cleared.ToList(),
             },
         };
 
@@ -758,14 +843,20 @@ public partial class StewardService
                 + "saying why, then set its outcomes and note anything for release as after a merge. If the work should be "
                 + "there and is not, send it back to NeedsImplementation saying so.");
 
+        // Behind first, before any flag is put to the owner. A rebase can change the change - the
+        // project's resolver renumbering a migration that collided - so an owner asked about a
+        // stale tip clears a change that is not the one that would merge, and was asked again
+        // after every rebase. Rebased first, the question is about the tip that merges.
+        if (change.Behind > 0)
+            return Refuse("behind", $"The base has moved by {change.Behind} commit(s) since this branch was last rebased. Rebase it, then merge again.");
+
         var flags = await FlagsAsync(cfg, t, change, ct);
-        var cleared = await ClearedAsync(projectKey, t.Id, change, ct);
+        var (cleared, carriedOver) = await ClearedAsync(projectKey, t, change, flags, ct);
+        await RecordCarriedClearancesAsync(projectKey, t, change, carriedOver, ct);
         if (flags.Where(f => f.Owner && !cleared.Contains(f.Flag)).ToList() is { Count: > 0 } owners)
             return Refuse("owner", "These are the owner's to decide, not yours. Ask, and leave the ticket unmerged.", owners);
         if (flags.Where(f => f.Blocks).ToList() is { Count: > 0 } blocking)
             return Refuse("not-proved", "The work is not proved yet. Send it back saying exactly what each of these says.", blocking);
-        if (change.Behind > 0)
-            return Refuse("behind", $"The base has moved by {change.Behind} commit(s) since this branch was last rebased. Rebase it, then merge again.");
 
         // The branch holds everything the base has, so its tip is exactly the tree the merge will
         // make: checking it in its own worktree is checking the result.
@@ -807,7 +898,11 @@ public partial class StewardService
                 // of a broken ticket. A check that is slow because many workers share the machine
                 // is retried, and only when it runs out again on the same tip is it the owner's.
                 if (run.TimedOut && (run.Failures?.Count ?? 0) == 0)
-                    return await TimedOutAsync(projectKey, t, change, c, run, ct);
+                    return await TimedOutAsync(projectKey, t, change, c, run, false, ct);
+                // Every failing test failed only by running out of its own time: the same busy
+                // machine, seen one test at a time. Counted with the whole check running out.
+                if (c.SlowFault.Length > 0 && CheckFailures.OnlySlow(run.Failures, c.SlowFault))
+                    return await TimedOutAsync(projectKey, t, change, c, run, true, ct);
                 return Refuse("check-failed",
                     run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result, and what it printed before then "
                                    + "names failures. Send it back to NeedsImplementation with this: 'failing' is every line in the whole output "
@@ -926,7 +1021,7 @@ public partial class StewardService
     /// which is also how the next one knows it is the second.
     /// </summary>
     private async Task<StewardReply> TimedOutAsync(string projectKey, Ticket t, BranchChange change, StewardCheck c,
-        CheckRun run, CancellationToken ct)
+        CheckRun run, bool slow, CancellationToken ct)
     {
         var tip = change.Tip ?? change.ChangeId ?? "unknown";
         tip = tip[..Math.Min(12, tip.Length)];
@@ -940,7 +1035,8 @@ public partial class StewardService
         _db.StewardEntries.Add(new StewardEntry
         {
             ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = t.Id,
-            Text = $"{mark} '{c.Name}' did not finish in {c.TimeoutMinutes} minutes and printed no failure. "
+            Text = $"{mark} '{c.Name}' " + (slow ? "failed only on tests that ran out of their own time. "
+                                                 : $"did not finish in {c.TimeoutMinutes} minutes and printed no failure. ")
                 + (again ? "The second time on this tip, so it waits at NeedsReview for the owner."
                          : "Left at NeedsReview to merge again on a later run."),
         });
@@ -948,6 +1044,20 @@ public partial class StewardService
         await _db.SaveChangesAsync(ct);
         if (!again) _heartbeat?.Wake();
 
+        if (slow)
+        {
+            var slowData = new { check = c.Name, tip, failing = run.Failures ?? Array.Empty<string>(), output = run.Output };
+            return again
+                ? Refuse("check-could-not-run",
+                    $"'{c.Name}' failed again on the same branch tip only on tests that ran out of their own time, and none of them "
+                    + "failed an assertion. Nothing is proved either way: that is the machine too busy for the suite, not the ticket. "
+                    + "Leave the ticket at NeedsReview and ask the owner once: whether the machine is too busy, or the tests' time "
+                    + "limits are too short, is theirs.", slowData)
+                : Refuse("check-timed-out",
+                    $"'{c.Name}' failed only on tests that ran out of their own time, and none of them failed an assertion: that is a "
+                    + "busy machine, not proof against the ticket. Do not send it back. Leave it at NeedsReview: a later run is already "
+                    + "owed and merges it again then. If it happens again on the same tip, it becomes the owner's.", slowData);
+        }
         var data = new { check = c.Name, minutes = c.TimeoutMinutes, tip, output = run.Output };
         return again
             ? Refuse("check-could-not-run",
@@ -1023,6 +1133,29 @@ public partial class StewardService
         return $"{t.Phase}|{change?.Tip}|{change?.Behind}|{change?.Ahead}";
     }
 
+    /// <summary>
+    /// What the open-at-once limit counts. A ticket parked in Backlog is not being worked, and one
+    /// waiting on another ticket cannot be: counting either let a deep chain of dependents fill the
+    /// limit and stop the steward filing the independent work that would have used the free berths.
+    /// So the limit counts the rest, and <see cref="OpenCeiling"/> still bounds the whole board.
+    /// </summary>
+    private async Task<OpenCount> OpenCountAsync(IReadOnlyList<Ticket> all)
+    {
+        var open = all.Where(t => t.Phase != TicketPhase.Done).ToList();
+        var parked = open.Count(t => t.Phase == TicketPhase.Backlog);
+        var live = open.Where(t => t.Phase != TicketPhase.Backlog).Select(t => t.Id).ToList();
+        var waiting = _deps is null || live.Count == 0 ? 0 : (await _deps.BlockedTicketIdsAsync(live)).Count;
+        return new OpenCount(open.Count - parked - waiting, waiting, parked, open.Count);
+    }
+
+    /// <summary>Every open ticket, waiting or parked, counted against twice the open limit.</summary>
+    internal static int OpenCeiling(StewardConfig s) => s.OpenAtOnce * 2;
+
+    private record OpenCount(int Counted, int Waiting, int Parked, int Total)
+    {
+        public string Say() => $"{Waiting} more waiting on another ticket, {Parked} parked in Backlog";
+    }
+
     public async Task<StewardReply> RebaseAsync(string projectKey, int ticketId, CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
@@ -1034,11 +1167,76 @@ public partial class StewardService
             return Refuse("not-ready", $"Ticket {ticketId} is in {t.Phase}. A branch is only rebased from here while it waits at NeedsReview: at any other time a worker may be in it.{await LeftReviewAsync(t)}");
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rebase {t.Branch} onto the base");
 
+        // A rebase a killed run left stopped in this ticket's worktree holds the branch, and no run
+        // will start there again to clear it. At NeedsReview no run is in it, so it is cleared here -
+        // without moving the branch - and kept, rather than put to the owner as a stale worktree.
+        var (keptStopped, stuck) = await _git.ClearStoppedRebasesAsync(projectKey, t.Branch, ct);
+        foreach (var k in keptStopped)
+            await _tickets.AddCommentAsync(t.Id, TicketGitService.SayStoppedRebaseKept(k, t.Branch), AuthorKind.System);
+        if (stuck is not null) return Refuse("refused", stuck);
+
+        var before = await _git.BranchChangeAsync(projectKey, t.Branch, ct);
         var r = await _git.RebaseAsync(projectKey, t.Branch, ct);
-        if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files.", r.ConflictedFiles);
-        return r.Ok
-            ? new StewardReply("rebased", null, new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha })
-            : Refuse("refused", r.Error ?? "The rebase was refused.");
+        if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files." +
+            (r.Error is { } e && e.Contains("resolver") ? $" {e}" : ""), r.ConflictedFiles);
+        if (!r.Ok) return Refuse("refused", r.Error ?? "The rebase was refused.");
+        if (r.Resolved.Count == 0)
+            return new StewardReply("rebased", null, new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha, resolved = r.Resolved });
+
+        var carried = await CarryClearancesAsync(projectKey, t.Id, before, r, ct);
+        return new StewardReply("rebased",
+            $"The project's rebase resolver settled {string.Join(", ", r.Resolved)}, so the change itself moved: its merge checks run again on the new tip. What it did: {string.Join(" | ", r.Output.Where(l => l.StartsWith("[rebase-resolve")))}"
+            + (carried.Count > 0 ? $" The owner's clearance of {string.Join(", ", carried)} carried over to the new tip, because the resolver's settling is not rework: do not ask about it again." : ""),
+            new { branch = t.Branch, from = r.PreviousSha, to = r.NewSha, resolved = r.Resolved, clearancesCarried = carried });
+    }
+
+    /// <summary>
+    /// A rebase whose only conflicts the project's resolver settled - a migration that collided on
+    /// its number, renumbered with its SQL proved the same - changes the change's id without being
+    /// rework. A clearance the owner gave the change before it keeps holding after it, and the
+    /// record says so. Without this an owner's clearance lapsed at every renumber, and on a busy
+    /// base the next collision landed before the owner had cleared it again.
+    /// <para>
+    /// It rests on the resolver's contract (TicketGitService, RebaseResolverOf): it settles only
+    /// conflicts with one right answer, and what it stages does not change what the change does.
+    /// A rebase that conflicted on anything it declined never gets here - it was rolled back.
+    /// </para>
+    /// </summary>
+    private async Task<List<string>> CarryClearancesAsync(string projectKey, int ticketId, BranchChange? before, RebaseResult r, CancellationToken ct)
+    {
+        var carried = new List<string>();
+        if (string.IsNullOrEmpty(before?.ChangeId)) return carried;
+        var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId && x.ProjectKey == projectKey, ct);
+        var after = string.IsNullOrWhiteSpace(t?.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        if (string.IsNullOrEmpty(after?.ChangeId) || after.ChangeId == before.ChangeId) return carried;
+
+        var held = await _db.StewardClearances
+            .Where(c => c.ProjectKey == projectKey && c.TicketId == ticketId && c.ChangeId == before.ChangeId)
+            .ToListAsync(ct);
+        foreach (var c in held.Where(c => !NeverCleared.Contains(c.Flag)))
+        {
+            if (await _db.StewardClearances.AnyAsync(x => x.ProjectKey == projectKey && x.TicketId == ticketId
+                    && x.Flag == c.Flag && x.ChangeId == after.ChangeId, ct)) continue;
+            _db.StewardClearances.Add(new StewardClearance
+            {
+                ProjectKey = projectKey, TicketId = ticketId, Flag = c.Flag, ChangeId = after.ChangeId, Sha = after.Tip,
+                About = c.About,
+            });
+            carried.Add(c.Flag);
+        }
+        if (carried.Count == 0) return carried;
+
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = ticketId,
+            Text = $"Ticket {ticketId}: the owner's clearance of {string.Join(", ", carried.Select(f => $"'{f}'"))} carried over a rebase"
+                + $" ({Short(r.PreviousSha)} to {Short(r.NewSha)}) whose only conflicts the project's resolver settled"
+                + $" ({string.Join(", ", r.Resolved)}). That is bookkeeping, not rework of what was cleared.",
+        });
+        await _db.SaveChangesAsync(ct);
+        return carried;
+
+        static string Short(string? sha) => string.IsNullOrEmpty(sha) ? "?" : sha[..Math.Min(7, sha.Length)];
     }
 
     /// <summary>
@@ -1212,13 +1410,15 @@ public partial class StewardService
             return Refuse("bad-request", $"{unit.File} has no outcome {string.Join(", ", unknown)}.");
 
         var all = await _tickets.ListAsync(projectKey, null);
-        var open = all.Count(t => t.Phase != TicketPhase.Done);
+        var open = await OpenCountAsync(all);
         var s = await StewardDue.StateAsync(_db, projectKey);
         if (s.CreatedDay != Today()) { s.CreatedDay = Today(); s.CreatedCount = 0; }
         if (s.CreatedCount >= cfg.Steward.CreatedPerDay)
             return Refuse("limit", $"{cfg.Steward.CreatedPerDay} tickets have been created today. The next run continues.");
-        if (open >= cfg.Steward.OpenAtOnce)
-            return Refuse("limit", $"{open} tickets are open, and {cfg.Steward.OpenAtOnce} is the most at once. Finish some first.");
+        if (open.Counted >= cfg.Steward.OpenAtOnce)
+            return Refuse("limit", $"{open.Counted} tickets are open and workable ({open.Say()}), and {cfg.Steward.OpenAtOnce} is the most at once. Finish some first.");
+        if (open.Total >= OpenCeiling(cfg.Steward))
+            return Refuse("limit", $"{open.Total} tickets are open in all ({open.Say()}), and {OpenCeiling(cfg.Steward)} - twice the open limit - is the most however many of them wait. Finish some first.");
         if (all.FirstOrDefault(t => string.Equals(t.Title?.Trim(), title, StringComparison.OrdinalIgnoreCase)) is { } same)
             return Refuse("duplicate", $"Ticket {same.Id} ({same.Phase}) already has this title.");
         var dependsOn = (d.DependsOn ?? Array.Empty<int>()).Distinct().ToList();
@@ -1835,8 +2035,9 @@ public partial class StewardService
         var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
         if (change is null || change.Ahead == 0) return new StewardReply("flags", null, new { tip = (string?)null, flags = Array.Empty<object>() });
 
-        var cleared = await ClearedAsync(projectKey, t.Id, change, ct);
-        var flags = (await FlagsAsync(cfg!, t, change, ct)).Where(f => f.Owner).Select(f => new
+        var raised = await FlagsAsync(cfg!, t, change, ct);
+        var (cleared, _) = await ClearedAsync(projectKey, t, change, raised, ct);
+        var flags = raised.Where(f => f.Owner).Select(f => new
         {
             f.Flag, f.Say, f.Detail,
             cleared = cleared.Contains(f.Flag),
@@ -1867,9 +2068,11 @@ public partial class StewardService
         if (!await _db.StewardClearances.AnyAsync(c => c.ProjectKey == projectKey && c.TicketId == ticketId
                 && c.Flag == raised.Flag && c.ChangeId == change.ChangeId, ct))
         {
+            // A flag that says what it is about is cleared for that too, so rework elsewhere keeps it.
+            var about = await FingerprintAsync(projectKey, t, raised, change, ct);
             _db.StewardClearances.Add(new StewardClearance
             {
-                ProjectKey = projectKey, TicketId = ticketId, Flag = raised.Flag, ChangeId = change.ChangeId, Sha = change.Tip,
+                ProjectKey = projectKey, TicketId = ticketId, Flag = raised.Flag, ChangeId = change.ChangeId, Sha = change.Tip, About = about,
             });
             // The record says so, where the owner reads back what was decided about this ticket.
             _db.StewardEntries.Add(new StewardEntry
@@ -1877,7 +2080,9 @@ public partial class StewardService
                 ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, TicketId = ticketId,
                 Text = $"Ticket {ticketId}: '{raised.Flag}' is cleared for its change as it stands"
                     + (change.Tip is { Length: >= 7 } tip ? $" (at {tip[..7]})" : "")
-                    + ". It may be merged past this flag; rework lets the clearance lapse.",
+                    + (about is null
+                        ? ". It may be merged past this flag; rework lets the clearance lapse."
+                        : $". It may be merged past this flag while what it is about stays the same ({Describe(raised, change)}); a change to that lets the clearance lapse."),
             });
             await StewardDue.MarkAsync(_db, projectKey, $"the owner cleared {raised.Flag} on #{ticketId}");
             await _db.SaveChangesAsync(ct);

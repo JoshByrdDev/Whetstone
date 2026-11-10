@@ -235,6 +235,83 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal("limit", (await In(s => s.CreateAsync("alpha", Draft("The third ticket of the day")))).Answer);
     }
 
+    private async Task<int> OpenTicket(string title, TicketPhase phase, int? waitsOn = null)
+    {
+        await using var ctx = NewCtx();
+        var t = new Ticket { ProjectKey = "alpha", Title = title, Phase = phase };
+        ctx.Tickets.Add(t);
+        await ctx.SaveChangesAsync();
+        if (waitsOn is { } blocker) await new TicketDependencyService(ctx).AddLocalAsync(t.Id, null, blocker, null);
+        return t.Id;
+    }
+
+    /// <summary>
+    /// A chain of dependents cannot be worked until its head is done, so it does not use up the
+    /// open limit: counting it was how a board with free berths stopped filing the independent work
+    /// that would have filled them. Parked Backlog tickets are not being worked either.
+    /// </summary>
+    [Fact]
+    public async Task Tickets_waiting_on_another_or_parked_in_backlog_do_not_fill_the_open_limit()
+    {
+        var head = await OpenTicket("The head of a chain", TicketPhase.NeedsImplementation);
+        await OpenTicket("Waits on the head", TicketPhase.NeedsSpeculation, waitsOn: head);
+        await OpenTicket("Also waits on the head", TicketPhase.NeedsSpeculation, waitsOn: head);
+        await OpenTicket("Later: an idea parked for now", TicketPhase.Backlog);
+
+        await Begin();
+        // Four open, openAtOnce 3 - but only the head can be worked.
+        Assert.Equal("created", (await In(s => s.CreateAsync("alpha", Draft("Independent work")))).Answer);
+    }
+
+    [Fact]
+    public async Task Workable_tickets_still_fill_the_open_limit()
+    {
+        for (var i = 0; i < 3; i++) await OpenTicket($"Workable {i}", TicketPhase.NeedsImplementation);
+
+        await Begin();
+        var r = await In(s => s.CreateAsync("alpha", Draft("One too many")));
+        Assert.Equal("limit", r.Answer);
+        Assert.Contains("workable", r.Why);
+    }
+
+    /// <summary>Waiting tickets are not free: the whole board stays under twice the limit.</summary>
+    [Fact]
+    public async Task Every_open_ticket_counts_against_twice_the_open_limit()
+    {
+        var head = await OpenTicket("The head of a chain", TicketPhase.NeedsImplementation);
+        for (var i = 0; i < 5; i++) await OpenTicket($"Waits {i}", TicketPhase.NeedsSpeculation, waitsOn: head);
+
+        await Begin();
+        var r = await In(s => s.CreateAsync("alpha", Draft("The seventh")));
+        Assert.Equal("limit", r.Answer);
+        Assert.Contains("twice the open limit", r.Why);
+    }
+
+    /// <summary>
+    /// The steward files to keep the fleet fed, so its status says what the queue can start: a
+    /// ticket waiting on another is not ready, one at review is the steward's own, and one being
+    /// worked is neither.
+    /// </summary>
+    [Fact]
+    public async Task The_status_says_how_much_of_the_queue_a_worker_could_start()
+    {
+        var head = await OpenTicket("Ready to plan", TicketPhase.NeedsSpeculation);
+        await OpenTicket("Ready to build", TicketPhase.NeedsImplementation);
+        await OpenTicket("Waits on the first", TicketPhase.NeedsSpeculation, waitsOn: head);
+        await OpenTicket("Being built", TicketPhase.Implementing);
+        await OpenTicket("Finished", TicketPhase.NeedsReview);
+        await OpenTicket("Later", TicketPhase.Backlog);
+
+        using var doc = System.Text.Json.JsonDocument.Parse(Json(await In(s => s.StatusAsync("alpha"))));
+        var c = doc.RootElement.GetProperty("capacity");
+        Assert.Equal(2, c.GetProperty("readyToStart").GetInt32());
+        Assert.Equal(1, c.GetProperty("waitingOnAnother").GetInt32());
+        Assert.Equal(1, c.GetProperty("working").GetInt32());
+        Assert.Equal(1, c.GetProperty("atReviewOrGate").GetInt32());
+        // No meter in a test: it says so rather than guessing a number.
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, c.GetProperty("freeBerths").ValueKind);
+    }
+
     [Fact]
     public async Task The_same_title_is_not_filed_twice()
     {
@@ -318,6 +395,111 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_clearance_of_a_flag_about_files_holds_while_those_files_change_is_the_same()
+    {
+        // A rebase whose conflicts in other files were resolved by hand: the whole change moved,
+        // the change to the never-merged file the owner cleared did not.
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts" };
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change";
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal("cleared", (await In(s => s.OwnerClearsFlagAsync("alpha", id, "never-merged-here"))).Answer);
+
+        _git.ChangeId = "change-2";
+        _git.Tip = "tip-after-rebase";
+        var flags = await In(s => s.OwnerFlagsAsync("alpha", id));
+        Assert.Contains("\"cleared\":true", System.Text.Json.JsonSerializer.Serialize(flags.Data));
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Contains(Entries(), e => e.Kind == StewardEntryKind.Call && e.TicketId == id
+            && e.Text.Contains("still holds") && e.Text.Contains("infra/stack.ts"));
+    }
+
+    [Fact]
+    public async Task A_clearance_of_a_flag_about_files_lapses_when_those_files_are_reworked()
+    {
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts" };
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change";
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "never-merged-here"));
+
+        _git.ChangeId = "change-2";
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change-reworked";
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public async Task A_clearance_of_a_flag_about_files_lapses_when_it_names_another_file()
+    {
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts" };
+        _git.PathsChangeIds["infra/stack.ts"] = "stack-change";
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "never-merged-here"));
+
+        // The rework added a second never-merged file the owner has not seen.
+        _git.ChangeId = "change-2";
+        _git.Files = new[] { "src/app.ts", "infra/stack.ts", "infra/dns.ts" };
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public async Task A_clearance_of_a_flag_that_says_what_it_is_about_holds_while_that_is_the_same()
+    {
+        // A new package, cleared; a rebase resolved a conflict by hand in a test file.
+        var flag = new StewardFlag("new-package-no-spec-names", Owner: true, Blocks: false, Detail: new[] { "qrcode" },
+            About: "packages/core/package.json dependencies qrcode@1.5.4");
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("cleared", (await In(s => s.OwnerClearsFlagAsync("alpha", id, flag.Flag), new FakeFlags(flag))).Answer);
+
+        _git.ChangeId = "change-2";
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id), new FakeFlags(flag))).Answer);
+        Assert.Contains(Entries(), e => e.Kind == StewardEntryKind.Call && e.TicketId == id
+            && e.Text.Contains("still holds") && e.Text.Contains("qrcode@1.5.4"));
+    }
+
+    [Fact]
+    public async Task A_clearance_of_a_flag_that_says_what_it_is_about_lapses_when_that_changes()
+    {
+        var flag = new StewardFlag("new-package-no-spec-names", Owner: true, Blocks: false, Detail: new[] { "qrcode" },
+            About: "packages/core/package.json dependencies qrcode@1.5.4");
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, flag.Flag), new FakeFlags(flag));
+
+        _git.ChangeId = "change-2";
+        var bumped = flag with { About = "packages/core/package.json dependencies qrcode@2.0.0" };
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), new FakeFlags(bumped))).Answer);
+        Assert.Empty(_git.Merged);
+    }
+
+    [Fact]
+    public async Task A_flag_that_says_nothing_about_what_it_is_about_still_lapses_with_the_change()
+    {
+        // Details that are not files, and no About: the whole change is what was cleared.
+        var flag = new StewardFlag("new-package-no-spec-names", Owner: true, Blocks: false, Detail: new[] { "qrcode" });
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, flag.Flag), new FakeFlags(flag));
+
+        _git.ChangeId = "change-2";
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), new FakeFlags(flag))).Answer);
+    }
+
+    [Fact]
+    public void Only_a_flag_whose_every_detail_is_a_changed_file_is_about_files()
+    {
+        var change = new BranchChange(new[] { "infra/stack.ts", "src/a.ts" }, 0, 1, "", "main", "tip", "c");
+        Assert.Equal(new[] { "infra/stack.ts" }, StewardService.PathsOf(new StewardFlag("x", true, false, null, new[] { "infra/stack.ts" }), change));
+        Assert.Null(StewardService.PathsOf(new StewardFlag("x", true, false, null, new[] { "infra/stack.ts", "a plan item" }), change));
+        Assert.Null(StewardService.PathsOf(new StewardFlag("x", true, false), change));
+    }
+
+    [Fact]
     public async Task A_clearance_is_for_one_flag_and_only_one_that_is_raised()
     {
         var id = await AtReview();
@@ -364,6 +546,74 @@ public partial class StewardServiceTests : IDisposable
         var id = await AtReview();
         await Begin();
         Assert.Equal("behind", (await In(s => s.MergeAsync("alpha", id))).Answer);
+    }
+
+    [Fact]
+    public async Task A_branch_behind_is_rebased_before_the_owner_is_asked_about_a_flag()
+    {
+        _git.Behind = 2;
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        Assert.Equal("behind", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+    }
+
+    [Fact]
+    public async Task A_clearance_carries_over_a_rebase_only_the_resolver_settled()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "migration-changes-existing-data"), flags);
+
+        // Another ticket's migration took this one's number; the resolver renumbered it.
+        _git.Behind = 1;
+        _git.RebaseResolves = new[] { "packages/db/migrations/meta/_journal.json" };
+        _git.ChangeIdAfterRebase = "change-renumbered";
+        var rebased = await In(s => s.RebaseAsync("alpha", id), flags);
+        Assert.Equal("rebased", rebased.Answer);
+        Assert.Contains("carried over", rebased.Why);
+        Assert.Contains(Entries(), e => e.Kind == StewardEntryKind.Call && e.TicketId == id && e.Text.Contains("carried over"));
+
+        Assert.Equal("merged", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
+    }
+
+    [Fact]
+    public async Task A_rebase_a_killed_run_left_stopped_is_cleared_before_the_steward_rebases_and_said()
+    {
+        var id = await AtReview();
+        await Begin();
+        _git.Behind = 1;
+        _git.StoppedAnswer = (new[] { new StoppedRebaseKept("wt/ticket", "refs/whetstone/stopped/ticket/abcdef12", "abcdef1234567890") }, null);
+        Assert.Equal("rebased", (await In(s => s.RebaseAsync("alpha", id))).Answer);
+        await using var ctx = NewCtx();
+        Assert.Contains(ctx.Comments.Where(c => c.TicketId == id), c => c.Body.Contains("refs/whetstone/stopped/ticket/abcdef12"));
+    }
+
+    [Fact]
+    public async Task A_stopped_rebase_that_cannot_be_cleared_refuses_the_rebase()
+    {
+        var id = await AtReview();
+        await Begin();
+        _git.Behind = 1;
+        _git.StoppedAnswer = (Array.Empty<StoppedRebaseKept>(), "it may be a person's");
+        var r = await In(s => s.RebaseAsync("alpha", id));
+        Assert.Equal("refused", r.Answer);
+        Assert.Contains("a person's", r.Why);
+    }
+
+    [Fact]
+    public async Task A_clearance_does_not_carry_over_a_change_the_resolver_did_not_make()
+    {
+        var id = await AtReview();
+        await Begin();
+        var flags = new FakeFlags(new StewardFlag("migration-changes-existing-data", Owner: true, Blocks: false));
+        await In(s => s.OwnerClearsFlagAsync("alpha", id, "migration-changes-existing-data"), flags);
+
+        _git.Behind = 1;
+        _git.ChangeIdAfterRebase = "change-moved";
+        Assert.Equal("rebased", (await In(s => s.RebaseAsync("alpha", id), flags)).Answer);
+        Assert.Equal("owner", (await In(s => s.MergeAsync("alpha", id), flags)).Answer);
     }
 
     private void WithACheck() => Configure("full", """
@@ -533,6 +783,75 @@ public partial class StewardServiceTests : IDisposable
         var r = await In(s => s.MergeAsync("alpha", id));
         Assert.Equal("check-failed", r.Answer);
         Assert.Contains("FAIL src/app.test.ts", System.Text.Json.JsonSerializer.Serialize(r.Data));
+    }
+
+    private const string Slow = @"Test timed out in \d+ms|Hook timed out in \d+ms";
+
+    private static readonly string[] OnlyTimeouts =
+    {
+        " FAIL  src/orders.db.test.ts > keeps every record",
+        "Error: Test timed out in 20000ms.",
+        " FAIL  src/setup.db.test.ts [ src/setup.db.test.ts ]",
+        "Error: Hook timed out in 300000ms.",
+    };
+
+    [Fact]
+    public async Task A_check_failing_only_on_tests_out_of_their_own_time_is_retried_then_the_owners()
+    {
+        Configure("full", $$"""
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests", "slowFault": "{{Slow.Replace("\\", "\\\\")}}" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed | 375 passed", OnlyTimeouts);
+
+        var first = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("check-timed-out", first.Answer);
+        Assert.Contains("ran out of their own time", first.Why);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+        Assert.Contains($"#{id}", (await State())?.DueReason);
+
+        // The same again on the same tip: the machine is too busy, and that is the owner's.
+        Assert.Equal("check-could-not-run", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+    }
+
+    [Fact]
+    public async Task A_check_that_ran_out_of_time_and_then_failed_only_slowly_on_the_same_tip_is_the_owners()
+    {
+        Configure("full", $$"""
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests", "slowFault": "{{Slow.Replace("\\", "\\\\")}}" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+
+        _git.Check = new CheckRun(false, true, "did not finish within 900s.", Array.Empty<string>());
+        Assert.Equal("check-timed-out", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed", OnlyTimeouts);
+        Assert.Equal("check-could-not-run", (await In(s => s.MergeAsync("alpha", id))).Answer);
+    }
+
+    [Fact]
+    public async Task A_real_failure_beside_slow_tests_is_sent_back_and_so_is_one_with_no_slow_pattern()
+    {
+        Configure("full", $$"""
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests", "slowFault": "{{Slow.Replace("\\", "\\\\")}}" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed",
+            OnlyTimeouts.Concat(new[] { " FAIL  src/prices.db.test.ts > quotes an item", "AssertionError: expected 1200 to be 1250" }).ToArray());
+        Assert.Equal("check-failed", (await In(s => s.MergeAsync("alpha", id))).Answer);
+
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests" } ]
+            """);
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed", OnlyTimeouts);
+        Assert.Equal("check-failed", (await In(s => s.MergeAsync("alpha", id))).Answer);
     }
 
     [Fact]
@@ -1755,6 +2074,25 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public void Only_slow_is_every_failing_test_out_of_its_own_time_and_nothing_else()
+    {
+        Assert.True(CheckFailures.OnlySlow(OnlyTimeouts, Slow));
+        // The run list's own spelling: a cross, then the reason on the next line.
+        Assert.True(CheckFailures.OnlySlow(new[] { "   × src/a.db.test.ts > makes an order 20012ms", "     → Test timed out in 20000ms." }, Slow));
+
+        // A failing test that names no timeout, an assertion, a crashed worker: not only slow.
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append(" FAIL  src/b.test.ts > adds").Append("  at b.test.ts:4").ToArray(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append("AssertionError: expected 1 to be 2").ToArray(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append("Error: [vitest-pool]: Worker forks emitted error.").ToArray(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append("src/x.ts(3,1): error TS2304: Cannot find name 'y'.").ToArray(), Slow));
+
+        // Nothing named, or nothing to match by.
+        Assert.False(CheckFailures.OnlySlow(new[] { "Error: Test timed out in 20000ms." }, Slow));
+        Assert.False(CheckFailures.OnlySlow(Array.Empty<string>(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts, ""));
+    }
+
+    [Fact]
     public async Task A_merge_refused_as_not_ready_says_where_the_ticket_went_and_why()
     {
         var id = await AtReview();
@@ -1927,6 +2265,18 @@ public partial class StewardServiceTests : IDisposable
         public Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default) =>
             Task.FromResult<BranchChange?>(new BranchChange(Files, Behind, Ahead, "1 file changed", "main", Tip, ChangeId));
 
+        /// <summary>The change id of the branch's diff to some files alone, by the files joined with a newline; unset follows <see cref="ChangeId"/>.</summary>
+        public Dictionary<string, string> PathsChangeIds = new();
+
+        /// <summary>What clearing a stuck rebase answers; a test sets it to have one kept or refused.</summary>
+        public (IReadOnlyList<StoppedRebaseKept> Kept, string? Why) StoppedAnswer = (Array.Empty<StoppedRebaseKept>(), null);
+
+        public Task<(IReadOnlyList<StoppedRebaseKept> Kept, string? Why)> ClearStoppedRebasesAsync(string projectKey, string branch, CancellationToken ct = default) =>
+            Task.FromResult(StoppedAnswer);
+
+        public Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default) =>
+            Task.FromResult<string?>(PathsChangeIds.TryGetValue(string.Join("\n", paths), out var id) ? id : $"paths-of-{ChangeId}");
+
         public Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default) =>
             Task.FromResult<(string, bool, int)?>(("diff", false, 4));
 
@@ -2000,7 +2350,18 @@ public partial class StewardServiceTests : IDisposable
             return Task.FromResult(new MergeResult(true, null, false, Array.Empty<string>(), branch, "main", "", "0123456789", false, 1, Array.Empty<string>()));
         }
 
-        public Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default) =>
-            Task.FromResult(new RebaseResult(true, null, false, Array.Empty<string>(), branch, "main", "a", "b", "", Array.Empty<string>()));
+        /// <summary>What the project's resolver settles on the next rebase, and the change's id after it.</summary>
+        public string[] RebaseResolves = Array.Empty<string>();
+        public string? ChangeIdAfterRebase;
+
+        public Task<RebaseResult> RebaseAsync(string projectKey, string branch, CancellationToken ct = default)
+        {
+            Behind = 0;
+            if (ChangeIdAfterRebase is not null) ChangeId = ChangeIdAfterRebase;
+            return Task.FromResult(new RebaseResult(true, null, false, Array.Empty<string>(), branch, "main", "a", "b", "", Array.Empty<string>())
+            {
+                Resolved = RebaseResolves,
+            });
+        }
     }
 }

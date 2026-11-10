@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { usePop } from '../hooks/usePop';
+import { ConfirmStopModal } from './ConfirmStopModal';
 
 interface HeartbeatStatus {
   running: boolean;
@@ -44,6 +45,7 @@ export function HeaderHeartbeatToggle() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [confirmStop, setConfirmStop] = useState(false);
   const menu = usePop(menuOpen);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -154,9 +156,9 @@ export function HeaderHeartbeatToggle() {
   return (
     <div className="flex items-center gap-1.5">
       <button
-        onClick={() => call('/api/heartbeat/stop', 'Failed to stop heartbeat')}
+        onClick={() => setConfirmStop(true)}
         disabled={loading}
-        title={error ?? 'Stop heartbeat now'}
+        title={error ?? 'Stop heartbeat and every worker now'}
         className={`${btnBase} ${
           error
             ? 'border-red-500/60 text-red-400 hover:bg-red-500/10'
@@ -255,6 +257,12 @@ export function HeaderHeartbeatToggle() {
           </div>
         )}
       </div>
+      {confirmStop && (
+        <ConfirmStopModal
+          onConfirm={() => call('/api/heartbeat/stop', 'Failed to stop heartbeat')}
+          onClose={() => setConfirmStop(false)}
+        />
+      )}
     </div>
   );
 }
