@@ -372,7 +372,8 @@ export const markStewardEntry = (project: string, id: number, mark: { handled?: 
 
 // ---- the register of decisions -----------------------------------------------------------
 
-export type DecisionStatus = 'inForce' | 'replaced' | 'provisional' | 'withdrawn';
+/** `retired`: its slice was released or abandoned (slice branches only) - derived, never written. */
+export type DecisionStatus = 'inForce' | 'replaced' | 'provisional' | 'withdrawn' | 'retired';
 
 /** One option a question offered, as the register hands it back with the decision it made. */
 export interface DecisionOffered { label: string; detail?: string | null; picked: boolean; stewardsPick: boolean }
@@ -381,8 +382,10 @@ export interface StewardDecision {
   number: number;
   rule: string;
   title?: string | null;
-  /** "project", or the unit (and outcomes) it applies to, in words. */
+  /** "project", "convention", or the unit (and outcomes) it applies to, in words. */
   appliesTo: string;
+  /** A rule every slice keeps, never retired with one. */
+  convention?: boolean;
   plan?: string | null;
   unit?: number | null;
   outcomes?: string | null;
@@ -410,6 +413,8 @@ export interface StewardInstruction {
 
 export interface StewardRegister {
   next: number;
+  /** Every new decision is a slice's or a convention, and a slice's retires with it. */
+  sliceBranches?: boolean;
   plan?: string | null;
   units: { unit: number; title: string }[];
   decisions: StewardDecision[];
@@ -428,6 +433,8 @@ export interface NewDecision {
   provisional?: boolean;
   provisionalUnit?: number | null;
   replaces?: { number: number; why: string }[];
+  /** With slice branches: a rule every slice keeps, naming no unit. */
+  convention?: boolean;
 }
 
 /** The register: every decision with its status, and the pairs the import thinks may disagree. */

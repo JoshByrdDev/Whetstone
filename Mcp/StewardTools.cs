@@ -65,8 +65,10 @@ public class StewardTools
         "marked with what it lasts until. An answer comes with every option it was picked from ('offered': picked, your " +
         "own pick, or neither), because what was turned down is decided too. Narrow it by unit (that slice's decisions " +
         "and the project's), by outcome within a unit, or by a query - search it before answering a blocked ticket, " +
-        "writing a ticket's criteria or asking the owner. Pass history to see replaced and withdrawn decisions too, " +
-        "each with what replaced it; never act on one of those. 'next' is the number a draft's next open decision takes.")]
+        "writing a ticket's criteria or asking the owner. Pass history to see replaced, withdrawn and retired decisions too, " +
+        "each with what replaced it; never act on one of those. On a project with slice branches a slice's decisions " +
+        "retire when it is released - its code is the decision then - and a unit's view is that slice's, its parent's and " +
+        "the conventions. 'next' is the number a draft's next open decision takes.")]
     public static Task<StewardReply> Decisions(StewardService s,
         [Description("The project key.")] string project,
         [Description("Optional text to look for in the rule, the question, its key or its options.")] string? query = null,
@@ -256,7 +258,8 @@ public class StewardTools
         "is asked to commit it as written, and the board commits it on a yes. Only the owner changes ideas. For a question " +
         "about a slice being built whose answer changes a step of its story, pass unit and story: the sentence as it stands " +
         "and its rewording under each option; the board commits the rewording with the decision. A built slice's story " +
-        "is never rewritten.")]
+        "is never rewritten. On a project with slice branches every answer decides for one slice or is a convention: " +
+        "a question that names no unit and comes from no ticket of a slice says which, with slice or convention.")]
     public static Task<StewardReply> AskOwner(StewardService s,
         [Description("The project key.")] string project,
         [Description("A short name for this question, lowercase with hyphens, like sms-provider. Yours for good.")] string key,
@@ -270,11 +273,13 @@ public class StewardTools
         [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null,
         [Description("The open follow-ups this question takes up, by id: they stop waiting once it is asked.")] int[]? followUps = null,
         [Description("An idea to propose: the slice file's name (number first, no folder) and its whole text, with its status line saying idea. Asked on its own, without options: the owner commits it or leaves the ideas as they are.")] StewardIdeaProposal? idea = null,
-        [Description("For a slice being built (with unit): the sentence of its story the answer changes, quoted exactly, and its rewording under each option that changes it, by the option's label.")] StewardStoryChange? story = null) =>
+        [Description("For a slice being built (with unit): the sentence of its story the answer changes, quoted exactly, and its rewording under each option that changes it, by the option's label.")] StewardStoryChange? story = null,
+        [Description("With slice branches: the slice the answer decides for, when the question names no unit and its ticket is of no slice. Its decision retires when that slice is released.")] int? slice = null,
+        [Description("With slice branches: the answer is a convention - a rule every slice keeps, never retired - rather than one slice's.")] bool convention = false) =>
         s.AskAsync(project, new StewardAsk(key, question, why,
             options?.Select(o => new BlockOption(o.Label, o.Detail, o.Recommended)).ToList(), heldUp, ticketId, unit, decisions, touches,
             options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!), followUps,
-            idea, story));
+            idea, story, slice, convention));
 
     [McpServerTool(Name = "steward_record_call"), Description(
         "Record a call you made for the owner about one ticket - an answer you gave it, a choice you made in filing it, what " +

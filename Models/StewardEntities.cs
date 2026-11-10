@@ -65,9 +65,17 @@ public class StewardQuestion
     /// The unit of the plan whose open decisions this asks about, when it asks about some - so
     /// the board can put those decisions in front of the owner instead of a summary of them. With
     /// <see cref="PlanKey"/>, because a unit's number means nothing without its plan.
+    /// On a project with slice branches it is also the slice a question about no ticket says its
+    /// answer applies to (docs/slice-branches.md, section 4), with no decisions named.
     /// </summary>
     public int? PlanUnit { get; set; }
     public string? PlanKey { get; set; }
+
+    /// <summary>
+    /// What its answer decides is a convention - a rule every slice keeps - rather than one slice's
+    /// (docs/slice-branches.md, section 4). Said when it is asked; never with a unit.
+    /// </summary>
+    public bool Convention { get; set; }
 
     /// <summary>Those decisions' numbers, comma separated, in the order asked.</summary>
     public string? Decisions { get; set; }
@@ -493,6 +501,13 @@ public class StewardDecision
     public string? PlanKey { get; set; }
     public int? PlanUnit { get; set; }
     public string? Outcomes { get; set; }
+
+    /// <summary>
+    /// A convention: a rule every slice keeps, never retired with one (docs/slice-branches.md,
+    /// section 4). Never with a unit. On a project with slice branches every new decision is either
+    /// this or a slice's; "the whole project" is what a decision made before the switch says.
+    /// </summary>
+    public bool Convention { get; set; }
 
     /// <summary>
     /// Provisional: in force only until a named point. With <see cref="ProvisionalUnit"/>, until that

@@ -31,7 +31,7 @@ public record StewardAsk(
     string Key, string Question, string Why, IReadOnlyList<BlockOption>? Options, string HeldUp, int? TicketId = null,
     int? Unit = null, IReadOnlyList<int>? Decisions = null, IReadOnlyList<int>? Touches = null,
     IReadOnlyDictionary<string, IReadOnlyList<int>>? Changes = null, IReadOnlyList<int>? FollowUps = null,
-    StewardIdeaProposal? Idea = null, StewardStoryChange? Story = null);
+    StewardIdeaProposal? Idea = null, StewardStoryChange? Story = null, int? Slice = null, bool Convention = false);
 
 /// <summary>The sentence of a slice's story an answer would change, and its rewording under each option, by label.</summary>
 public record StewardStoryChange(string Sentence, IReadOnlyDictionary<string, string>? Rewordings);
@@ -1619,6 +1619,35 @@ public partial class StewardService
                         return Refuse("bad-request", $"\"{label}\" is not one of the options.");
             }
         }
+        // What the answer will decide for (docs/slice-branches.md, section 4): a slice, or every
+        // slice as a convention. A question that names a unit, or comes from a ticket of a slice,
+        // says it already; any other has to say it, because "the whole project" is no longer one.
+        int? aboutSlice = null;
+        if (a.Slice is not null || a.Convention)
+        {
+            if (!cfg.SliceBranchesOn) return Refuse("bad-request", "This project has no slice branches: leave out slice and convention.");
+            if (a.Slice is not null && a.Convention) return Refuse("bad-request", "A convention is every slice's: name a slice or say convention, not both.");
+            if (a.Idea is not null) return Refuse("bad-request", "A proposed idea is its own question: ask it without a slice or convention.");
+            if (a.Convention && a.Unit is not null) return Refuse("bad-request", "A convention is every slice's: ask it without a unit.");
+            if (a.Slice is { } sn && a.Unit is { } un && sn != un) return Refuse("bad-request", $"The unit is slice {un}: the slice it decides for is that one.");
+        }
+        if (cfg.SliceBranchesOn && a.Idea is null && a.Unit is null)
+        {
+            var ticketUnit = a.TicketId is { } tid
+                ? await _db.Tickets.AsNoTracking().Where(t => t.Id == tid && t.ProjectKey == projectKey).Select(t => t.PlanUnit).FirstOrDefaultAsync(ct)
+                : null;
+            if (ticketUnit is null && a.Slice is null && !a.Convention)
+                return Refuse("bad-request", "Say what the answer decides for: the slice (slice), or that it is a convention every slice keeps (convention).");
+            if (a.Slice is { } sn)
+            {
+                if (ticketUnit is { } tu && tu != sn) return Refuse("bad-request", $"Ticket {a.TicketId} is slice {tu}'s: its answer decides for that slice.");
+                if ((await _git.PlanAsync(projectKey, ct)).All(u => u.Number != sn)) return Refuse("bad-request", $"There is no slice {sn}.");
+                if (await _db.StewardUnits.AsNoTracking().AnyAsync(u => u.ProjectKey == projectKey && u.Plan == cfg.Steward.Plan.Key
+                        && u.Unit == sn && (u.ReleasedAt != null || u.AbandonedAt != null), ct))
+                    return Refuse("bad-request", $"Slice {sn} is over: what it decided retired with it. Ask for the slice that is changing it.");
+                aboutSlice = sn;
+            }
+        }
         if (a.Idea is not null)
         {
             if (!cfg.Steward.Plan.Configured) return Refuse("no-plan", "This project has no plan folder for an idea.");
@@ -1642,13 +1671,15 @@ public partial class StewardService
         {
             await EnsureRegisterAsync(cfg, ct);
             var all = await RegisterAsync(projectKey, track: false, ct);
-            var map = ReplacedIndex(all);
+            var map = await IndexAsync(projectKey, all, ct);
             foreach (var n in touches)
             {
                 var d = all.FirstOrDefault(x => x.Number == n);
                 if (d is null) return Refuse("bad-request", $"There is no decision #{n}.");
                 var st = StatusOf(d, map);
                 if (st.Name == Withdrawn) return Refuse("bad-request", $"#{n} is withdrawn: there is nothing in force to touch.");
+                if (st.Name == Retired)
+                    return Refuse("bad-request", $"#{n} retired with its slice: its code is the decision now. Decide afresh for this slice, touching nothing.");
                 if (st.Name == Replaced)
                     return Refuse("bad-request", $"#{n} no longer holds; touch what replaced it ({string.Join(", ", st.ReplacedBy.Select(r => $"#{r.By}"))}).");
             }
@@ -1680,8 +1711,9 @@ public partial class StewardService
             OptionsJson = JsonSerializer.Serialize(options, Json),
             HeldUp = a.HeldUp.Trim(),
             TicketId = a.TicketId,
-            PlanUnit = a.Unit,
-            PlanKey = a.Unit is null ? null : cfg.Steward.Plan.Key,
+            PlanUnit = a.Unit ?? aboutSlice,
+            PlanKey = (a.Unit ?? aboutSlice) is null ? null : cfg.Steward.Plan.Key,
+            Convention = a.Convention,
             Decisions = asks.Count == 0 ? null : string.Join(",", asks),
             Touches = string.Join(",", touches),
             OptionChangesJson = changes.Count == 0 ? null : JsonSerializer.Serialize(changes, Json),
@@ -1811,12 +1843,12 @@ public partial class StewardService
         {
             await EnsureRegisterAsync(cfg, ct);
             var all = await RegisterAsync(projectKey, track: false, ct);
-            var map = ReplacedIndex(all);
+            var map = await IndexAsync(projectKey, all, ct);
             foreach (var n in read)
             {
                 var d = all.FirstOrDefault(x => x.Number == n);
                 if (d is null) return Refuse("bad-request", $"There is no decision #{n}.");
-                if (StatusOf(d, map).Name is Replaced or Withdrawn) return Refuse("bad-request", $"#{n} no longer holds: a ruling cannot read it.");
+                if (StatusOf(d, map).Gone) return Refuse("bad-request", $"#{n} no longer holds: a ruling cannot read it.");
             }
         }
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"rule: {Head(text, 200)}");
@@ -1843,14 +1875,14 @@ public partial class StewardService
         if (e.Reads is not null && Config(projectKey) is { } cfg)
         {
             var all = await RegisterAsync(projectKey, track: false, ct);
-            var map = ReplacedIndex(all);
+            var map = await IndexAsync(projectKey, all, ct);
             var now = new List<int>();
             foreach (var n in Numbers(e.Reads))
             {
                 var d = all.FirstOrDefault(x => x.Number == n);
                 var st = d is null ? null : StatusOf(d, map);
                 if (st?.Name == Replaced) now.AddRange(st.ReplacedBy.Select(r => r.By));
-                else if (st?.Name != Withdrawn) now.Add(n);
+                else if (st?.Name is not (Withdrawn or Retired)) now.Add(n);
             }
             e.Reads = string.Join(",", now.Distinct());
         }
@@ -2202,6 +2234,8 @@ public partial class StewardService
         {
             ProjectKey = projectKey, Number = await NextNumberAsync(projectKey, ct), Rule = said.Text,
             Source = StewardDecisionSource.OwnerSaid, SourceRef = $"record line {said.Id}", ImportKey = $"said:{said.Id}",
+            // The owner's word about no slice is a rule every slice keeps (docs/slice-branches.md, section 4).
+            Convention = cfg.SliceBranchesOn,
             MadeAt = said.At, DeliveredAt = DateTime.UtcNow,
         });
         await StewardDue.MarkAsync(_db, projectKey, "the owner left an instruction");

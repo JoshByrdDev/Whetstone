@@ -80,7 +80,7 @@ public partial class StewardService
 
         await EnsureRegisterAsync(cfg, ct);
         var all = await RegisterAsync(projectKey, track: false, ct);
-        var map = ReplacedIndex(all);
+        var map = await IndexAsync(projectKey, all, ct);
         var whole = all.Where(d => d.PlanUnit is null && StatusOf(d, map).Name is InForce or Provisional).ToList();
         if (whole.Count > 0)
             sb.Append("\n## Decided for the whole project\n\n")

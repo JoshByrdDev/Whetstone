@@ -158,6 +158,9 @@ public partial class StewardService
         }
         await StewardDue.MarkAsync(_db, projectKey, $"the owner abandoned slice{(abandoned.Count == 1 ? "" : "s")} {string.Join(", ", abandoned)}");
         await _db.SaveChangesAsync(ct);
+        // What an abandoned slice decided retires with it, as a released one's does: none of it is
+        // in the base, and nothing is left to keep it.
+        await ExportDecisionsAsync(cfg, ct);
         await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply("abandoned", null, new { abandoned, recut, branchesKept = marks.Select(m => m.Row.Branch).Where(b => b is not null) });

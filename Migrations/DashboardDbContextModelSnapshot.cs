@@ -1219,6 +1219,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime>("ChangedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("Convention")
+                        .HasColumnType("INTEGER");
+
                     b.Property<DateTime?>("DeliveredAt")
                         .HasColumnType("TEXT");
 
@@ -1576,6 +1579,9 @@ namespace Whetstone.Migrations
 
                     b.Property<DateTime>("AskedAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("Convention")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Decisions")
                         .HasMaxLength(400)

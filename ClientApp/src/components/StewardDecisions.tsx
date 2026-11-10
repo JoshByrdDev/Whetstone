@@ -40,15 +40,18 @@ export function StewardDecisions({ project, register, onChanged }: {
 
   const force = all.filter(d => d.status === 'inForce');
   const provisional = all.filter(d => d.status === 'provisional');
-  const history = all.filter(d => d.status === 'replaced' || d.status === 'withdrawn');
+  const history = all.filter(d => d.status === 'replaced' || d.status === 'withdrawn' || d.status === 'retired');
   const list = (shown === 'force' ? force : shown === 'provisional' ? provisional : history).filter(matches);
 
-  // In force: the whole project first, then each slice in order - the order the file is written in.
+  // In force: the conventions and the whole project first, then each slice in order - the order
+  // the file is written in.
   const groups = useMemo(() => {
     if (shown !== 'force') return [{ key: shown, title: '', rows: list }];
     const out: { key: string; title: string; rows: StewardDecision[] }[] = [];
-    const whole = list.filter(d => d.unit == null);
-    if (whole.length > 0) out.push({ key: 'project', title: 'The whole project', rows: whole });
+    const conventions = list.filter(d => d.convention);
+    if (conventions.length > 0) out.push({ key: 'conventions', title: 'Conventions: every slice', rows: conventions });
+    const whole = list.filter(d => d.unit == null && !d.convention);
+    if (whole.length > 0) out.push({ key: 'project', title: register?.sliceBranches ? 'The whole project, from before slices' : 'The whole project', rows: whole });
     const units = [...new Set(list.filter(d => d.unit != null).map(d => `${d.plan ?? ''}:${d.unit}`))];
     units.sort((a, b) => Number(a.split(':')[1]) - Number(b.split(':')[1]));
     for (const u of units) {
@@ -74,7 +77,8 @@ export function StewardDecisions({ project, register, onChanged }: {
         <Chip on={shown === 'provisional'} onClick={() => pick('provisional')} title="In force until a named point">
           Provisional {provisional.length}
         </Chip>
-        <Chip on={shown === 'history'} onClick={() => pick('history')} title="Replaced or withdrawn, with what replaced each">
+        <Chip on={shown === 'history'} onClick={() => pick('history')}
+          title={register.sliceBranches ? 'Replaced, withdrawn, or retired with a released slice' : 'Replaced or withdrawn, with what replaced each'}>
           History {history.length}
         </Chip>
         <span className="max-sm:hidden" style={{ marginLeft: 'auto' }} />
@@ -101,7 +105,7 @@ export function StewardDecisions({ project, register, onChanged }: {
 
       <div key={shown} className="orbit-swap">
         {list.length === 0
-          ? <Quiet>{needle ? 'Nothing matches.' : shown === 'force' ? 'Nothing is decided yet.' : shown === 'provisional' ? 'Nothing is provisional.' : 'Nothing has been replaced or withdrawn.'}</Quiet>
+          ? <Quiet>{needle ? 'Nothing matches.' : shown === 'force' ? 'Nothing is decided yet.' : shown === 'provisional' ? 'Nothing is provisional.' : register.sliceBranches ? 'Nothing has been replaced, withdrawn or retired.' : 'Nothing has been replaced or withdrawn.'}</Quiet>
           : groups.map(g => (
             <div key={g.key} className="mb-6">
               {g.title && <div style={{ ...label('var(--w-t300)'), margin: '0 0 6px 2px' }}>{g.title} - {g.rows.length}</div>}
@@ -215,6 +219,11 @@ function DecisionRow({ d, project, onChanged, onChange }: {
             Replaced by {d.replacedBy.map(r => `#${r.number}: ${r.why.replace(/\.$/, '')}`).join('; ')}.
           </div>
         )}
+        {d.status === 'retired' && (
+          <div style={{ font: `400 11.5px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 4 }}>
+            Retired with {d.appliesTo}: its slice is over, and its code is the decision now.
+          </div>
+        )}
         {d.withdrawn && (
           <div style={{ font: `400 11.5px/1.5 ${BODY}`, color: TIER.gate.c, marginTop: 4 }}>
             Withdrawn {d.withdrawn.on}{d.withdrawn.because ? `: ${d.withdrawn.because}` : ''}
@@ -288,6 +297,8 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
       provisional,
       provisionalUnit: provisional ? until : null,
       replaces: replaces != null ? [{ number: replaces, why: why.trim() }] : undefined,
+      // With slice branches there is no "whole project": a decision for no slice is a convention.
+      convention: register.sliceBranches && unit == null ? true : undefined,
     };
     try { await recordStewardDecision(project, body); await onDone(); }
     catch (err) { setFailed(err instanceof Error ? err.message : String(err)); setBusy(false); }
@@ -312,7 +323,10 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
 
         <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 10 }}>
           <span style={label()}>Applies to</span>
-          <Chip on={unit == null} onClick={() => setUnit(null)}>The project</Chip>
+          <Chip on={unit == null} onClick={() => setUnit(null)}
+            title={register.sliceBranches ? 'A convention: a rule every slice keeps, never retired' : undefined}>
+            {register.sliceBranches ? 'Every slice' : 'The project'}
+          </Chip>
           {register.units.map(u => (
             <Chip key={u.unit} on={unit === u.unit} onClick={() => setUnit(u.unit)} title={u.title}>Unit {String(u.unit).padStart(2, '0')}</Chip>
           ))}

@@ -404,7 +404,9 @@ export interface SliceDecisionSet {
 export function sliceDecisions(unit: StewardPlanUnitView, register: StewardRegister | null, waiting: StewardQuestion[]): SliceDecisionSet | null {
   if (!register) return null;
   const live = register.decisions.filter(d => d.status === 'inForce' || d.status === 'provisional');
-  const own = live.filter(d => d.unit === unit.unit && (d.plan ?? '') === (register.plan ?? ''));
+  // A released slice's decisions retired with it (slice branches): still what it decided, so still shown, marked.
+  const own = register.decisions.filter(d => (d.status === 'inForce' || d.status === 'provisional' || d.status === 'retired')
+    && d.unit === unit.unit && (d.plan ?? '') === (register.plan ?? ''));
   const ownSet = new Set(own.map(d => d.number));
   const text = `${storyOf(unit.text)?.map(s => s.text).join(' ') ?? ''} ${unit.groups.flatMap(g => g.outcomes.map(o => o.text)).join(' ')}`;
   const nums = new Set([...text.matchAll(/#(\d+)\b/g)].map(m => Number(m[1])));
@@ -428,7 +430,9 @@ export function DecisionsBeside({ set, lit, onLight, onAll }: {
   const visible = own.filter((d, i) => i < shown || d.number === lit);
   return (
     <div className="flex flex-col" style={{ gap: 8 }}>
-      <div style={label()}>This slice's decisions - {own.length}</div>
+      <div style={label()}>
+        {own.every(d => d.status === 'retired') ? 'What this slice decided, retired with its release' : "This slice's decisions"} - {own.length}
+      </div>
       {visible.map(row)}
       {own.length > visible.length && (
         <button type="button" onClick={() => setShown(own.length)} className="orbit-tap text-left" style={label('var(--w-t300)')}>
@@ -465,7 +469,8 @@ function DecisionCard({ d, lit, touched, onClick }: { d: StewardDecision; lit: b
         {d.rule}
       </div>
       <div style={{ font: `400 10.5px ${MONO}`, color: 'var(--w-t500)', marginTop: 4 }}>
-        {[d.outcomes, d.status === 'provisional' ? `provisional until ${d.provisionalUntil ?? 'you say'}` : null, d.on].filter(Boolean).join(' - ')}
+        {[d.outcomes, d.status === 'provisional' ? `provisional until ${d.provisionalUntil ?? 'you say'}` : null,
+          d.status === 'retired' ? 'retired' : null, d.on].filter(Boolean).join(' - ')}
       </div>
       {touched && <div style={{ ...label(TIER.gate.c), marginTop: 4 }}>A question on Now touches it</div>}
     </button>

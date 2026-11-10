@@ -110,7 +110,8 @@ public partial class StewardService
         await StewardDue.MarkAsync(_db, projectKey, $"the owner released slice {unit}");
         await _db.SaveChangesAsync(ct);
         var reparented = await ReparentChildrenAsync(projectKey, row, ct);
-        if (promoted.Count > 0) await ExportDecisionsAsync(cfg, ct);
+        // Its decisions retire with it, so the decisions file loses them (docs/slice-branches.md, section 4).
+        await ExportDecisionsAsync(cfg, ct);
         await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply("released", null, new

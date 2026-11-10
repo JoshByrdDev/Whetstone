@@ -136,12 +136,13 @@ public partial class StewardService
         var flags = new Dictionary<int, string>();
         if (rulings.Count == 0) return flags;
         var all = await RegisterAsync(projectKey, track: false, ct);
-        var map = ReplacedIndex(all);
+        var map = await IndexAsync(projectKey, all, ct);
         foreach (var r in rulings)
         {
             var dead = Numbers(r.Reads).Select(n => (n, d: all.FirstOrDefault(x => x.Number == n))).Where(x => x.d is not null)
-                .Select(x => (x.n, st: StatusOf(x.d!, map))).Where(x => x.st.Name is Replaced or Withdrawn)
+                .Select(x => (x.n, st: StatusOf(x.d!, map))).Where(x => x.st.Gone)
                 .Select(x => x.st.Name == Withdrawn ? $"#{x.n} was withdrawn"
+                    : x.st.Name == Retired ? $"#{x.n} retired with its slice"
                     : $"#{x.n} was replaced by {string.Join(", ", x.st.ReplacedBy.Select(b => $"#{b.By}"))}").ToList();
             if (dead.Count > 0) flags[r.Id] = string.Join("; ", dead);
         }
@@ -178,7 +179,7 @@ public partial class StewardService
         var all = await RegisterAsync(projectKey, track: true, ct);
         var d = all.FirstOrDefault(x => x.Number == number);
         if (d is null) return Refuse("bad-request", $"There is no decision #{number}.");
-        if (StatusOf(d, ReplacedIndex(all)).Name != Provisional) return Refuse("bad-request", $"#{number} is not provisional.");
+        if (StatusOf(d, await IndexAsync(projectKey, all, ct)).Name != Provisional) return Refuse("bad-request", $"#{number} is not provisional.");
         (d.Provisional, d.ProvisionalUnit, d.ChangedAt, d.DeliveredAt) = (false, null, DateTime.UtcNow, null);
         await StewardDue.MarkAsync(_db, projectKey, $"the owner confirmed #{number}");
         await _db.SaveChangesAsync(ct);
@@ -199,7 +200,7 @@ public partial class StewardService
         var projectKey = cfg.Name;
         await EnsureRegisterAsync(cfg, ct);
         var all = await RegisterAsync(projectKey, track: false, ct);
-        var map = ReplacedIndex(all);
+        var map = await IndexAsync(projectKey, all, ct);
         var titles = await UnitTitlesAsync(cfg, ct);
         var plan = cfg.Steward.Plan.Configured ? await _git.PlanAsync(projectKey, ct) : Array.Empty<PlanUnit>();
         var current = plan.Count == 0 ? null
@@ -209,6 +210,38 @@ public partial class StewardService
         var flags = await RulingFlagsAsync(projectKey, ct);
         var rulings = flags.Count == 0 ? new List<StewardEntry>() : await _db.StewardEntries.AsNoTracking()
             .Where(e => flags.Keys.Contains(e.Id)).ToListAsync(ct);
+        if (cfg.SliceBranchesOn)
+        {
+            // Slices run side by side (docs/slice-branches.md, section 4): each open slice's own
+            // decisions, and the conventions every slice keeps. A slice built on another is shown
+            // its parent's beside its own. What retired with a released slice is not here at all.
+            var open = await OpenSlicesAsync(cfg, ct);
+            var parents = await _db.StewardUnits.AsNoTracking()
+                .Where(u => u.ProjectKey == projectKey && u.Plan == cfg.Steward.Plan.Key && u.ParentUnit != null)
+                .ToDictionaryAsync(u => u.Unit, u => u.ParentUnit, ct);
+            return new
+            {
+                slices = open.Select(s => new
+                {
+                    unit = s.Unit, branch = s.Branch, builtOn = parents.GetValueOrDefault(s.Unit),
+                    decisions = standing.Where(x => !x.d.Convention && x.d.PlanUnit == s.Unit && (x.d.PlanKey ?? "") == cfg.Steward.Plan.Key)
+                        .Select(x => Shape(x.d, x.st, titles)),
+                }),
+                conventions = new
+                {
+                    file = cfg.Steward.Conventions.Length > 0 ? cfg.Steward.Conventions : null,
+                    decisions = standing.Where(x => x.d.Convention).Select(x => Shape(x.d, x.st, titles)),
+                },
+                // Decided for the whole project before the switch: in force until the migration
+                // sorts each into a convention or retires it. A steward_decisions call away.
+                projectDecisions = standing.Count(x => x.d.PlanUnit is null && !x.d.Convention),
+                provisionalDue = standing.Where(x => x.d.Provisional && x.d.ProvisionalUnit is { } pu && built.Contains(pu))
+                    .Select(x => new { number = x.d.Number, rule = x.d.Rule, until = $"unit {x.d.ProvisionalUnit} is built" }),
+                flaggedRulings = rulings.Select(e => new { e.Id, ruling = e.Text, flag = flags[e.Id] }),
+                followUps = (await OpenFollowUpsAsync(projectKey, ct)).Select(f => new { f.Id, decision = f.Decision, f.Text }),
+                instructions = (await OpenInstructionsAsync(projectKey, ct)).Select(i => new { i.Id, i.Text, i.Until }),
+            };
+        }
         return new
         {
             slice = current,

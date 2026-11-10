@@ -9,7 +9,7 @@ namespace Whetstone.Services;
 
 /// <summary>A decision the owner records from the register page, and what it replaces.</summary>
 public record StewardNewDecision(string? Rule, string? Title = null, int? Unit = null, IReadOnlyList<string>? Outcomes = null,
-    bool Provisional = false, int? ProvisionalUnit = null, IReadOnlyList<StewardReplacing>? Replaces = null);
+    bool Provisional = false, int? ProvisionalUnit = null, IReadOnlyList<StewardReplacing>? Replaces = null, bool Convention = false);
 
 /// <summary>One decision a newer one overrides, and in a line why.</summary>
 public record StewardReplacing(int Number, string? Why);
@@ -24,17 +24,50 @@ public record StewardReplacing(int Number, string? Why);
 public partial class StewardService
 {
     /// <summary>Statuses, as the register writes them.</summary>
-    public const string InForce = "inForce", Replaced = "replaced", Provisional = "provisional", Withdrawn = "withdrawn";
+    public const string InForce = "inForce", Replaced = "replaced", Provisional = "provisional", Withdrawn = "withdrawn",
+        Retired = "retired";
 
-    private sealed record Status(string Name, IReadOnlyList<(int By, string Why)> ReplacedBy);
+    private sealed record Status(string Name, IReadOnlyList<(int By, string Why)> ReplacedBy)
+    {
+        /// <summary>No longer holds: replaced, withdrawn, or retired with its slice. Never acted on.</summary>
+        public bool Gone => Name is Replaced or Withdrawn or Retired;
+    }
 
-    private static Dictionary<int, List<(int By, string Why)>> ReplacedIndex(IEnumerable<StewardDecision> all) =>
-        all.SelectMany(d => d.Replaces.Select(r => (r.Number, By: d.Number, r.Why)))
-            .GroupBy(x => x.Number).ToDictionary(g => g.Key, g => g.Select(x => (x.By, x.Why)).OrderBy(x => x.By).ToList());
+    /// <summary>
+    /// What a decision's status is read from besides itself: what replaced it, and - on a project
+    /// with slice branches - which slices are over, released or abandoned, so their decisions are
+    /// retired (docs/slice-branches.md, section 4). Retired is derived, never written.
+    /// </summary>
+    private sealed class DecisionIndex : Dictionary<int, List<(int By, string Why)>>
+    {
+        public HashSet<(string Plan, int Unit)> Over { get; } = new();
+    }
 
-    private static Status StatusOf(StewardDecision d, Dictionary<int, List<(int By, string Why)>> replaced) =>
+    private static DecisionIndex ReplacedIndex(IEnumerable<StewardDecision> all)
+    {
+        var map = new DecisionIndex();
+        foreach (var g in all.SelectMany(d => d.Replaces.Select(r => (r.Number, By: d.Number, r.Why))).GroupBy(x => x.Number))
+            map[g.Key] = g.Select(x => (x.By, x.Why)).OrderBy(x => x.By).ToList();
+        return map;
+    }
+
+    /// <summary>The index with the slices that are over, on a project with slice branches; without the switch nothing retires.</summary>
+    private async Task<DecisionIndex> IndexAsync(string projectKey, IEnumerable<StewardDecision> all, CancellationToken ct)
+    {
+        var map = ReplacedIndex(all);
+        if (Config(projectKey) is { SliceBranchesOn: true })
+            foreach (var u in await _db.StewardUnits.AsNoTracking()
+                         .Where(u => u.ProjectKey == projectKey && (u.ReleasedAt != null || u.AbandonedAt != null))
+                         .Select(u => new { u.Plan, u.Unit }).ToListAsync(ct))
+                map.Over.Add((u.Plan ?? "", u.Unit));
+        return map;
+    }
+
+    private static Status StatusOf(StewardDecision d, DecisionIndex replaced) =>
         d.WithdrawnAt is not null ? new(Withdrawn, Array.Empty<(int, string)>())
         : replaced.TryGetValue(d.Number, out var by) ? new(Replaced, by)
+        // The code is the decision now: a later slice that changes it simply decides again.
+        : !d.Convention && d.PlanUnit is { } u && replaced.Over.Contains((d.PlanKey ?? "", u)) ? new(Retired, Array.Empty<(int, string)>())
         : d.Provisional ? new(Provisional, Array.Empty<(int, string)>())
         : new(InForce, Array.Empty<(int, string)>());
 
@@ -68,9 +101,14 @@ public partial class StewardService
         if (s?.RegisterBuiltAt is null) await BuildRegisterAsync(cfg, ct);
     }
 
-    /// <summary>What a question was about: its unit when it asked about one, else its ticket's place in the plan, else the project.</summary>
+    /// <summary>
+    /// What a question was about: its unit (or the slice it said) when it named one, else its
+    /// ticket's place in the plan, else a convention when it said so, else the project - which on
+    /// a project with slice branches only a question asked before the switch can be.
+    /// </summary>
     private async Task<(string? Plan, int? Unit, string? Outcomes)> AboutAsync(StewardQuestion q, CancellationToken ct)
     {
+        if (q.Convention) return (null, null, null);
         if (q.PlanUnit is { } u) return (q.PlanKey, u, null);
         if (q.TicketId is { } id && await _db.Tickets.AsNoTracking().Where(t => t.Id == id && t.ProjectKey == q.ProjectKey)
                 .Select(t => new { t.PlanKey, t.PlanUnit, t.PlanOutcomes }).FirstOrDefaultAsync(ct) is { PlanUnit: not null } t)
@@ -82,6 +120,7 @@ public partial class StewardService
     {
         ProjectKey = q.ProjectKey, Number = number, Rule = rule ?? q.Answer ?? "", Source = StewardDecisionSource.Question,
         QuestionKey = q.Key, Question = q.Question, OptionsJson = q.OptionsJson,
+        Convention = about.Unit is null && q.Convention,
         PlanKey = about.Unit is null ? null : about.Plan, PlanUnit = about.Unit, Outcomes = about.Outcomes,
         ImportKey = $"question:{q.Key}", MadeAt = q.AnsweredAt ?? q.AskedAt, DeliveredAt = DateTime.UtcNow,
     };
@@ -304,6 +343,10 @@ public partial class StewardService
         if (rule.Length > 2000) return Refuse("bad-request", "A decision is a sentence or two. Put the reasoning in the plan.");
         if (n.Outcomes is { Count: > 0 } && n.Unit is null) return Refuse("bad-request", "Outcomes belong to a unit: name the unit too.");
         if (n.ProvisionalUnit is not null && !n.Provisional) return Refuse("bad-request", "Only a provisional decision lasts until a unit.");
+        if (n.Convention && n.Unit is not null) return Refuse("bad-request", "A convention is every slice's: it names no unit.");
+        // Every decision is a slice's or a convention (docs/slice-branches.md, section 4).
+        if (cfg.SliceBranchesOn && n.Unit is null && !n.Convention)
+            return Refuse("bad-request", "Say which slice this decides for, or that it is a convention every slice keeps.");
         await EnsureRegisterAsync(cfg, ct);
 
         var plan = cfg.Steward.Plan;
@@ -316,10 +359,13 @@ public partial class StewardService
             if (picked.FirstOrDefault(o => !u.Outcomes.Contains(o, StringComparer.OrdinalIgnoreCase)) is { } missing)
                 return Refuse("bad-request", $"Unit {unit} has no outcome {missing}.");
             outcomes = picked.Count == 0 ? null : string.Join(", ", picked);
+            if (cfg.SliceBranchesOn && await _db.StewardUnits.AsNoTracking().AnyAsync(x => x.ProjectKey == projectKey && x.Plan == plan.Key
+                    && x.Unit == unit && (x.ReleasedAt != null || x.AbandonedAt != null), ct))
+                return Refuse("bad-request", $"Slice {unit} is over: what it decided retired with it. Record this for the slice that changes it, or as a convention.");
         }
 
         var all = await RegisterAsync(projectKey, track: false, ct);
-        var replaced = ReplacedIndex(all);
+        var replaced = await IndexAsync(projectKey, all, ct);
         var replaces = new List<StewardDecisionReplace>();
         foreach (var r in n.Replaces ?? Array.Empty<StewardReplacing>())
         {
@@ -327,6 +373,7 @@ public partial class StewardService
             if (old is null) return Refuse("bad-request", $"There is no decision #{r.Number}.");
             var st = StatusOf(old, replaced);
             if (st.Name == Withdrawn) return Refuse("bad-request", $"#{r.Number} is withdrawn: there is nothing in force to replace.");
+            if (st.Name == Retired) return Refuse("bad-request", $"#{r.Number} retired with its slice: the code is that decision now, and this one simply stands.");
             if (st.Name == Replaced) return Refuse("bad-request", $"#{r.Number} is already replaced by #{st.ReplacedBy[0].By}. Replace that one.");
             if (string.IsNullOrWhiteSpace(r.Why)) return Refuse("bad-request", $"Say in a line why #{r.Number} no longer holds.");
             if (replaces.All(x => x.Number != r.Number)) replaces.Add(new StewardDecisionReplace { Number = r.Number, Why = r.Why.Trim() });
@@ -336,7 +383,7 @@ public partial class StewardService
         {
             ProjectKey = projectKey, Number = await NextNumberAsync(projectKey, ct), Rule = rule,
             Title = string.IsNullOrWhiteSpace(n.Title) ? null : n.Title.Trim(), Source = StewardDecisionSource.Owner,
-            PlanKey = n.Unit is null ? null : plan.Key, PlanUnit = n.Unit, Outcomes = outcomes,
+            PlanKey = n.Unit is null ? null : plan.Key, PlanUnit = n.Unit, Outcomes = outcomes, Convention = n.Convention,
             Provisional = n.Provisional, ProvisionalUnit = n.ProvisionalUnit, Replaces = replaces,
         };
         _db.StewardDecisions.Add(d);
@@ -358,8 +405,8 @@ public partial class StewardService
         var all = await RegisterAsync(projectKey, track: true, ct);
         var d = all.FirstOrDefault(x => x.Number == number);
         if (d is null) return Refuse("bad-request", $"There is no decision #{number}.");
-        var st = StatusOf(d, ReplacedIndex(all));
-        if (st.Name is Withdrawn or Replaced) return Refuse("bad-request", $"#{number} is {st.Name} already.");
+        var st = StatusOf(d, await IndexAsync(projectKey, all, ct));
+        if (st.Gone) return Refuse("bad-request", $"#{number} is {st.Name} already.");
         (d.WithdrawnAt, d.WithdrawnBecause, d.ChangedAt, d.DeliveredAt) = (DateTime.UtcNow, because.Trim(), DateTime.UtcNow, null);
         await StewardDue.MarkAsync(_db, projectKey, $"the owner withdrew #{number}");
         await _db.SaveChangesAsync(ct);
@@ -382,12 +429,12 @@ public partial class StewardService
         if (replaces)
         {
             var all = await RegisterAsync(projectKey, track: true, ct);
-            var map = ReplacedIndex(all);
+            var map = await IndexAsync(projectKey, all, ct);
             var older = all.FirstOrDefault(d => d.Number == c.Older);
             var newer = all.FirstOrDefault(d => d.Number == c.Newer);
             if (older is null || newer is null) return Refuse("bad-request", "One of the pair is no longer in the register.");
-            if (StatusOf(older, map).Name is Replaced or Withdrawn) return Refuse("bad-request", $"#{older.Number} no longer holds already.");
-            if (StatusOf(newer, map).Name is Replaced or Withdrawn) return Refuse("bad-request", $"#{newer.Number} no longer holds itself, so it replaces nothing.");
+            if (StatusOf(older, map).Gone) return Refuse("bad-request", $"#{older.Number} no longer holds already.");
+            if (StatusOf(newer, map).Gone) return Refuse("bad-request", $"#{newer.Number} no longer holds itself, so it replaces nothing.");
             newer.Replaces.Add(new StewardDecisionReplace { Number = older.Number, Why = string.IsNullOrWhiteSpace(why) ? "Settled by the owner from the import's report." : why.Trim() });
             (newer.ChangedAt, newer.DeliveredAt) = (DateTime.UtcNow, null);
             await StewardDue.MarkAsync(_db, projectKey, $"the owner said #{newer.Number} replaces #{older.Number}");
@@ -406,11 +453,12 @@ public partial class StewardService
         number = d.Number,
         rule = d.Rule,
         title = d.Title,
-        appliesTo = d.PlanUnit is not { } u ? "project"
+        appliesTo = d.Convention ? "convention" : d.PlanUnit is not { } u ? "project"
             : $"{(titles.TryGetValue((d.PlanKey, u), out var t) ? t : $"unit {u}")}{(d.Outcomes is { Length: > 0 } o ? $": {o}" : "")}",
         plan = d.PlanKey,
         unit = d.PlanUnit,
         outcomes = d.Outcomes,
+        convention = d.Convention,
         status = st.Name,
         provisionalUntil = !d.Provisional ? null : d.ProvisionalUnit is { } pu ? $"unit {pu} is built" : "the owner says",
         replaces = d.Replaces.Count == 0 ? null : d.Replaces.OrderBy(r => r.Number).Select(r => new { number = r.Number, why = r.Why }),
@@ -460,9 +508,11 @@ public partial class StewardService
 
     /// <summary>
     /// What is decided. By default what is in force (provisional decisions included, and marked);
-    /// with <paramref name="history"/>, replaced and withdrawn decisions too, each with what replaced
-    /// it. With a unit, that slice's decisions and the project's; with an outcome as well, only those
-    /// of the slice's that apply to it. A query looks in the rule, the question and its options.
+    /// with <paramref name="history"/>, replaced, withdrawn and retired decisions too, each with what
+    /// replaced it. With a unit, that slice's decisions and the project's - on a project with slice
+    /// branches, the slice's own, its parent's if it is built on one, and the conventions, nothing
+    /// else; with an outcome as well, only those of the slice's that apply to it. A query looks in
+    /// the rule, the question and its options.
     /// </summary>
     public async Task<StewardReply> DecisionsAsync(string projectKey, string? query, int? unit = null, string? outcome = null,
         bool history = false, CancellationToken ct = default)
@@ -473,13 +523,19 @@ public partial class StewardService
         await EnsureRegisterAsync(cfg!, ct);
 
         var all = await RegisterAsync(projectKey, track: false, ct);
-        var replaced = ReplacedIndex(all);
+        var replaced = await IndexAsync(projectKey, all, ct);
         var titles = await UnitTitlesAsync(cfg!, ct);
         var working = cfg!.Steward.Plan.Key;
         var o = outcome?.Trim();
+        // A slice built on another sees its parent's decisions too: it is cut from that work.
+        var parent = unit is not null && cfg.SliceBranchesOn
+            ? await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey && u.Plan == working && u.Unit == unit)
+                .Select(u => u.ParentUnit).FirstOrDefaultAsync(ct)
+            : null;
         var rows = all.Select(d => (d, st: StatusOf(d, replaced)))
             .Where(x => history || x.st.Name is InForce or Provisional)
             .Where(x => unit is null || x.d.PlanUnit is null
+                || (x.d.PlanUnit == parent && (x.d.PlanKey ?? "") == working)
                 || (x.d.PlanUnit == unit && (x.d.PlanKey ?? "") == working
                     && (o is null || x.d.Outcomes is null || x.d.Outcomes.Split(',').Any(y => y.Trim().Equals(o, StringComparison.OrdinalIgnoreCase)))))
             .ToList();
@@ -504,7 +560,7 @@ public partial class StewardService
         if (Config(projectKey) is not { } cfg) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
         await EnsureRegisterAsync(cfg, ct);
         var all = await RegisterAsync(projectKey, track: false, ct);
-        var replaced = ReplacedIndex(all);
+        var replaced = await IndexAsync(projectKey, all, ct);
         var titles = await UnitTitlesAsync(cfg, ct);
         var pairs = await _db.StewardDecisionConflicts.AsNoTracking()
             .Where(c => c.ProjectKey == projectKey && c.Settled == null).OrderBy(c => c.Older).ThenBy(c => c.Newer).ToListAsync(ct);
@@ -512,6 +568,8 @@ public partial class StewardService
         return new StewardReply("register", null, new
         {
             next = await NextNumberAsync(projectKey, ct),
+            // Every new decision is a slice's or a convention, and a slice's retires with it.
+            sliceBranches = cfg.SliceBranchesOn,
             plan = cfg.Steward.Plan.Configured ? cfg.Steward.Plan.Key : null,
             units = titles.Where(t => t.Key.Item1 == cfg.Steward.Plan.Key).OrderBy(t => t.Key.Item2).Select(t => new { unit = t.Key.Item2, title = t.Value }),
             decisions = all.Select(d => Shape(d, StatusOf(d, replaced), titles)),
@@ -530,12 +588,16 @@ public partial class StewardService
     /// <summary>
     /// The register written out whole, in the order it is read: what is in force for the whole
     /// project, then each slice's, then what is provisional, then history with what replaced each.
+    /// On a project with slice branches only what is in force: the conventions, what the project
+    /// decided before the switch, and each open slice's. Nothing retired or replaced is written
+    /// again, so the file grows with the work that is open, not with the project's age.
     /// </summary>
     private async Task<string?> RegisterTextAsync(ProjectConfig cfg, CancellationToken ct)
     {
         var all = await RegisterAsync(cfg.Name, track: false, ct);
         if (all.Count == 0) return null;
-        var replaced = ReplacedIndex(all);
+        var replaced = await IndexAsync(cfg.Name, all, ct);
+        var slices = cfg.SliceBranchesOn;
         var titles = await UnitTitlesAsync(cfg, ct);
         var rows = all.Select(d => (d, st: StatusOf(d, replaced))).ToList();
 
@@ -551,7 +613,11 @@ public partial class StewardService
 
         var sb = new StringBuilder("# Decisions\n\n")
             .Append("What this project's owner has decided, from the board's register of decisions. Each has one number for good; ")
-            .Append("a decision that changes is replaced by a newer one, listed under History with what replaced it. ")
+            .Append(slices
+                ? "only what is in force is written here. A slice's decisions retire when it is released - its code is the decision then - "
+                  + "and the rules every slice keeps are the conventions"
+                  + (cfg.Steward.Conventions.Length > 0 ? $" (`{cfg.Steward.Conventions}`)" : "") + ". "
+                : "a decision that changes is replaced by a newer one, listed under History with what replaced it. ")
             .Append("Written out by the ticket board each time the register changes; edits made here are overwritten.\n");
         var standing = rows.Where(x => x.st.Name == InForce).ToList();
         void Section(string heading, IEnumerable<StewardDecision> ds)
@@ -560,7 +626,9 @@ public partial class StewardService
             if (list.Count == 0) return;
             sb.Append($"\n## {heading}\n\n").Append(string.Join("\n", list.Select(Line))).Append('\n');
         }
-        Section("In force: the whole project", standing.Where(x => x.d.PlanUnit is null).Select(x => x.d));
+        if (slices) Section("In force: conventions", standing.Where(x => x.d.Convention).Select(x => x.d));
+        Section(slices ? "In force: the whole project, from before slices" : "In force: the whole project",
+            standing.Where(x => x.d.PlanUnit is null && !x.d.Convention).Select(x => x.d));
         foreach (var g in standing.Where(x => x.d.PlanUnit is not null).GroupBy(x => (x.d.PlanKey, x.d.PlanUnit!.Value))
                      .OrderBy(g => g.Key.PlanKey == cfg.Steward.Plan.Key ? 1 : 0).ThenBy(g => g.Key.PlanKey).ThenBy(g => g.Key.Value))
         {
@@ -569,6 +637,7 @@ public partial class StewardService
             Section($"In force: {name}{of}", g.Select(x => x.d));
         }
         Section("Provisional", rows.Where(x => x.st.Name == Provisional).Select(x => x.d));
+        if (slices) return sb.ToString();
         var past = rows.Where(x => x.st.Name is Replaced or Withdrawn).ToList();
         if (past.Count > 0)
         {
@@ -610,7 +679,7 @@ public partial class StewardService
         if (replaces.Count > 0)
         {
             var all = await RegisterAsync(q.ProjectKey, track: false, ct);
-            var map = ReplacedIndex(all);
+            var map = await IndexAsync(q.ProjectKey, all, ct);
             foreach (var n in replaces)
                 if (all.FirstOrDefault(x => x.Number == n) is { } old && StatusOf(old, map).Name is InForce or Provisional)
                     d.Replaces.Add(new StewardDecisionReplace { Number = n, Why = $"The owner's answer to {q.Key}: {Head(q.Question, 200)}" });
