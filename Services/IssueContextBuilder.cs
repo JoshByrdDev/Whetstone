@@ -44,7 +44,9 @@ public class IssueContextBuilder
     private const int AncestorAttachmentBudget = 10;
 
     private readonly IssueAttachmentStore _attachments;
-    public IssueContextBuilder(IssueAttachmentStore attachments) => _attachments = attachments;
+    private readonly PrototypeCaptureService? _captures;
+    public IssueContextBuilder(IssueAttachmentStore attachments, PrototypeCaptureService? captures = null)
+        => (_attachments, _captures) = (attachments, captures);
 
     public record CommentDto(string? Author, string? Created, string? Text);
     public record LinkDto(string Relationship, string Key, string? Summary, string? Status, string? Type);
@@ -94,7 +96,10 @@ public class IssueContextBuilder
     public delegate Task<(AttachmentDto[] Cached, NotCachedDto[] NotCached)> CacheAttachments(
         string key, IReadOnlyList<IssueAttachment> attachments);
 
-    public async Task<object> BuildAsync(int ticketId, Issue issue, IIssueTracker tracker)
+    /// <param name="ticket">The ticket, when the caller has it: its prototype and design links are
+    /// captured here, over the issue and parent chain already read, and the captures join the
+    /// attachments - a failed one joins attachmentsNotCached, with its reason.</param>
+    public async Task<object> BuildAsync(int ticketId, Issue issue, IIssueTracker tracker, Models.Ticket? ticket = null)
     {
         var cache = await _attachments.CacheAsync(ticketId, issue.Attachments, tracker);
 
@@ -110,6 +115,13 @@ public class IssueContextBuilder
         });
 
         var children = await ReadChildrenAsync(issue.Children, keys => tracker.GetBriefsAsync(keys));
+
+        // The links in the issue that nobody on the fleet may open, photographed by the board. A
+        // capture already on disk is reused, so this costs a browser only the first time.
+        var captures = ticket is not null && _captures is not null
+            ? await _captures.CaptureAsync(ticket, issue, ancestry.ParentChain)
+            : Array.Empty<PrototypeCaptureService.Entry>();
+        var captureDir = PrototypeCaptureService.DirFor(_attachments.Paths, ticketId);
 
         return new
         {
@@ -141,8 +153,16 @@ public class IssueContextBuilder
             // Children past the cap, named so a reader knows they exist and that it has not read them.
             subtasksNotRead = children.NotRead,
             linkedIssues = await LinksAsync(issue, tracker),
-            attachments = cache.Attachments.Select(ToDto).ToArray(),
-            attachmentsNotCached = cache.NotCached.Select(s => new NotCachedDto(s.FileName, s.Reason)).ToArray(),
+            attachments = cache.Attachments.Select(ToDto)
+                .Concat(captures.Where(c => c.Ok && File.Exists(Path.Combine(captureDir, c.File!))).Select(c =>
+                    new AttachmentDto(c.File!, Path.Combine(captureDir, c.File!), new FileInfo(Path.Combine(captureDir, c.File!)).Length,
+                        "image/png", $"the board, a screenshot of {c.Url} (linked in {c.FoundIn})", c.At.ToString("o"))))
+                .ToArray(),
+            attachmentsNotCached = cache.NotCached.Select(s => new NotCachedDto(s.FileName, s.Reason))
+                .Concat(captures.Where(c => !c.Ok).Select(c => new NotCachedDto(c.Url,
+                    $"a prototype or design link in {c.FoundIn} that the board could not capture: {c.Error?.TrimEnd('.')}. "
+                    + "Nobody on the fleet has seen it - block and ask the owner for screenshots of its screens.")))
+                .ToArray(),
             // Stated in the payload rather than left to each skill to remember: the human's standing
             // instructions for a ticket are its master notes, which no tracker field can override.
             howToReadThis =

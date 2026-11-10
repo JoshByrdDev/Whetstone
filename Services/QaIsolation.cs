@@ -84,6 +84,9 @@ public sealed class QaIsolation
         R("GET", @"^/api/hosts/project-kit/[^/]+/?$", "serving a project to a worker host"),
         R("GET", @"^/api/hosts/ticket-data/\d+/?$", "serving a ticket's files to a worker host"),
         R("PUT", @"^/api/hosts/[^/]+/qa-captures/", "taking a capture from a worker host"),
+        // Not here: /api/tickets/{id}/prototype-captures. What reaches past the copy is the page a
+        // capture opens, not the route, so PrototypeCaptureService refuses every link that is not on
+        // this machine while the copy is isolated - and a copy can still prove a capture of its own.
     };
 
     /// <summary>What a request would do that a QA copy refuses, or null when the copy may serve it.</summary>

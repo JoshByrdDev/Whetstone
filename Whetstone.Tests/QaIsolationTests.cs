@@ -97,6 +97,8 @@ public class QaIsolationTests : IDisposable
     [InlineData("PUT", "/api/hosts/settings")]
     [InlineData("PUT", "/api/hosts/settings/hosts/bravo-host")]
     [InlineData("DELETE", "/api/hosts/settings/hosts/bravo-host")]
+    // The capture route stays open: the service refuses any page off this machine on a copy.
+    [InlineData("POST", "/api/tickets/7/prototype-captures")]
     [InlineData("GET", "/")]
     public void A_copy_still_serves_what_a_QA_run_is_there_to_exercise(string method, string path)
     {

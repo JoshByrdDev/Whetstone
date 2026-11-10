@@ -387,6 +387,12 @@ public class ProjectConfig
     public StackConfig Stack { get; init; } = new();
 
     /// <summary>
+    /// Which prototype and design links in a ticket the board may open and photograph for the fleet
+    /// (<see cref="PrototypeCaptureService"/>). Off unless the project names its hosts.
+    /// </summary>
+    public PrototypeCaptureConfig PrototypeCapture { get; init; } = PrototypeCaptureConfig.Off;
+
+    /// <summary>
     /// The lease the stack control takes, fully qualified - by default the SAME
     /// <c>{project}:app-stack</c> the qa-test phase takes via <see cref="PhaseResources"/>.
     /// <para>
@@ -626,6 +632,7 @@ public class ProjectRegistry
             ResourcePaths = GetStrArrayMap(cfg, "resourcePaths"),
             Tracker = TrackerConfig.From(cfg),
             Stack = GetStack(cfg),
+            PrototypeCapture = PrototypeCaptureConfig.From(cfg),
             Steward = StewardConfig.From(cfg),
             StewardModeSetting = StewardConfig.ParseMode(
                 cfg.TryGetValue("stewardMode", out var sm) && sm.ValueKind == JsonValueKind.String ? sm.GetString() : null),

@@ -38,6 +38,7 @@ public class IssueAttachmentStore
 
     private readonly DashboardPaths _paths;
     public IssueAttachmentStore(DashboardPaths paths) => _paths = paths;
+    public DashboardPaths Paths => _paths;
 
     /// <summary>One cached attachment, as handed to the worker.</summary>
     public record Cached(string Id, string FileName, string LocalPath, long Bytes, string? MimeType, string? Author, string? Created);
@@ -51,7 +52,10 @@ public class IssueAttachmentStore
     /// <param name="SourceIssue">Null when it hangs off the ticket's own issue; otherwise the ancestor
     /// key it was inherited from. A parent's mockup is worth reading and worth not mistaking for your
     /// own - "the epic shows the layout" and "your ticket shows the layout" are different claims.</param>
-    public record OnDisk(string FileName, string LocalPath, long Bytes, string? SourceIssue = null);
+    /// <param name="CapturedFrom">Set on a screenshot the board took of a prototype link
+    /// (<see cref="PrototypeCaptureService"/>): the link. Not an attachment anyone made, and a reader
+    /// should know it is a picture of a page rather than a design someone drew.</param>
+    public record OnDisk(string FileName, string LocalPath, long Bytes, string? SourceIssue = null, string? CapturedFrom = null);
 
     /// <summary>
     /// What is already cached for this ticket, read straight from the folder.
@@ -83,7 +87,8 @@ public class IssueAttachmentStore
                 .OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
                 .Select(f => new OnDisk(OriginalName(f.Name), f.FullName, f.Length, d.Key)));
 
-        return own.Concat(inherited).ToList();
+        // The board's own screenshots of prototype links sit in a folder of their own, beside both.
+        return own.Concat(inherited).Concat(PrototypeCaptureService.ListOnDisk(_paths, ticketId)).ToList();
     }
 
     /// <summary>Undo <see cref="SafeName"/>: drop the attachment id we prefixed for uniqueness.</summary>

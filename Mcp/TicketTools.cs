@@ -56,8 +56,8 @@ public class TicketTools
         var cached = store.ListCached(t.Id);
         var tracker = trackers.For(t.ProjectKey);
         return TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable,
-            attachments: cached.Select(a => new TicketAttachmentDto(a.FileName, a.LocalPath, a.Bytes, a.SourceIssue)).ToList(),
-            attachmentsNote: AttachmentsNote(t, cached, tracker),
+            attachments: cached.Select(a => new TicketAttachmentDto(a.FileName, a.LocalPath, a.Bytes, a.SourceIssue, a.CapturedFrom)).ToList(),
+            attachmentsNote: AttachmentsNote(t, cached, tracker, PrototypeCaptureService.Read(store.Paths, t.Id)),
             files: ticketFiles, tracker: tracker,
             // The one caller that must have this: it is how a QA run learns which of the green items
             // on its checklist actually describe the branch it is looking at.
@@ -73,7 +73,40 @@ public class TicketTools
     /// note is what turns a list of paths into something the reader knows to act on.
     /// </para>
     /// </summary>
-    private static string? AttachmentsNote(Ticket t, IReadOnlyList<IssueAttachmentStore.OnDisk> cached,
+    public static string? AttachmentsNote(Ticket t, IReadOnlyList<IssueAttachmentStore.OnDisk> cached,
+        IIssueTracker tracker, IReadOnlyList<PrototypeCaptureService.Entry> captures)
+    {
+        var issue = IssueAttachmentsNote(t, cached.Where(a => a.CapturedFrom is null).ToList(), tracker);
+        var shots = CapturesNote(captures);
+        return issue is null ? shots : shots is null ? issue : issue + " " + shots;
+    }
+
+    /// <summary>
+    /// What the board's screenshots of prototype links are, and which links it could not capture.
+    /// A failure is named with its reason, because the prompt's rule turns on it: a prototype nobody
+    /// could see is a block that asks the owner for screenshots, never something to build around.
+    /// </summary>
+    public static string? CapturesNote(IReadOnlyList<PrototypeCaptureService.Entry> captures)
+    {
+        if (captures.Count == 0) return null;
+        var parts = new List<string>();
+        var ok = captures.Count(c => c.Ok);
+        if (ok > 0)
+            parts.Add($"{ok} of these (capturedFrom set) {(ok == 1 ? "is a screenshot" : "are screenshots")} the board took of "
+                    + "prototype or design links in the ticket, since you may not open them yourself: each is the linked page as it "
+                    + $"first loads, {PrototypeCaptureService.ViewportWidth}px wide and full length. It shows what the link showed and "
+                    + "nothing more - a clickable prototype's other screens are not in it. If the screens this ticket changes are "
+                    + "not among them, the link is still one you have not seen.");
+        var failed = captures.Where(c => !c.Ok).ToArray();
+        if (failed.Length > 0)
+            parts.Add("The board could not capture "
+                    + string.Join("; ", failed.Select(f => $"{f.Url} (in {f.FoundIn}): {f.Error?.TrimEnd('.')}"))
+                    + ". A prototype, mockup or design link that no attachment shows is one nobody has seen - block and ask "
+                    + "the owner for screenshots of its screens, as the prompt says.");
+        return string.Join(" ", parts);
+    }
+
+    private static string? IssueAttachmentsNote(Ticket t, IReadOnlyList<IssueAttachmentStore.OnDisk> cached,
         IIssueTracker tracker)
     {
         if (string.IsNullOrWhiteSpace(t.IssueKey)) return null;
@@ -748,7 +781,7 @@ public class TicketTools
             var issue = await tracker.GetIssueAsync(t.IssueKey);
             if (issue is null)
                 return new { error = $"{tracker.DisplayName} {tracker.IssueNoun} {t.IssueKey} not found" };
-            return await builder.BuildAsync(t.Id, issue, tracker);
+            return await builder.BuildAsync(t.Id, issue, tracker, t);
         }
         catch (HttpRequestException ex)
         {

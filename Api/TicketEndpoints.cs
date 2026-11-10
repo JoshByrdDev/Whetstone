@@ -170,7 +170,7 @@ public static class TicketEndpoints
         // Atomically claim the next ticket for the one global heartbeat: most-progressed
         // workable ticket across all projects (or the given subset). Locks it into its "-ing"
         // phase and returns everything the orchestrator needs to launch the worker.
-        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments) =>
+        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments, PrototypeCaptureQueue captures) =>
         {
             bool SkillExists(string projectKey, string skill) => File.Exists(paths.SkillFile(projectKey, skill));
 
@@ -289,6 +289,10 @@ public static class TicketEndpoints
             capacity.RecordClaim(req?.Host, result is not null, trace);
             if (result is null)
                 return Results.Ok(new { claimed = (object?)null });
+
+            // Anything new in the ticket's links is photographed for the runs after this one. Not awaited:
+            // the heartbeat gives a claim fifteen seconds, and a browser can take longer than that.
+            captures.Enqueue(result.Ticket.Id);
 
             var key = result.Ticket.ProjectKey;
             var cfg = registry.GetProjectConfig(key);
@@ -636,7 +640,7 @@ public static class TicketEndpoints
         });
 
         app.MapPost("/api/tickets", async (CreateTicketRequest req, TicketService svc, ProjectRegistry registry,
-            LinkedIssueResolver resolver, IssueTrackerFactory trackers) =>
+            LinkedIssueResolver resolver, IssueTrackerFactory trackers, PrototypeCaptureQueue captures) =>
         {
             // Named, never inferred. A ticket carries its project for the rest of its life - it
             // decides the repo, the branch, the tracker and the skills - so a create that did not
@@ -710,6 +714,8 @@ public static class TicketEndpoints
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault);
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
+            // Photographed now, while it waits in its queue, so the first run already has the pictures.
+            captures.Enqueue(t.Id);
             var r = await resolver.ResolveAsync(t);
             return Results.Created($"/api/tickets/{t.Id}",
                 TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable, tracker: tracker));
