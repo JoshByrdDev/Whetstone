@@ -13,7 +13,12 @@ namespace Whetstone.Services;
 /// checking anything - a database that is down, say. That is the machine's fault and not the
 /// ticket's, so the ticket is left where it is and the owner is told, instead of being sent back
 /// to be "fixed".</param>
-public record StewardCheck(string Name, string Run, string[] WhenChanged, string MachineFault, int TimeoutMinutes);
+/// <param name="SlowFault">A pattern that names a test failing only because it ran out of its own
+/// time ("Test timed out in 20000ms"). When every failing test the check names is one of those, the
+/// result is a busy machine's, not the ticket's, and is treated like the whole check running out of
+/// time: merged again on a later run, and the owner's only when it happens again on the same tip.
+/// A real failure beside them sends the ticket back as before (<see cref="CheckFailures.OnlySlow"/>).</param>
+public record StewardCheck(string Name, string Run, string[] WhenChanged, string MachineFault, int TimeoutMinutes, string SlowFault = "");
 
 /// <summary>
 /// Where a project keeps the plan its steward works from, and how to read it.
@@ -263,7 +268,7 @@ public class StewardConfig
             if (run.Length == 0) continue;
             var name = Str(c, "name");
             checks.Add(new StewardCheck(name.Length > 0 ? name : run, run, StrArray(c, "whenChanged"),
-                Pattern(c, "machineFault", ""), Int(c, "timeoutMinutes", 15, 1, 120)));
+                Pattern(c, "machineFault", ""), Int(c, "timeoutMinutes", 15, 1, 120), Pattern(c, "slowFault", "")));
         }
         return checks.ToArray();
     }

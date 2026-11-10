@@ -47,6 +47,40 @@ public static class CheckFailures
         @"\bExpected[: ]|\bReceived:|\berror (TS|CS)\d+|\b[1-9]\d* (failed|failing)\b|^\s*Error:|\bFailed [A-Za-z_.]+\b",
         System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
 
+    /// <summary>A line that names one failing test: a runner's FAIL / not ok line, or a failure bullet.</summary>
+    private static readonly System.Text.RegularExpressions.Regex Head = new(
+        @"^\s*(FAIL|FAILED|not ok)\b|^\s*[●✕✗×❌]\s",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>What a failure other than a slow test prints: an assertion, a compiler error, an error
+    /// thrown (a crashed worker included), unless it is the slow pattern's own "Error: Test timed out".</summary>
+    private static readonly System.Text.RegularExpressions.Regex Real = new(
+        @"AssertionError|Assertion failed|\bExpected[: ]|\bReceived:|\berror (TS|CS)\d+|^\s*\w*Error\b",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Whether every failing test in <paramref name="failures"/> (as <see cref="Pick"/> chose them)
+    /// failed only by running out of its own time: each one names <paramref name="slowFault"/> on its
+    /// line or the two after it, and nothing in them is an assertion, a compiler error or another error
+    /// thrown. False when no
+    /// failing test is named at all - then there is nothing to say it was only slow.
+    /// </summary>
+    public static bool OnlySlow(IReadOnlyList<string>? failures, string slowFault)
+    {
+        if (failures is not { Count: > 0 } f || string.IsNullOrWhiteSpace(slowFault)) return false;
+        var slow = new System.Text.RegularExpressions.Regex(slowFault, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        var heads = 0;
+        for (var i = 0; i < f.Count; i++)
+        {
+            if (Real.IsMatch(f[i]) && !slow.IsMatch(f[i])) return false;
+            if (!Head.IsMatch(f[i])) continue;
+            heads++;
+            var named = Enumerable.Range(i, 3).Where(j => j < f.Count).Any(j => slow.IsMatch(f[j]));
+            if (!named) return false;
+        }
+        return heads > 0;
+    }
+
     /// <summary>
     /// Each line that names a failure, with the line after it for context, in order, each cut to a
     /// readable length and the whole held to <paramref name="max"/> lines.

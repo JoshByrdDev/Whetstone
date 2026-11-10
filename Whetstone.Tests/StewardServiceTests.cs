@@ -785,6 +785,75 @@ public partial class StewardServiceTests : IDisposable
         Assert.Contains("FAIL src/app.test.ts", System.Text.Json.JsonSerializer.Serialize(r.Data));
     }
 
+    private const string Slow = @"Test timed out in \d+ms|Hook timed out in \d+ms";
+
+    private static readonly string[] OnlyTimeouts =
+    {
+        " FAIL  src/orders.db.test.ts > keeps every record",
+        "Error: Test timed out in 20000ms.",
+        " FAIL  src/setup.db.test.ts [ src/setup.db.test.ts ]",
+        "Error: Hook timed out in 300000ms.",
+    };
+
+    [Fact]
+    public async Task A_check_failing_only_on_tests_out_of_their_own_time_is_retried_then_the_owners()
+    {
+        Configure("full", $$"""
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests", "slowFault": "{{Slow.Replace("\\", "\\\\")}}" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed | 375 passed", OnlyTimeouts);
+
+        var first = await In(s => s.MergeAsync("alpha", id));
+        Assert.Equal("check-timed-out", first.Answer);
+        Assert.Contains("ran out of their own time", first.Why);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+        Assert.Contains($"#{id}", (await State())?.DueReason);
+
+        // The same again on the same tip: the machine is too busy, and that is the owner's.
+        Assert.Equal("check-could-not-run", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+    }
+
+    [Fact]
+    public async Task A_check_that_ran_out_of_time_and_then_failed_only_slowly_on_the_same_tip_is_the_owners()
+    {
+        Configure("full", $$"""
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests", "slowFault": "{{Slow.Replace("\\", "\\\\")}}" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+
+        _git.Check = new CheckRun(false, true, "did not finish within 900s.", Array.Empty<string>());
+        Assert.Equal("check-timed-out", (await In(s => s.MergeAsync("alpha", id))).Answer);
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed", OnlyTimeouts);
+        Assert.Equal("check-could-not-run", (await In(s => s.MergeAsync("alpha", id))).Answer);
+    }
+
+    [Fact]
+    public async Task A_real_failure_beside_slow_tests_is_sent_back_and_so_is_one_with_no_slow_pattern()
+    {
+        Configure("full", $$"""
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests", "slowFault": "{{Slow.Replace("\\", "\\\\")}}" } ]
+            """);
+        var id = await AtReview();
+        await Begin();
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed",
+            OnlyTimeouts.Concat(new[] { " FAIL  src/prices.db.test.ts > quotes an item", "AssertionError: expected 1200 to be 1250" }).ToArray());
+        Assert.Equal("check-failed", (await In(s => s.MergeAsync("alpha", id))).Answer);
+
+        Configure("full", """
+            "plan": { "units": "docs/units" },
+            "mergeChecks": [ { "name": "db tests", "run": "run-db-tests" } ]
+            """);
+        _git.Check = new CheckRun(false, false, "Test Files  2 failed", OnlyTimeouts);
+        Assert.Equal("check-failed", (await In(s => s.MergeAsync("alpha", id))).Answer);
+    }
+
     [Fact]
     public async Task A_merge_check_is_told_the_base_it_checks_against()
     {
@@ -2002,6 +2071,25 @@ public partial class StewardServiceTests : IDisposable
         Assert.Contains(picked, l => l.Contains("1 failed | 900 passed"));
         Assert.DoesNotContain(picked, l => l.Contains("ok line 40"));
         Assert.Empty(CheckFailures.Pick(new[] { "all good", "0 failed" }));
+    }
+
+    [Fact]
+    public void Only_slow_is_every_failing_test_out_of_its_own_time_and_nothing_else()
+    {
+        Assert.True(CheckFailures.OnlySlow(OnlyTimeouts, Slow));
+        // The run list's own spelling: a cross, then the reason on the next line.
+        Assert.True(CheckFailures.OnlySlow(new[] { "   × src/a.db.test.ts > makes an order 20012ms", "     → Test timed out in 20000ms." }, Slow));
+
+        // A failing test that names no timeout, an assertion, a crashed worker: not only slow.
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append(" FAIL  src/b.test.ts > adds").Append("  at b.test.ts:4").ToArray(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append("AssertionError: expected 1 to be 2").ToArray(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append("Error: [vitest-pool]: Worker forks emitted error.").ToArray(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts.Append("src/x.ts(3,1): error TS2304: Cannot find name 'y'.").ToArray(), Slow));
+
+        // Nothing named, or nothing to match by.
+        Assert.False(CheckFailures.OnlySlow(new[] { "Error: Test timed out in 20000ms." }, Slow));
+        Assert.False(CheckFailures.OnlySlow(Array.Empty<string>(), Slow));
+        Assert.False(CheckFailures.OnlySlow(OnlyTimeouts, ""));
     }
 
     [Fact]

@@ -898,7 +898,11 @@ public partial class StewardService
                 // of a broken ticket. A check that is slow because many workers share the machine
                 // is retried, and only when it runs out again on the same tip is it the owner's.
                 if (run.TimedOut && (run.Failures?.Count ?? 0) == 0)
-                    return await TimedOutAsync(projectKey, t, change, c, run, ct);
+                    return await TimedOutAsync(projectKey, t, change, c, run, false, ct);
+                // Every failing test failed only by running out of its own time: the same busy
+                // machine, seen one test at a time. Counted with the whole check running out.
+                if (c.SlowFault.Length > 0 && CheckFailures.OnlySlow(run.Failures, c.SlowFault))
+                    return await TimedOutAsync(projectKey, t, change, c, run, true, ct);
                 return Refuse("check-failed",
                     run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merged result, and what it printed before then "
                                    + "names failures. Send it back to NeedsImplementation with this: 'failing' is every line in the whole output "
@@ -1017,7 +1021,7 @@ public partial class StewardService
     /// which is also how the next one knows it is the second.
     /// </summary>
     private async Task<StewardReply> TimedOutAsync(string projectKey, Ticket t, BranchChange change, StewardCheck c,
-        CheckRun run, CancellationToken ct)
+        CheckRun run, bool slow, CancellationToken ct)
     {
         var tip = change.Tip ?? change.ChangeId ?? "unknown";
         tip = tip[..Math.Min(12, tip.Length)];
@@ -1031,7 +1035,8 @@ public partial class StewardService
         _db.StewardEntries.Add(new StewardEntry
         {
             ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = t.Id,
-            Text = $"{mark} '{c.Name}' did not finish in {c.TimeoutMinutes} minutes and printed no failure. "
+            Text = $"{mark} '{c.Name}' " + (slow ? "failed only on tests that ran out of their own time. "
+                                                 : $"did not finish in {c.TimeoutMinutes} minutes and printed no failure. ")
                 + (again ? "The second time on this tip, so it waits at NeedsReview for the owner."
                          : "Left at NeedsReview to merge again on a later run."),
         });
@@ -1039,6 +1044,20 @@ public partial class StewardService
         await _db.SaveChangesAsync(ct);
         if (!again) _heartbeat?.Wake();
 
+        if (slow)
+        {
+            var slowData = new { check = c.Name, tip, failing = run.Failures ?? Array.Empty<string>(), output = run.Output };
+            return again
+                ? Refuse("check-could-not-run",
+                    $"'{c.Name}' failed again on the same branch tip only on tests that ran out of their own time, and none of them "
+                    + "failed an assertion. Nothing is proved either way: that is the machine too busy for the suite, not the ticket. "
+                    + "Leave the ticket at NeedsReview and ask the owner once: whether the machine is too busy, or the tests' time "
+                    + "limits are too short, is theirs.", slowData)
+                : Refuse("check-timed-out",
+                    $"'{c.Name}' failed only on tests that ran out of their own time, and none of them failed an assertion: that is a "
+                    + "busy machine, not proof against the ticket. Do not send it back. Leave it at NeedsReview: a later run is already "
+                    + "owed and merges it again then. If it happens again on the same tip, it becomes the owner's.", slowData);
+        }
         var data = new { check = c.Name, minutes = c.TimeoutMinutes, tip, output = run.Output };
         return again
             ? Refuse("check-could-not-run",
