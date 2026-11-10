@@ -6,6 +6,10 @@
 >
 > **How to read it.** A decision already made is cited by its number in the register, (#12), and
 > never restated. A choice nothing decides is a numbered decision under "To decide", with its options.
+>
+> **Built on: slice N.** Only on a project with slice branches, and only when this slice needs work
+> of one other open slice that is not released yet: its branch is then cut from that slice's. One
+> slice, never two, and that one built on none. Delete this line otherwise.
 
 The idea's paragraph, as the owner wrote it.
 

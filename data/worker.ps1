@@ -2094,9 +2094,9 @@ You are reading ``$reviewBranch``$(if ($reviewRepo) { " in ``$reviewRepo``" }) t
 "@
 } else {
     $trackRules = if ($isWalkthrough) { @"
-**This ticket is a slice's WALK-THROUGH. Your working directory is the base branch as it stands, checked out detached.**
+**This ticket is a slice's WALK-THROUGH. Your working directory is ``$(Resolve-TicketBase -Claim $Claim -DefaultBase $BaseBranch)`` as it stands, checked out detached.**
 
-There is no change to test and no branch of this ticket's own. Drive the slice's story, written in the ticket's description, end to end against the app as the base has it, one step at a time, capturing each. Change no file and commit nothing: a step that fails is reported by blocking this ticket with the step it failed at, never fixed here.
+There is no change to test and no branch of this ticket's own. Drive the slice's story, written in the ticket's description, end to end against the app as that branch has it, one step at a time, capturing each. Change no file and commit nothing: a step that fails is reported by blocking this ticket with the step it failed at, never fixed here.
 "@ } else { "" }
 }
 # Dashboard-owned per-project data dir (holds reflect-prompt and the review queue).

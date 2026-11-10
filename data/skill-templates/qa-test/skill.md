@@ -43,7 +43,7 @@ Most projects are one repo, and this section does not apply to them. When your p
 
 ## A slice's walk-through
 
-`get_ticket` also returns **`walkthrough`**. When it is `true` this ticket is a slice's walk-through, filed by the board once every other outcome of the slice was done. It changes no code: your working directory is the base branch as it stands, checked out detached, and there is no diff.
+`get_ticket` also returns **`walkthrough`**. When it is `true` this ticket is a slice's walk-through, filed by the board once every other outcome of the slice was done. It changes no code: your working directory is the slice's branch as it stands - on a project without slice branches, the base branch - checked out detached, and there is no diff. The prompt's base ref names which.
 
 - **Skip Part A.** There is no branch to review. Do not route anything back to implementation: this ticket has no code of its own to fix.
 - **The story is the checklist.** The description quotes the slice's story, one step per sentence, each citing the outcomes that make it true. Write one QA item per step (B3), in order, and drive them as one person would, start to finish - the data each step leaves is what the next step starts from.

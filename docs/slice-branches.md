@@ -2,7 +2,8 @@
 
 > Design, 2026-11-09. The owner chose three things the same day: a branch per slice, decisions that
 > retire with their slice, and finishing the slices already in flight on the old shape before
-> switching. Nothing here is built yet.
+> switching. Built 2026-11-10, every piece of "Order of work", behind the per-project switch
+> `sliceBranches`; a project moves onto it from the Steward page (piece 8).
 > Summary: The plan goes away as a structure. A project has slices, and each slice is one branch
 > off the base, cut when the slice is agreed and merged back as one piece when the owner releases
 > it. A slice may be built on one other open slice, never two. A slice's decisions are in force

@@ -159,12 +159,27 @@ $planDir = if ($launch.planUnits) { "$($launch.planUnits)" } else { "(no plan fo
 $planCharter = if ($launch.planCharter) { "$($launch.planCharter)" }
     elseif ($launch.planMaster) { "(none yet: the plan is still its older single document, $($launch.planMaster))" }
     else { "(this plan has no charter)" }
+# A project with slice branches has slices and no plan around them (docs/slice-branches.md): no
+# charter, a branch per open slice, and a conventions file in place of the whole project's
+# decisions. Every other project's prompt reads exactly as it did.
+$slices = [bool]$launch.sliceBranches
+$slicesConventions = if ($launch.conventions) { "``$($launch.conventions)``" } else { "(none yet: the owner has not named one)" }
+$planLines = if ($slices) {
+    "- **The slices:** ``$planDir`` in the working directory, one file per slice, numbered for good - an idea, a draft or an agreed spec. Read them as they are committed there. An agreed slice that is not released has a branch of its own, ``slice/<NN>-<name>``, where its tickets are merged.`n" +
+    "- **What every slice keeps:** $slicesConventions - the owner's conventions file. Read it whole every run. Only the owner edits it, and a spec or ticket that would break a line of it is a question for the owner."
+} else {
+    "- **The plan:** ``$planDir`` in the working directory, one file per slice of work, in order - an idea, a draft or an agreed spec. Read them as they are committed there.`n" +
+    "- **The charter:** ``$planCharter`` - why the plan exists, its words, where things are. Direction for every draft; it decides nothing."
+}
+$slicesRule = if ($slices) {
+    " On this project each slice has a branch of its own and there is no plan or charter around them: what is in force is the conventions file and the decisions of slices still open. A released slice's decisions are retired - its code is the decision now - and decide nothing. Your skill's **Slice branches** section says what else that changes."
+} else { "" }
 
 $prompt = (Get-Content -Path $PromptStewardFile -Raw -Encoding UTF8).
     Replace('{{PROJECT_KEY}}', $Project).
     Replace('{{PROJECT_NAME}}', $projectName).
-    Replace('{{PLAN_DIR}}', $planDir).
-    Replace('{{PLAN_CHARTER}}', $planCharter).
+    Replace('{{PLAN_LINES}}', $planLines).
+    Replace('{{SLICES_RULE}}', $slicesRule).
     Replace('{{DRAFT_TEMPLATE}}', "$($launch.draftTemplate)").
     Replace('{{CONVENTIONS_FILE}}', $conventionsFile).
     Replace('{{MEMORY_INDEX}}', $memoryIndex).

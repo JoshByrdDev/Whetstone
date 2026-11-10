@@ -489,6 +489,10 @@ public static class StewardEndpoints
                 // A draft's shape, for a first draft with no agreed slice before it to follow.
                 draftTemplate = Path.Combine(paths.DataRoot, "plan-templates", "unit.md"),
                 planMaster = cfg.Steward.Plan.Master,
+                // Slices with a branch each and no plan around them (docs/slice-branches.md): the
+                // prompt then speaks of slices and the conventions file, not of a plan and its charter.
+                sliceBranches = cfg.SliceBranchesOn,
+                conventions = cfg.Steward.Conventions,
             });
         });
 
