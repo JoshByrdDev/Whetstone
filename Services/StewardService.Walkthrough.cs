@@ -77,9 +77,14 @@ public partial class StewardService
             if (propose) { filed.Add($"would file unit {u.Number}'s walk-through"); continue; }
 
             var steps = SliceStory.Sentences(story).Select((s, i) => $"{i + 1}. {s}");
+            // On a project with slice branches the walk-through runs on the slice's own branch, so the
+            // owner tests one slice with nothing else mixed in; the claim names it as the ticket's base.
+            var where = SliceBranches.BaseFor(cfg, u.Number, row) is { } sliceBranch
+                ? $"on the slice's own branch, {sliceBranch}, as it stands"
+                : "on the base branch as it stands";
             var description = string.Join("\n\n", new[]
             {
-                $"The walk-through of unit {u.Number} ({u.File}), driven end to end on the base branch as it stands. "
+                $"The walk-through of unit {u.Number} ({u.File}), driven end to end {where}. "
                     + "Filed by the board because every other outcome of the unit is done. It changes no code.",
                 $"**The story**\n\n{story}",
                 $"**Acceptance criteria:** each step below works, in order, as one person doing it, and is captured.\n\n{string.Join("\n", steps)}",

@@ -34,6 +34,11 @@ public interface IStewardGit
     /// section 2). The sha it points at, or the refusal.
     /// </summary>
     Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default);
+    /// <summary>
+    /// Bring an open slice's branch up to the base with a merge, never a rebase; with
+    /// <paramref name="dryRun"/>, only how far behind it is (docs/slice-branches.md, section 2).
+    /// </summary>
+    Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, CancellationToken ct = default);
 }
 
 public partial class TicketGitService : IStewardGit

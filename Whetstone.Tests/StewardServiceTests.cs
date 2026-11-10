@@ -2278,6 +2278,17 @@ public partial class StewardServiceTests : IDisposable
         public List<string> Cut = new();
         public string? CutRefusal;
 
+        /// <summary>What syncing each slice answers, by branch; unset is up to date.</summary>
+        public Dictionary<string, SyncFromResult> SliceSync = new();
+        public List<(string Slice, bool DryRun)> Synced = new();
+
+        public Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, CancellationToken ct = default)
+        {
+            Synced.Add((slice, dryRun));
+            var r = SliceSync.TryGetValue(slice, out var set) ? set : new SyncFromResult("up-to-date", 0, Array.Empty<string>(), null);
+            return Task.FromResult(dryRun && r.Answer is "merged" or "conflict" ? r with { Answer = "proposed" } : r);
+        }
+
         public Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default)
         {
             if (CutRefusal is not null) return Task.FromResult<(string?, string?)>((null, CutRefusal));

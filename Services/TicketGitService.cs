@@ -1351,6 +1351,11 @@ public partial class TicketGitService
     {
         var cfg = _registry.GetProjectConfig(projectKey);
         var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
+        // A ticket of an open slice lands on its slice's branch, not the base: the slice reaches the
+        // base as one piece when its owner releases it (docs/slice-branches.md, section 2).
+        if (await ForTicketAsync(cfg, TargetsOf(cfg).FirstOrDefault(), branch, ct) is { } ticketTarget
+            && ticketTarget.BaseBranch != ResolveBaseBranch(cfg))
+            return await MergeIntoSliceAsync(cfg, repo, ticketTarget.BaseBranch, branch, title, description, ct);
         var baseBranch = ResolveBaseBranch(cfg);
         var output = new List<string>();
         var noFiles = Array.Empty<string>();

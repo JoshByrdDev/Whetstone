@@ -121,6 +121,18 @@ public partial class TicketGitService
         return (cfg, cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "", ResolveBaseBranch(cfg));
     }
 
+    /// <summary>
+    /// <see cref="HubOf"/> for one ticket's branch: its base is the ticket's own - its open slice's
+    /// branch on a project with slice branches - so what the steward reads of a finished ticket
+    /// (its change, its diff, how far behind it is) is measured against where it will merge.
+    /// </summary>
+    private async Task<(ProjectConfig Cfg, string Repo, string Base)> TicketHubOfAsync(string projectKey, string branch, CancellationToken ct)
+    {
+        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        var target = await ForTicketAsync(cfg, TargetsOf(cfg).FirstOrDefault(), branch, ct);
+        return (cfg, repo, target?.BaseBranch ?? baseBranch);
+    }
+
     /// <summary>Why the hub cannot be written to right now, or null when it can.</summary>
     private async Task<string?> HubNotWritableAsync(string repo, string baseBranch, CancellationToken ct)
     {
@@ -375,7 +387,7 @@ public partial class TicketGitService
     /// </summary>
     public async Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default)
     {
-        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        var (cfg, repo, baseBranch) = await TicketHubOfAsync(projectKey, branch, ct);
         if (string.IsNullOrWhiteSpace(branch) || !IsGitRepo(repo)) return null;
         if (!(await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}")).Ok) return null;
         var baseRef = await BaseRefAsync(repo, cfg, baseBranch, ct);
@@ -398,7 +410,7 @@ public partial class TicketGitService
     /// </summary>
     public async Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default)
     {
-        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        var (cfg, repo, baseBranch) = await TicketHubOfAsync(projectKey, branch, ct);
         if (paths.Count == 0 || string.IsNullOrWhiteSpace(branch) || !IsGitRepo(repo)) return null;
         if (!(await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}")).Ok) return null;
         var baseRef = await BaseRefAsync(repo, cfg, baseBranch, ct);
@@ -429,7 +441,7 @@ public partial class TicketGitService
     public async Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(
         string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default)
     {
-        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        var (cfg, repo, baseBranch) = await TicketHubOfAsync(projectKey, branch, ct);
         if (string.IsNullOrWhiteSpace(branch) || !IsGitRepo(repo)) return null;
         var baseRef = await BaseRefAsync(repo, cfg, baseBranch, ct);
         if (baseRef is null) return null;

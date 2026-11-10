@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using Whetstone.Services;
 using Xunit;
 
@@ -59,5 +60,86 @@ public partial class StewardServiceTests
         Assert.Contains("could not cut it", System.Text.Json.JsonSerializer.Serialize(reply.Data));
         await using var ctx = NewCtx();
         Assert.Null(ctx.StewardUnits.Single(u => u.Unit == 2).Branch);
+    }
+}
+
+/// <summary>
+/// docs/slice-branches.md, piece 2: the steward's run keeps every open slice up with the base, and
+/// the walk-through runs on the slice's branch.
+/// </summary>
+public partial class StewardServiceTests
+{
+    private async Task OpenSlice(int unit, string branch, bool released = false)
+    {
+        await using var ctx = NewCtx();
+        ctx.StewardUnits.Add(new Whetstone.Models.StewardUnit
+        {
+            ProjectKey = "alpha", Plan = "", Unit = unit, Branch = branch, AgreedAt = DateTime.UtcNow,
+            ReleasedAt = released ? DateTime.UtcNow : null,
+        });
+        await ctx.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task A_run_brings_each_open_slice_up_to_the_base_and_leaves_a_released_one_alone()
+    {
+        SwitchToSliceBranches();
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(3, "slice/03-older", released: true);
+        _git.SliceSync["slice/01-first"] = new SyncFromResult("merged", 2, new[] { "src/fix.ts" }, null);
+
+        var begin = Json(await Begin());
+        Assert.Equal(new[] { ("slice/01-first", false) }, _git.Synced);
+        Assert.Contains("\"branch\":\"slice/01-first\"", begin);
+        Assert.Contains("\"answer\":\"merged\"", begin);
+    }
+
+    [Fact]
+    public async Task A_slice_that_cannot_take_the_base_is_put_to_the_owner_through_the_run()
+    {
+        SwitchToSliceBranches();
+        await OpenSlice(1, "slice/01-first");
+        _git.SliceSync["slice/01-first"] = new SyncFromResult("conflict", 1, new[] { "src/app.ts" }, "nothing was changed");
+
+        var begin = Json(await Begin());
+        Assert.Contains("Ask the owner", begin);
+        Assert.Contains("src/app.ts", begin);
+    }
+
+    [Fact]
+    public async Task A_slice_behind_the_base_makes_a_run_due()
+    {
+        SwitchToSliceBranches();
+        await Begin();
+        await In(s => s.EndAsync("alpha", "x", false));
+        await OpenSlice(1, "slice/01-first");
+        _git.SliceSync["slice/01-first"] = new SyncFromResult("merged", 1, Array.Empty<string>(), null);
+
+        await using var ctx = NewCtx();
+        var (due, why) = await Steward(ctx).DueAsync("alpha");
+        Assert.True(due);
+        Assert.Equal("slice/01-first is behind the base", why);
+        Assert.Contains(("slice/01-first", true), _git.Synced);
+    }
+
+    [Fact]
+    public async Task Without_the_switch_no_slice_is_synced()
+    {
+        await OpenSlice(1, "slice/01-first");
+        await Begin();
+        Assert.Empty(_git.Synced);
+    }
+
+    [Fact]
+    public async Task The_walk_through_of_an_open_slice_says_it_runs_on_the_slices_branch()
+    {
+        SwitchToSliceBranches();
+        _git.First = WithWalkthrough;
+        await OpenSlice(1, "slice/01-first");
+        await Done(1, "A1", "A2");
+        await Begin();
+        await using var ctx = NewCtx();
+        var t = await ctx.Tickets.SingleAsync(x => x.Walkthrough);
+        Assert.Contains("on the slice's own branch, slice/01-first", t.Description);
     }
 }

@@ -256,6 +256,131 @@ public class SliceBranchTests : IDisposable
         Assert.NotNull(no);
     }
 
+    // ---- piece 2: work lands on the slice, and the slice keeps up with the base ----------------
+
+    [Fact]
+    public async Task A_slice_ticket_merges_into_its_slice_without_touching_the_base_or_the_checkout()
+    {
+        await LayOutAsync();
+        var baseTip = Rev("main");
+        var sliceTip = Rev(Slice);
+
+        var merged = await _svc.MergeAsync("alpha", "t-13", "Cards (#1)", null);
+        Assert.True(merged.Ok, merged.Error);
+        Assert.Equal(Slice, merged.BaseBranch);
+        Assert.Equal(Rev(Slice), merged.MergeSha);
+        Assert.Equal(new[] { sliceTip, Rev("t-13") }, Lines("rev-list", "--parents", "-n", "1", Slice).Single().Split(' ').Skip(1));
+        Assert.Equal("Cards (#1)", Lines("log", "-1", "--format=%s", Slice).Single());
+        Assert.Equal(baseTip, Rev("main"));
+        Assert.Equal("main", Lines("rev-parse", "--abbrev-ref", "HEAD").Single());
+        Assert.Empty(Lines("status", "--porcelain", "--untracked-files=no"));
+    }
+
+    [Fact]
+    public async Task A_ticket_of_a_project_without_the_switch_still_merges_into_the_base()
+    {
+        await LayOutAsync();
+        var sliceTip = Rev(Slice);
+        var merged = await _svc.MergeAsync("bravo", "b-13", "Cards (#4)", null);
+        Assert.True(merged.Ok, merged.Error);
+        Assert.Equal("main", merged.BaseBranch);
+        Assert.Equal(Rev("main"), merged.MergeSha);
+        Assert.Equal(sliceTip, Rev(Slice));
+    }
+
+    [Fact]
+    public async Task A_merge_into_the_slice_that_conflicts_changes_nothing()
+    {
+        await LayOutAsync();
+        OnBranch(Slice, "mine.txt", "S2: another ticket of slice 13 wrote the same file");
+        var sliceTip = Rev(Slice);
+        var merged = await _svc.MergeAsync("alpha", "t-13", "Cards (#1)", null);
+        Assert.False(merged.Ok);
+        Assert.True(merged.Conflicted);
+        Assert.Contains("mine.txt", merged.ConflictedFiles);
+        Assert.Equal(sliceTip, Rev(Slice));
+    }
+
+    [Fact]
+    public async Task A_slice_branch_a_person_has_checked_out_is_not_moved_under_them()
+    {
+        await LayOutAsync();
+        var held = Path.Combine(_root, "held");
+        Git(_hub, "worktree", "add", "-q", held, Slice);
+        var sliceTip = Rev(Slice);
+        var merged = await _svc.MergeAsync("alpha", "t-13", null, null);
+        Assert.False(merged.Ok);
+        Assert.Contains("is checked out in", merged.Error);
+        Assert.Equal("refused", (await _svc.SyncSliceAsync("alpha", Slice, dryRun: false)).Answer);
+        Assert.Equal(sliceTip, Rev(Slice));
+    }
+
+    [Fact]
+    public async Task The_stewards_reading_of_a_slice_ticket_is_against_the_slice()
+    {
+        await LayOutAsync();
+        var change = await _svc.BranchChangeAsync("alpha", "t-13");
+        Assert.Equal((Slice, 0, 1), (change!.BaseRef, change.Behind, change.Ahead));
+        Assert.Equal(new[] { "mine.txt" }, change.Files);
+        var diff = await _svc.BranchDiffAsync("alpha", "t-13", null, 10_000);
+        Assert.DoesNotContain("cards.txt", diff!.Value.Text);
+    }
+
+    [Fact]
+    public async Task A_slice_takes_the_base_by_a_merge_with_itself_first_and_never_a_rebase()
+    {
+        await LayOutAsync();
+        var sliceTip = Rev(Slice);
+        var baseTip = Rev("main");
+
+        var dry = await _svc.SyncSliceAsync("alpha", Slice, dryRun: true);
+        Assert.Equal(("proposed", 1), (dry.Answer, dry.Commits));
+        Assert.Equal(sliceTip, Rev(Slice));
+
+        var sync = await _svc.SyncSliceAsync("alpha", Slice, dryRun: false);
+        Assert.Equal("merged", sync.Answer);
+        Assert.Equal(new[] { "fix.txt" }, sync.Files);
+        Assert.Equal(new[] { sliceTip, baseTip }, Lines("rev-list", "--parents", "-n", "1", Slice).Single().Split(' ').Skip(1));
+        Assert.Equal(baseTip, Rev("main"));
+        // The slice's earlier work is still where it was: an ancestor, not rewritten.
+        Assert.Equal(0, Run(_hub, "merge-base", "--is-ancestor", sliceTip, Slice).Code);
+        Assert.Equal("up-to-date", (await _svc.SyncSliceAsync("alpha", Slice, dryRun: false)).Answer);
+    }
+
+    [Fact]
+    public async Task A_slice_that_conflicts_with_the_base_is_left_for_the_owner_when_nothing_settles_it()
+    {
+        await LayOutAsync();
+        OnBranch(Slice, "fix.txt", "S2: the slice wrote the base's file too");
+        var sliceTip = Rev(Slice);
+        var sync = await _svc.SyncSliceAsync("alpha", Slice, dryRun: false);
+        Assert.Equal("conflict", sync.Answer);
+        Assert.Contains("fix.txt", sync.Files);
+        Assert.Equal(sliceTip, Rev(Slice));
+    }
+
+    [Fact]
+    public async Task The_projects_resolver_settles_a_slice_sync_in_a_rebases_orientation()
+    {
+        await LayOutAsync();
+        OnBranch(Slice, "fix.txt", "S2: the slice wrote the base's file too");
+        var sliceTip = Rev(Slice);
+        // A resolver that keeps "ours" - which at a rebase's stop is the base it is replayed onto.
+        File.WriteAllText(Path.Combine(_root, "data", "projects", "alpha", "rebase-resolve.ps1"), """
+            $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+            foreach ($f in $in.conflicted) { git checkout --ours -- $f; git add -- $f }
+            Write-Output "[rebase-resolve] kept the base's $($in.conflicted -join ', ') (onto $($in.baseRef))"
+            exit 0
+            """);
+
+        var sync = await _svc.SyncSliceAsync("alpha", Slice, dryRun: false);
+        Assert.Equal("merged", sync.Answer);
+        Assert.Contains("resolver settled fix.txt", sync.Why);
+        Assert.Equal(sliceTip, Lines("rev-list", "--parents", "-n", "1", Slice).Single().Split(' ')[1]);
+        Assert.Equal(Lines("show", "main:fix.txt"), Lines("show", $"{Slice}:fix.txt"));
+        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("whetstone-slice-sync"));
+    }
+
     // ---- plumbing ----------------------------------------------------------------------------
 
     private async Task SeedAsync()

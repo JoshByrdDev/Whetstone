@@ -188,6 +188,11 @@ public partial class StewardService
         if (cfg.Steward.SyncFrom.Length > 0 && await _git.AheadOfBaseAsync(projectKey, cfg.Steward.SyncFrom, ct) > 0)
             return (true, $"{cfg.Steward.SyncFrom} has moved");
 
+        // An open slice that has not taken the base's latest is owed the merge that brings it up.
+        foreach (var slice in await OpenSliceBranchesAsync(cfg, ct))
+            if ((await _git.SyncSliceAsync(projectKey, slice, dryRun: true, ct)).Answer == "proposed")
+                return (true, $"{slice} is behind the base");
+
         if (s.RestingAtSha is not null)
             return await _git.BaseHeadAsync(projectKey, ct) == s.RestingAtSha
                 ? (false, "nothing has changed since a run that left nothing to do")
@@ -196,6 +201,18 @@ public partial class StewardService
         return DateTime.UtcNow - s.LastRunEndedAt.Value >= IdleInterval
             ? (true, "work was left for a later run")
             : (false, "the last run was a moment ago");
+    }
+
+    /// <summary>
+    /// The branches of this project's open slices: agreed, cut, and not released. Empty on a
+    /// project without slice branches.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> OpenSliceBranchesAsync(ProjectConfig cfg, CancellationToken ct)
+    {
+        if (!cfg.SliceBranchesOn) return Array.Empty<string>();
+        return await _db.StewardUnits.AsNoTracking()
+            .Where(u => u.ProjectKey == cfg.Name && u.Branch != null && u.ReleasedAt == null)
+            .OrderBy(u => u.Unit).Select(u => u.Branch!).ToListAsync(ct);
     }
 
     /// <summary>Note that a run is owed, and make sure a sleeping heartbeat hears about it.</summary>
@@ -251,6 +268,22 @@ public partial class StewardService
         if (cfg!.Steward.SyncFrom.Length > 0)
             sync = await _git.SyncFromAsync(projectKey, cfg.Steward.SyncFrom, cfg.StewardMode == StewardMode.Propose, ct);
 
+        // Every open slice takes what has landed on the base since, by a merge (docs/slice-branches.md,
+        // section 2). A conflict nothing settled is the owner's: the run is told, and asks.
+        var slices = new List<object>();
+        foreach (var slice in await OpenSliceBranchesAsync(cfg, ct))
+        {
+            var r = await _git.SyncSliceAsync(projectKey, slice, cfg.StewardMode == StewardMode.Propose, ct);
+            if (r.Answer != "up-to-date")
+                slices.Add(new
+                {
+                    branch = slice, answer = r.Answer, commits = r.Commits, files = r.Files.Count == 0 ? null : r.Files, why = r.Why,
+                    ask = r.Answer == "conflict"
+                        ? $"Ask the owner: {slice} cannot take the base's latest without a conflict in {string.Join(", ", r.Files)}, and only a person can settle it."
+                        : null,
+                });
+        }
+
         var (still, gone) = await FreshReasonsAsync(projectKey, why, ct);
         var walkthroughs = await WalkthroughsAsync(cfg, ct);
 
@@ -276,6 +309,8 @@ public partial class StewardService
                 replaces = d.Replaces.Count == 0 ? null : d.Replaces.Select(r => new { number = r.Number, why = r.Why }),
             }),
             sync,
+            // Open slices brought up to the base, or that could not be. Absent when there is none to say.
+            slices = slices.Count == 0 ? null : slices,
             // The slice's decisions in force, provisional ones coming due, rulings reading a decision
             // that no longer holds, open follow-ups and instructions.
             briefing = await BriefingAsync(cfg, ct),
