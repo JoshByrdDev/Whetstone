@@ -198,3 +198,25 @@ export const getReviewMarkdown = (ticketId: number) =>
 export const markReviewSubmitted = (ticketId: number) =>
   fetch(`/api/tickets/${ticketId}/review/submit`, { method: 'POST' })
     .then(json<{ submittedAt: string }>);
+
+// ---- Prototype screenshots (PrototypeCaptureService) ----
+export interface PrototypeCapture {
+  url: string;
+  foundIn: string;
+  linkText: string | null;
+  file: string | null;
+  imageUrl: string | null;
+  error: string | null;
+  at: string;
+  title: string | null;
+}
+export interface PrototypeCaptures {
+  enabled: boolean;
+  hosts: string[];
+  unavailable: string | null;
+  captures: PrototypeCapture[];
+}
+export const getPrototypeCaptures = (id: number) =>
+  fetch(`/api/tickets/${id}/prototype-captures`).then(json<PrototypeCaptures>);
+export const capturePrototypes = (id: number) =>
+  fetch(`/api/tickets/${id}/prototype-captures`, { method: 'POST' }).then(json<PrototypeCaptures>);

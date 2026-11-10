@@ -78,6 +78,12 @@ public class DashboardPaths
     public string PlaywrightMcpCli => Path.Combine(DataRoot, "playwright-mcp", "node_modules", "@playwright", "mcp", "cli.js");
 
     /// <summary>
+    /// The board's own page capture (<see cref="PrototypeCaptureService"/>): a script beside QA's browser
+    /// server that runs on the browser library that install already brings.
+    /// </summary>
+    public string PageCaptureScript => Path.Combine(DataRoot, "playwright-mcp", "capture-pages.mjs");
+
+    /// <summary>
     /// Every voiced walkthrough line, named by a hash of voice and spoken text - so a line two decks
     /// share, or a deck regenerated with one sentence changed, is synthesised once (gitignored).
     /// </summary>

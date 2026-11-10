@@ -21,6 +21,7 @@ import { compact } from './metrics/parts';
 import { CONTEXT_RANK, CONTEXT_TONE, contextLevel, describeContext } from './metrics/contextLevel';
 import { AgentMascot, agentAccent } from './AgentMascot';
 import { useShotLightbox } from './ShotLightbox';
+import { PrototypeCaptures } from './PrototypeCaptures';
 import { usePop } from '../hooks/usePop';
 
 const PROGRESS_LIMIT = 4;
@@ -308,6 +309,10 @@ export function TicketDetail({
                 />
               )}
             </div>
+
+            {/* What the prototype links in it look like - the board's screenshots, which are all the
+                fleet sees of a link it may not open. Nothing at all for a project that captures none. */}
+            <PrototypeCaptures key={t.id} ticketId={t.id} />
 
             {/* Labels — your filing, and the one thing on this drawer the pipeline cannot see. Sits
                 above Priority because everything below it changes how the ticket is WORKED, while

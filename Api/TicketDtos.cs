@@ -142,7 +142,8 @@ public record QaShotDto(int Order, string Caption, string ImageUrl, ImageRect? F
 /// <param name="SourceIssue">Null when the attachment hangs off this ticket's own linked issue;
 /// otherwise the ancestor issue it was inherited from, so a parent's mockup is readable without
 /// being mistaken for something attached to this ticket.</param>
-public record TicketAttachmentDto(string FileName, string LocalPath, long Bytes, string? SourceIssue = null);
+public record TicketAttachmentDto(string FileName, string LocalPath, long Bytes, string? SourceIssue = null,
+    string? CapturedFrom = null);
 
 /// <summary>
 /// What a Review ticket is reviewing. Null on every Delivery ticket, which is how a client tells

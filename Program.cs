@@ -160,6 +160,11 @@ builder.Services.AddSingleton<QaShotStore>();
 builder.Services.AddSingleton<TicketFileStore>();
 builder.Services.AddSingleton<IssueAttachmentStore>();
 builder.Services.AddSingleton<IssueSnapshotService>();
+builder.Services.AddSingleton<IPageCapturer, NodePageCapturer>();
+builder.Services.AddSingleton<PrototypeCaptureService>();
+// Off the claim's path: a claim's caller gives up after fifteen seconds, and a browser can take longer.
+builder.Services.AddSingleton<PrototypeCaptureQueue>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PrototypeCaptureQueue>());
 builder.Services.AddSingleton<IssueContextBuilder>();
 // Reads and cleans up the per-ticket git worktrees the heartbeat creates. Creation lives in the
 // heartbeat (it owns branch naming); this side only lists, prunes and removes.
@@ -344,6 +349,7 @@ app.MapEscapeEndpoints();
 // The Classroom: on-demand teaching analyses of a ticket. Read-only over the pipeline.
 app.MapAnalysisEndpoints();
 app.MapWalkthroughEndpoints();
+app.MapPrototypeCaptureEndpoints();
 app.MapUnitReportEndpoints();
 
 // The owner's filing tags. Separate routes and separate DTOs from the ticket API, so a label can
