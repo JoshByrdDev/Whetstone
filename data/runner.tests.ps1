@@ -16,7 +16,7 @@ $ErrorActionPreference = 'Continue'
 $Self = (Get-Process -Id $PID).Path
 # What runner.ps1 gets from heartbeat-common.ps1, which the lifted functions do not load.
 $PsHost = $Self
-$PsProcessFilter = "Name='powershell.exe' OR Name='pwsh.exe'"
+. (Join-Path $PSScriptRoot 'process-table.ps1')
 $runner = Join-Path $PSScriptRoot 'runner.ps1'
 
 function Write-Log { param([string]$Message) }

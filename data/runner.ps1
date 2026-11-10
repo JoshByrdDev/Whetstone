@@ -168,7 +168,7 @@ function Get-OwnCommit {
 # orchestrator's Find-OrphanAgents uses, plus the -RunId the runner stamped on them.
 function Find-SurvivingRuns {
     $found = @{}
-    $procs = @(Get-CimInstance Win32_Process -Filter $PsProcessFilter -ErrorAction SilentlyContinue |
+    $procs = @(Get-ProcessTable -Shells |
         Where-Object {
             # This checkout's worker.ps1 only: the machine may also run a board of its own, whose
             # workers are its business and not this runner's. See Test-RunsScript.
@@ -193,7 +193,7 @@ function Stop-Run {
     $target = if ($Run.Process) { $Run.Process.Id } else { $Run.Pid }
     if (-not $target) { return }
     Write-Log "  Killing run $($Run.RunId) (ticket #$($Run.TicketId), pid $target): $Why"
-    & taskkill /PID $target /T /F *> $null
+    Stop-ProcessTree -Id $target
 }
 
 function Start-Run {
@@ -396,7 +396,7 @@ function Remove-OldBackups {
 function Test-SupervisorAlive {
     param([int]$SupervisorPid)
     if ($SupervisorPid -le 0) { return $false }
-    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$SupervisorPid" -ErrorAction SilentlyContinue
+    $p = Get-ProcessTable -Id $SupervisorPid
     if (-not $p) { return $false }
     return (Test-RunsScript -CommandLine $p.CommandLine -Script (Join-Path $DataRoot 'runner.ps1'))
 }

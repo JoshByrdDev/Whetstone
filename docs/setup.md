@@ -4,7 +4,13 @@ Read this once, top to bottom, before the first run. It is written for a person 
 install: every step says how to check it worked, because several of the things below fail
 **silently** when they are missing.
 
-Whetstone runs on Windows only.
+Whetstone runs on Windows. macOS is being brought up: the scripts find and stop their processes
+on either, and run a project's setup commands, stack commands and merge checks in that machine's
+shell (cmd on Windows, sh on a Mac), so a project worked on a Mac has sh commands in its
+`project.json`. What is not there yet on a Mac: the Claude login (macOS keeps it in the Keychain,
+which the usage meter and the account switch do not read), and starting and restarting the board
+(`Start-Whetstone.bat`, the restart menu). A Mac checkout lives at a path without spaces, because
+`ps` prints a command line unquoted and the heartbeat finds its own workers by theirs.
 
 Once it is running, **System → Setup check** checks most of this list for you: the agent CLIs your
 roles use, git and its identity in each project's repo, Node and npx, QA's browser server, the narrator, and why the

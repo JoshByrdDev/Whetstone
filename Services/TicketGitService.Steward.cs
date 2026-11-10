@@ -540,7 +540,11 @@ public partial class TicketGitService
     public async Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout,
         IReadOnlyDictionary<string, string>? env = null, CancellationToken ct = default)
     {
-        var r = await RunAsync("cmd.exe", dir, timeout, env, ct, "/d", "/c", command);
+        // The machine's own shell, as a project's stack commands are run (ProjectStackService):
+        // a project's checks are written for the machine it is worked on.
+        var r = OperatingSystem.IsWindows()
+            ? await RunAsync("cmd.exe", dir, timeout, env, ct, "/d", "/c", command)
+            : await RunAsync("/bin/sh", dir, timeout, env, ct, "-c", command);
         var lines = $"{r.Stdout}\n{r.Stderr}".Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Trim().Length > 0).ToList();
         return new CheckRun(r.Ok, r.ExitCode == -1 && r.Stderr.Contains("did not finish"),
             string.Join("\n", lines.Skip(Math.Max(0, lines.Count - 40))),

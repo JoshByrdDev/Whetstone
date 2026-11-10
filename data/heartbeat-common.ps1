@@ -171,9 +171,8 @@ function Get-PsHost {
 }
 $PsHost = Get-PsHost
 
-# The fleet's own processes, looked for by name: either PowerShell, because a heartbeat started on
-# one may find workers a previous one started on the other.
-$PsProcessFilter = "Name='powershell.exe' OR Name='pwsh.exe'"
+# The machine's processes, on any OS: Get-ProcessTable and Stop-ProcessTree.
+. (Join-Path $PSScriptRoot 'process-table.ps1')
 
 # Which Claude login a run spends: the config directory of the account Settings has switched to, or
 # $null for the CLI's own. The dashboard reads the same two keys the same way (ClaudeAccounts.cs),
@@ -198,7 +197,7 @@ function Get-ClaudeProfilePath {
     param([string]$ConfigDir)
     if ($ConfigDir) { return [IO.Path]::Combine($ConfigDir, '.claude.json') }
     if ($env:CLAUDE_CONFIG_DIR) { return [IO.Path]::Combine($env:CLAUDE_CONFIG_DIR, '.claude.json') }
-    return [IO.Path]::Combine($env:USERPROFILE, '.claude.json')
+    return [IO.Path]::Combine($(if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }), '.claude.json')
 }
 
 # Where a login's credentials are: the same folder as its profile, except for the CLI's own login,
@@ -207,7 +206,7 @@ function Get-ClaudeCredentialsPath {
     param([string]$ConfigDir)
     if ($ConfigDir) { return [IO.Path]::Combine($ConfigDir, '.credentials.json') }
     if ($env:CLAUDE_CONFIG_DIR) { return [IO.Path]::Combine($env:CLAUDE_CONFIG_DIR, '.credentials.json') }
-    return [IO.Path]::Combine($env:USERPROFILE, '.claude', '.credentials.json')
+    return [IO.Path]::Combine($(if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }), '.claude', '.credentials.json')
 }
 
 # Who a profile file says its login is, as @{ uuid; email }, or $null. Cached by the file's time:
@@ -543,8 +542,8 @@ function Stop-DescendantAgent {
     param([int]$RootPid, [string[]]$Pattern)
     if (-not $Pattern) { $Pattern = $script:AgentProcessPattern }
     if (-not $Pattern) { $Pattern = @('claude*') }
-    try { $procs = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop }
-    catch { return }
+    $procs = @(Get-ProcessTable)
+    if (-not $procs) { return }
     $childrenOf = @{}
     foreach ($p in $procs) {
         $k = [int]$p.ParentProcessId
@@ -593,7 +592,9 @@ function Start-AgentWatchdog {
     if (-not $Pattern) { $Pattern = @('claude*') }
     Set-Content -Path $ActivityFile -Value '' -Encoding ASCII
     Start-Job -ScriptBlock {
-        param($timeoutSec, $stallSec, $rootPid, $patterns, $activity)
+        param($timeoutSec, $stallSec, $rootPid, $patterns, $activity, $tableScript)
+        # A job is a process of its own, which has to load the process table for itself.
+        . $tableScript
         $clock = [System.Diagnostics.Stopwatch]::StartNew()
         $verdict = $null
         while (-not $verdict) {
@@ -606,7 +607,8 @@ function Start-AgentWatchdog {
             }
         }
         Set-Content -Path "$activity.verdict" -Value "$verdict $([math]::Round($quiet, 1))" -Encoding ASCII
-        try { $procs = Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name -ErrorAction Stop } catch { return }
+        $procs = @(Get-ProcessTable)
+        if (-not $procs) { return }
         $childrenOf = @{}
         foreach ($p in $procs) { $k = [int]$p.ParentProcessId; if (-not $childrenOf.ContainsKey($k)) { $childrenOf[$k] = @() }; $childrenOf[$k] += $p }
         # Walk from the root; once a process matches the pattern, it and everything under it goes.
@@ -624,7 +626,7 @@ function Start-AgentWatchdog {
             }
         }
         foreach ($k in $kill) { Stop-Process -Id $k -Force -ErrorAction SilentlyContinue }
-    } -ArgumentList $TimeoutSeconds, $StallSeconds, $RootPid, $Pattern, $ActivityFile
+    } -ArgumentList $TimeoutSeconds, $StallSeconds, $RootPid, $Pattern, $ActivityFile, (Join-Path $PSScriptRoot 'process-table.ps1')
 }
 
 # Marks the agent's stream as alive. Called for every line the pipeline reads; writes at most every

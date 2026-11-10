@@ -452,6 +452,17 @@ function Initialize-Worktree {
     return $null
 }
 
+# The shell a setup command runs in: cmd on Windows (/d skips AutoRun), sh everywhere else. A
+# project's setup commands are written for its machine's shell, so a project worked on a Mac has
+# sh commands in its project.json. The parentheses and 2>&1 mean the same in both.
+function Get-SetupShell {
+    # Asked here rather than read from process-table.ps1, which a test lifting this may not load.
+    param([string]$Script, [bool]$Windows = (($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows))
+    if ($Windows) { return @{ Exe = 'cmd.exe'; Args = "/d /s /c `"$Script`""; Name = 'cmd' } }
+    # An array, which 7 quotes as one argument; a single string would be split again.
+    return @{ Exe = '/bin/sh'; Args = @('-c', $Script); Name = 'sh' }
+}
+
 # Run one worktree setup command, for at most $TimeoutMinutes. Returns @{ code; timedOut; output }.
 #
 # Its own process, not a pipeline in this one, for two reasons. A command still running at the limit
@@ -469,8 +480,9 @@ function Invoke-SetupCommand {
     $output = New-Object System.Collections.Generic.List[string]
     $reader = $null
     try {
-        # /d skips AutoRun; the parentheses take the 2>&1 to every command in "a && b".
-        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/d /s /c `"( $Command ) 2>&1`"" -WorkingDirectory $WorkDir `
+        # The parentheses take the 2>&1 to every command in "a && b".
+        $shell = Get-SetupShell -Script "( $Command ) 2>&1"
+        $p = Start-Process -FilePath $shell.Exe -ArgumentList $shell.Args -WorkingDirectory $WorkDir `
             -RedirectStandardOutput $outFile -RedirectStandardInput $inFile -NoNewWindow -PassThru
         try { $null = $p.Handle } catch { }
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
@@ -487,7 +499,7 @@ function Invoke-SetupCommand {
             if ((Get-Date) -ge $deadline) {
                 $timedOut = $true
                 Write-Log "      (still running after $TimeoutMinutes min - stopping it and everything it started)"
-                & taskkill /PID $p.Id /T /F *> $null
+                Stop-ProcessTree -Id $p.Id
                 $null = $p.WaitForExit(15000)
                 if ($reader) { while ($null -ne ($line = $reader.ReadLine())) { [void]$output.Add($line) } }
                 break
@@ -557,15 +569,16 @@ function Start-BackgroundSetup {
 
     $base = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-setup-" + [guid]::NewGuid().ToString('N'))
     [IO.File]::WriteAllText("$base.in", '')
-    # One cmd running each command in turn and stopping at the first that fails, as the foreground
-    # loop does. /d skips AutoRun; each command's 2>&1 is inside its own parentheses.
+    # One shell running each command in turn and stopping at the first that fails, as the foreground
+    # loop does. Each command's 2>&1 is inside its own parentheses.
     $chain = ($commands | ForEach-Object { "( $_ ) 2>&1" }) -join ' && '
     $gitUsrBin = Get-GitUsrBin
     $savedPath = $env:PATH
     try {
         Set-Content -Path $marker -Value "starting: $($commands -join ' && ')" -Encoding ascii
         if ($gitUsrBin -and ($env:PATH -split ';') -notcontains $gitUsrBin) { $env:PATH = "$env:PATH;$gitUsrBin" }
-        $p = Start-Process -FilePath 'cmd.exe' -ArgumentList "/d /s /c `"$chain`"" -WorkingDirectory $Path `
+        $shell = Get-SetupShell -Script $chain
+        $p = Start-Process -FilePath $shell.Exe -ArgumentList $shell.Args -WorkingDirectory $Path `
             -RedirectStandardOutput "$base.out" -RedirectStandardInput "$base.in" -NoNewWindow -PassThru
         try { $null = $p.Handle } catch { }
         Set-Content -Path $marker -Value "background pid=$($p.Id): $($commands -join ' && ')" -Encoding ascii
@@ -595,7 +608,7 @@ function Wait-BackgroundSetup {
     $tookSec = [math]::Round(((Get-Date) - $Job.started).TotalSeconds)
     try {
         if (-not $done) {
-            & taskkill /PID $p.Id /T /F *> $null
+            Stop-ProcessTree -Id $p.Id
             $null = $p.WaitForExit(15000)
             Set-Content -Path $Job.marker -Value ($Job.commands -join ' && ') -Encoding ascii
             Write-Log "  Background setup still running after $TimeoutMinutes min - stopped it; the next phase sets the worktree up again."
@@ -626,9 +639,9 @@ function Wait-OrphanSetup {
     $m = [regex]::Match("$(Get-Content $Marker -Raw -ErrorAction SilentlyContinue)", 'background pid=(\d+)')
     if (-not $m.Success) { return }
     $p = Get-Process -Id ([int]$m.Groups[1].Value) -ErrorAction SilentlyContinue
-    if (-not $p -or $p.ProcessName -ne 'cmd') { return }
+    if (-not $p -or $p.ProcessName -notin 'cmd', 'sh') { return }
     Write-Log "  A background setup from an earlier run is still going (pid $($p.Id)) - waiting for it before setting up again"
-    if (-not $p.WaitForExit([int]($TimeoutMinutes * 60000))) { & taskkill /PID $p.Id /T /F *> $null }
+    if (-not $p.WaitForExit([int]($TimeoutMinutes * 60000))) { Stop-ProcessTree -Id $p.Id }
 }
 
 # The name of the branch a ticket owns: the one it already has, else one from its linked issue, else
@@ -2365,9 +2378,11 @@ $requiredServers = @('tickets')
 if ($repoDir -and (Get-Command auggie -ErrorAction SilentlyContinue)) {
     $mcpServers.auggie = @{
         type    = "stdio"
-        command = "cmd"
-        args    = @("/c", "auggie", "--mcp", "-w", $workDir, "--wait-for-indexing")
+        command = "auggie"
+        args    = @("--mcp", "-w", $workDir, "--wait-for-indexing")
     }
+    # An npm-installed CLI is a .cmd shim on Windows, which only cmd can start.
+    if ($OnWindows) { $mcpServers.auggie.args = @("/c", "auggie") + $mcpServers.auggie.args; $mcpServers.auggie.command = "cmd" }
     Write-Log "  Augment codebase-retrieval enabled ($workDir)"
 }
 # QA needs a real browser. Without it the qa-test skill quietly degrades to reading source code,
@@ -2413,8 +2428,8 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
         Write-Log "  Playwright not installed in data/playwright-mcp - falling back to npx, which can be slow to start"
         $mcpServers.playwright = @{
             type    = "stdio"
-            command = "cmd"
-            args    = @("/c", "npx", "--yes", "@playwright/mcp@latest") + $pwArgs
+            command = $(if ($OnWindows) { "cmd" } else { "npx" })
+            args    = $(if ($OnWindows) { @("/c", "npx") } else { @() }) + @("--yes", "@playwright/mcp@latest") + $pwArgs
         }
     }
     # Required, not optional: Part B of qa-test is browser work and the skill blocks the ticket
