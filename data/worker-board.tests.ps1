@@ -141,6 +141,16 @@ try {
     $r = Sync-BoardRefs -RepoDir $nr.clone -BaseBranch main
     Check "no 'board' remote: refused" $r.ok $false
 
+    # A detached worktree git still lists after its folder went (a killed run's): the base lookup
+    # asks it for a stopped rebase, and that used to throw the whole sync away.
+    $gone = New-Pair 'sync-prunable'
+    $goneWt = Join-Path $gone.cloneWt 'gone'
+    git -C $gone.clone worktree add --quiet --detach $goneWt *> $null
+    Remove-Item -Recurse -Force -LiteralPath $goneWt
+    $r = Sync-BoardRefs -RepoDir $gone.clone -BaseBranch main
+    Check 'a prunable detached worktree in the clone: synced' ($null -ne $r -and $r.ok) $true
+    Check '... and the base mirrored' (Get-Sha $gone.clone 'refs/heads/main') (Get-Sha $gone.board 'refs/heads/main')
+
     # ---- Get-BoardBranch ------------------------------------------------------
     Write-Host "== Get-BoardBranch"
     $g = New-Pair 'get'

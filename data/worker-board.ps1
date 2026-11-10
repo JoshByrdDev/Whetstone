@@ -71,10 +71,16 @@ function Get-GitDirPath {
 }
 
 # The branch a stopped rebase in this worktree is rewriting, or ''.
+# A worktree git still lists but whose folder is gone (a killed run's, or one another run is still
+# making) has no git dir to ask, and Join-Path on '' throws: inside Sync-BoardRefs that threw away
+# the whole sync, so every run on the clone gave its ticket back with an empty reason until the
+# attempt cap blocked them all. Such a worktree is rewriting nothing.
 function Get-RebasingBranch {
     param([string]$Dir)
     foreach ($state in 'rebase-merge', 'rebase-apply') {
-        $file = Join-Path (Get-GitDirPath -Dir $Dir -Name $state) 'head-name'
+        $gitPath = Get-GitDirPath -Dir $Dir -Name $state
+        if (-not $gitPath) { continue }
+        $file = Join-Path $gitPath 'head-name'
         if (Test-Path -LiteralPath $file) {
             return ("$(Get-Content -LiteralPath $file -TotalCount 1)".Trim() -replace '^refs/heads/', '')
         }
@@ -163,7 +169,9 @@ function Undo-StoppedGitOperation {
     if ($op.branch -and ($op.kind -eq 'rebase' -or $op.kind -eq 'am')) {
         $orig = ''
         foreach ($state in 'rebase-merge', 'rebase-apply') {
-            $file = Join-Path (Get-GitDirPath -Dir $Dir -Name $state) 'orig-head'
+            $gitPath = Get-GitDirPath -Dir $Dir -Name $state
+            if (-not $gitPath) { continue }
+            $file = Join-Path $gitPath 'orig-head'
             if (Test-Path -LiteralPath $file) { $orig = "$(Get-Content -LiteralPath $file -TotalCount 1)".Trim(); break }
         }
         $now = Get-RefSha -Dir $Dir -Ref "refs/heads/$($op.branch)"

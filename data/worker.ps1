@@ -2145,9 +2145,13 @@ if ($null -eq $Claim.project.mergeInsteadOfPr -and $Claim.project.dataDir) {
 # A run that cannot start, said once: a comment, a cycle row, the claim given back. -Block when it
 # needs a person; otherwise the ticket is simply left for the next claim, on whichever machine.
 function Stop-CycleEarly {
-    param([string]$Reason, [string]$Comment, [switch]$Block)
+    # -Refund: nothing was attempted and the cause is the machine, not the ticket, so the attempt is
+    # given back. Without it a give-back still counts towards the attempt cap, and a worker host
+    # whose clone is broken blocks every ticket it is sent within three passes.
+    param([string]$Reason, [string]$Comment, [switch]$Block, [switch]$Refund)
     Write-Log "  $Reason - $(if ($Block) { 'blocking' } else { 'giving back' }) ticket #$ticketId."
     if ($Block) { Block-Ticket -TicketId $ticketId -Reason $Reason }
+    elseif ($Refund) { Send-AttemptRefund -TicketId $ticketId -Reason $Reason }
     Send-TicketComment -TicketId $ticketId -Body $Comment
     Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error $Reason
     # Still a cycle: it consumed wall clock and produced nothing. A failure that leaves no row
@@ -2197,14 +2201,16 @@ if ($onHost -and $repoDir) {
     # host's origin/* has it, and the mirror is how this clone has that at all.
     $sync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase
     if (-not $sync.ok) {
-        Stop-CycleEarly -Reason "Could not sync with the board host ($runHost): $($sync.reason)" `
-            -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $($sync.reason). No work was attempted; the ticket goes back to the queue."
+        # Nothing back at all means it threw; its error is in this host's heartbeat log.
+        $why = if ("$($sync.reason)") { $sync.reason } else { "the sync stopped on an error (see the heartbeat log on $runHost)" }
+        Stop-CycleEarly -Refund -Reason "Could not sync with the board host ($runHost): $why" `
+            -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $why. No work was attempted; the ticket goes back to the queue, and the attempt is not counted."
     }
     $recordedBranch = if ($readsOnly) { "" } else { "$($Claim.ticket.branch)".Trim() }
     if ($recordedBranch) {
         $got = Get-BoardBranch -RepoDir $repoDir -Branch $recordedBranch
         if (-not $got.ok) {
-            Stop-CycleEarly -Reason "Could not fetch '$recordedBranch' from the board host ($runHost): $($got.reason)" `
+            Stop-CycleEarly -Refund -Reason "Could not fetch '$recordedBranch' from the board host ($runHost): $($got.reason)" `
                 -Comment "This run was on worker host ``$runHost`` and could not fetch this ticket's branch from the board host: $($got.reason). No work was attempted; the ticket goes back to the queue."
         }
         $boardStartSha = $got.sha
