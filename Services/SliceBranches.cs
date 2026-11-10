@@ -56,8 +56,21 @@ public static class SliceBranches
     {
         if (!cfg.SliceBranchesOn || unit is null || row is null) return null;
         if (row.Unit != unit) return null;
-        if (row.ReleasedAt is not null) return null;
+        if (row.ReleasedAt is not null || row.AbandonedAt is not null) return null;
         return string.IsNullOrWhiteSpace(row.Branch) ? null : row.Branch.Trim();
+    }
+
+    /// <summary>
+    /// The slices a spec says it is built on, by number, from its header line
+    /// (<c>Built on: slice 11</c>; docs/slice-branches.md, section 3). Every number on that line,
+    /// so a spec that names two is seen to name two. Empty when it names none.
+    /// </summary>
+    public static IReadOnlyList<int> ParentsNamed(string specText)
+    {
+        var m = Regex.Match(specText ?? "", @"^[>\s*_]*Built on[*_]*\s*:?[*_]*\s*(?<rest>.*)$",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline, TimeSpan.FromSeconds(1));
+        if (!m.Success) return Array.Empty<int>();
+        return Regex.Matches(m.Groups["rest"].Value, @"\d+").Select(x => int.Parse(x.Value)).Distinct().ToList();
     }
 
     /// <summary>The slice row a ticket belongs to, or null when it belongs to none.</summary>

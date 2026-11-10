@@ -80,13 +80,13 @@ public partial class StewardServiceTests
 /// </summary>
 public partial class StewardServiceTests
 {
-    private async Task OpenSlice(int unit, string branch, bool released = false)
+    private async Task OpenSlice(int unit, string branch, bool released = false, int? parent = null)
     {
         await using var ctx = NewCtx();
         ctx.StewardUnits.Add(new Whetstone.Models.StewardUnit
         {
             ProjectKey = "alpha", Plan = "", Unit = unit, Branch = branch, AgreedAt = DateTime.UtcNow,
-            ReleasedAt = released ? DateTime.UtcNow : null,
+            ReleasedAt = released ? DateTime.UtcNow : null, ParentUnit = parent,
         });
         await ctx.SaveChangesAsync();
     }
@@ -294,5 +294,209 @@ public partial class StewardServiceTests
         var cfg = new ProjectRegistry(new DashboardPaths(_dataRoot)).GetProjectConfig("alpha");
         Assert.True(cfg.Steward.IsNeverMerged("docs/conventions.md"));
         Assert.False(cfg.Steward.IsNeverMerged("docs/other.md"));
+    }
+}
+
+/// <summary>
+/// docs/slice-branches.md, piece 4: a slice built on one other open slice - the parent its spec
+/// names, cut from it and kept up with it, released after it, re-parented onto the base when it is
+/// released, and put to the owner when it is abandoned.
+/// </summary>
+public partial class StewardServiceTests
+{
+    private const string BuiltOnFirst = "> **Built on:** slice 1\n> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n";
+    private const string AgreedSecond = "> **Status: agreed 2026-01-02.**\n\n- **A1.** One.\n";
+
+    private async Task<Whetstone.Models.StewardUnit> Row(int unit)
+    {
+        await using var ctx = NewCtx();
+        return ctx.StewardUnits.Single(u => u.Unit == unit);
+    }
+
+    [Fact]
+    public async Task A_slice_built_on_an_open_one_is_cut_from_it_and_remembers_it()
+    {
+        SwitchToSliceBranches();
+        await OpenSlice(1, "slice/01-first");
+        _git.Second = BuiltOnFirst;
+        var reply = await In(s => s.OwnerAgreesUnitAsync("alpha", 2));
+        Assert.Equal("agreed", reply.Answer);
+        Assert.Equal(new[] { ("slice/02-second", (string?)"slice/01-first") }, _git.CutFrom);
+        Assert.Equal(1, (await Row(2)).ParentUnit);
+        Assert.Contains("\"builtOn\":1", System.Text.Json.JsonSerializer.Serialize(reply.Data));
+    }
+
+    [Fact]
+    public async Task A_parent_that_is_not_open_is_refused_before_anything_is_committed()
+    {
+        SwitchToSliceBranches();
+        _git.Second = BuiltOnFirst;
+        // Unit 1's spec is agreed, but it was never cut: there is no branch to build on.
+        Assert.Equal("parent-not-open", (await In(s => s.OwnerAgreesUnitAsync("alpha", 2))).Answer);
+        Assert.Empty(_git.Committed);
+        Assert.Empty(_git.Cut);
+        // The page says so before the owner presses anything.
+        Assert.Contains("which is not open yet", System.Text.Json.JsonSerializer.Serialize((await In(s => s.PlanViewAsync("alpha"))).Data));
+    }
+
+    [Fact]
+    public async Task Two_unreleased_parents_are_refused_and_a_released_one_is_no_parent_at_all()
+    {
+        SwitchToSliceBranches();
+        _git.More[3] = ("docs/units/03-third.md", "> Built on: slices 1 and 2\n> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n");
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second");
+        var two = await In(s => s.OwnerAgreesUnitAsync("alpha", 3));
+        Assert.Equal("two-parents", two.Answer);
+        Assert.Contains("1 and 2", two.Why);
+
+        await using (var ctx = NewCtx())
+        {
+            ctx.StewardUnits.Single(u => u.Unit == 1).ReleasedAt = DateTime.UtcNow;
+            await ctx.SaveChangesAsync();
+        }
+        Assert.Equal("agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 3))).Answer);
+        Assert.Equal(new[] { ("slice/03-third", (string?)"slice/02-second") }, _git.CutFrom);
+        Assert.Equal(2, (await Row(3)).ParentUnit);
+    }
+
+    [Fact]
+    public async Task A_slice_is_not_built_on_one_that_is_itself_built_on_another()
+    {
+        SwitchToSliceBranches();
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second", parent: 1);
+        _git.More[3] = ("docs/units/03-third.md", "Built on: slice 2\n\n> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n");
+        var chain = await In(s => s.OwnerAgreesUnitAsync("alpha", 3));
+        Assert.Equal("chain", chain.Answer);
+        Assert.Contains("wait until slice 1 is released", chain.Why);
+        Assert.Empty(_git.Cut);
+    }
+
+    [Fact]
+    public async Task A_run_brings_a_parent_up_to_the_base_before_its_child_takes_the_parent()
+    {
+        SwitchToSliceBranches();
+        await OpenSlice(2, "slice/02-second", parent: 1);
+        await OpenSlice(1, "slice/01-first");
+        await Begin();
+        Assert.Equal(new[] { ("slice/01-first", (string?)null), ("slice/02-second", "slice/01-first") }, _git.SyncedFrom);
+    }
+
+    [Fact]
+    public async Task A_child_is_released_after_its_parent_and_the_parents_release_hands_it_the_base()
+    {
+        await ReleasableSlice();
+        _git.Second = AgreedSecond;
+        await OpenSlice(2, "slice/02-second", parent: 1);
+        await Built(2, "A1");
+        await Begin();
+        await In(s => s.SetOutcomeAsync("alpha", 2, "A1", "Done", false, null));
+        await In(s => s.EndAsync("alpha", "x", false));
+
+        Assert.Equal("parent-unreleased", (await In(s => s.OwnerReleasesUnitAsync("alpha", 2, true))).Answer);
+        Assert.Empty(_git.Released);
+
+        _git.SyncedFrom.Clear();
+        var reply = await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true));
+        Assert.Equal("released", reply.Answer);
+        Assert.Contains("\"reparented\":[{\"unit\":2", System.Text.Json.JsonSerializer.Serialize(reply.Data));
+        Assert.Null((await Row(2)).ParentUnit);
+        Assert.Contains(("slice/02-second", (string?)null), _git.SyncedFrom);
+
+        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 2, true))).Answer);
+    }
+
+    [Fact]
+    public async Task Abandoning_a_parent_asks_the_owner_about_its_child_before_anything_moves()
+    {
+        SwitchToSliceBranches();
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second", parent: 1);
+
+        var asked = await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, null));
+        Assert.Equal("children", asked.Answer);
+        Assert.Contains("Slice 2 is built on slice 1", asked.Why);
+        Assert.Empty(_git.Committed);
+        Assert.Null((await Row(1)).AbandonedAt);
+
+        await In(s => s.PlanViewAsync("alpha"));   // records where each agreed slice's spec is
+        Assert.Equal("abandoned", (await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, "recut"))).Answer);
+        Assert.Equal(new[] { "slice/02-second" }, _git.Recut);
+        var (file, text) = _git.Committed.Single();
+        // Its spec says abandoned now, which is not a slice gone missing.
+        _git.First = text;
+        var view = System.Text.Json.JsonSerializer.Serialize((await In(s => s.PlanViewAsync("alpha"))).Data);
+        Assert.DoesNotContain("no longer says so", view);
+        Assert.Contains("\"stage\":\"abandoned\"", view);
+        Assert.Equal("docs/units/01-first.md", file);
+        Assert.Contains($"**Status: abandoned {DateTime.Now:yyyy-MM-dd}.**", text);
+        Assert.NotNull((await Row(1)).AbandonedAt);
+        Assert.Null((await Row(2)).ParentUnit);
+        Assert.Null((await Row(2)).AbandonedAt);
+
+        // Abandoned: no longer synced, and its tickets are of no open slice.
+        await Begin();
+        Assert.DoesNotContain(_git.Synced, x => x.Slice == "slice/01-first");
+        Assert.Null(SliceBranches.BaseFor(new ProjectRegistry(new DashboardPaths(_dataRoot)).GetProjectConfig("alpha"), 1, await Row(1)));
+    }
+
+    [Fact]
+    public async Task A_child_with_work_of_its_own_is_not_recut_and_nothing_is_abandoned()
+    {
+        SwitchToSliceBranches();
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second", parent: 1);
+        _git.RecutRefusals["slice/02-second"] = "slice/02-second has 2 commits of its own";
+        var reply = await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, "recut"));
+        Assert.Equal("cannot-recut", reply.Answer);
+        Assert.Contains("Nothing was abandoned", reply.Why);
+        Assert.Empty(_git.Committed);
+        Assert.Equal(1, (await Row(2)).ParentUnit);
+    }
+
+    [Fact]
+    public async Task Abandoning_a_parent_and_its_child_marks_both_and_keeps_their_branches()
+    {
+        SwitchToSliceBranches();
+        _git.Second = AgreedSecond;
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second", parent: 1);
+        var reply = await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, "abandon"));
+        Assert.Equal("abandoned", reply.Answer);
+        Assert.Equal(new[] { "docs/units/01-first.md", "docs/units/02-second.md" }, _git.Committed.Select(c => c.Path));
+        Assert.Contains("slice/02-second", System.Text.Json.JsonSerializer.Serialize(reply.Data));
+        Assert.NotNull((await Row(2)).AbandonedAt);
+        Assert.Equal("slice/02-second", (await Row(2)).Branch);
+        Assert.Empty(_git.Recut);
+    }
+
+    [Fact]
+    public async Task A_slice_with_a_ticket_open_is_not_abandoned_and_nor_is_one_without_the_switch()
+    {
+        await OpenSlice(1, "slice/01-first");
+        Assert.Equal("no-slice-branches", (await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, null))).Answer);
+        SwitchToSliceBranches();
+        await Built(1, "A1", phase: Whetstone.Models.TicketPhase.NeedsImplementation);
+        Assert.Equal("tickets-open", (await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, null))).Answer);
+        Assert.Empty(_git.Committed);
+    }
+
+    [Theory]
+    [InlineData("# Cards\n\n> **Built on:** slice 11\n", new[] { 11 })]
+    [InlineData("Built on: slices 3 and 7\n", new[] { 3, 7 })]
+    [InlineData("> _Built on_: slice 4, slice 5", new[] { 4, 5 })]
+    [InlineData("# Cards\n\nNothing here is built on anything.\n", new int[0])]
+    public void A_spec_names_its_parents_on_its_built_on_line(string spec, int[] want) =>
+        Assert.Equal(want, SliceBranches.ParentsNamed(spec));
+
+    [Fact]
+    public void An_abandoned_status_line_reads_as_neither_agreed_nor_a_draft()
+    {
+        var p = new StewardPlan("docs/units", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed,
+            StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
+        var marked = TicketGitService.MarkAbandoned(p, "# One\n\n> **Status: agreed 2026-01-01.** Kept.\n\n- **A1.** One.\n", new DateTime(2026, 3, 4));
+        Assert.Equal("# One\n\n> **Status: abandoned 2026-03-04.** Kept.\n\n- **A1.** One.\n", marked);
+        Assert.Null(TicketGitService.MarkAbandoned(p, "> **Status: draft.**\n", DateTime.Now));
     }
 }

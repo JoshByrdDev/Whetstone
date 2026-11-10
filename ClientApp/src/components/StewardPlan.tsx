@@ -11,7 +11,7 @@ import {
 } from './stewardSlice';
 import type { Standing } from './stewardSlice';
 import { useNarrow } from '../hooks/useNarrow';
-import { agreeStewardUnit, setStewardUnitReleased } from '../api/steward';
+import { abandonStewardUnit, agreeStewardUnit, setStewardUnitReleased } from '../api/steward';
 import type {
   StewardMode, StewardPlanOutcome, StewardPlanUnitView, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus, UnitStage,
 } from '../api/steward';
@@ -44,6 +44,7 @@ const STAGE: Record<UnitStage, { word: string; tier: keyof typeof TIER }> = {
   building: { word: 'building', tier: 'active' },
   built: { word: 'built - yours to release', tier: 'gate' },
   released: { word: 'released', tier: 'done' },
+  abandoned: { word: 'abandoned', tier: 'backlog' },
 };
 
 /** The way a unit goes, for the strip that shows how far along it is. */
@@ -190,7 +191,7 @@ const LANES: { title: string; stages: UnitStage[]; c: string; empty: string }[] 
   { title: 'Agreed', stages: ['agreed'], c: TIER.queue.c, empty: 'Nothing agreed and waiting.' },
   { title: 'Building', stages: ['building'], c: TIER.active.c, empty: 'Nothing being built.' },
   { title: 'To release', stages: ['built'], c: TIER.gate.c, empty: 'Nothing to release.' },
-  { title: 'Released', stages: ['released'], c: TIER.done.c, empty: 'Nothing released yet.' },
+  { title: 'Released', stages: ['released', 'abandoned'], c: TIER.done.c, empty: 'Nothing released yet.' },
 ];
 
 function Lanes({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
@@ -241,6 +242,7 @@ function SliceCard({ u, on, onClick }: { u: Unit; on: boolean; onClick: () => vo
     : u.stage === 'draft' ? `draft${(u.openDecisions?.length ?? 0) > 0 ? ` - ${u.openDecisions!.length} to settle` : ''}`
     : u.stage === 'built' ? (u.release && u.release.outstanding > 0 ? `${u.release.outstanding} to tick off first` : 'ready to release')
     : u.stage === 'released' ? `released${u.releasedAt ? ` ${u.releasedAt.slice(0, 10)}` : ''}`
+    : u.stage === 'abandoned' ? `abandoned${u.abandonedAt ? ` ${u.abandonedAt.slice(0, 10)}` : ''}`
     : u.agreed ? `${p.done} of ${p.outcomes} done` : s.word;
   return (
     <button
@@ -348,6 +350,14 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
           onReport={show === 'report' ? undefined : () => pick('report')} />}
         {working && unit.agreed && (unit.openDecisions?.length ?? 0) > 0 && (
           <StillOpen project={project} unit={unit} onChanged={onChanged} />
+        )}
+        {unit.builtOn != null && unit.sliceBranch && (
+          <div style={{ marginTop: 10, font: `400 12px ${BODY}`, color: 'var(--w-t400)' }}>
+            Built on slice {unit.builtOn}: its branch keeps up with slice {unit.builtOn}'s, and it is released after it.
+          </div>
+        )}
+        {working && unit.sliceBranch && unit.stage !== 'released' && (
+          <Abandon project={project} unit={unit} onChanged={onChanged} />
         )}
         {working && unit.agreed && unit.stage !== 'built' && unit.stage !== 'released' && (
           <Between unit={unit} standing={standing} onPick={id => { toggle(id); pick('outcomes'); }} onNow={onNow} render={render} />
@@ -631,6 +641,54 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
       {seeNotes}
     </div>
   ) : null;
+}
+
+/**
+ * Abandoning an open slice: asked twice, and when slices are built on it, the board's question
+ * about them - re-cut each from the base, or abandon each too - answered here before anything moves.
+ */
+function Abandon({ project, unit, onChanged }: { project: string; unit: StewardPlanUnitView; onChanged: () => Promise<void> }) {
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const [asked, setAsked] = useState<string | null>(null);
+  const go = async (children?: 'recut' | 'abandon') => {
+    setBusy(true); setFailed(null);
+    try {
+      const r = await abandonStewardUnit(project, unit.unit, children);
+      if (r.answer === 'children') { setAsked(r.why); return; }
+      setSure(false); setAsked(null);
+      await onChanged();
+    } catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  const kids = unit.builtOnIt ?? [];
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="flex items-center gap-2 flex-wrap">
+        {!sure && <GhostButton onClick={() => setSure(true)} title="Stop this slice unreleased; its branch is kept">Abandon this slice</GhostButton>}
+        {sure && !asked && (
+          <>
+            <span className="min-w-0" style={{ font: `400 12px ${BODY}`, color: 'var(--w-t300)' }}>
+              Its spec is marked abandoned and nothing more is filed against it. {unit.sliceBranch} is kept.
+              {kids.length > 0 && <> Slice{kids.length === 1 ? '' : 's'} {kids.join(' and ')} {kids.length === 1 ? 'is' : 'are'} built on it.</>}
+            </span>
+            <GhostButton tone="danger" disabled={busy} onClick={() => go()}>{busy ? 'Abandoning' : `Yes, abandon slice ${unit.unit}`}</GhostButton>
+            <GhostButton disabled={busy} onClick={() => setSure(false)}>Keep it</GhostButton>
+          </>
+        )}
+        {sure && asked && (
+          <>
+            <span className="min-w-0" style={{ font: `400 12px ${BODY}`, color: 'var(--w-t200)' }}>{asked}</span>
+            <GhostButton tone="go" disabled={busy} onClick={() => go('recut')}>Re-cut from the base</GhostButton>
+            <GhostButton tone="danger" disabled={busy} onClick={() => go('abandon')}>Abandon {kids.length === 1 ? 'it' : 'them'} too</GhostButton>
+            <GhostButton disabled={busy} onClick={() => { setSure(false); setAsked(null); }}>Keep all of them</GhostButton>
+          </>
+        )}
+      </div>
+      {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 6 }}>{failed}</div>}
+    </div>
+  );
 }
 
 /**

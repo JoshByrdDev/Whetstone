@@ -203,6 +203,11 @@ export interface StewardPlanUnitView {
   releasedAt?: string | null;
   /** The slice's own branch while it is open; releasing it is then the board's merge into the base. */
   sliceBranch?: string | null;
+  /** The open slice this one is built on: its branch keeps up with that one's, and it is released after it. */
+  builtOn?: number | null;
+  /** The open slices built on this one. */
+  builtOnIt?: number[];
+  abandonedAt?: string | null;
   /** Released by the board's merge: taking it back is a revert, by hand. */
   releasedByMerge?: boolean;
   /** The conventions file a release promotes decisions into, for a slice with a branch. */
@@ -262,7 +267,7 @@ export const decideStewardUnit = (project: string, unit: number,
     method: 'POST', headers: jsonHeaders, body: JSON.stringify(body),
   }).then(json<{ answer: string; why?: string | null }>);
 
-export type UnitStage = 'idea' | 'draft' | 'notAgreed' | 'agreed' | 'building' | 'built' | 'released';
+export type UnitStage = 'idea' | 'draft' | 'notAgreed' | 'agreed' | 'building' | 'built' | 'released' | 'abandoned';
 
 export interface StewardPlanName { key: string; name: string; working: boolean }
 
@@ -303,6 +308,21 @@ export const setStewardUnitReleased = (project: string, unit: number, released: 
   fetch(`/api/steward/plan/units/${unit}/released?${q(project)}`, {
     method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ released, promote }),
   }).then(json<{ answer: string }>);
+
+/**
+ * Abandon a slice unreleased. When slices are built on it, the first answer is the question:
+ * `children`, naming them; ask again with `recut` (each onto the base) or `abandon` (each too).
+ */
+export const abandonStewardUnit = (project: string, unit: number, children?: 'recut' | 'abandon') =>
+  fetch(`/api/steward/plan/units/${unit}/abandon?${q(project)}`, {
+    method: 'POST', headers: jsonHeaders, body: JSON.stringify({ children }),
+  }).then(async res => {
+    const body = await res.json().catch(() => null);
+    if (res.ok) return body as { answer: 'abandoned' };
+    if (body?.answer === 'children')
+      return body as { answer: 'children'; why: string; data: { children: { unit: number; branch?: string | null }[] } };
+    throw new Error(body?.why ?? body?.error ?? `${res.status} ${res.statusText}`);
+  });
 
 /** Start a new plan: its documents into the repo, and the project pointed at it. */
 export const startStewardPlan = (project: string,

@@ -2282,9 +2282,13 @@ public partial class StewardServiceTests : IDisposable
         public Dictionary<string, SyncFromResult> SliceSync = new();
         public List<(string Slice, bool DryRun)> Synced = new();
 
-        public Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, CancellationToken ct = default)
+        /// <summary>What each slice was synced from: its parent's branch, or null for the base.</summary>
+        public List<(string Slice, string? From)> SyncedFrom = new();
+
+        public Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, string? from = null, CancellationToken ct = default)
         {
             Synced.Add((slice, dryRun));
+            SyncedFrom.Add((slice, from));
             var r = SliceSync.TryGetValue(slice, out var set) ? set : new SyncFromResult("up-to-date", 0, Array.Empty<string>(), null);
             return Task.FromResult(dryRun && r.Answer is "merged" or "conflict" ? r with { Answer = "proposed" } : r);
         }
@@ -2307,10 +2311,24 @@ public partial class StewardServiceTests : IDisposable
             return Task.FromResult<(string?, string?)>(("release-sha", null));
         }
 
-        public Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default)
+        /// <summary>Each cut with what it was cut from: a parent's branch, or null for the base.</summary>
+        public List<(string Branch, string? From)> CutFrom = new();
+        /// <summary>Slices re-cut onto the base; a slice in <see cref="RecutRefusals"/> refuses instead.</summary>
+        public List<string> Recut = new();
+        public Dictionary<string, string> RecutRefusals = new();
+
+        public Task<(string? Sha, string? Refusal)> RecutSliceAsync(string projectKey, string slice, string parent, CancellationToken ct = default)
+        {
+            if (RecutRefusals.TryGetValue(slice, out var no)) return Task.FromResult<(string?, string?)>((null, no));
+            Recut.Add(slice);
+            return Task.FromResult<(string?, string?)>((Head, null));
+        }
+
+        public Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, string? from = null, CancellationToken ct = default)
         {
             if (CutRefusal is not null) return Task.FromResult<(string?, string?)>((null, CutRefusal));
             Cut.Add(branch);
+            CutFrom.Add((branch, from));
             return Task.FromResult<(string?, string?)>((Head, null));
         }
 

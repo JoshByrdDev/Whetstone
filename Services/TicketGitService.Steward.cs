@@ -183,9 +183,12 @@ public partial class TicketGitService
     /// branch has tickets merged into it.
     /// </para>
     /// </summary>
-    public async Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default)
+    public async Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, string? from = null,
+        CancellationToken ct = default)
     {
-        var (_, repo, baseBranch) = HubOf(projectKey);
+        var (_, repo, projectBase) = HubOf(projectKey);
+        // A slice built on another is cut from that one's tip (docs/slice-branches.md, section 3).
+        var baseBranch = string.IsNullOrWhiteSpace(from) ? projectBase : from.Trim();
         if (!IsGitRepo(repo)) return (null, $"There is no git repo at '{repo}'.");
         if (!branch.StartsWith(SliceBranches.Prefix, StringComparison.Ordinal)
             || !(await GitAsync(repo, ct, "check-ref-format", "--branch", branch)).Ok)
@@ -316,6 +319,27 @@ public partial class TicketGitService
         var marked = text[..m.Index] + line + text[(close + 2)..];
         var read = ReadUnit(plan, 0, "", marked);
         return read.Agreed && !Regex.IsMatch(marked, plan.Draft, o) ? marked : null;
+    }
+
+    /// <summary>
+    /// <paramref name="text"/> with its agreed status line rewritten to say the slice was abandoned
+    /// on <paramref name="day"/>, or null when the line cannot be found or the result would still read
+    /// as agreed or as a draft - so nothing goes on filing against it.
+    /// </summary>
+    public static string? MarkAbandoned(StewardPlan plan, string text, DateTime day)
+    {
+        const RegexOptions o = RegexOptions.IgnoreCase | RegexOptions.Multiline;
+        var m = Regex.Match(text, plan.Agreed, o);
+        if (!m.Success) return null;
+        var lineEnd = text.IndexOf('\n', m.Index);
+        if (lineEnd < 0) lineEnd = text.Length;
+        var from = m.Index + (m.Value.StartsWith("**") ? 2 : 0);
+        var close = text.IndexOf("**", Math.Min(from, text.Length), StringComparison.Ordinal);
+        if (close < 0 || close >= lineEnd) return null;
+
+        var marked = text[..m.Index] + $"**Status: abandoned {day:yyyy-MM-dd}.**" + text[(close + 2)..];
+        var read = ReadUnit(plan, 0, "", marked);
+        return !read.Agreed && !read.Draft && !read.Idea ? marked : null;
     }
 
     /// <summary>A unit's own name: its spec's first heading, or its file name when it has none.</summary>

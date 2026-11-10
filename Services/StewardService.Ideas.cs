@@ -141,7 +141,8 @@ public partial class StewardService
             if (row is null) { _db.StewardUnits.Add(row = new StewardUnit { ProjectKey = projectKey, Plan = p.Key, Unit = u.Number }); rows.Add(row); }
             if (row.AgreedFile is null) { row.AgreedFile = u.File; changed = true; }
         }
-        foreach (var row in rows.Where(r => r.AgreedFile is not null))
+        // An abandoned slice no longer says it is agreed, on purpose.
+        foreach (var row in rows.Where(r => r.AgreedFile is not null && r.AbandonedAt is null))
         {
             var now = plan.FirstOrDefault(u => u.Number == row.Unit);
             if (now is null || !string.Equals(now.File, row.AgreedFile, StringComparison.OrdinalIgnoreCase) || !now.Agreed)

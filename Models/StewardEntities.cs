@@ -426,6 +426,20 @@ public class StewardUnit
     /// before its project switched.
     /// </summary>
     public string? Branch { get; set; }
+
+    /// <summary>
+    /// The open slice this one is built on (docs/slice-branches.md, section 3): named in its spec's
+    /// header, recorded when it was agreed, its branch cut from that parent's tip and kept up with
+    /// it rather than with the base. Cleared when the parent is released, or when the owner re-cuts
+    /// it from the base because the parent was abandoned.
+    /// </summary>
+    public int? ParentUnit { get; set; }
+
+    /// <summary>
+    /// When the owner abandoned it unreleased. Its spec says so, nothing more is filed against it,
+    /// and its branch is kept until the owner deletes it.
+    /// </summary>
+    public DateTime? AbandonedAt { get; set; }
 }
 
 /// <summary>Where a <see cref="StewardDecision"/> came from.</summary>

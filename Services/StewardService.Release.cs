@@ -24,6 +24,11 @@ public partial class StewardService
         var p = cfg.Steward.Plan;
         var unit = u.Number;
 
+        // Built on another slice: released after it, never before (section 3).
+        if (row.ParentUnit is { } parentUnit && await _db.StewardUnits.AnyAsync(x => x.ProjectKey == projectKey && x.Plan == row.Plan
+                && x.Unit == parentUnit && x.ReleasedAt == null, ct))
+            return Refuse("parent-unreleased", $"Slice {unit} is built on slice {parentUnit}, which is not released. Release slice {parentUnit} first.");
+
         var open = mine.Where(t => t.PlanUnit == unit && t.Phase != TicketPhase.Done).Select(t => t.Id).ToList();
         if (open.Count > 0)
             return Refuse("tickets-open", $"Slice {unit} still has {open.Count} ticket{(open.Count == 1 ? "" : "s")} open ({string.Join(", ", open.Take(8).Select(i => $"#{i}"))}). A slice is released whole: finish or close them first.");
@@ -104,6 +109,7 @@ public partial class StewardService
         (row.ReleasedAt, row.ReleasedSha) = (now, sha);
         await StewardDue.MarkAsync(_db, projectKey, $"the owner released slice {unit}");
         await _db.SaveChangesAsync(ct);
+        var reparented = await ReparentChildrenAsync(projectKey, row, ct);
         if (promoted.Count > 0) await ExportDecisionsAsync(cfg, ct);
         await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
@@ -111,6 +117,7 @@ public partial class StewardService
         {
             at = sha, slice, into = prep.BaseBranch, merged = true,
             promoted = promoted.Select(d => d.Number), conventions = promoted.Count > 0 ? cfg.Steward.Conventions : null,
+            reparented = reparented.Count > 0 ? reparented : null,
         });
     }
 

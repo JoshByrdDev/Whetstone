@@ -499,6 +499,46 @@ public class SliceBranchTests : IDisposable
         Assert.Contains("not 'main'", off.Refusal);
     }
 
+    // ---- piece 4: built on another slice -------------------------------------------------------
+
+    private const string Child = "slice/14-decks";
+
+    [Fact]
+    public async Task A_child_slice_is_cut_from_its_parent_and_keeps_up_with_it_not_the_base()
+    {
+        await LayOutAsync();
+        var (at, no) = await _svc.CutSliceBranchAsync("alpha", Child, from: Slice);
+        Assert.Null(no);
+        Assert.Equal(Rev(Slice), at);
+        Assert.Equal(Rev(Slice), Rev(Child));
+
+        OnBranch(Slice, "more.txt", "S2: more on the parent");
+        var sync = await _svc.SyncSliceAsync("alpha", Child, dryRun: false, from: Slice);
+        Assert.Equal("merged", sync.Answer);
+        Assert.Equal(new[] { "more.txt" }, sync.Files);
+        // The base's fix is not the child's to take: it reaches the child through the parent.
+        Assert.NotEqual(0, Run(_hub, "merge-base", "--is-ancestor", "main", Child).Code);
+    }
+
+    [Fact]
+    public async Task A_child_with_nothing_of_its_own_is_recut_from_the_base_and_one_with_work_is_not()
+    {
+        await LayOutAsync();
+        await _svc.CutSliceBranchAsync("alpha", Child, from: Slice);
+        var (at, no) = await _svc.RecutSliceAsync("alpha", Child, Slice);
+        Assert.Null(no);
+        Assert.Equal(Rev("main"), at);
+        Assert.Equal(Rev("main"), Rev(Child));
+
+        Git(_hub, "branch", "-f", Child, Slice);
+        OnBranch(Child, "deck.txt", "C: the child's own work");
+        var tip = Rev(Child);
+        (at, no) = await _svc.RecutSliceAsync("alpha", Child, Slice);
+        Assert.Null(at);
+        Assert.Contains("1 commit of its own", no);
+        Assert.Equal(tip, Rev(Child));
+    }
+
     // ---- plumbing ----------------------------------------------------------------------------
 
     private async Task SeedAsync()

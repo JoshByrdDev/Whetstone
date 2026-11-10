@@ -188,10 +188,10 @@ public partial class StewardService
         if (cfg.Steward.SyncFrom.Length > 0 && await _git.AheadOfBaseAsync(projectKey, cfg.Steward.SyncFrom, ct) > 0)
             return (true, $"{cfg.Steward.SyncFrom} has moved");
 
-        // An open slice that has not taken the base's latest is owed the merge that brings it up.
-        foreach (var slice in await OpenSliceBranchesAsync(cfg, ct))
-            if ((await _git.SyncSliceAsync(projectKey, slice, dryRun: true, ct)).Answer == "proposed")
-                return (true, $"{slice} is behind the base");
+        // An open slice that has not taken the base's latest - or its parent's - is owed the merge.
+        foreach (var slice in await OpenSlicesAsync(cfg, ct))
+            if ((await _git.SyncSliceAsync(projectKey, slice.Branch, true, slice.From, ct)).Answer == "proposed")
+                return (true, $"{slice.Branch} is behind {slice.From ?? "the base"}");
 
         if (s.RestingAtSha is not null)
             return await _git.BaseHeadAsync(projectKey, ct) == s.RestingAtSha
@@ -203,17 +203,6 @@ public partial class StewardService
             : (false, "the last run was a moment ago");
     }
 
-    /// <summary>
-    /// The branches of this project's open slices: agreed, cut, and not released. Empty on a
-    /// project without slice branches.
-    /// </summary>
-    private async Task<IReadOnlyList<string>> OpenSliceBranchesAsync(ProjectConfig cfg, CancellationToken ct)
-    {
-        if (!cfg.SliceBranchesOn) return Array.Empty<string>();
-        return await _db.StewardUnits.AsNoTracking()
-            .Where(u => u.ProjectKey == cfg.Name && u.Branch != null && u.ReleasedAt == null)
-            .OrderBy(u => u.Unit).Select(u => u.Branch!).ToListAsync(ct);
-    }
 
     /// <summary>Note that a run is owed, and make sure a sleeping heartbeat hears about it.</summary>
     public async Task MarkDueAsync(string projectKey, string reason)
@@ -271,15 +260,16 @@ public partial class StewardService
         // Every open slice takes what has landed on the base since, by a merge (docs/slice-branches.md,
         // section 2). A conflict nothing settled is the owner's: the run is told, and asks.
         var slices = new List<object>();
-        foreach (var slice in await OpenSliceBranchesAsync(cfg, ct))
+        foreach (var open in await OpenSlicesAsync(cfg, ct))
         {
-            var r = await _git.SyncSliceAsync(projectKey, slice, cfg.StewardMode == StewardMode.Propose, ct);
+            var slice = open.Branch;
+            var r = await _git.SyncSliceAsync(projectKey, slice, cfg.StewardMode == StewardMode.Propose, open.From, ct);
             if (r.Answer != "up-to-date")
                 slices.Add(new
                 {
-                    branch = slice, answer = r.Answer, commits = r.Commits, files = r.Files.Count == 0 ? null : r.Files, why = r.Why,
+                    branch = slice, from = open.From, answer = r.Answer, commits = r.Commits, files = r.Files.Count == 0 ? null : r.Files, why = r.Why,
                     ask = r.Answer == "conflict"
-                        ? $"Ask the owner: {slice} cannot take the base's latest without a conflict in {string.Join(", ", r.Files)}, and only a person can settle it."
+                        ? $"Ask the owner: {slice} cannot take {open.From ?? "the base"}'s latest without a conflict in {string.Join(", ", r.Files)}, and only a person can settle it."
                         : null,
                 });
         }
@@ -2389,7 +2379,7 @@ public partial class StewardService
                     // Built is every outcome called done, and a unit with none has built nothing.
                     done = built,
                     // Where it is on the way from a draft to released, in one word.
-                    stage = row?.ReleasedAt is not null ? "released" : built ? "built"
+                    stage = row?.ReleasedAt is not null ? "released" : row?.AbandonedAt is not null ? "abandoned" : built ? "built"
                         : u.Agreed ? u.Number == current?.Number ? "building" : "agreed"
                         : u.Draft ? "draft" : u.Idea ? "idea" : "notAgreed",
                     movedFrom = moved.TryGetValue(u.Number, out var mv) ? mv : null,
@@ -2400,6 +2390,10 @@ public partial class StewardService
                     releasedAt = row?.ReleasedAt,
                     // The slice's own branch while it is open: releasing it is then the board's merge.
                     sliceBranch,
+                    // The open slice this one is built on, and the open slices built on this one.
+                    builtOn = row?.ParentUnit,
+                    builtOnIt = rows.Where(r => r.ParentUnit == u.Number && r.ReleasedAt == null && r.AbandonedAt == null).Select(r => r.Unit),
+                    abandonedAt = row?.AbandonedAt,
                     // Released by the board's merge of its branch: a revert by hand, not a record to take back.
                     releasedByMerge = row?.ReleasedAt is not null && cfg.SliceBranchesOn && !string.IsNullOrWhiteSpace(row.Branch),
                     conventions = sliceBranch is not null && cfg.Steward.Conventions.Length > 0 ? cfg.Steward.Conventions : null,
@@ -2411,6 +2405,7 @@ public partial class StewardService
                     // Why a draft cannot be agreed from here, or null when it can (or is not a draft).
                     cannotAgree = u.Idea ? "An idea is drafted before it is agreed: the steward expands it when its turn comes."
                         : !u.Draft ? null
+                        : ParentOf(cfg, u.Number, u.Text, rows).No is { } noParent ? noParent.Why
                         : !isWorking ? "This plan is finished: nothing is filed against it."
                         : earlier.Count > 0 ? $"Unit {earlier[0]} comes first and is not agreed."
                         : TicketGitService.MarkAgreed(which, u.Text, DateTime.Now) is null
@@ -2527,6 +2522,7 @@ public partial class StewardService
                     .Select(d => (int?)d.Number).FirstOrDefaultAsync(ct) is { } taken)
                 return Refuse("number-taken", $"#{taken} is already a decision in the register, so the spec's #{taken} cannot keep its number. Renumber it in {u.File} from steward_decisions' next number, and commit that.");
         }
+        StewardUnit? parent = null;
         if (agree)
         {
             if (u.Agreed) return Refuse("already-agreed", $"{u.File} is already agreed.");
@@ -2539,6 +2535,11 @@ public partial class StewardService
             // that is not a local branch has nothing to cut it from, so the agreement waits too.
             if (cfg.SliceBranchesOn && await _git.BaseHeadAsync(projectKey, ct) is null)
                 return Refuse("no-base", $"{cfg.DisplayName} has slice branches, and its base is not a local branch to cut unit {unit}'s from.");
+            // A slice built on another is checked against that one before anything is committed.
+            var (parentRow, noParent) = ParentOf(cfg, unit, text,
+                await _db.StewardUnits.AsNoTracking().Where(x => x.ProjectKey == projectKey && x.Plan == p.Key).ToListAsync(ct));
+            if (noParent is not null) return noParent;
+            parent = parentRow;
             if (TicketGitService.MarkAgreed(p, text, DateTime.Now) is not { } marked)
                 return Refuse("not-by-rule", $"The status line of {u.File} is not written the way the board can rewrite. Mark it agreed in the file and commit that.");
             text = marked;
@@ -2562,8 +2563,9 @@ public partial class StewardService
             if (cfg.SliceBranchesOn)
             {
                 var name = row.Branch ?? SliceBranches.NameFor(unit, u.File);
-                var (cutAt, no2) = await _git.CutSliceBranchAsync(projectKey, name, ct);
-                if (cutAt is not null) row.Branch = sliceBranch = name;
+                // Built on another slice: cut from that one's tip, and kept up with it from now on.
+                var (cutAt, no2) = await _git.CutSliceBranchAsync(projectKey, name, parent?.Branch, ct);
+                if (cutAt is not null) (row.Branch, row.ParentUnit, sliceBranch) = (name, parent?.Unit, name);
                 else
                 {
                     // The agreement is committed and stands; the reply says the branch is missing.
@@ -2598,7 +2600,7 @@ public partial class StewardService
         {
             file = u.File, commit = sha, decided = said,
             open = UnitDecisions.Open(text).Select(d => d.Number),
-            sliceBranch, sliceBranchRefused = sliceRefusal,
+            sliceBranch, sliceBranchRefused = sliceRefusal, builtOn = parent?.Unit,
         });
     }
 

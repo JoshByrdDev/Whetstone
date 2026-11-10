@@ -12,6 +12,8 @@ public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released, int[]? Promote = null);
+/// <summary>What becomes of the slices built on an abandoned one: "recut" from the base, or "abandon" them too.</summary>
+public record StewardUnitAbandoned(string? Children = null);
 public record StewardReverse(string? Because);
 public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
@@ -235,6 +237,14 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerReleasesUnitAsync(project ?? "", unit, body.Released ?? true, body.Promote, ct);
             return r.Answer is "released" or "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Abandon a slice unreleased; children says what becomes of the slices built on it. No tool behind it.
+        app.MapPost("/api/steward/plan/units/{unit:int}/abandon", async (int unit, string? project, StewardUnitAbandoned body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerAbandonsUnitAsync(project ?? "", unit, body.Children, ct);
+            return r.Answer == "abandoned" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // Start a new plan: its two documents into the repo from the templates, then the project's

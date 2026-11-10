@@ -1697,6 +1697,9 @@ namespace Whetstone.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("AbandonedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("AgreedAt")
                         .HasColumnType("TEXT");
 
@@ -1705,6 +1708,9 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("Branch")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("ParentUnit")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Plan")
                         .IsRequired()

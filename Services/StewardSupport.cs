@@ -33,12 +33,17 @@ public interface IStewardGit
     /// Cut a slice's branch from the base's local tip, or find it already cut (docs/slice-branches.md,
     /// section 2). The sha it points at, or the refusal.
     /// </summary>
-    Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, CancellationToken ct = default);
+    Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, string? from = null, CancellationToken ct = default);
+    /// <summary>
+    /// Move a slice built on <paramref name="parent"/> to the base's tip, because its parent was
+    /// abandoned; refused when it has commits of its own.
+    /// </summary>
+    Task<(string? Sha, string? Refusal)> RecutSliceAsync(string projectKey, string slice, string parent, CancellationToken ct = default);
     /// <summary>
     /// Bring an open slice's branch up to the base with a merge, never a rebase; with
     /// <paramref name="dryRun"/>, only how far behind it is (docs/slice-branches.md, section 2).
     /// </summary>
-    Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, CancellationToken ct = default);
+    Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, string? from = null, CancellationToken ct = default);
     /// <summary>
     /// Ready a slice's release: the hub fenced as for any merge into the base, and the slice brought
     /// up to the base. Its tip and the files it changes, for the checks.

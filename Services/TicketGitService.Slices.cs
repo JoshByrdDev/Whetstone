@@ -74,9 +74,12 @@ public partial class TicketGitService
     /// nothing and is answered "conflict", with the files, for the owner.
     /// </para>
     /// </summary>
-    public async Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, CancellationToken ct = default)
+    public async Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, string? from = null,
+        CancellationToken ct = default)
     {
-        var (cfg, repo, baseBranch) = HubOf(projectKey);
+        var (cfg, repo, projectBase) = HubOf(projectKey);
+        // A slice built on another keeps up with that one, which keeps up with the base (section 3).
+        var baseBranch = string.IsNullOrWhiteSpace(from) ? projectBase : from.Trim();
         var none = Array.Empty<string>();
         if (!IsGitRepo(repo)) return new("refused", 0, none, $"There is no git repo at '{repo}'.");
         var sliceTip = await TipAsync(repo, slice, ct);
@@ -111,6 +114,34 @@ public partial class TicketGitService
             slice, baseBranch, repo, Short(sliceTip), Short(made.Sha),
             resolved.Count > 0 ? $" (resolver settled {string.Join(", ", resolved)})" : "");
         return new("merged", waiting, files, resolved.Count > 0 ? $"the project's resolver settled {string.Join(", ", resolved)}" : null);
+    }
+
+    /// <summary>
+    /// Cut <paramref name="slice"/> again from the base's tip, because the slice it was built on,
+    /// <paramref name="parent"/>, was abandoned (docs/slice-branches.md, section 3). Only a slice
+    /// with nothing of its own yet - every commit on it is the parent's - can move without losing
+    /// work; one that has its own is refused, and is the owner's to rebuild or abandon. The branch
+    /// moves only from the commit it was read at, and never while a tree has it checked out.
+    /// </summary>
+    public async Task<(string? Sha, string? Refusal)> RecutSliceAsync(string projectKey, string slice, string parent,
+        CancellationToken ct = default)
+    {
+        var (_, repo, baseBranch) = HubOf(projectKey);
+        if (!IsGitRepo(repo)) return (null, $"There is no git repo at '{repo}'.");
+        var tip = await TipAsync(repo, slice, ct);
+        if (tip is null) return (null, $"The slice's branch '{slice}' does not exist in {repo}.");
+        var baseTip = await TipAsync(repo, baseBranch, ct);
+        if (baseTip is null) return (null, $"The base branch '{baseBranch}' is not a local branch in {repo}.");
+        if (await TipAsync(repo, parent, ct) is null) return (null, $"'{parent}' is gone, so what is its and what is {slice}'s cannot be told apart.");
+        var (_, own) = await CountAsync(repo, $"refs/heads/{parent}", $"refs/heads/{slice}", ct);
+        if (own > 0)
+            return (null, $"{slice} has {own} commit{(own == 1 ? "" : "s")} of its own on top of {parent}, so it cannot be re-cut from {baseBranch} without them. Abandon it too, or rebuild it by hand.");
+        if (CheckedOutElsewhere(repo, slice) is { } holder)
+            return (null, $"'{slice}' is checked out in {holder}. Switch that tree off it first.");
+        var move = await GitAsync(repo, ct, "update-ref", "-m", $"re-cut {slice} from {baseBranch}", $"refs/heads/{slice}", baseTip, tip);
+        if (!move.Ok) return (null, Explain(move, $"'{slice}' moved while it was being re-cut; nothing was changed"));
+        _log.LogInformation("Re-cut {Slice} from {Base} at {Sha} in {Repo} (was on {Parent})", slice, baseBranch, Short(baseTip), repo, parent);
+        return (baseTip, null);
     }
 
     private record SliceMerge(string? Sha, IReadOnlyList<string> Conflicted, string? Error, RunResult? Said = null);
@@ -200,7 +231,7 @@ public partial class TicketGitService
         var prep = await PrepareBaseForMergeAsync(repo, baseBranch, output, ct);
         if (prep.Error is not null) return No(prep.Error);
 
-        var sync = await SyncSliceAsync(projectKey, slice, dryRun: false, ct);
+        var sync = await SyncSliceAsync(projectKey, slice, dryRun: false, ct: ct);
         if (sync.Answer == "conflict")
             return No($"{slice} cannot take {baseBranch} without a conflict ({sync.Why}). Resolve it on the slice's branch, then release again.", sync.Files);
         if (sync.Answer is not ("merged" or "up-to-date"))
