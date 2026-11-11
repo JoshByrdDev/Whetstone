@@ -453,6 +453,56 @@ function Test-SupervisorAlive {
     return (Test-RunsScript -CommandLine $p.CommandLine -Script (Join-Path $DataRoot 'runner.ps1'))
 }
 
+# Windows PowerShell 5.1 is not a host the fleet runs on, but a runner set up before that rule can
+# still be started on it: by a scheduled task whose action names powershell.exe, and then by the
+# supervisor that task started, which starts every runner after it on the host it read at its own
+# start. Whether this runner is in such a chain - itself on 5.1, or under a supervisor that is.
+function Test-OnWindowsPowerShell {
+    param([string]$Edition = "$($PSVersionTable.PSEdition)", [string]$SupervisorName = '')
+    return ($Edition -eq 'Desktop') -or ("$SupervisorName" -match '^(?i)powershell(\.exe)?$')
+}
+
+# The action a scheduled task should have instead of one that starts Windows PowerShell: the same
+# arguments, on 7. $null for an action that already starts something else.
+function Get-PwshTaskAction {
+    param([string]$Execute, [string]$Arguments, [string]$PsHost)
+    $leaf = Split-Path -Leaf ("$Execute".Trim().Trim('"'))
+    if ($leaf -notmatch '^(?i)powershell(\.exe)?$') { return $null }
+    return @{ Execute = $PsHost; Arguments = "$Arguments" }
+}
+
+# The scheduled task whose action runs this checkout's runner.ps1, or $null.
+function Find-RunnerTask {
+    param([string]$Script = (Join-Path $DataRoot 'runner.ps1'))
+    $want = [IO.Path]::GetFullPath($Script)
+    foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+        foreach ($a in @($t.Actions)) {
+            if ("$($a.Execute) $($a.Arguments)" -like "*$want*") { return $t }
+        }
+    }
+    return $null
+}
+
+# Point a scheduled task that starts the runner on Windows PowerShell at 7 instead, keeping its
+# arguments, triggers and settings. 'moved', or 'same' when it already starts 7. Throws when the
+# task cannot be changed.
+function Move-RunnerTaskToPwsh {
+    param($Task)
+    $changed = $false
+    $actions = @(foreach ($a in @($Task.Actions)) {
+        $n = Get-PwshTaskAction -Execute $a.Execute -Arguments $a.Arguments -PsHost $PsHost
+        if (-not $n) { $a; continue }
+        $changed = $true
+        $new = @{ Execute = $n.Execute }
+        if ($n.Arguments) { $new.Argument = $n.Arguments }
+        if ($a.WorkingDirectory) { $new.WorkingDirectory = $a.WorkingDirectory }
+        New-ScheduledTaskAction @new
+    })
+    if (-not $changed) { return 'same' }
+    Set-ScheduledTask -TaskName $Task.TaskName -TaskPath $Task.TaskPath -Action $actions -ErrorAction Stop | Out-Null
+    return 'moved'
+}
+
 # Run the runner as a child for as long as it keeps exiting with $RunnerUpdatedExit, starting it
 # again each time; return the first other exit code. A function so the tests can drive it with a
 # stand-in child script rather than the runner itself.
@@ -494,6 +544,10 @@ if (-not $single.WaitOne(0)) { Write-Log "Another runner is already running on t
 
 $script:AgentSlot = 0
 $commit = Get-OwnCommit
+# On 5.1, or under a supervisor that is: moved to 7 as soon as nothing is running here (below).
+$supervisorName = $(if ($SupervisorPid -gt 0) { "$((Get-ProcessTable -Id $SupervisorPid | Select-Object -First 1).Name)" } else { '' })
+$onWindowsPs = $OnWindows -and (Test-OnWindowsPowerShell -SupervisorName $supervisorName)
+$psMoveTried = $false
 Write-Log "Runner '$($HostCfg.name)' on commit $commit, board host $DashboardUrl, projects: $(@($HostCfg.projects.Keys) -join ', '), auto-update $(if ($HostCfg.autoUpdate) { 'on' } else { 'off' }), supervisor $(if ($SupervisorPid -gt 0) { "pid $SupervisorPid" } else { 'none' })"
 $ownRepo = Split-Path -Parent $DataRoot
 # What has already been said, so a waiting or refused update is logged once per board commit and
@@ -561,6 +615,8 @@ while ($true) {
         dataRoot = $DataRoot
         inventory = $inventory
         load = $load
+        psVersion = "$($PSVersionTable.PSVersion)"
+        windowsPowerShell = $onWindowsPs
     } | ConvertTo-Json -Depth 6 -Compress
 
     $resp = $null
@@ -646,6 +702,38 @@ while ($true) {
             # Dirty or not a fast-forward: a person's call. Not tried again for this board commit.
             $updateRetryAt[$boardSha] = [datetime]::MaxValue
             Write-Log "Not updating to the board host's commit ${boardSha}: $($result.reason). This host gets no work until its checkout is on that commit."
+        }
+    }
+
+    # Off Windows PowerShell 5.1, once, while idle: the scheduled task is pointed at 7 for every
+    # logon after this one, and this runner starts a new supervisor on 7 and steps aside - which
+    # ends the 5.1 supervisor too, since this is not an update exit. Tried once per runner: a task
+    # that cannot be changed is said in the log, and the board shows the host as still on 5.1.
+    if ($onWindowsPs -and -not $psMoveTried -and $liveNow -eq 0 -and -not (Test-Path $RunnerStopFile)) {
+        $psMoveTried = $true
+        if (-not (Get-Command $PsHost -ErrorAction SilentlyContinue)) {
+            Write-Log "This runner is on Windows PowerShell 5.1 and PowerShell 7 is not installed here: winget install --id Microsoft.PowerShell, then double-click Update-Runner.bat."
+        }
+        else {
+            $task = Find-RunnerTask
+            if ($task) {
+                try {
+                    if ((Move-RunnerTaskToPwsh -Task $task) -eq 'moved') { Write-Log "Scheduled task '$($task.TaskName)' now starts the runner on PowerShell 7 ($PsHost)." }
+                }
+                catch { Write-Log "Could not point the scheduled task '$($task.TaskName)' at PowerShell 7: $($_.Exception.Message). Change its action to $PsHost by hand (docs/worker-host-setup.md, step 12)." }
+            }
+            Write-Log "This runner was started on Windows PowerShell 5.1 - starting it again on PowerShell 7 ($PsHost)."
+            $restart = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path)
+            if ($HostFile) { $restart += @('-HostFile', $HostFile) }
+            $single.ReleaseMutex()
+            try {
+                Start-Process -FilePath $PsHost -ArgumentList $restart -WindowStyle Hidden | Out-Null
+                exit 0
+            }
+            catch {
+                Write-Log "Could not start PowerShell 7 ($PsHost): $($_.Exception.Message). Staying on 5.1."
+                $null = $single.WaitOne(0)
+            }
         }
     }
 

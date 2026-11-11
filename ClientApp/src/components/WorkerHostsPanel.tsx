@@ -283,6 +283,12 @@ function HostCard({ h, s, busy, onEdit, onRemove, machine }: {
           {!h.commitMatches && h.commit && <> · the board is on <span style={{ fontFamily: MONO }}>{short(s.boardCommit)}</span> - pull on that computer</>}
         </span>
         <span>berths {h.slots === 1 ? h.firstSlot : `${h.firstSlot}–${lastBerth}`}</span>
+        {h.windowsPowerShell && (
+          <span style={{ color: 'rgb(var(--w-gate-rgb))' }}
+            title="Its scheduled task was set up before the fleet left Windows PowerShell 5.1. The runner points the task at PowerShell 7 and restarts on it as soon as nothing is running there; if this stays, double-click Update-Runner.bat on that computer.">
+            on Windows PowerShell 5.1 - moving to 7 when idle
+          </span>
+        )}
         {h.usageLimitUntil && <span>paused until {new Date(h.usageLimitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
       </div>
 

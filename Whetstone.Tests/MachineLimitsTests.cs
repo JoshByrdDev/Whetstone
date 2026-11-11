@@ -520,5 +520,25 @@ public class MachineCheckinBindingTests
         Assert.Equal(4574, req.Load.MemAvailMb);
         Assert.Equal(16188, req.Inventory!.RamMb);
         Assert.Equal("22.22.1", req.Inventory.Tools!["node"]);
+        Assert.Null(req.WindowsPowerShell);
+    }
+
+    [Fact]
+    public async Task A_runner_still_on_Windows_PowerShell_shows_as_one_until_it_moves()
+    {
+        var req = System.Text.Json.JsonSerializer.Deserialize<HostCheckinRequest>(
+            """{"commit":"abc","runs":[],"psVersion":"5.1.26100.1","windowsPowerShell":true}""",
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        var cfg = WorkerHostConfig.Read(System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, System.Text.Json.JsonElement>>(
+            """{ "workerHosts": [{ "name": "bravo-host", "slots": 3, "projects": ["alpha"] }] }""")!);
+        var svc = new WorkerHostService(() => cfg, () => "abc", () => DateTime.UtcNow);
+        await svc.CheckInAsync("bravo-host", "abc", Array.Empty<HostRun>(), null, TimeSpan.Zero,
+            psVersion: req.PsVersion, windowsPowerShell: req.WindowsPowerShell ?? false);
+        var h = svc.Snapshot().Single(x => x.Name == "bravo-host");
+        Assert.True(h.WindowsPowerShell);
+        Assert.Equal("5.1.26100.1", h.PsVersion);
+
+        await svc.CheckInAsync("bravo-host", "abc", Array.Empty<HostRun>(), null, TimeSpan.Zero, psVersion: "7.6.10");
+        Assert.False(svc.Snapshot().Single(x => x.Name == "bravo-host").WindowsPowerShell);
     }
 }

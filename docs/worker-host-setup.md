@@ -196,6 +196,11 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
       are this user's.
     - Clear "Stop the task if it runs longer than...".
 
+    A task made before the fleet left Windows PowerShell 5.1 names `powershell.exe`. The runner
+    points it at `pwsh.exe` itself, and restarts on 7, the first time this machine is idle; until
+    then its card on the Heartbeat page says "on Windows PowerShell 5.1". `Update-Runner.bat` does
+    the same.
+
     Never start the runner from a Claude session. Whatever owns its tree can kill every worker
     under it.
 

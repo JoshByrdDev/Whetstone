@@ -29,6 +29,10 @@ export interface WorkerHost {
   /** Which Claude account its next run spends, when the board chooses (the smart switch is on). */
   claude?: WorkerHostClaude | null;
   runs: WorkerHostRun[];
+  /** The PowerShell its runner is on. */
+  psVersion?: string | null;
+  /** Its runner, or the supervisor that started it, is on Windows PowerShell 5.1: it moves itself to 7 once idle. */
+  windowsPowerShell?: boolean;
 }
 
 /**

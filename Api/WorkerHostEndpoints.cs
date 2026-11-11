@@ -12,9 +12,13 @@ namespace Whetstone.Api;
 /// <param name="UsageLimits">Each provider's pause there, naming the Claude account that hit one.</param>
 /// <param name="Inventory">That machine's hardware: sent on a runner's first check-in and hourly after, stored only when it changed.</param>
 /// <param name="Load">Its load, read at most once a minute; the board keeps the latest for its minute sample.</param>
+/// <param name="PsVersion">The PowerShell the runner is on.</param>
+/// <param name="WindowsPowerShell">Whether it, or the supervisor that started it, is Windows PowerShell 5.1 - a
+/// task set up before the fleet left 5.1. The runner moves itself to 7 once idle; until then the Heartbeat page says so.</param>
 public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null,
     HostClaudeLogin[]? ClaudeLogins = null, HostUsageLimit[]? UsageLimits = null,
-    MachineInventoryReport? Inventory = null, MachineLoadReport? Load = null);
+    MachineInventoryReport? Inventory = null, MachineLoadReport? Load = null,
+    string? PsVersion = null, bool? WindowsPowerShell = null);
 
 /// <summary>The switch for all remote work, as the Heartbeat page sets it.</summary>
 public record HostSwitchRequest(bool Enabled);
@@ -154,7 +158,7 @@ public static class WorkerHostEndpoints
 
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
             var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot,
-                req.ClaudeLogins, req.UsageLimits);
+                req.ClaudeLogins, req.UsageLimits, req.PsVersion, req.WindowsPowerShell ?? false);
             return CheckinResult(name, orders, revoked, commit.Get());
         });
 

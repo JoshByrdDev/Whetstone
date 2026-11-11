@@ -161,6 +161,23 @@ try {
     Check 'differ, auto-update off: leave it' (Get-UpdateAction -Own $a -Board $b -LiveRuns 0 -Stopping $false -Enabled $false) 'none'
     Check 'differ and idle: update' (Get-UpdateAction -Own $a -Board $b -LiveRuns 0 -Stopping $false -Enabled $true) 'update'
 
+    # ---- Off Windows PowerShell 5.1 ----------------------------------------------
+    Write-Host "== Test-OnWindowsPowerShell / Get-PwshTaskAction"
+    Check 'a runner on 5.1 is' (Test-OnWindowsPowerShell -Edition 'Desktop' -SupervisorName 'pwsh.exe') $true
+    Check 'a runner on 7 under a 5.1 supervisor is' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName 'powershell.exe') $true
+    Check 'a 5.1 supervisor named another case is' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName 'PowerShell.EXE') $true
+    Check 'on 7 under 7 is not' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName 'pwsh.exe') $false
+    Check 'on 7 with no supervisor is not' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName '') $false
+    $pw = 'C:\Program Files\PowerShell\7\pwsh.exe'
+    $taskArgs = '-WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -HostFile D:\h.json'
+    $n = Get-PwshTaskAction -Execute 'powershell.exe' -Arguments $taskArgs -PsHost $pw
+    Check 'a task on powershell.exe moves to 7' $n.Execute $pw
+    Check 'keeping its arguments word for word' $n.Arguments $taskArgs
+    Check 'a full, quoted path to 5.1 moves too' ((Get-PwshTaskAction -Execute '"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"' -Arguments $taskArgs -PsHost $pw).Execute) $pw
+    Check 'a task already on pwsh is left' (Get-PwshTaskAction -Execute 'pwsh.exe' -Arguments $taskArgs -PsHost $pw) $null
+    Check 'a task on a full pwsh path is left' (Get-PwshTaskAction -Execute $pw -Arguments $taskArgs -PsHost $pw) $null
+    Check 'an action that is something else is left' (Get-PwshTaskAction -Execute 'cmd.exe' -Arguments '/c x.bat' -PsHost $pw) $null
+
     # ---- Update-OwnCheckout, against real repos -------------------------------
     Write-Host "== Update-OwnCheckout"
     $env:GIT_TERMINAL_PROMPT = '0'
@@ -278,7 +295,7 @@ try {
         Check '... and another checkout''s runner.ps1 is not' (@($found | ForEach-Object { $_.ProcessId }) -contains $p2.Id) $false
     }
     finally { foreach ($p in $p1, $p2) { try { $p.Kill() } catch { } } }
-    Check 'no scheduled task runs a stand-in: none found' ($null -eq (Find-RunnerTask)) $true
+    Check 'no scheduled task runs a stand-in: none found' ($null -eq (Find-RunnerTask -Script $RunnerScript)) $true
     Check 'a task''s -HostFile is read, quoted' (Get-HostFileArg '-File C:\W\data\runner.ps1 -HostFile "D:\cfg\my host.json"') 'D:\cfg\my host.json'
     Check '... or bare' (Get-HostFileArg '-File C:\W\data\runner.ps1 -HostFile D:\cfg\host.json') 'D:\cfg\host.json'
     Check '... and none is none' (Get-HostFileArg '-File C:\W\data\runner.ps1') ''
