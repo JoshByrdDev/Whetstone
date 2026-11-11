@@ -156,6 +156,15 @@ if ((Get-MachineOs) -ne 'other') {
     Check 'live: CPU read' ($null -ne $l.cpuPct) $true
 }
 
+# An older runner supervisor still starts the runner on Windows PowerShell 5.1, which has no
+# $IsWindows. The collector has to know Windows there too, or it reads nothing but the network.
+$ps51 = Get-Command powershell.exe -ErrorAction SilentlyContinue
+if ($ps51) {
+    $mi = Join-Path $PSScriptRoot 'machine-info.ps1'
+    $out = & $ps51.Source -NoProfile -ExecutionPolicy Bypass -Command ". '$mi'; `$l = Get-MachineLoad -DataRoot '$PSScriptRoot' -Docker `$false; `"`$(Get-MachineOs)|`$([bool]`$l.memAvailMb)|`$(`$null -ne `$l.cpuPct)`""
+    Check 'on 5.1: Windows is still Windows, and its load is read' "$out".Trim() 'windows|True|True'
+}
+
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "All $script:total machine-info checks passed." -ForegroundColor Green; exit 0 }
 Write-Host "$script:fail of $script:total machine-info checks FAILED." -ForegroundColor Red

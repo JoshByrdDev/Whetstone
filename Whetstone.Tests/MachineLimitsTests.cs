@@ -502,3 +502,23 @@ public class MachineLimitsTests : IDisposable
         Assert.Equal(4, c.ReserveGbMin);
     }
 }
+
+/// <summary>What a runner's check-in body binds to on the board, from the JSON the runner really sends.</summary>
+public class MachineCheckinBindingTests
+{
+    [Fact]
+    public void A_runner_check_in_carries_its_hardware_and_load_through_to_the_board()
+    {
+        const string body = """
+            {"commit":"abc","runs":[],"waitSeconds":20,"dataRoot":"/w/data",
+             "load":{"at":"2026-11-11T21:26:55.5028859Z","cpuPct":73.0,"memAvailMb":4574,"memTotalMb":16188,"swapUsedMb":1821,"pressure":0,"diskFreeGb":250.1,"netInKbps":null,"netOutKbps":null,"dockerMemUsedMb":345,"dockerMemLimitMb":7843},
+             "inventory":{"cpuModel":"Example CPU","physicalCores":6,"logicalCores":12,"perfCores":null,"effCores":null,"ramMb":16188,"os":"Windows","osVersion":"11 25H2 (build 26200)","arch":"x64","diskKind":"SSD","diskTotalGb":930.5,"dockerCpus":12,"dockerMemMb":7843,"tools":{"node":"22.22.1","pwsh":"7.6.10"}}}
+            """;
+        var req = System.Text.Json.JsonSerializer.Deserialize<HostCheckinRequest>(body,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        Assert.Equal(73.0, req.Load!.CpuPct);
+        Assert.Equal(4574, req.Load.MemAvailMb);
+        Assert.Equal(16188, req.Inventory!.RamMb);
+        Assert.Equal("22.22.1", req.Inventory.Tools!["node"]);
+    }
+}

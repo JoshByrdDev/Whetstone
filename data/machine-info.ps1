@@ -21,8 +21,11 @@ $script:MachineLoads = 0
 $MachineDockerEvery = 5
 $MachineTools = @('node', 'pnpm', 'dotnet', 'pwsh', 'git', 'docker', 'claude')
 
+# Not $IsWindows alone: Windows PowerShell 5.1 has no such variable, and an older runner
+# supervisor still starts the runner on 5.1 - which read every Windows machine as 'other' and
+# sent a load with nothing in it but the network and docker.
 function Get-MachineOs {
-    if ($IsWindows) { 'windows' } elseif ($IsMacOS) { 'macos' } else { 'other' }
+    if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'windows' } elseif ($IsMacOS) { 'macos' } else { 'other' }
 }
 
 # One outside reading, by key. Returns text for a command, objects for a CIM class, $null when it
