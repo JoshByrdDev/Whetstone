@@ -368,6 +368,10 @@ public class MachineLimitsTests : IDisposable
             "Heartbeat could not prepare a git worktree for this ticket on worker host `bravo-host`. Ticket blocked.\n\nworktree setup command timed out after 20 min"));
         Assert.Equal(CapacityPlaces.Board, MachineLimitsService.PlaceOfComment(
             "Heartbeat could not prepare a git worktree for this ticket. Ticket blocked.\n\nworktree setup command timed out after 20 min"));
+        // The block reason a timeout also leaves names no machine, and is not a second timeout anywhere.
+        Assert.Null(MachineLimitsService.PlaceOfComment(
+            "Blocked: Workspace setup failed (implement): worktree setup command timed out after 20 min and was stopped: pnpm install"));
+        Assert.Null(MachineLimitsService.PlaceOfComment("Heartbeat could not prepare a git worktree for this ticket. It failed (exit 1)."));
     }
 
     // ---- Run speed: model time against machine time ----
@@ -462,6 +466,8 @@ public class MachineLimitsTests : IDisposable
             await db.SaveChangesAsync();
             await MachineInventoryStore.RecordAsync(db, "bravo-host", new MachineInventoryReport(PerfCores: 4, EffCores: 6, RamMb: 48 * 1024, DockerMemMb: 8 * 1024), Now);
             db.Comments.Add(new Comment { TicketId = 1, CreatedAt = Now.AddHours(-1),
+                Body = "Blocked: Workspace setup failed (implement): worktree setup command timed out after 20 min" });
+            db.Comments.Add(new Comment { TicketId = 1, CreatedAt = Now.AddHours(-1),
                 Body = "Heartbeat could not prepare a git worktree for this ticket on worker host `bravo-host`.\n\nworktree setup command timed out after 20 min" });
             db.CapacitySamples.Add(new CapacitySample { Place = "bravo-host", At = Now.AddHours(-1), Slots = 6, Busy = 5 });
             await db.SaveChangesAsync();
@@ -481,6 +487,8 @@ public class MachineLimitsTests : IDisposable
         Assert.Equal(2, host["qa"]!["suggested"]!.GetValue<int>());
         Assert.Equal(3, machines[0]!["workers"]!["set"]!.GetValue<int>());
         Assert.Null(machines[0]!["workers"]!["suggested"]);
+        // The host's block-reason comment did not make a timeout on the board host too.
+        Assert.DoesNotContain(machines[0]!["workers"]!["reasons"]!.AsArray(), r => r!.GetValue<string>().Contains("timed out"));
     }
 
     [Fact]

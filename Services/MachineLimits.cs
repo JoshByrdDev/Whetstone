@@ -454,6 +454,13 @@ public class MachineLimitsService
     /// limit, and the host it names. Read from the comment because that is the one record of it.
     /// </summary>
     public const string TimeoutText = "setup command timed out";
+
+    /// <summary>
+    /// The one comment per timeout that says where it happened. A timeout also leaves a
+    /// "Blocked: Workspace setup failed" comment, which names no machine - counting that one too
+    /// gave every worker host's timeouts to the board host as well.
+    /// </summary>
+    public const string PrepareText = "Heartbeat could not prepare a git worktree for this ticket";
     private static readonly Regex HostInComment = new(@"on worker host `([^`]+)`", RegexOptions.CultureInvariant);
 
     public static readonly TimeSpan Window = TimeSpan.FromDays(14);
@@ -463,8 +470,10 @@ public class MachineLimitsService
 
     public MachineLimitsService(DashboardDbContext db, ProjectRegistry registry) => (_db, _registry) = (db, registry);
 
-    public static string PlaceOfComment(string body) =>
-        HostInComment.Match(body) is { Success: true } m ? m.Groups[1].Value : CapacityPlaces.Board;
+    /// <summary>The machine a setup timeout happened on, or null for a comment that does not say.</summary>
+    public static string? PlaceOfComment(string body) =>
+        !body.StartsWith(PrepareText, StringComparison.Ordinal) || !body.Contains(TimeoutText) ? null
+        : HostInComment.Match(body) is { Success: true } m ? m.Groups[1].Value : CapacityPlaces.Board;
 
     public async Task<object> ReadAsync(DateTime now, CancellationToken ct = default)
     {
@@ -483,7 +492,7 @@ public class MachineLimitsService
         var capacity = await _db.CapacitySamples.AsNoTracking().Where(s => s.At >= now - MachineLimits.CeilingFor)
             .Select(s => new { s.Place, s.At, s.Busy }).ToListAsync(ct);
         var timeoutRows = await _db.Comments.AsNoTracking()
-            .Where(x => x.CreatedAt >= now - MachineLimits.CeilingFor && x.Body.Contains(TimeoutText))
+            .Where(x => x.CreatedAt >= now - MachineLimits.CeilingFor && x.Body.StartsWith(PrepareText) && x.Body.Contains(TimeoutText))
             .Select(x => new { x.CreatedAt, x.Body }).ToListAsync(ct);
         var runs = (await _db.CycleRuns.AsNoTracking()
                 .Where(r => r.StartedAt >= since && r.DurationSeconds > 60 && r.NumTurns > 5 && r.ApiDurationSeconds != null)
@@ -501,7 +510,7 @@ public class MachineLimitsService
             var cap = capacity.Where(s => Same(s.Place, m.Place)).ToList();
             int? BusyAt(DateTime t) =>
                 cap.Where(s => Math.Abs((s.At - t).TotalMinutes) <= 2).OrderBy(s => Math.Abs((s.At - t).Ticks)).Select(s => (int?)s.Busy).FirstOrDefault();
-            var timeouts = timeoutRows.Where(x => Same(PlaceOfComment(x.Body), m.Place)).Select(x => x.CreatedAt).ToList();
+            var timeouts = timeoutRows.Where(x => PlaceOfComment(x.Body) is { } p && Same(p, m.Place)).Select(x => x.CreatedAt).ToList();
             var s = MachineLimits.Suggest(m.Place, m.Workers, m.Qa, m.Max, inv, mine, timeouts, BusyAt,
                 runs.Where(r => Same(r.Place, m.Place)).ToList(), c, now);
             var last = mine.LastOrDefault();
