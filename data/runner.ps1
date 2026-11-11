@@ -42,6 +42,7 @@ param(
 
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $DataRoot "heartbeat-common.ps1")
+. (Join-Path $DataRoot "machine-info.ps1")
 
 $ErrorActionPreference = 'Continue'
 $env:GCM_INTERACTIVE     = 'never'
@@ -508,6 +509,12 @@ $Runs = Find-SurvivingRuns
 foreach ($slot in $Runs.Keys) { Write-Log "  Adopted run $($Runs[$slot].RunId) in slot $slot (ticket #$($Runs[$slot].TicketId), pid $($Runs[$slot].Pid))" }
 
 $failures = 0
+# This machine's hardware goes with the first check-in and hourly after (the board keeps it only
+# when it changed), its load at most once a minute. docs/machine-limits-plan.md.
+$MachineInventoryMinutes = 60
+$machineSentAt = $null
+$machineTriedAt = $null
+$machineLoadAt = $null
 while ($true) {
     # Finished runs are reported for a while and then forgotten; the orchestrator reads an absent
     # run as finished too, so dropping one never strands a slot.
@@ -533,6 +540,18 @@ while ($true) {
 
     # Read afresh each time: a login signed in or out here reaches the board on the next check-in.
     $script:ClaudeLogins = @(Get-ClaudeLogins)
+    $inventory = $null; $load = $null
+    # Tried again after a failed check-in, but not on every one of a run of them: reading the tools'
+    # versions takes seconds.
+    $inventoryDue = (-not $machineSentAt -or ((Get-Date) - $machineSentAt).TotalMinutes -ge $MachineInventoryMinutes) -and
+        (-not $machineTriedAt -or ((Get-Date) - $machineTriedAt).TotalMinutes -ge 5)
+    if ($inventoryDue) {
+        $machineTriedAt = Get-Date
+        try { $inventory = Get-MachineInventory -DataRoot $DataRoot } catch { Write-Log "Could not read this machine's hardware: $($_.Exception.Message)" }
+    }
+    if (-not $machineLoadAt -or ((Get-Date) - $machineLoadAt).TotalSeconds -ge 55) {
+        try { $load = Get-MachineLoad -DataRoot $DataRoot; $machineLoadAt = Get-Date } catch { }
+    }
     $body = @{
         commit = $commit
         runs = (Get-RunReport -Runs $Runs)
@@ -540,6 +559,8 @@ while ($true) {
         usageLimits = (Get-HostUsageLimits -Logins $script:ClaudeLogins)
         waitSeconds = $(if ($Once) { 0 } else { 20 })
         dataRoot = $DataRoot
+        inventory = $inventory
+        load = $load
     } | ConvertTo-Json -Depth 6 -Compress
 
     $resp = $null
@@ -548,6 +569,7 @@ while ($true) {
             -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 60
         if ($failures -gt 0) { Write-Log "Board host reachable again after $failures failed check-in(s)." }
         $failures = 0
+        if ($inventory) { $machineSentAt = Get-Date }
     }
     catch {
         $failures++

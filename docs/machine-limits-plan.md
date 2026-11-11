@@ -1,6 +1,8 @@
 # Machine limits: what each machine has, how loaded it is, and how many berths it should take
 
-Plan, not yet built. Slot counts are hand-set today (`heartbeatWorkers`, `qaLeases`, and each
+Agreed 2026-11-11: suggestions are driven by machine strain, the board host collects its own in
+C#, inventory gets a Machines section on the System page, and automatic mode is one global switch.
+Slot counts are hand-set today (`heartbeatWorkers`, `qaLeases`, and each
 worker host's `slots` / `qaLeases`). This adds three things, in this order:
 
 1. an **inventory** of every machine's hardware, kept as a history of changes;
@@ -44,16 +46,18 @@ finding: fewer berths on one host would not fix it.
 
 ## 1. Inventory
 
-One collector, `data/machine-info.ps1`, used by both kinds of machine, so the fields mean the same
-thing everywhere and are tested once. pwsh 7 on Windows and macOS; pure ASCII. Every external
-command goes through one `Invoke-Probe` function the tests replace, so both OSes are tested on
-either.
+Two collectors with one shape (decided 2026-11-11): a worker host's runner uses
+`data/machine-info.ps1` (pwsh 7 on Windows and macOS, pure ASCII, every external command behind one
+`Invoke-Probe` the tests replace); the board host reads its own in C# (`Services/MachineProbe.cs`,
+Win32 calls on Windows and the same commands as below on macOS, every command behind an injectable
+runner). Both send the JSON shape of `MachineInventoryReport` / `MachineLoadReport`, and the tests
+on each side parse the same captured command output, so the two cannot quietly mean different things.
 
 | Field | Windows | macOS |
 |---|---|---|
 | CPU model | `Win32_Processor.Name` | `sysctl -n machdep.cpu.brand_string` |
 | Physical / logical cores | `NumberOfCores` / `NumberOfLogicalProcessors` | `hw.physicalcpu` / `hw.logicalcpu` |
-| Performance / efficiency cores | Intel hybrid: from `Win32_Processor` is not reliable, so null unless `GetLogicalProcessorInformationEx` says (null is an honest answer) | `hw.perflevel0.physicalcpu` / `hw.perflevel1.physicalcpu` |
+| Performance / efficiency cores | the board host: each core's efficiency class from `GetLogicalProcessorInformationEx`; a worker host on Windows: null (null is an honest answer) | `hw.perflevel0.physicalcpu` / `hw.perflevel1.physicalcpu` |
 | RAM | `Win32_ComputerSystem.TotalPhysicalMemory` | `hw.memsize` |
 | OS, version, arch | `[RuntimeInformation]` + `Win32_OperatingSystem.Caption` | `sw_vers` + `uname -m` |
 | Worktree drive: kind, size | `Get-PhysicalDisk.MediaType` for the volume holding the data root | `diskutil info` (`Solid State`) |
@@ -77,12 +81,12 @@ second; no `docker stats` every minute).
 
 | Field | Windows | macOS |
 |---|---|---|
-| CPU % | `Win32_PerfFormattedData_PerfOS_Processor` `_Total` | `top -l 2 -n 0 -s 1`, second sample's idle |
-| Memory available | `Win32_OperatingSystem.FreePhysicalMemory` (+ standby via `Win32_PerfFormattedData_PerfOS_Memory.AvailableBytes`) | `vm_stat`: free + inactive + purgeable + speculative - *not* free alone, which is always near zero |
-| Swap / pagefile in use | `Win32_PageFileUsage.CurrentUsage` | `sysctl vm.swapusage` |
+| CPU % | runner: `Win32_Processor.LoadPercentage`; board: `GetSystemTimes` between minutes | `top -l 2 -n 0 -s 1`, second sample's idle |
+| Memory available | runner: `Win32_PerfFormattedData_PerfOS_Memory.AvailableMBytes`; board: `GlobalMemoryStatusEx` | `vm_stat`: free + inactive + purgeable + speculative - *not* free alone, which is always near zero |
+| Swap / pagefile in use | runner: `Win32_PageFileUsage.CurrentUsage`; board: `NtQuerySystemInformation` page files | `sysctl vm.swapusage` |
 | Pressure | derived: available < 10% of RAM or pages/s high -> warn | `sysctl kern.memorystatus_vm_pressure_level` (1 normal, 2 warn, 4 critical) |
-| Worktree drive free | `Get-PSDrive` | `df -k` |
-| Network in/out bytes | `Get-NetAdapterStatistics` (delta since the last sample) | `netstat -ib` (delta) |
+| Worktree drive free | `DriveInfo` | `df -k` |
+| Network in/out | .NET `NetworkInterface` byte counters, delta since the last sample (both OSes, both collectors) | same |
 | Docker memory in use | `docker stats --no-stream`, every 5th minute only | same |
 
 **Who adds the berths.** A host reports only what it measured. The board already knows which
@@ -116,8 +120,10 @@ worker count. Confidence: low.
 of busy minutes spread over at least 3 different busy counts). For each busy count n, take the p90
 CPU and the p10 available memory over the minutes at n; fit each as a straight line in n (a berth
 costs about this much CPU and this much memory here); suggested = the largest n where CPU stays
-under 85% and available memory above the reserve. Memory is fitted per phase where there is enough
-data, since a QA berth with its stack costs far more than an implement one.
+under 85% and available memory above the reserve, held to twice the busiest count seen (a straight
+line is only trusted a little past where it was drawn). QA leases are learned the same way from
+Docker's memory on the minutes it was read, against how many stack phases were running. Fitting
+host memory per phase is left for later: the samples record the phases, so it needs no new data.
 
 Shown beside it, as evidence rather than as an input: the run-speed curve from `CycleRuns` on that
 host, by time-weighted local overlap, split into model time and machine time, with the two points the
@@ -165,6 +171,11 @@ does nothing yet. Its design is fixed now so it can be built later without chang
 
 Later candidates for the same treatment: heavy checks at once, test threads per run, which phases a
 host takes, dispatch order, setup timeouts.
+
+Where each piece lives: `Services/MachineInfo.cs` (report shapes, parsers, store-on-change, the
+latest-load book), `Services/MachineProbe.cs` (the board host's collector), `Services/MachineLimits.cs`
+(the rules and `GET /api/machines`), `data/machine-info.ps1` (a worker host's collector),
+`ClientApp/src/components/MachinesSection.tsx` and `SlotSuggestionNote.tsx` (the pages).
 
 ## Tests
 

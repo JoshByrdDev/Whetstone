@@ -719,6 +719,137 @@ namespace Whetstone.Migrations
                     b.ToTable("Labels");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.MachineInventory", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Arch")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CpuModel")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DiskKind")
+                        .HasColumnType("TEXT");
+
+                    b.Property<double?>("DiskTotalGb")
+                        .HasColumnType("REAL");
+
+                    b.Property<int?>("DockerCpus")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("DockerMemMb")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("EffCores")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("FirstSeen")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Hash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Json")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastSeen")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("LogicalCores")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Os")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OsVersion")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("PerfCores")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("PhysicalCores")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Place")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("RamMb")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Place", "LastSeen");
+
+                    b.ToTable("MachineInventories");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.MachineLoadSample", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Busy")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double?>("CpuPct")
+                        .HasColumnType("REAL");
+
+                    b.Property<double?>("DiskFreeGb")
+                        .HasColumnType("REAL");
+
+                    b.Property<long?>("DockerMemLimitMb")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("DockerMemUsedMb")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("MemAvailMb")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("MemTotalMb")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double?>("NetInKbps")
+                        .HasColumnType("REAL");
+
+                    b.Property<double?>("NetOutKbps")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("PhasesJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Place")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("Pressure")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long?>("SwapUsedMb")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("At");
+
+                    b.HasIndex("Place", "At");
+
+                    b.ToTable("MachineLoadSamples");
+                });
+
             modelBuilder.Entity("Whetstone.Models.NoteAttachment", b =>
                 {
                     b.Property<int>("Id")

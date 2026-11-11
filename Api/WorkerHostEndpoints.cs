@@ -10,8 +10,11 @@ namespace Whetstone.Api;
 /// <param name="UsageLimitUntil">One pause for the whole host. Runners before per-account limits sent only this.</param>
 /// <param name="ClaudeLogins">Who each Claude login on that machine is signed in as - identity only, never a folder or a token.</param>
 /// <param name="UsageLimits">Each provider's pause there, naming the Claude account that hit one.</param>
+/// <param name="Inventory">That machine's hardware: sent on a runner's first check-in and hourly after, stored only when it changed.</param>
+/// <param name="Load">Its load, read at most once a minute; the board keeps the latest for its minute sample.</param>
 public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null,
-    HostClaudeLogin[]? ClaudeLogins = null, HostUsageLimit[]? UsageLimits = null);
+    HostClaudeLogin[]? ClaudeLogins = null, HostUsageLimit[]? UsageLimits = null,
+    MachineInventoryReport? Inventory = null, MachineLoadReport? Load = null);
 
 /// <summary>The switch for all remote work, as the Heartbeat page sets it.</summary>
 public record HostSwitchRequest(bool Enabled);
@@ -43,6 +46,17 @@ public static class WorkerHostEndpoints
         orders is null
             ? Results.NotFound(new { error = $"'{name}' is not a worker host in this board's config (workerHosts)." })
             : Results.Ok(new { orders, revoked, boardCommit });
+
+    /// <summary>
+    /// What a check-in carries about the machine itself: its load is held for the next minute's
+    /// sample, its hardware is kept only when it changed. docs/machine-limits-plan.md.
+    /// </summary>
+    public static async Task RecordMachineAsync(Persistence.DashboardDbContext db, MachineLoadBook book, string host,
+        MachineInventoryReport? inventory, MachineLoadReport? load, DateTime now, CancellationToken ct = default)
+    {
+        if (load is not null) book.Set(host, load, now);
+        if (inventory is not null) await MachineInventoryStore.RecordAsync(db, host, inventory, now, ct);
+    }
 
     public static void MapWorkerHostEndpoints(this WebApplication app)
     {
@@ -124,9 +138,17 @@ public static class WorkerHostEndpoints
         // the orchestrator gave up on them while this host was unreachable - which the runner kills
         // without handing anything back, because their tickets may already be running elsewhere.
         app.MapPost("/api/hosts/{name}/checkin", async (string name, HostCheckinRequest req,
-            WorkerHostService hosts, ResourceLeaseService leases, BoardCommit commit, CancellationToken ct) =>
+            WorkerHostService hosts, ResourceLeaseService leases, BoardCommit commit, MachineLoadBook book,
+            IServiceScopeFactory scopes, CancellationToken ct) =>
         {
             var runs = req.Runs ?? Array.Empty<HostRun>();
+            // Only for a machine the config names, so a stray runner leaves no history behind.
+            if (hosts.Find(name) is { } known && (req.Load is not null || req.Inventory is not null))
+            {
+                using var scope = scopes.CreateScope();
+                await RecordMachineAsync(scope.ServiceProvider.GetRequiredService<Persistence.DashboardDbContext>(), book,
+                    known.Name, req.Inventory, req.Load, DateTime.UtcNow, ct);
+            }
             var live = await leases.LiveRunsAsync(runs.Where(r => !r.Exited).Select(r => r.RunId).ToList());
             var revoked = runs.Where(r => !r.Exited && !live.Contains(r.RunId)).Select(r => r.RunId).ToArray();
 

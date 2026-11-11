@@ -1,0 +1,4 @@
+   Device Identifier:         disk3s5
+   Device Node:               /dev/disk3s5
+   Solid State:               Yes
+   Protocol:                  Apple Fabric

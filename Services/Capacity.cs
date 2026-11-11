@@ -271,8 +271,14 @@ public class CapacitySampler : BackgroundService
     private readonly ILogger<CapacitySampler> _log;
     private DateTime _prunedAt = DateTime.MinValue;
 
-    public CapacitySampler(IServiceScopeFactory scopes, CapacitySnapshot snapshot, ProjectRegistry registry, ILogger<CapacitySampler> log)
-        => (_scopes, _snapshot, _registry, _log) = (scopes, snapshot, registry, log);
+    private readonly MachineLoadBook? _book;
+    private readonly Func<string, Dictionary<string, int>>? _phases;
+
+    /// <param name="book">Each machine's latest load reading, written beside its capacity row.</param>
+    /// <param name="phases">The phases a place's busy berths are on this minute.</param>
+    public CapacitySampler(IServiceScopeFactory scopes, CapacitySnapshot snapshot, ProjectRegistry registry, ILogger<CapacitySampler> log,
+        MachineLoadBook? book = null, Func<string, Dictionary<string, int>>? phases = null)
+        => (_scopes, _snapshot, _registry, _log, _book, _phases) = (scopes, snapshot, registry, log, book, phases);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -312,12 +318,28 @@ public class CapacitySampler : BackgroundService
                 Reason = v.Reason,
                 DetailJson = detail is { Count: > 0 } ? JsonSerializer.Serialize(detail) : null,
             });
+            // The machine's own load beside it, with what its berths were doing - only when it
+            // reported one lately: a machine that went quiet has no load this minute, not zero.
+            if (_book?.Get(p.Place, now) is { } load)
+            {
+                var phases = _phases?.Invoke(p.Place);
+                db.MachineLoadSamples.Add(new MachineLoadSample
+                {
+                    At = now, Place = p.Place, Busy = Math.Min(p.Busy, p.Slots),
+                    CpuPct = load.CpuPct, MemAvailMb = load.MemAvailMb, MemTotalMb = load.MemTotalMb,
+                    SwapUsedMb = load.SwapUsedMb, Pressure = load.Pressure, DiskFreeGb = load.DiskFreeGb,
+                    NetInKbps = load.NetInKbps, NetOutKbps = load.NetOutKbps,
+                    DockerMemUsedMb = load.DockerMemUsedMb, DockerMemLimitMb = load.DockerMemLimitMb,
+                    PhasesJson = phases is { Count: > 0 } ? JsonSerializer.Serialize(phases) : null,
+                });
+            }
         }
 
         if (now - _prunedAt > TimeSpan.FromHours(1))
         {
             var cutoff = now - Keep;
             await db.CapacitySamples.Where(s => s.At < cutoff).ExecuteDeleteAsync(ct);
+            await db.MachineLoadSamples.Where(s => s.At < cutoff).ExecuteDeleteAsync(ct);
             _prunedAt = now;
         }
         await db.SaveChangesAsync(ct);

@@ -495,6 +495,79 @@ public class CapacitySample
     public string? DetailJson { get; set; }
 }
 
+/// <summary>
+/// One machine's hardware as it stood from <see cref="FirstSeen"/> to <see cref="LastSeen"/>. A new
+/// row is written only when the report changes, so a new row for a place is an upgrade (or a
+/// reinstall, or Docker given more memory) and the dates say when. Written by
+/// <see cref="Services.MachineInventoryStore"/>; docs/machine-limits-plan.md section 1.
+/// </summary>
+public class MachineInventory
+{
+    public int Id { get; set; }
+
+    /// <summary><c>@board</c> for this machine, or a worker host's name.</summary>
+    public string Place { get; set; } = "";
+
+    public DateTime FirstSeen { get; set; }
+
+    public DateTime LastSeen { get; set; }
+
+    /// <summary>Of the normalised report; equal hashes are the same hardware.</summary>
+    public string Hash { get; set; } = "";
+
+    /// <summary>The whole report, tool versions included.</summary>
+    public string Json { get; set; } = "";
+
+    // The fields worth searching and charting, promoted from the report.
+    public string? CpuModel { get; set; }
+    public int? PhysicalCores { get; set; }
+    public int? LogicalCores { get; set; }
+    public int? PerfCores { get; set; }
+    public int? EffCores { get; set; }
+    public long? RamMb { get; set; }
+    public string? Os { get; set; }
+    public string? OsVersion { get; set; }
+    public string? Arch { get; set; }
+    public string? DiskKind { get; set; }
+    public double? DiskTotalGb { get; set; }
+    public int? DockerCpus { get; set; }
+    public long? DockerMemMb { get; set; }
+}
+
+/// <summary>
+/// One machine's load at one minute, beside its <see cref="CapacitySample"/>: what the machine
+/// measured, and which of its berths were working at that minute and in what phase. Null fields are
+/// ones the machine could not read, never zero. Written by <see cref="Services.CapacitySampler"/>.
+/// </summary>
+public class MachineLoadSample
+{
+    public int Id { get; set; }
+
+    public DateTime At { get; set; }
+
+    public string Place { get; set; } = "";
+
+    public double? CpuPct { get; set; }
+    public long? MemAvailMb { get; set; }
+    public long? MemTotalMb { get; set; }
+    public long? SwapUsedMb { get; set; }
+
+    /// <summary>0 normal, 1 warn, 2 critical (<see cref="Services.MachinePressure"/>).</summary>
+    public int? Pressure { get; set; }
+
+    public double? DiskFreeGb { get; set; }
+    public double? NetInKbps { get; set; }
+    public double? NetOutKbps { get; set; }
+    public long? DockerMemUsedMb { get; set; }
+    public long? DockerMemLimitMb { get; set; }
+
+    /// <summary>Berths working at that minute.</summary>
+    public int Busy { get; set; }
+
+    /// <summary>How many of them were in each phase, as JSON: <c>{"implement":3,"qa-test":1}</c>.</summary>
+    public string? PhasesJson { get; set; }
+}
+
 /// <summary>What a <see cref="QaRulingEvent"/> records.</summary>
 public enum QaRulingKind
 {

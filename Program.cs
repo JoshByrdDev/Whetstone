@@ -183,7 +183,22 @@ builder.Services.AddSingleton<ProjectStackService>();
 if (!isolation.On) builder.Services.AddHostedService<StackProbeService>();
 // Reads the board and writes its own table, nothing past the data folder - so it runs on the QA
 // copy too, where it says "stopped", which is the truth there.
-builder.Services.AddSingleton<CapacitySampler>();
+// Each machine's latest load: a worker host's from its check-in, this one's from MachineProbeService,
+// which reads only this machine (and leaves docker alone on a QA copy). docs/machine-limits-plan.md.
+builder.Services.AddSingleton<MachineLoadBook>();
+builder.Services.AddHostedService<MachineProbeService>();
+builder.Services.AddScoped<MachineLimitsService>();
+builder.Services.AddSingleton(sp =>
+{
+    var events = sp.GetRequiredService<EventStore>();
+    var hosts = sp.GetRequiredService<WorkerHostService>();
+    return new CapacitySampler(sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<CapacitySnapshot>(),
+        sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<ILogger<CapacitySampler>>(),
+        sp.GetRequiredService<MachineLoadBook>(),
+        place => place == CapacityPlaces.Board
+            ? events.RunningPhases(slot => slot >= 1 && slot <= HeartbeatManager.MaxWorkers)
+            : hosts.Find(place) is { } h ? events.RunningPhases(h.OwnsSlot) : new Dictionary<string, int>());
+});
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CapacitySampler>());
 
 // How much subscription rate-limit headroom is left, polled once for every open tab. Reads Claude
@@ -610,6 +625,7 @@ app.MapStackEndpoints();
 
 // Worker hosts: check-in and orders for their runners, branch hand-back, the project kit.
 app.MapWorkerHostEndpoints();
+app.MapMachineEndpoints();
 
 // Per-ticket git actions for the human: checkout, and PR preflight + create.
 app.MapGitEndpoints();

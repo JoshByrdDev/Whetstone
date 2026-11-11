@@ -11,6 +11,8 @@ import { SmartSwitchField } from './SmartSwitchField';
 import type { SmartSwitchSetting } from './SmartSwitchField';
 import { ApiCreditsField, API_CREDITS_OFF } from './ApiCreditsField';
 import type { ApiCreditsSetting } from './ApiCreditsField';
+import { SlotSuggestionNote } from './SlotSuggestionNote';
+import { useMachines, BOARD_PLACE } from '../hooks/useMachines';
 
 // ---------- Shared field primitives -----------------------------------------
 
@@ -235,6 +237,8 @@ interface GlobalConfig {
   maxQaLeases: number;
   /** Whether the Heartbeat tab shows its Worker Hosts section. Display only. */
   showWorkerHosts: boolean;
+  /** The slot-suggestion rules' knobs; only `auto` has a switch here. Absent from an older server. */
+  machineLimits?: { auto: boolean } & Record<string, unknown>;
   /** Remote work is switched on and a worker host is set up. The section cannot be hidden then. */
   workerHostsInUse: boolean;
   /** What each kind of run takes, keyed by role. Served with every gap filled, so what is on
@@ -431,6 +435,7 @@ function withDefaults(d: GlobalConfig): GlobalConfig {
 
 function GlobalSettings() {
   const [cfg, setCfg] = useState<GlobalConfig | null>(null);
+  const board = useMachines()?.machines.find(m => m.place === BOARD_PLACE);
   // What the server last held, as JSON. Unsaved means "different from this", not "touched": a
   // field changed and changed back leaves nothing to save.
   const [saved, setSaved] = useState<string | null>(null);
@@ -790,6 +795,22 @@ function GlobalSettings() {
             error={errors.qaLeases}
           />
         </div>
+        {board && (
+          <div className="grid grid-cols-2 max-sm:grid-cols-1 gap-4 -mt-1">
+            <SlotSuggestionNote s={board.workers} current={cfg.heartbeatWorkers} onUse={n => update({ heartbeatWorkers: Math.min(n, cfg.maxHeartbeatWorkers || 10) })} />
+            <SlotSuggestionNote s={board.qa} current={cfg.qaLeases} onUse={n => update({ qaLeases: Math.min(n, cfg.maxQaLeases || 10) })} />
+          </div>
+        )}
+        <CheckField
+          label="Automatic slot limits"
+          description={
+            'Not built yet, and off: suggestions above are advice only. When it exists, it will only ever run fewer ' +
+            'berths than you set, on any computer, while one shows strain - never more, and never renumbering a berth.'
+          }
+          checked={cfg.machineLimits?.auto ?? false}
+          onChange={v => update({ machineLimits: { ...(cfg.machineLimits ?? {}), auto: v } })}
+          disabled={cfg.machineLimits === undefined}
+        />
         {/* The caveats the two descriptions would otherwise each carry, said once under both. */}
         <div className="space-y-1 text-[11px] text-gray-600">
           <p>

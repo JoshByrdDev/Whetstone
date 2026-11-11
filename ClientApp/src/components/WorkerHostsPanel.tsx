@@ -4,6 +4,8 @@ import { DISPLAY, MONO, BODY, CAPS, chamfer } from './orbit';
 import { label, ago } from './stewardParts';
 import { track } from '../theme';
 import type { WorkerHost } from '../hooks/useWorkerHosts';
+import { useMachines, hardwareLine, type Machine } from '../hooks/useMachines';
+import { SlotSuggestionNote } from './SlotSuggestionNote';
 
 /**
  * The board's worker hosts: other computers that run workers for it and hand their branches back
@@ -84,6 +86,7 @@ export function WorkerHostsPanel() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [newName, setNewName] = useState('');
+  const machines = useMachines();
 
   const load = useCallback(async () => {
     try {
@@ -151,6 +154,7 @@ export function WorkerHostsPanel() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         {s.hosts.map(h => (
           <HostCard key={h.name} h={h} s={s} busy={busy} onEdit={e => edit(h.name, e)}
+            machine={machines?.machines.find(m => m.place.toLowerCase() === h.name.toLowerCase())}
             onRemove={() => act(`/api/hosts/settings/hosts/${encodeURIComponent(h.name)}`, 'DELETE')} />
         ))}
       </div>
@@ -246,9 +250,11 @@ function DispatchPanel({ s, busy, onSave }: {
   );
 }
 
-function HostCard({ h, s, busy, onEdit, onRemove }: {
+function HostCard({ h, s, busy, onEdit, onRemove, machine }: {
   h: Settings['hosts'][number];
   s: Settings;
+  /** Its hardware and suggested counts (docs/machine-limits-plan.md), once it has reported. */
+  machine?: Machine;
   busy: boolean;
   onEdit: (e: HostEdit) => void;
   onRemove: () => void;
@@ -280,6 +286,12 @@ function HostCard({ h, s, busy, onEdit, onRemove }: {
         {h.usageLimitUntil && <span>paused until {new Date(h.usageLimitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
       </div>
 
+      {machine?.inventory && (
+        <div className="mt-0.5 min-w-0 break-words" style={{ font: `400 10.5px ${BODY}`, color: DIM }}>
+          {hardwareLine(machine.inventory)}
+        </div>
+      )}
+
       {h.claude?.gated && (
         <div className="mt-0.5" style={{ font: `400 10.5px ${BODY}`, color: h.claude.account ? MUTED : 'rgb(var(--w-gate-rgb))' }}
           title="The smart switch chooses this computer's Claude account, from the logins it has, by the same limits as this machine's.">
@@ -297,10 +309,12 @@ function HostCard({ h, s, busy, onEdit, onRemove }: {
         <span style={label()}>Berths</span>
         <Stepper value={h.slots} min={1} max={8} busy={busy} onChange={v => onEdit({ slots: v })}
           hint="How many workers this computer runs at once." />
+        {machine && <><span /><SlotSuggestionNote s={machine.workers} current={h.slots} busy={busy} onUse={n => onEdit({ slots: Math.min(n, 8) })} /></>}
 
         <span style={label()}>QA at once</span>
         <Stepper value={h.qaLeases} min={1} max={8} busy={busy} onChange={v => onEdit({ qaLeases: v })}
           hint="Copies of one project's stack this computer may run together. Above one, only for a project whose config sets parallelStacks." />
+        {machine && <><span /><SlotSuggestionNote s={machine.qa} current={h.qaLeases} busy={busy} onUse={n => onEdit({ qaLeases: Math.min(n, 8) })} /></>}
 
         <span style={label()}>Phases</span>
         <div className="flex flex-wrap gap-1.5">
