@@ -70,6 +70,8 @@ data/narrator/node_modules/
 data/agent-sdk/node_modules/
 # QA's browser server, installed once so a run does not ask the npm registry at every launch.
 data/playwright-mcp/node_modules/
+# Set while a worker host's runner installs it (runner.ps1); workers use npx until it is gone.
+data/playwright-mcp/.installing
 # The analytics warehouse and its published marts (docs/analytics.md): rebuilt by a refresh, one machine's.
 data/analytics/
 # Files the ticket owner attached to a progress note. Not a cache - there is no upstream to refetch

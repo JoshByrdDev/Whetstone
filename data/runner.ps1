@@ -56,7 +56,58 @@ $RunnerUpdatedExit = 75
 # How long to wait before fetching again for a board commit this checkout cannot see yet.
 $RunnerFetchBackoffMinutes = 5
 
+# QA's browser server, installed in data/playwright-mcp so a run starts it in seconds. The folder's
+# node_modules is gitignored, so a worker host's checkout never had it: every QA run there went
+# through `npx @playwright/mcp@latest`, which asks the npm registry each launch, and on a busy host
+# it missed the 90s connect timeout twice running and blocked the ticket on a healthy browser. The
+# runner installs it itself, in the background and only while idle (an install deletes the files a
+# live run's browser has open). While it runs, the marker tells workers to keep using npx, so none
+# starts on a half-written install. worker.ps1 reads the same marker.
+$PlaywrightDir = Join-Path $DataRoot 'playwright-mcp'
+$PlaywrightInstallingMarker = '.installing'
+$PlaywrightRetryMinutes = 30
+
 # ---- Pure helpers (data/runner.tests.ps1 lifts these) ---------------------------------------
+
+# Whether data/playwright-mcp holds the version its package.json pins, finished. Returns
+# @{ ok; pinned; installed }.
+function Test-PlaywrightInstall {
+    param([string]$Dir)
+    $pinned = ''; $installed = ''
+    try { $pinned = "$((Get-Content -Raw -LiteralPath (Join-Path $Dir 'package.json') | ConvertFrom-Json).dependencies.'@playwright/mcp')".Trim() } catch { }
+    $mcpPkg = Join-Path $Dir 'node_modules\@playwright\mcp\package.json'
+    if (Test-Path -LiteralPath $mcpPkg) {
+        try { $installed = "$((Get-Content -Raw -LiteralPath $mcpPkg | ConvertFrom-Json).version)".Trim() } catch { }
+    }
+    $busy = Test-Path -LiteralPath (Join-Path $Dir $PlaywrightInstallingMarker)
+    return @{ ok = [bool]($pinned -and $installed -eq $pinned -and -not $busy); pinned = $pinned; installed = $installed }
+}
+
+# Start `npm ci` in data/playwright-mcp in the background, the marker written first. Returns the
+# process, or $null when it could not start.
+function Start-PlaywrightInstall {
+    param([string]$Dir, [string]$LogDir)
+    Set-Content -LiteralPath (Join-Path $Dir $PlaywrightInstallingMarker) -Value "npm ci started $(Get-Date -Format s)" -Encoding ascii
+    $out = Join-Path $LogDir 'playwright-install.log'
+    $err = Join-Path $LogDir 'playwright-install.err.log'
+    try {
+        $npmArgs = @('ci', '--no-audit', '--no-fund')
+        $p = if ($OnWindows) {
+            Start-Process -FilePath 'cmd.exe' -ArgumentList (@('/c', 'npm') + $npmArgs) -WorkingDirectory $Dir `
+                -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden -PassThru
+        } else {
+            Start-Process -FilePath 'npm' -ArgumentList $npmArgs -WorkingDirectory $Dir `
+                -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+        }
+        try { $null = $p.Handle } catch { }
+        return $p
+    }
+    catch {
+        Remove-Item -LiteralPath (Join-Path $Dir $PlaywrightInstallingMarker) -Force -ErrorAction SilentlyContinue
+        Write-Log "Could not start the QA browser install: $($_.Exception.Message)"
+        return $null
+    }
+}
 
 # host.json, checked. Returns @{ ok; name; projects = @{ key = @{ path; worktreeRoot } }; reason }.
 function Read-HostConfig {
@@ -448,6 +499,10 @@ $ownRepo = Split-Path -Parent $DataRoot
 # not on every check-in; and when a commit not fetchable yet may be tried for again.
 $updateSaid = @{}
 $updateRetryAt = @{}
+$pwInstall = $null
+$pwRetryAt = [datetime]::MinValue
+$pwState = Test-PlaywrightInstall -Dir $PlaywrightDir
+if (-not $pwState.ok) { Write-Log "QA browser in data/playwright-mcp is $(if ($pwState.installed) { "at $($pwState.installed)" } else { 'not installed' }) (wants $($pwState.pinned)) - installing it once this host is idle; QA uses npx until then." }
 
 $Runs = Find-SurvivingRuns
 foreach ($slot in $Runs.Keys) { Write-Log "  Adopted run $($Runs[$slot].RunId) in slot $slot (ticket #$($Runs[$slot].TicketId), pid $($Runs[$slot].Pid))" }
@@ -531,6 +586,9 @@ while ($true) {
     # acted on first; and only ever while idle - see Get-UpdateAction.
     $boardSha = "$($resp.boardCommit)".Trim()
     $liveNow = @($Runs.Values | Where-Object { -not $_.ExitedAt }).Count
+    # A QA browser install holds the update back like a run: restarting under it would leave an
+    # npm ci going with nothing to clear its marker, and the next runner would start a second.
+    if ($pwInstall -and -not $pwInstall.HasExited) { $liveNow++ }
     $action = Get-UpdateAction -Own $commit -Board $boardSha -LiveRuns $liveNow -Stopping (Test-Path $RunnerStopFile) -Enabled $HostCfg.autoUpdate
     if ($action -eq 'wait' -and $updateSaid[$boardSha] -ne 'wait') {
         Write-Log "Board host is on commit $boardSha; this runner is on $commit. Updating once its $liveNow run(s) finish."
@@ -567,6 +625,30 @@ while ($true) {
             $updateRetryAt[$boardSha] = [datetime]::MaxValue
             Write-Log "Not updating to the board host's commit ${boardSha}: $($result.reason). This host gets no work until its checkout is on that commit."
         }
+    }
+
+    # The QA browser install, after the update: an update exits this runner, and an install it had
+    # just started would outlive it with its marker never cleared.
+    if ($pwInstall) {
+        if ($pwInstall.HasExited) {
+            $code = try { $pwInstall.ExitCode } catch { $null }
+            Remove-Item -LiteralPath (Join-Path $PlaywrightDir $PlaywrightInstallingMarker) -Force -ErrorAction SilentlyContinue
+            $pwState = Test-PlaywrightInstall -Dir $PlaywrightDir
+            if ($code -eq 0 -and $pwState.ok) { Write-Log "QA browser installed in data/playwright-mcp ($($pwState.installed)); QA starts it directly from now on." }
+            else {
+                # A half-written install is worse than none: npx is slow, a broken copy fails outright.
+                Remove-Item -LiteralPath (Join-Path $PlaywrightDir 'node_modules') -Recurse -Force -ErrorAction SilentlyContinue
+                $pwRetryAt = (Get-Date).AddMinutes($PlaywrightRetryMinutes)
+                Write-Log "QA browser install failed (exit $code; see logs\playwright-install.err.log) - QA keeps using npx; trying again in $PlaywrightRetryMinutes min."
+            }
+            $pwInstall = $null
+        }
+    }
+    elseif ((Get-Date) -ge $pwRetryAt -and -not (Test-Path $RunnerStopFile) -and
+            @($Runs.Values | Where-Object { -not $_.ExitedAt }).Count -eq 0 -and -not (Test-PlaywrightInstall -Dir $PlaywrightDir).ok) {
+        Write-Log "Installing the QA browser in data/playwright-mcp (npm ci) while this host is idle."
+        $pwInstall = Start-PlaywrightInstall -Dir $PlaywrightDir -LogDir $LogDir
+        if (-not $pwInstall) { $pwRetryAt = (Get-Date).AddMinutes($PlaywrightRetryMinutes) }
     }
 }
 

@@ -2455,9 +2455,12 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
     # it took 25-70s on a quiet machine, so a busy one tipped past the 90s connect timeout and QA
     # tickets blocked on a healthy browser. npx stays as the fallback for a machine without the
     # install, which the Setup check flags.
+    # A worker host's runner installs it while idle (runner.ps1, Start-PlaywrightInstall) and marks
+    # the folder until it is done, so a run never starts on half of node_modules.
     $pwCli = Join-Path $DataRoot "playwright-mcp\node_modules\@playwright\mcp\cli.js"
+    $pwBusy = Test-Path -LiteralPath (Join-Path $DataRoot "playwright-mcp\.installing")
     $pwArgs = @("--headless", "--isolated", "--output-dir", $qaShotDir)
-    if (Test-Path -LiteralPath $pwCli) {
+    if ((Test-Path -LiteralPath $pwCli) -and -not $pwBusy) {
         $mcpServers.playwright = @{ type = "stdio"; command = "node"; args = @($pwCli) + $pwArgs }
     } else {
         Write-Log "  Playwright not installed in data/playwright-mcp - falling back to npx, which can be slow to start"

@@ -85,9 +85,14 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
 
 6. **Tools.** Install git, and the agent CLI logged in to this machine's own account, plus whatever
    the project's implement skill builds and tests with (its SDKs, Node, and so on). It needs no
-   .NET, because this machine runs no board.
+   .NET, because this machine runs no board. Node and npm are needed in any case: the runner
+   installs QA's browser server in `data/playwright-mcp` itself (`npm ci`, the first time it is
+   idle and again whenever the pinned version changes). Until that has finished, QA runs start the
+   browser through `npx`, which can miss its 90-second start-up window on a busy machine and block a
+   QA ticket.
 
-   Check: the CLI answers a one-line prompt. A project build runs in a scratch clone.
+   Check: the CLI answers a one-line prompt. A project build runs in a scratch clone. After the
+   runner's first idle minute, its log says "QA browser installed in data/playwright-mcp".
 
 7. **Credentials for the share**, stored for the account the runner will run as:
 

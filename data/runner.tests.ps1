@@ -421,6 +421,24 @@ exit 3
     Check '... the worker is told why, to turn a Claude phase down' $claim.claudeAccount.refused 'A weekly 85% >= 80%'
     Check '... with no folder' "$($claim.claudeAccount.configDir)" ''
 
+    # ---- QA's browser install ----------------------------------------------------------
+    Write-Host "== Test-PlaywrightInstall"
+    $PlaywrightInstallingMarker = '.installing'
+    $pw = Join-Path $root 'playwright-mcp'
+    New-Item -ItemType Directory -Path $pw -Force | Out-Null
+    Write-Json (Join-Path $pw 'package.json') '{ "dependencies": { "@playwright/mcp": "0.0.84" } }'
+    $s = Test-PlaywrightInstall -Dir $pw
+    Check 'nothing installed: not ready' $s.ok $false
+    Check '... and says what it wants' $s.pinned '0.0.84'
+    $mcp = Join-Path $pw 'node_modules\@playwright\mcp'
+    New-Item -ItemType Directory -Path $mcp -Force | Out-Null
+    Write-Json (Join-Path $mcp 'package.json') '{ "version": "0.0.80" }'
+    Check 'an older version: not ready, so it is installed again' (Test-PlaywrightInstall -Dir $pw).ok $false
+    Write-Json (Join-Path $mcp 'package.json') '{ "version": "0.0.84" }'
+    Check 'the pinned version: ready' (Test-PlaywrightInstall -Dir $pw).ok $true
+    Set-Content -LiteralPath (Join-Path $pw '.installing') -Value 'npm ci started' -Encoding ascii
+    Check 'an install under way (or one a runner died in): not ready' (Test-PlaywrightInstall -Dir $pw).ok $false
+
     # ---- Which PowerShell the fleet starts ---------------------------------------------
     # Get-PsHost is heartbeat-common.ps1's too. Mirrors PowerShellHost in C#.
     Write-Host "== Get-PsHost"
