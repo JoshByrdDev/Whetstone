@@ -28,6 +28,8 @@ data/**/*.bak
 # Snapshots of the dashboard database, taken before a migration. Local, large, and full of
 # ticket content - never shared.
 data/backups/
+# A project's per-machine caches ({machineCache} in its workerEnv) - one machine's, rebuilt at will
+data/cache/
 # Runtime state
 data/**/events.jsonl
 data/**/logs/

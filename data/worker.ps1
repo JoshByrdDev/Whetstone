@@ -39,6 +39,35 @@ $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 # only; a project of one repo takes its set-of-one path, which is Resolve-Worktree as it always was.
 . (Join-Path $DataRoot "worker-repos.ps1")
 
+# A project's workerEnv, ready to set: the names it may set, each value with {machineCache} made
+# this machine's folder for the project (<data root>/cache/<key>), and the names it may not set.
+# Refused are the names this pipeline sets or reads itself - its own WHETSTONE_* (the guard trusts
+# WHETSTONE_BOARD_HOST), the providers' logins and homes, git's, and the paths every process
+# resolves through - because a project config that could set those could route around the rules
+# that are not its to change. Dirs lists the names whose value is a {machineCache} folder, which the
+# caller creates. Pure apart from reading its arguments, so worker-env.tests.ps1 can drive it.
+function Get-WorkerEnv {
+    param($Spec, [string]$CacheRoot, [string]$ProjectKey)
+    $out = @{ Env = [ordered]@{}; Refused = @(); Dirs = [Collections.Generic.HashSet[string]]::new() }
+    if ($null -eq $Spec) { return $out }
+    $pairs = if ($Spec -is [Collections.IDictionary]) { $Spec.GetEnumerator() | ForEach-Object { @{ Name = "$($_.Key)"; Value = $_.Value } } }
+             else { $Spec.PSObject.Properties | ForEach-Object { @{ Name = $_.Name; Value = $_.Value } } }
+    $deny = '^(WHETSTONE_|CLAUDE|ANTHROPIC|CODEX|GEMINI|OPENAI|GIT_|GCM_)|^(PATH|PSMODULEPATH|PATHEXT|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TEMP|TMP|COMSPEC|SYSTEMROOT|WINDIR)$'
+    $cache = [IO.Path]::Combine($CacheRoot, $ProjectKey)
+    foreach ($p in $pairs) {
+        $name = $p.Name
+        if ($name.StartsWith('_')) { continue }
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or $name -match $deny -or $p.Value -isnot [string]) { $out.Refused += $name; continue }
+        $value = $p.Value
+        if ($value.Contains('{machineCache}')) {
+            $value = [IO.Path]::GetFullPath($value.Replace('{machineCache}', $cache))
+            [void]$out.Dirs.Add($name)
+        }
+        $out.Env[$name] = $value
+    }
+    return $out
+}
+
 # A worker is its own top-level session, never a child of one. When the app was started from inside
 # Claude Code (`dotnet run` in a session's shell), every process under it inherits that session's
 # variables: CLAUDECODE=1 makes claude refuse to launch at all ("cannot be launched inside another
@@ -2461,6 +2490,17 @@ $toolSetup = New-AgentToolSetup -Provider $AgentProvider -Servers $mcpServers -R
 # is safe precisely because this script IS one agent working one ticket - the isolation the fleet
 # relies on is the process boundary, so there is nobody else in here to disturb.
 foreach ($k in $toolSetup.Env.Keys) { Set-Item -Path "Env:$k" -Value $toolSetup.Env[$k] }
+
+# The project's own environment (workerEnv in its config): what its tooling reads and the platform
+# has no word for, such as one build cache shared by every worktree on this machine. Set after the
+# provider's and before the platform's own WHETSTONE_* below, which Get-WorkerEnv refuses anyway.
+$workerEnv = Get-WorkerEnv -Spec $Claim.project.workerEnv -CacheRoot (Join-Path $DataRoot 'cache') -ProjectKey $projectKey
+foreach ($k in $workerEnv.Refused) { Write-Log "  workerEnv: $k is not a project's to set - ignored." }
+foreach ($k in $workerEnv.Env.Keys) {
+    if ($workerEnv.Dirs.Contains($k)) { New-Item -ItemType Directory -Force -Path $workerEnv.Env[$k] -ErrorAction SilentlyContinue | Out-Null }
+    Set-Item -Path "Env:$k" -Value $workerEnv.Env[$k]
+}
+if ($workerEnv.Env.Count -gt 0) { Write-Log "  workerEnv: $(@($workerEnv.Env.Keys) -join ', ')" }
 
 # Which run this is, for the hooks. A hook is a child of the agent CLI, which is a child of this
 # process, so the environment is the one channel that reaches it without a file per run - and the

@@ -239,6 +239,11 @@ Optional. Leave it out and QA stays on the board host.
     the worker host's log shows `Captures mirrored to the board host as they land`. QA on the board
     host can run at the same time.
 
+    A project's `workerEnv` (environment its workers run with, such as a build cache every
+    worktree shares) reaches a worker host in the claim, and `{machineCache}` in it is that host's
+    own folder, `data/cache/<key>` under its Whetstone checkout. Nothing to set up: the folder is
+    made the first time a run needs it, and it is never sent back to the board host.
+
 ## Day to day
 
 - **Stop taking new work:** switch the host **Off** on the Heartbeat page, or all of them with

@@ -342,6 +342,16 @@ public class ProjectConfig
     public bool ParallelStacks { get; init; }
 
     /// <summary>
+    /// Environment variables this project's workers run with, set by <c>worker.ps1</c> before the
+    /// agent starts. For what a project's own tooling reads and the platform has no word for - a
+    /// build cache several worktrees on one machine can share, a test runner's thread count. A
+    /// value may name <c>{machineCache}</c>: a folder for this project under the data root of the
+    /// machine the run is on, so a worker host's cache is its own. Names the platform sets or
+    /// reads itself are refused there, never here (<c>Get-WorkerEnv</c>), so the list is in one place.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> WorkerEnv { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
     /// How this project's steward works: its limits, its plan, what its merge checks and refuses.
     /// See <see cref="StewardConfig"/>.
     /// </summary>
@@ -628,6 +638,7 @@ public class ProjectRegistry
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
+            WorkerEnv = GetStrMap(cfg, "workerEnv"),
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
             ResourcePaths = GetStrArrayMap(cfg, "resourcePaths"),
             Tracker = TrackerConfig.From(cfg),
@@ -691,6 +702,16 @@ public class ProjectRegistry
     }
 
     /// <summary>Read a <c>{ "key": ["a","b"] }</c> object out of config, skipping anything malformed.</summary>
+    private static Dictionary<string, string> GetStrMap(Dictionary<string, JsonElement> cfg, string key)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!cfg.TryGetValue(key, out var v) || v.ValueKind != JsonValueKind.Object) return map;
+        foreach (var prop in v.EnumerateObject())
+            if (!prop.Name.StartsWith('_') && prop.Value.ValueKind == JsonValueKind.String)
+                map[prop.Name] = prop.Value.GetString()!;
+        return map;
+    }
+
     private static Dictionary<string, string[]> GetStrArrayMap(Dictionary<string, JsonElement> cfg, string key)
     {
         var map = new Dictionary<string, string[]>();

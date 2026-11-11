@@ -371,6 +371,9 @@ public static class TicketEndpoints
                         worktreeRoot = cfg.ResolvedWorktreeRoot,
                         worktreeSetup = cfg.WorktreeSetup,
                         worktreeCopyFiles = cfg.WorktreeCopyFiles,
+                        // The project's own environment for its workers, {machineCache} unexpanded:
+                        // the machine the run lands on says where its cache is (Get-WorkerEnv).
+                        workerEnv = cfg.WorkerEnv,
                         // A project of several repos: each one's folder, hub, base and setup, in
                         // order (Get-RepoMembers in data/worker-repos.ps1). Empty for a project that
                         // is one repo, which the worker reads as the set of one built from the keys
