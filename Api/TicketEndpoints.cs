@@ -25,7 +25,14 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     // ticket gets created honours it, not only the form that knows to ask.
     bool? SkipClassroomAnalysis = null,
     // This ticket fixes a bug: when it lands, its fix is blamed back to the tickets that wrote it.
-    bool? IsBug = null);
+    bool? IsBug = null,
+    // The branch the ticket forks from and is delivered into, when it is not the project's base: a
+    // feature branch a set of tickets builds on (Ticket.BaseBranch). Blank or the project's base is
+    // the project's base. Fixed once the ticket has a branch.
+    string? BaseBranch = null);
+
+/// <summary>The owner setting a ticket's own base before it has a branch. Blank is the project's base.</summary>
+public record SetBaseBranchRequest(string? BaseBranch);
 
 /// <summary>Staging one piece of feedback. Everything but the body has a sensible default.</summary>
 public record AddReviewCommentRequest(string Body, string? FilePath = null, int? Line = null,
@@ -104,6 +111,22 @@ public static class TicketEndpoints
             return $"'{member.Dir}' is read-only in {cfg.DisplayName}: nothing is delivered from it, so there is no pull request in it to review. The branch can be in {dirs}.";
         repo = member.Dir;
         return null;
+    }
+
+    /// <summary>
+    /// The base a ticket of <paramref name="projectKey"/> is filed on when its owner names
+    /// <paramref name="requested"/>: null for blank or the project's own base (so a ticket on the
+    /// project's base is stored as one, and follows the project if its base changes), the trimmed
+    /// name when every writable repo has it where the ticket's git will look
+    /// (<see cref="TicketGitService.TicketBaseProblemAsync"/>), and the refusal otherwise.
+    /// </summary>
+    public static async Task<(string? Base, string? Error)> OwnBaseAsync(TicketGitService git, string projectKey, string? requested)
+    {
+        var name = requested?.Trim();
+        if (string.IsNullOrEmpty(name)) return (null, null);
+        if (name == await git.TicketBaseBranchAsync(projectKey, null)) return (null, null);
+        var problem = await git.TicketBaseProblemAsync(projectKey, name);
+        return problem is null ? (name, null) : (null, problem);
     }
 
     /// <summary>
@@ -296,8 +319,8 @@ public static class TicketEndpoints
 
             var key = result.Ticket.ProjectKey;
             var cfg = registry.GetProjectConfig(key);
-            // The ticket's own base: its open slice's branch, on a project with slice branches.
-            // Told to the worker rather than left for it to work out, so a worker host is told too.
+            // The ticket's own base: the one its owner filed it on, else its open slice's branch on a
+            // project with slice branches (SliceBranches.ForTicketAsync). Told to the worker rather than left for it to work out, so a worker host is told too.
             result = result with { BaseBranch = await SliceBranches.ForTicketAsync(db, cfg, result.Ticket) };
             var tracker = trackers.For(key);
             var r = await resolver.ResolveAsync(result.Ticket);
@@ -654,8 +677,51 @@ public static class TicketEndpoints
                 tracker: trackers.For(t.ProjectKey), lastBackwardAt: await svc.LastBackwardAtAsync(id)));
         });
 
+        // The owner choosing a ticket's own base before it has a branch (Ticket.BaseBranch). A REST
+        // route with no tool behind it, like master notes; refused once the ticket has a branch.
+        app.MapPut("/api/tickets/{id:int}/base-branch", async (int id, SetBaseBranchRequest req, TicketService svc,
+            TicketGitService git, LinkedIssueResolver resolver, IssueTrackerFactory trackers) =>
+        {
+            var cur = await svc.GetAsync(id);
+            if (cur is null) return Results.NotFound();
+            var (own, error) = await OwnBaseAsync(git, cur.ProjectKey, req.BaseBranch);
+            if (error is not null) return Results.BadRequest(new { error });
+            switch (await svc.SetBaseBranchAsync(id, own))
+            {
+                case TicketService.BaseBranchChange.NotFound: return Results.NotFound();
+                case TicketService.BaseBranchChange.ReviewTrack:
+                    return Results.BadRequest(new { error = "A peer review ticket is read against its pull request's target, not a base of its own." });
+                case TicketService.BaseBranchChange.Started:
+                    return Results.Conflict(new { error = $"This ticket already has a branch, forked from {cur.BaseBranch ?? "the project's base"}. "
+                        + "Changing its base now would rebase that work onto another line; file a new ticket on the other base instead." });
+            }
+            var t = (await svc.GetAsync(id))!;
+            var r = await resolver.ResolveAsync(t);
+            return Results.Ok(TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable, tracker: trackers.For(t.ProjectKey)));
+        });
+
+        // What the new-ticket form offers under "Based on": the project's base, and the bases open
+        // tickets of the project already use - most used first - so a feature's twelfth ticket is
+        // one pick, not a branch name typed right eleven times.
+        app.MapGet("/api/projects/{key}/ticket-bases", async (string key, ProjectRegistry registry, TicketGitService git,
+            DashboardDbContext db) =>
+        {
+            if (!registry.IsEnabled(key)) return Results.NotFound();
+            var projectBase = await git.TicketBaseBranchAsync(key, null);
+            var inUse = await db.Tickets.AsNoTracking()
+                .Where(t => t.ProjectKey == key && t.BaseBranch != null && t.Phase != TicketPhase.Done)
+                .GroupBy(t => t.BaseBranch!)
+                .Select(g => new { branch = g.Key, tickets = g.Count() })
+                .ToListAsync();
+            return Results.Ok(new
+            {
+                projectBase,
+                inUse = inUse.OrderByDescending(b => b.tickets).ThenBy(b => b.branch, StringComparer.Ordinal).ToList(),
+            });
+        });
+
         app.MapPost("/api/tickets", async (CreateTicketRequest req, TicketService svc, ProjectRegistry registry,
-            LinkedIssueResolver resolver, IssueTrackerFactory trackers, PrototypeCaptureQueue captures) =>
+            LinkedIssueResolver resolver, IssueTrackerFactory trackers, PrototypeCaptureQueue captures, TicketGitService git) =>
         {
             // Named, never inferred. A ticket carries its project for the rest of its life - it
             // decides the repo, the branch, the tracker and the skills - so a create that did not
@@ -724,10 +790,19 @@ public static class TicketEndpoints
             if (issueKey != null && string.IsNullOrWhiteSpace(issueUrl))
                 issueUrl = DeriveIssueUrl(tracker, issueKey);
 
+            // A base of its own: checked against every writable repo before anything is filed, so a
+            // feature branch that was never pushed is refused here, naming the repo, rather than at
+            // the first claim.
+            if (track == TicketTrack.Review && !string.IsNullOrWhiteSpace(req.BaseBranch))
+                return Results.BadRequest(new { error = "A peer review ticket is read against its pull request's target, not a base of its own." });
+            var (ownBase, baseError) = await OwnBaseAsync(git, projectKey, req.BaseBranch);
+            if (baseError is not null) return Results.BadRequest(new { error = baseError });
+
             var t = await svc.CreateAsync(projectKey, title, req.Description, issueKey, issueUrl, phase,
                 req.RequiresSpeculationReview ?? false, req.RequiresImplementationReview ?? false, req.MasterNotes,
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
-                req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault);
+                req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,
+                ownBase);
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             // Photographed now, while it waits in its queue, so the first run already has the pictures.
             captures.Enqueue(t.Id);

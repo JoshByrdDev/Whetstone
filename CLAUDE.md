@@ -153,6 +153,17 @@ carries it (`baseBranch`, read by `Resolve-TicketBase`) and the board asks `Slic
 A place that reads `baseBranch` straight off the project for a ticket's git is wrong on such a
 project, however right it is on every other.
 
+**Any ticket can also have a base of its own** (`Ticket.BaseBranch`), on any project: a feature
+built on a long-lived branch, whose tickets fork from it and open their pull requests into it
+while the project's other tickets stay on its base. The owner sets it when filing, or from the
+drawer until the ticket has a branch, and never after - no tool writes it. The order is written
+once, in `SliceBranches.ForTicketAsync`: the ticket's own, else its open slice's, else the
+project's - and the claim and `TicketGitService.ForTicketAsync` both ask it, so the rule above
+is the same rule. By pull request the branch has to be on origin in every writable repo: filing
+refuses one that is not (`TicketBaseProblemAsync`), and so does the claim (`Test-TicketBaseOnOrigin`).
+The project's own Base Branch setting writes the committed `project.defaults.json` and moves every
+ticket, so it is not the way to put one feature on its branch.
+
 ```bash
 pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
 ```

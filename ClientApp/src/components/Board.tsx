@@ -1229,6 +1229,13 @@ function OrbitRow({
             )}
             {t.title}
           </div>
+          {/* Its own base, on a line of its own like the labels below: a feature branch's name is
+              told apart from its neighbours by its end, which is the part a shared line cuts off. */}
+          {t.baseBranch && (
+            <span className="flex min-w-0" style={{ marginTop: 3 }}>
+              <BaseMark t={t} />
+            </span>
+          )}
           {/* Your filing tags, on their own line and only on the rows that carry any. A line the
               row grows rather than width the identifiers give up: labels are the thing you scan a
               board FOR once you have filed anything, and a set truncated to fit beside a phase chip
@@ -1413,6 +1420,26 @@ function PriorityMark({ t }: { t: TicketSummary }) {
     >
       <span style={{ fontSize: 7.5, letterSpacing: 0 }}>{PRIORITY_MARK[p]}</span>
       {p}
+    </span>
+  );
+}
+
+/**
+ * `⑂ feature/PROJ-4333` — this ticket forks from and is delivered into a branch of its own choosing
+ * rather than the project's base (Ticket.BaseBranch). Never drawn for a ticket on the project's base,
+ * for the same reason as the priority mark: the exception is what is worth seeing, and a board where a
+ * feature's tickets sit beside everyone else's has to say which is which on the row itself.
+ */
+function BaseMark({ t }: { t: TicketSummary }) {
+  if (!t.baseBranch) return null;
+  return (
+    <span
+      className="flex items-center gap-1 min-w-0"
+      title={`Based on ${t.baseBranch}, not the project's base: forks from it, is compared with it, and is delivered into it`}
+      style={{ font: `600 9px ${MONO}`, color: 'var(--w-t300)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: '0 1 auto' }}
+    >
+      <span style={{ flex: 'none' }}>⑂</span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{t.baseBranch}</span>
     </span>
   );
 }

@@ -1767,7 +1767,7 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
           )}
 
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Base Branch" description="Branch new feature branches fork from. Blank = main." value={p.baseBranch} onChange={v => update({ baseBranch: v })} placeholder="main" />
+            <Field label="Base Branch" description="Branch every ticket of this project forks from and is delivered into. Blank = main. Saved to the committed project.defaults.json, so it is a lasting change for the whole project, not a switch for one feature: to build a feature on its own branch, set Based on when filing its tickets." value={p.baseBranch} onChange={v => update({ baseBranch: v })} placeholder="main" />
             <Field label="Branch Prefix" description="Prefix for auto-created branches, e.g. jb/ → jb/PROJ-123." value={p.branchPrefix} onChange={v => update({ branchPrefix: v })} placeholder="jb/" />
           </div>
           <FolderField label="Project Path" description="Absolute path to the repo this project works on. Yours to work in — the heartbeat never runs here." value={p.projectPath}

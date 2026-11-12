@@ -18,7 +18,9 @@ public partial class TicketGitService
     /// <summary>
     /// Merge the ticket's <paramref name="branch"/> into its slice's branch <paramref name="slice"/>,
     /// <c>--no-ff</c>, without touching any checkout. A conflict changes nothing and asks for the
-    /// branch to be rebased onto the slice, exactly as a merge into the base does.
+    /// branch to be rebased onto the slice, exactly as a merge into the base does. Also the merge of
+    /// a ticket filed on a base of its own (<see cref="Models.Ticket.BaseBranch"/>) on a project that
+    /// merges locally: the same move into a branch that is not the project's base.
     /// </summary>
     private async Task<MergeResult> MergeIntoSliceAsync(ProjectConfig cfg, string repo, string slice, string branch,
         string? title, string? description, CancellationToken ct)
@@ -27,16 +29,18 @@ public partial class TicketGitService
         var noFiles = Array.Empty<string>();
         MergeResult Fail(string error, bool conflicted = false, IReadOnlyList<string>? files = null) =>
             new(false, error, conflicted, files ?? noFiles, branch, slice, repo, null, false, 0, output);
+        var isSlice = SliceBranches.IsSliceBranch(slice);
+        var whose = isSlice ? "slice's" : "ticket's base";
 
         if (string.IsNullOrWhiteSpace(branch)) return Fail("This ticket has no branch yet.");
         if (!IsGitRepo(repo)) return Fail($"{cfg.DisplayName} has no git repo at '{repo}'.");
-        if (branch == slice) return Fail($"'{branch}' is the slice's own branch - there is nothing to merge.");
+        if (branch == slice) return Fail($"'{branch}' is {(isSlice ? "the slice's own branch" : "the ticket's base")} - there is nothing to merge.");
         if (!(await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}")).Ok)
             return Fail($"Branch '{branch}' does not exist in {repo}.");
         var sliceTip = await TipAsync(repo, slice, ct);
-        if (sliceTip is null) return Fail($"The slice's branch '{slice}' does not exist in {repo}.");
+        if (sliceTip is null) return Fail($"The {whose} branch '{slice}' does not exist in {repo}.");
         if (CheckedOutElsewhere(repo, slice) is { } holder)
-            return Fail($"'{slice}' is checked out in {holder}. A slice branch is merged into without a checkout; " +
+            return Fail($"'{slice}' is checked out in {holder}. {(isSlice ? "A slice branch" : "A ticket's base")} is merged into without a checkout; " +
                         "switch that tree off it first, so it is not left holding files its branch no longer has.");
 
         var (_, ahead) = await CountAsync(repo, $"refs/heads/{slice}", $"refs/heads/{branch}", ct);

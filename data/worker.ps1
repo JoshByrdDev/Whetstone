@@ -352,12 +352,12 @@ function Test-BranchRef {
 # Asks whatever repo it is pointed at; a worktree shares the hub's refs, so either gives the same
 # answer. Does not fetch. Returns $null when the base exists nowhere.
 # Which BRANCH this ticket's work is based on, before Resolve-BaseRef says which ref of it: the
-# ticket's own when the claim names one (a ticket of an open slice, on a project with slice
-# branches - docs/slice-branches.md), else the project's baseBranch, else the global one. The board
-# works the same answer out for the diff a person reviews and its own rebase (ForTicketAsync and
-# SliceBranches.BaseFor in Services/), and tells it here rather than leaving it to be worked out, so
-# a worker host is told it too. A claim from an app without slice branches carries no baseBranch,
-# and means exactly what it always meant.
+# ticket's own when the claim names one (the base its owner filed it on, on any project; or an
+# open slice's branch, on a project with slice branches - docs/slice-branches.md), else the
+# project's baseBranch, else the global one. The board works the same answer out for the diff a
+# person reviews and its own rebase (SliceBranches.ForTicketAsync in Services/), and tells it here
+# rather than leaving it to be worked out, so a worker host is told it too. A claim that carries no
+# baseBranch means exactly what it always meant.
 function Resolve-TicketBase {
     param($Claim, [string]$DefaultBase)
     $ticketBase = "$($Claim.baseBranch)".Trim()
@@ -365,6 +365,34 @@ function Resolve-TicketBase {
     $projectBase = "$($Claim.project.baseBranch)".Trim()
     if ($projectBase) { return $projectBase }
     return $DefaultBase
+}
+
+# Why a ticket's own base cannot be worked here, or $null when it can. Delivered by pull request,
+# Resolve-BaseRef forks from origin/<base> when origin has it and from the local branch when only
+# that exists - and a ticket forked from a branch origin lacks has nowhere to open its pull request
+# into. So on such a project every writable member whose base is the ticket's must have it on
+# origin, fetched first in case the owner pushed it a minute ago. The board refuses to file a ticket
+# like that (TicketBaseProblemAsync); this is the same rule at the claim, for a branch deleted
+# from origin since. A slice branch is local by design, and a merge-locally project needs only the
+# local branch, which Resolve-Worktree already reports when it is missing.
+function Test-TicketBaseOnOrigin {
+    param([object[]]$Members, [string]$TicketBase, [bool]$MergeLocally, [switch]$NoFetch)
+    $TicketBase = "$TicketBase".Trim()
+    if (-not $TicketBase -or $MergeLocally -or $TicketBase.StartsWith('slice/')) { return $null }
+    foreach ($m in @($Members)) {
+        if ($m.readOnly -eq $true -or "$($m.baseBranch)" -ne $TicketBase) { continue }
+        $hub = "$($m.hub)"
+        $where = if ("$($m.dir)") { "$($m.dir)" } else { 'the project''s repo' }
+        git -C $hub rev-parse --verify --quiet "refs/remotes/origin/$TicketBase" *> $null
+        if ($LASTEXITCODE -eq 0) { continue }
+        if (-not $NoFetch) {
+            git -C $hub fetch origin $TicketBase --quiet *> $null
+            git -C $hub rev-parse --verify --quiet "refs/remotes/origin/$TicketBase" *> $null
+            if ($LASTEXITCODE -eq 0) { continue }
+        }
+        return "the ticket's base branch '$TicketBase' is not on origin in $where; this project is delivered by pull request, so a ticket based on it forks from origin's copy and opens its pull request into it"
+    }
+    return $null
 }
 
 function Resolve-BaseRef {
@@ -2440,6 +2468,19 @@ if ($onHost) {
     $ticketData = Get-BoardTicketData -DashboardUrl $DashboardUrl -TicketId $ticketId -DataRoot $DataRoot
     if ($ticketData.ok) { Write-Log "  Ticket files from the board host: $($ticketData.files)" }
     else { Write-Log "  WARNING: could not fetch the ticket's files from the board host: $($ticketData.reason)" }
+}
+
+# A ticket filed on a base of its own, on a project delivered by pull request, needs that base on
+# origin (Test-TicketBaseOnOrigin). Blocked rather than given back: the branch is the owner's to push
+# or the ticket's base the owner's to change, and another claim would find it missing the same way.
+# A worker host reads origin through the board host's mirror and does not fetch it itself.
+if ($repoDir) {
+    $baseProblem = Test-TicketBaseOnOrigin -Members $repoMembers -TicketBase "$($Claim.baseBranch)" `
+        -MergeLocally $mergeLocally -NoFetch:$onHost
+    if ($baseProblem) {
+        Stop-CycleEarly -Block -Reason $baseProblem `
+            -Comment "This ticket could not start: $baseProblem. Push the branch to origin, or clear the ticket's base from the drawer while it has no branch of its own, then unblock it."
+    }
 }
 
 # The project's own folder (data/projects/<key>), for the worktree's setup commands and everything

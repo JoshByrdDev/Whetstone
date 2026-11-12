@@ -53,7 +53,20 @@ export const createTicket = (body: {
   prUrl?: string; prId?: string; prAuthor?: string;
   // The repo the branch is in: required on a project of several repos, refused on a project of one.
   repo?: string;
+  // Delivery only: the branch to fork from and deliver into instead of the project's base. Blank is
+  // the project's base. Refused when a writable repo lacks it (on origin, for a pull-request project).
+  baseBranch?: string;
 }) => fetch('/api/tickets', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);
+
+// A ticket's own base, before it has a branch. Blank puts it back on the project's base.
+export const setTicketBaseBranch = (id: number, baseBranch: string) =>
+  fetch(`/api/tickets/${id}/base-branch`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ baseBranch }) })
+    .then(json<TicketDetail>);
+
+// What the new-ticket form offers under "Based on": the project's base, and the bases open tickets use.
+export interface TicketBases { projectBase: string; inUse: { branch: string; tickets: number }[] }
+export const getTicketBases = (projectKey: string) =>
+  fetch(`/api/projects/${encodeURIComponent(projectKey)}/ticket-bases`).then(json<TicketBases>);
 
 export const updateTicket = (id: number, body: Partial<{
   title: string; description: string; issueKey: string; issueUrl: string; branch: string; projectKey: string;

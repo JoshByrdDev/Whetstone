@@ -309,21 +309,22 @@ public partial class TicketGitService
     private readonly ITicketBases? _bases;
 
     /// <summary>
-    /// <paramref name="target"/> with its base the ticket's own: the branch of the open slice the
-    /// ticket on <paramref name="branch"/> belongs to, or the project's base as before. Only a
-    /// writable repo of a project with slice branches can be re-based; anything else is returned
-    /// as it came. Every git action about one ticket's branch asks this rather than reading the
-    /// project's base directly, the same way the worker takes its base from the claim.
+    /// <paramref name="target"/> with its base the ticket's own (<see cref="SliceBranches.ForTicketAsync"/>):
+    /// the base its owner filed it on, else the branch of the open slice it belongs to, else the
+    /// project's base as before - for the ticket on <paramref name="branch"/>. Only a writable repo
+    /// is re-based; a read-only one is returned as it came. Every git action about one ticket's
+    /// branch asks this rather than reading the project's base directly, the same way the worker
+    /// takes its base from the claim.
     /// </summary>
     private async Task<RepoTarget?> ForTicketAsync(ProjectConfig cfg, RepoTarget? target, string? branch, CancellationToken ct)
     {
-        if (target is null || target.ReadOnly || _bases is null || !cfg.SliceBranchesOn || string.IsNullOrWhiteSpace(branch))
+        if (target is null || target.ReadOnly || _bases is null || string.IsNullOrWhiteSpace(branch))
             return target;
-        var slice = await _bases.BaseOfBranchAsync(cfg, branch.Trim(), ct);
-        return slice is null || slice == target.BaseBranch ? target : target with { BaseBranch = slice };
+        var own = await _bases.BaseOfBranchAsync(cfg, branch.Trim(), ct);
+        return own is null || own == target.BaseBranch ? target : target with { BaseBranch = own };
     }
 
-    /// <summary>The ticket's base branch on <paramref name="branch"/>: its slice's, or the project's.</summary>
+    /// <summary>The ticket's base branch on <paramref name="branch"/>: its own, its slice's, or the project's.</summary>
     public async Task<string> TicketBaseBranchAsync(string projectKey, string? branch, CancellationToken ct = default)
     {
         var cfg = _registry.GetProjectConfig(projectKey);
@@ -1352,7 +1353,8 @@ public partial class TicketGitService
         var cfg = _registry.GetProjectConfig(projectKey);
         var repo = cfg.ProjectPath?.Trim().TrimEnd('\\', '/') ?? "";
         // A ticket of an open slice lands on its slice's branch, not the base: the slice reaches the
-        // base as one piece when its owner releases it (docs/slice-branches.md, section 2).
+        // base as one piece when its owner releases it (docs/slice-branches.md, section 2). One filed
+        // on a base of its own lands on that, which reaches the base when its owner merges it.
         if (await ForTicketAsync(cfg, TargetsOf(cfg).FirstOrDefault(), branch, ct) is { } ticketTarget
             && ticketTarget.BaseBranch != ResolveBaseBranch(cfg))
             return await MergeIntoSliceAsync(cfg, repo, ticketTarget.BaseBranch, branch, title, description, ct);

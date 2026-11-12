@@ -260,6 +260,9 @@ export interface TicketSummary {
   reviewRepo?: string | null;
   // A bug fix: blamed back to its cause when it lands (docs/bugs-and-experiments-plan.md).
   isBug?: boolean;
+  // The branch its owner filed it on, when it is not the project's base (a feature branch a set of
+  // tickets builds on). Null for almost every ticket. The row's base mark.
+  baseBranch?: string | null;
   // Expansion work items holding this ticket at NeedsApproval when its own setting would have
   // skipped the gate; 0 otherwise. Said on the row, or the stop reads as the skip having broken.
   heldForExpansion?: number;
@@ -463,6 +466,9 @@ export interface TicketDetail {
   // Each round goes on top of them as one commit, nothing rebases. Null when not under review.
   reviewedOn?: string | null;
   reviewedOnAt?: string | null;
+  // The branch its owner filed it on, when it is not the project's base; null otherwise. Settable
+  // from the drawer only while the ticket has no branch (setTicketBaseBranch).
+  baseBranch?: string | null;
   blockedReason?: string | null;
   // The same block as the questions the agent actually asked, when it asked in questions. Absent for
   // a fault report, a hand-written block, or anything blocked before the structured form existed —

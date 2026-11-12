@@ -535,6 +535,74 @@ exit 1
     $plain = New-TicketWorktree -Repo $sl -Branch 't-14' -MergeLocally $true
     Check 'no slice, same project: forks from the base' (Get-Sha $plain.path HEAD) (Get-Sha $sl.hub main)
     Check 'no slice: none of the slice''s work is in it' (Test-Path (Join-Path $plain.path 'cards.txt')) $false
+
+    # ---- A ticket's own base, on a project with no slice branches ------------------------
+    # The owner filed it on a feature branch (Ticket.BaseBranch); the board names that branch on the
+    # claim exactly as it names a slice's, and every step below already takes whatever it is handed.
+    # By pull request it resolves to origin's copy, so the ticket's pull request goes into it.
+    Write-Host "== a ticket's own base"
+    $prProj = [pscustomobject]@{ baseBranch = 'main'; projectPath = '' }
+    Check 'a claim naming a feature base: that base' `
+        (Resolve-TicketBase -Claim ([pscustomobject]@{ baseBranch = 'feature/PROJ-123'; project = $prProj }) -DefaultBase 'trunk') 'feature/PROJ-123'
+    $members = @(Get-RepoMembers -Project $prProj -DefaultBase 'trunk' -TicketBase 'feature/PROJ-123')
+    Check 'a project of one: its one member is based on it' $members[0].baseBranch 'feature/PROJ-123'
+    $multiProj = [pscustomobject]@{ baseBranch = 'main'; projectPath = 'C:\x'; repos = @(
+        [pscustomobject]@{ dir = 'alpha-api' }, [pscustomobject]@{ dir = 'alpha-docs'; readOnly = $true }) }
+    $mm = @(Get-RepoMembers -Project $multiProj -DefaultBase 'trunk' -TicketBase 'feature/PROJ-123')
+    Check 'several repos: a writable one is based on it' $mm[0].baseBranch 'feature/PROJ-123'
+    Check 'several repos: a read-only one stays at its own base' $mm[1].baseBranch 'main'
+
+    $fb = New-Hub 'feature'
+    git -C $fb.hub branch --no-track feature/PROJ-123 main *> $null
+    $fw = Join-Path $root 'feature-wt'
+    git -C $fb.hub worktree add $fw feature/PROJ-123 *> $null
+    Add-Commit -Dir $fw -File 'feature.txt' -Subject 'an earlier story of the feature, merged by its PR'
+    git -C $fb.hub worktree remove --force $fw *> $null
+    $one = @(@{ dir = ''; hub = $fb.hub; baseBranch = 'feature/PROJ-123'; readOnly = $false })
+
+    Check 'PR project, base only local: the claim is refused' `
+        ([bool](Test-TicketBaseOnOrigin -Members $one -TicketBase 'feature/PROJ-123' -MergeLocally $false)) $true
+    Check '... and the reason says origin' `
+        ((Test-TicketBaseOnOrigin -Members $one -TicketBase 'feature/PROJ-123' -MergeLocally $false) -match 'not on origin') $true
+    Check 'merge-locally project, base only local: allowed' `
+        (Test-TicketBaseOnOrigin -Members $one -TicketBase 'feature/PROJ-123' -MergeLocally $true) $null
+    Check 'no base of its own: nothing to check' `
+        (Test-TicketBaseOnOrigin -Members $one -TicketBase '' -MergeLocally $false) $null
+    Check 'a slice branch is local by design: not checked' `
+        (Test-TicketBaseOnOrigin -Members $one -TicketBase 'slice/13-cards' -MergeLocally $false) $null
+    $ro = @(@{ dir = 'alpha-docs'; hub = $fb.hub; baseBranch = 'main'; readOnly = $true })
+    Check 'a read-only member is not asked' `
+        (Test-TicketBaseOnOrigin -Members $ro -TicketBase 'feature/PROJ-123' -MergeLocally $false) $null
+
+    # Pushed from somewhere else since this hub last fetched: the check fetches it and lets it through.
+    $other = Join-Path $root 'feature-other'
+    git clone -q (Join-Path (Split-Path $fb.hub) 'origin.git') $other *> $null
+    git -C $fb.hub push origin feature/PROJ-123 *> $null
+    git -C $fb.hub update-ref -d refs/remotes/origin/feature/PROJ-123 *> $null
+    Check 'pushed but not yet fetched, -NoFetch (a worker host): still refused' `
+        ([bool](Test-TicketBaseOnOrigin -Members $one -TicketBase 'feature/PROJ-123' -MergeLocally $false -NoFetch)) $true
+    Check 'pushed but not yet fetched: the check fetches it and allows it' `
+        (Test-TicketBaseOnOrigin -Members $one -TicketBase 'feature/PROJ-123' -MergeLocally $false) $null
+
+    Add-Commit -Dir $fb.hub -File 'main-only.txt' -Subject 'unrelated work on main'
+    git -C $fb.hub push origin main *> $null
+    Check 'PR project: the feature base resolves to origin''s copy' `
+        (Resolve-BaseRef -RepoDir $fb.hub -BaseBranch 'feature/PROJ-123' -MergeLocally $false) 'origin/feature/PROJ-123'
+    $fwt = New-TicketWorktree -Repo $fb -Branch 'jb/PROJ-124' -MergeLocally $false -Base 'feature/PROJ-123'
+    Check 'feature base: worktree is created' $fwt.ok $true
+    Check 'feature base: forks from the feature''s tip on origin' (Get-Sha $fwt.path HEAD) (Get-Sha $fb.hub 'origin/feature/PROJ-123')
+    Check 'feature base: the feature''s earlier work is in it' (Test-Path (Join-Path $fwt.path 'feature.txt')) $true
+    Check 'feature base: main''s unrelated work is not' (Test-Path (Join-Path $fwt.path 'main-only.txt')) $false
+    Add-Commit -Dir $fwt.path -File 'story.txt' -Subject 'PROJ-124: first'
+    Add-Commit -Dir $fwt.path -File 'story.txt' -Subject 'PROJ-124: second'
+    $fsq = Compress-TicketCommits -WorkDir $fwt.path -TicketId '2' -Title 'Story' -IssueRef '' `
+        -BaseBranch 'feature/PROJ-123' -Summary 'A story of the feature.' -MergeLocally $false
+    Check 'feature base: the squash folds only the ticket''s own commits' $fsq.from 2
+    Check 'feature base: one commit past the feature' (git -C $fwt.path rev-list --count origin/feature/PROJ-123..HEAD) 1
+
+    $nwt = New-TicketWorktree -Repo $fb -Branch 'jb/other' -MergeLocally $false
+    Check 'a neighbour of the same project, no base of its own: forks from origin/main' (Get-Sha $nwt.path HEAD) (Get-Sha $fb.hub 'origin/main')
+    Check '... with none of the feature in it' (Test-Path (Join-Path $nwt.path 'feature.txt')) $false
 }
 finally {
     # Worktree .git files are read-only on Windows; -Force is what removes them.

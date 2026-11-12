@@ -57,7 +57,10 @@ public sealed record AnalysisPin(string? HeadSha, string? TreeSha, IReadOnlyList
         {
             var wt = Path.Combine(workspace, m.Dir);
             if (!Directory.Exists(wt) || Git(wt, "rev-parse", "HEAD") is not { } head) continue;
-            var baseBranch = m.BaseBranch.Length > 0 ? m.BaseBranch : "main";
+            // A ticket filed on a base of its own is measured against it in every writable repo, or
+            // every repo the feature branch touched would count as this ticket's. (No project of
+            // several has slice branches, so the ticket's own base is the whole of the rule here.)
+            var baseBranch = SliceBranches.OwnBase(t) ?? (m.BaseBranch.Length > 0 ? m.BaseBranch : "main");
             // origin's when there is one: a project of several delivers by pull request, and that is
             // the rule Resolve-BaseRef and BaseRefAsync apply to such a project.
             var baseRef = Git(wt, "rev-parse", "--verify", "--quiet", $"refs/remotes/origin/{baseBranch}") is not null

@@ -62,7 +62,10 @@ public record TicketSummaryDto(
     // puts on their branch. Null on a project of one and on a delivery ticket.
     string? ReviewRepo = null,
     // A bug fix, for the card's chip. See Ticket.IsBug.
-    bool IsBug = false);
+    bool IsBug = false,
+    // The base its owner filed it on (Ticket.BaseBranch), for the card's base chip. Null - almost
+    // every ticket - is the project's base, or its slice's branch.
+    string? BaseBranch = null);
 
 /// <summary>One thing a ticket is waiting on, resolved as far as it can be.</summary>
 public record BlockerDto(
@@ -258,7 +261,10 @@ public record TicketDetailDto(
     // on top of them rather than one rewritten commit. Null when it is not under review. Set from the
     // drawer, or by a run classifying a send-back as found in PR review; never by a tool of its own.
     string? ReviewedOn = null,
-    DateTime? ReviewedOnAt = null);
+    DateTime? ReviewedOnAt = null,
+    // The base its owner filed it on (Ticket.BaseBranch); null is the project's base or its slice's
+    // branch. Readable by a worker; set only by the owner, and only before the ticket has a branch.
+    string? BaseBranch = null);
 
 /// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
 public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
@@ -318,7 +324,8 @@ public static class TicketMapper
         HeldForExpansion(t),
         awaitingAnalysis,
         t.ReviewTarget?.Repo,
-        t.IsBug);
+        t.IsBug,
+        SliceBranches.OwnBase(t));
 
     private static int HeldForExpansion(Ticket t) =>
         WorkItemScopes.HeldForExpansion(t) ? WorkItemScopes.OpenExpansionCount(t) : 0;
@@ -407,7 +414,8 @@ public static class TicketMapper
         t.FullQaRequired,
         t.Needs,
         t.ReviewedOn,
-        t.ReviewedOnAt);
+        t.ReviewedOnAt,
+        SliceBranches.OwnBase(t));
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

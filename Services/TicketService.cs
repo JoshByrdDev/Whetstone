@@ -170,7 +170,7 @@ public class TicketService
         var tickets = await q.OrderBy(t => t.BoardOrder).ThenByDescending(t => t.UpdatedAt).Select(t => new Ticket
         {
             Id = t.Id, ProjectKey = t.ProjectKey, Title = t.Title, Phase = t.Phase, Track = t.Track,
-            IssueKey = t.IssueKey, IssueUrl = t.IssueUrl, Branch = t.Branch, BoardOrder = t.BoardOrder,
+            IssueKey = t.IssueKey, IssueUrl = t.IssueUrl, Branch = t.Branch, BaseBranch = t.BaseBranch, BoardOrder = t.BoardOrder,
             Priority = t.Priority, RequiresSpeculationReview = t.RequiresSpeculationReview,
             SkipQaTesting = t.SkipQaTesting, Walkthrough = t.Walkthrough, SkipClassroomAnalysis = t.SkipClassroomAnalysis,
             GateAnalysisId = t.GateAnalysisId, PlanUnit = t.PlanUnit, PlanKey = t.PlanKey, IsBug = t.IsBug,
@@ -621,8 +621,13 @@ public class TicketService
         bool requiresSpeculationReview = false, bool requiresImplementationReview = false, string? masterNotes = null,
         bool skipQaTesting = false, TicketPriority priority = TicketPriority.Normal,
         TicketTrack track = TicketTrack.Delivery, ReviewTarget? reviewTarget = null,
-        bool skipClassroomAnalysis = false)
+        bool skipClassroomAnalysis = false, string? baseBranch = null)
     {
+        // A ticket's own base is a delivery ticket's: a review ticket is read against the target
+        // its pull request names (ReviewTarget.TargetBranch).
+        if (track == TicketTrack.Review && !string.IsNullOrWhiteSpace(baseBranch))
+            throw new ArgumentException("A peer review ticket is read against its pull request's target, not a base of its own.", nameof(baseBranch));
+
         var maxOrder = await _db.Tickets.Where(t => t.ProjectKey == projectKey)
             .Select(t => (double?)t.BoardOrder).MaxAsync() ?? 0;
 
@@ -644,6 +649,7 @@ public class TicketService
             Priority = priority,
             Track = track,
             MasterNotes = string.IsNullOrWhiteSpace(masterNotes) ? null : masterNotes.Trim(),
+            BaseBranch = string.IsNullOrWhiteSpace(baseBranch) ? null : baseBranch.Trim(),
         };
 
         // A Review ticket without a branch to review has nothing to work on, and the phase that
@@ -703,6 +709,9 @@ public class TicketService
         if (issueKey is not null) t.IssueKey = string.IsNullOrWhiteSpace(issueKey) ? null : issueKey.Trim();
         if (issueUrl is not null) t.IssueUrl = string.IsNullOrWhiteSpace(issueUrl) ? null : issueUrl.Trim();
         if (branch is not null) t.Branch = string.IsNullOrWhiteSpace(branch) ? null : branch.Trim();
+        // A base of its own names a branch of its project's repos, so a move to another project
+        // leaves it behind: the ticket is on its new project's base until its owner says otherwise.
+        if (projectKey is not null && projectKey != t.ProjectKey) t.BaseBranch = null;
         if (projectKey is not null) t.ProjectKey = projectKey;
 
         // Invariant: a linked ticket never keeps a local title/description (the tracker owns them);
@@ -712,6 +721,35 @@ public class TicketService
         t.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return await GetAsync(id);
+    }
+
+    /// <summary>What <see cref="SetBaseBranchAsync"/> did.</summary>
+    public enum BaseBranchChange { Set, Unchanged, NotFound, Started, ReviewTrack }
+
+    /// <summary>
+    /// The owner choosing which branch <paramref name="id"/> forks from and is delivered into
+    /// (<see cref="Ticket.BaseBranch"/>; null or blank is the project's base). The REST API is the
+    /// only caller and no MCP tool reaches it, as with master notes.
+    /// <para>
+    /// Refused once the ticket has a branch or a worktree: its work was forked from the base it had,
+    /// and a different base now would rebase that work onto another line at the next hand-off. A
+    /// review ticket has no base of its own. Whether the branch exists is the caller's question
+    /// (<see cref="TicketGitService.TicketBaseProblemAsync"/>), asked before this.
+    /// </para>
+    /// </summary>
+    public async Task<BaseBranchChange> SetBaseBranchAsync(int id, string? baseBranch)
+    {
+        var t = await _db.Tickets.FindAsync(id);
+        if (t is null) return BaseBranchChange.NotFound;
+        var next = string.IsNullOrWhiteSpace(baseBranch) ? null : baseBranch.Trim();
+        if (next == t.BaseBranch) return BaseBranchChange.Unchanged;
+        if (t.Track == TicketTrack.Review) return BaseBranchChange.ReviewTrack;
+        if (!string.IsNullOrWhiteSpace(t.Branch) || !string.IsNullOrWhiteSpace(t.WorktreePath))
+            return BaseBranchChange.Started;
+        t.BaseBranch = next;
+        t.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return BaseBranchChange.Set;
     }
 
     /// <summary>

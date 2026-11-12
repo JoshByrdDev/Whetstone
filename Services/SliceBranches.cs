@@ -85,13 +85,24 @@ public static class SliceBranches
             .FirstOrDefaultAsync(u => u.ProjectKey == ticket.ProjectKey && u.Plan == plan && u.Unit == unit, ct);
     }
 
-    /// <summary>The branch <paramref name="ticket"/> is based on, or null for the project's base.</summary>
+    /// <summary>
+    /// The branch <paramref name="ticket"/> is based on, or null for the project's base. The one
+    /// rule, in order: the ticket's own <see cref="Ticket.BaseBranch"/>, which its owner chose when
+    /// filing it and which works on any project (several repos, delivered by pull request); else its
+    /// open slice's branch, on a project with slice branches; else null. Everything that asks which
+    /// branch a ticket is based on - the claim, the git service, the Classroom - asks this.
+    /// </summary>
     public static async Task<string?> ForTicketAsync(DashboardDbContext db, ProjectConfig cfg, Ticket ticket,
         CancellationToken ct = default)
     {
+        if (OwnBase(ticket) is { } own) return own;
         if (!cfg.SliceBranchesOn) return null;
         return BaseFor(cfg, ticket.PlanUnit, await RowOfAsync(db, cfg, ticket, ct));
     }
+
+    /// <summary>The base the ticket's owner filed it on, trimmed, or null when it has none of its own.</summary>
+    public static string? OwnBase(Ticket ticket) =>
+        string.IsNullOrWhiteSpace(ticket.BaseBranch) ? null : ticket.BaseBranch.Trim();
 
     /// <summary>
     /// The branch the ticket whose branch is <paramref name="branch"/> is based on, or null for the
@@ -100,7 +111,8 @@ public static class SliceBranches
     public static async Task<string?> ForBranchAsync(DashboardDbContext db, ProjectConfig cfg, string branch,
         CancellationToken ct = default)
     {
-        if (!cfg.SliceBranchesOn || string.IsNullOrWhiteSpace(branch)) return null;
+        // Not gated on slice branches: a ticket's own base is on any project.
+        if (string.IsNullOrWhiteSpace(branch)) return null;
         var ticket = await db.Tickets.AsNoTracking()
             .Where(t => t.ProjectKey == cfg.Name && t.Branch == branch)
             .OrderByDescending(t => t.Id)
@@ -123,7 +135,6 @@ public sealed class TicketBases(IServiceScopeFactory scopes) : ITicketBases
 {
     public async Task<string?> BaseOfBranchAsync(ProjectConfig cfg, string branch, CancellationToken ct = default)
     {
-        if (!cfg.SliceBranchesOn) return null;
         using var scope = scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DashboardDbContext>();
         return await SliceBranches.ForBranchAsync(db, cfg, branch, ct);

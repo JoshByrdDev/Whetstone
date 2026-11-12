@@ -743,7 +743,12 @@ export function TicketDetail({
                 branch" here would write Ticket.Branch, which every other feature reads as "the
                 branch this ticket authored". */}
             {t.track !== 'Review' && (
-              <BranchChip branch={t.branch ?? ''} onSave={v => run(() => api.updateTicket(t.id, { branch: v }))} />
+              <BranchChip branch={t.branch ?? ''} base={t.baseBranch} onSave={v => run(() => api.updateTicket(t.id, { branch: v }))} />
+            )}
+            {/* Its own base, while there is still a choice to make: before the ticket has a branch.
+                After that the base is on the branch chip, and fixed. */}
+            {t.track !== 'Review' && !t.branch && !t.worktreePath && (
+              <BaseChip base={t.baseBranch ?? ''} onSave={v => run(() => api.setTicketBaseBranch(t.id, v))} />
             )}
             <WorktreeChip path={t.worktreePath ?? ''} />
             <IssueFooter
@@ -1858,7 +1863,7 @@ function RenameControl({ title, onSave }: { title: string; onSave: (v: string) =
   );
 }
 
-function BranchChip({ branch, onSave }: { branch: string; onSave: (v: string) => void }) {
+function BranchChip({ branch, base, onSave }: { branch: string; base?: string | null; onSave: (v: string) => void }) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(branch);
   useEffect(() => setVal(branch), [branch]);
@@ -1866,10 +1871,12 @@ function BranchChip({ branch, onSave }: { branch: string; onSave: (v: string) =>
     return (
       <button
         onClick={() => setEditing(true)}
-        title="Edit branch"
-        className="text-[10px] font-mono font-semibold px-2 py-1 rounded bg-panel border border-hair text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors"
+        title={base && branch ? `Edit branch. Forked from ${base}, and delivered into it` : 'Edit branch'}
+        className="text-[10px] font-mono font-semibold px-2 py-1 rounded bg-panel border border-hair text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors min-w-0 truncate"
       >
         ⎇ {branch || 'set branch'}
+        {/* The ticket's own base, beside the branch it is the base of: `jb/4334 <- feature/4333`. */}
+        {base && branch && <span className="text-gray-500 font-normal"> ← {base}</span>}
       </button>
     );
   }
@@ -1885,6 +1892,42 @@ function BranchChip({ branch, onSave }: { branch: string; onSave: (v: string) =>
       />
       <button onClick={() => { onSave(val.trim()); setEditing(false); }} className="text-[10px] text-blue-400 hover:text-blue-300">Save</button>
       <button onClick={() => { setVal(branch); setEditing(false); }} className="text-[10px] text-gray-500">Cancel</button>
+    </span>
+  );
+}
+
+// The branch this ticket will fork from and be delivered into, when it is not the project's base.
+// Editable only until the ticket has a branch - the server refuses a change after that, because it
+// would rebase the work onto another line. Blank puts it back on the project's base.
+function BaseChip({ base, onSave }: { base: string; onSave: (v: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(base);
+  useEffect(() => setVal(base), [base]);
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        title={base ? `Based on ${base} instead of the project's base. Editable until the ticket has a branch` : 'Base this ticket on a branch other than the project\'s base'}
+        className={`orbit-tap text-[10px] font-mono px-2 py-1 rounded bg-panel border border-hair min-w-0 truncate ${base ? 'text-gray-300 font-semibold' : 'text-gray-500'}`}
+      >
+        ⑂ {base || 'project base'}
+      </button>
+    );
+  }
+  const save = () => { onSave(val.trim()); setEditing(false); };
+  return (
+    <span className="flex items-center gap-1.5 min-w-0">
+      <input
+        autoFocus value={val} onChange={e => setVal(e.target.value)} placeholder="the project's base"
+        spellCheck={false} autoCapitalize="off"
+        onKeyDown={e => {
+          if (e.key === 'Enter') save();
+          if (e.key === 'Escape') { setVal(base); setEditing(false); }
+        }}
+        className="w-44 min-w-0 bg-panel border border-hair rounded px-2 py-1 text-[11px] font-mono text-gray-200 focus:outline-none focus:border-gray-500"
+      />
+      <button onClick={save} className="text-[10px] text-blue-400 hover:text-blue-300">Save</button>
+      <button onClick={() => { setVal(base); setEditing(false); }} className="text-[10px] text-gray-500">Cancel</button>
     </span>
   );
 }

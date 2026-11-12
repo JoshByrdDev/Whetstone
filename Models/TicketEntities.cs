@@ -240,6 +240,21 @@ public class Ticket
     public string? Branch { get; set; }
 
     /// <summary>
+    /// The branch this ticket's work forks from, is measured against and is delivered into, when it
+    /// is not the project's base: a feature branch that a set of tickets builds on, with one pull
+    /// request of its own into the project's base at the end. Null - almost every ticket - is the
+    /// project's base, or an open slice's branch on a project with slice branches
+    /// (<see cref="Services.SliceBranches.ForTicketAsync"/>, which this outranks).
+    /// <para>
+    /// The owner's, like <see cref="MasterNotes"/>: set when the ticket is filed or by the REST API
+    /// before it has a branch, and by no MCP tool. Once the ticket has a branch it is fixed,
+    /// because a change then would rebase someone's work onto another line. Every writable repo
+    /// uses it; a read-only repo stays at its own base.
+    /// </para>
+    /// </summary>
+    public string? BaseBranch { get; set; }
+
+    /// <summary>
     /// The git worktree this ticket's work happens in — a checkout of <see cref="Branch"/> that is
     /// the agent's alone, so the human's own checkout of the repo is never switched or dirtied
     /// underneath them.

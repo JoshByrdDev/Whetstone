@@ -1889,6 +1889,9 @@ namespace Whetstone.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("BaseBranch")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("BlockedQuestionsJson")
                         .HasColumnType("TEXT");
 

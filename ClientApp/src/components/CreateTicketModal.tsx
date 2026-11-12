@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Phase, Priority, ProjectInfo, Track } from '../types/tickets';
 import { PHASE_LABEL, DEFAULT_PRIORITY } from '../types/tickets';
-import { createTicket, getUnlinkedIssues } from '../api/tickets';
-import type { UnlinkedIssue } from '../api/tickets';
+import { createTicket, getTicketBases, getUnlinkedIssues } from '../api/tickets';
+import type { TicketBases, UnlinkedIssue } from '../api/tickets';
 import { TicketOptions } from './TicketOptions';
 import { useVeil } from '../hooks/useVeil';
 import { usePop, useHeld } from '../hooks/usePop';
@@ -66,6 +66,24 @@ export function CreateTicketModal({
     if (!reviewRepos.includes(reviewRepo)) setReviewRepo(reviewRepos.length === 1 ? reviewRepos[0] : '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewRepos]);
+
+  // Which branch a delivery ticket forks from and is delivered into. Blank, the default, is the
+  // project's base - shown as the placeholder so the choice is visible without being made. A feature
+  // built on its own branch picks it here once per ticket; the bases open tickets of the project
+  // already use are offered, so the twelfth ticket of a feature is a pick, not a retyped name. Cleared
+  // when the project changes: a branch names one project's repos.
+  const [baseBranch, setBaseBranch] = useState('');
+  const [bases, setBases] = useState<TicketBases | null>(null);
+  useEffect(() => {
+    setBaseBranch('');
+    setBases(null);
+    if (!projectKey) return;
+    let live = true;
+    getTicketBases(projectKey).then(b => { if (live) setBases(b); }).catch(() => { /* the field still takes a typed name */ });
+    return () => { live = false; };
+  }, [projectKey]);
+  const projectBase = bases?.projectBase ?? 'main';
+  const offBase = baseBranch.trim().length > 0 && baseBranch.trim() !== projectBase;
 
   // The board unmounts this the moment onClose fires, so leaving is something the panel does to
   // itself. Every way out goes through it, a successful create included - a panel that fades when
@@ -204,6 +222,8 @@ export function CreateTicketModal({
         skipQaTesting: skipQa,
         priority,
         masterNotes: masterNotes.trim() || undefined,
+        // Delivery only: a review ticket is read against its pull request's target.
+        ...(!reviewing && offBase ? { baseBranch: baseBranch.trim() } : {}),
         ...(reviewing ? {
           track,
           sourceBranch: sourceBranch.trim(),
@@ -336,6 +356,32 @@ export function CreateTicketModal({
         <Labeled label="Priority">
           <PriorityPicker value={priority} onChange={setPriority} />
         </Labeled>
+
+        {!reviewing && (
+          <Labeled label="Based on">
+            <input
+              value={baseBranch}
+              onChange={e => setBaseBranch(e.target.value)}
+              placeholder={`${projectBase} (the project's base)`}
+              list="ticket-bases"
+              spellCheck={false}
+              autoCapitalize="off"
+              className={`${inputCls} font-mono`}
+            />
+            <datalist id="ticket-bases">
+              {(bases?.inUse ?? []).map(b => (
+                <option key={b.branch} value={b.branch}>{`${b.tickets} open ticket${b.tickets === 1 ? '' : 's'}`}</option>
+              ))}
+              {bases && <option value={bases.projectBase}>the project's base</option>}
+            </datalist>
+            {offBase && (
+              <p className="text-[11px] text-gray-500 mt-1">
+                Forks from <span className="font-mono text-gray-300">{baseBranch.trim()}</span>, is compared with it and
+                is delivered into it, instead of <span className="font-mono">{projectBase}</span>. Fixed once the ticket has a branch.
+              </p>
+            )}
+          </Labeled>
+        )}
 
         <Labeled label={`${trackerName} key (optional)`}>
           <div className="relative" ref={fieldRef}>

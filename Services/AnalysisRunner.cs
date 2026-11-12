@@ -155,8 +155,8 @@ public class AnalysisRunner : IAnalysisExecutor
             reqs = new Requirements(map.Segments, map.Dropped,
                 DescriptionSegmenter.Fingerprint(resolved.Description));
 
-            // The ticket's own base: its open slice's branch on a project with slice branches, so the
-            // run reads the ticket's change and not the whole slice's (docs/slice-branches.md).
+            // The ticket's own base - the one its owner filed it on, else its open slice's branch - so
+            // the run reads the ticket's change and not the whole feature's or slice's.
             var ticketBase = await SliceBranches.ForTicketAsync(db, cfg, ticket, ct);
             prompt = BuildPrompt(ticket, cfg, lens, readDir, resolved.Title, resolved.Description,
                 map, siblings, ticketBase);
