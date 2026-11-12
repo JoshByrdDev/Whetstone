@@ -2011,11 +2011,11 @@ function Invoke-Reflection {
             foreach ($k in $knownKeys) { if (-not $live.Contains($k)) { [void]$live.Add($k) } }
 
             foreach ($f in $findings) {
-                $key  = "$($f.key)".Trim().ToLowerInvariant()
                 $text = ("$($f.text)" -replace "\s+", " ").Trim()
                 if (-not $text) { continue }
-                if (-not $key) { $key = ($text.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-') }
-                if ($key.Length -gt 60) { $key = $key.Substring(0, 60) }
+                # One shape for every key, whatever the model sent (ConvertTo-NoteKey says why).
+                $key = ConvertTo-NoteKey -Text "$($f.key)"
+                if (-not $key) { $key = ConvertTo-NoteKey -Text $text }
 
                 if ($live.Contains($key)) { $duplicate++; continue }
 

@@ -233,6 +233,12 @@ $sent = [IO.File]::ReadAllText((Join-Path $dir 'prompt.txt'))
 Check 'reflection prompt: lists the known keys' ($sent -match '(?m)^- db-on-1433\s*$') $true
 Check 'reflection prompt: does not carry the index' ($sent -match 'SUMMARY-ONLY-IN-THE-INDEX') $false
 
+# --- A key the model sent with spaces in it is made a clean one ---
+$spaced = '[{"kind":"codebase","key":"Seed Script  slow","text":"The seed script takes four minutes on a fresh database.","confidence":"high"}]'
+$r = Invoke-Case -Name 'spaced-key' -Reply $spaced
+Check 'spaced key: the note is named cleanly' (Test-Path (Join-Path $r.mem 'seed-script-slow.md')) $true
+Check 'spaced key: and claimed under that name' ((Get-Content (Join-Path $r.proj 'reflection-keys.txt')) -join ',') 'seed-script-slow'
+
 # --- Not an answer: discarded, and nothing is claimed or written ---
 $r = Invoke-Case -Name 'chatter' -Reply 'You have hit your limit - resets 11:30am' -Warn
 Check 'a reply with no array: discarded, quoting the reply rather than the warning' `

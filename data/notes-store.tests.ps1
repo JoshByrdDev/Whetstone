@@ -130,6 +130,21 @@ Check 'maintenance: the index is brought under budget' ((Get-Item (Join-Path $s.
 Check 'maintenance: it files nothing for a human' (Test-Path (Join-Path $s.proj 'improvement-suggestions.md')) $false
 Check 'maintenance: it says what it did' ([bool]($script:log | Where-Object { $_ -like '*evicted*' })) $true
 
+# ---- Note keys ----
+# The key that started this: two keys run together with a space, cut mid-word at 56 characters.
+$joined = 'alpha-credit-one-row alpha-dog-created-at-activation dedupe'
+Check 'key: a space is a hyphen, and it is cut at one' (ConvertTo-NoteKey -Text $joined -Max 56) 'alpha-credit-one-row-alpha-dog-created-at-activation'
+Check 'key: punctuation and case' (ConvertTo-NoteKey -Text '  The DB: port 1433 / "local" ') 'the-db-port-1433-local'
+Check 'key: nothing usable is nothing' "[$(ConvertTo-NoteKey -Text ' -- ')]" '[]'
+Check 'key: never longer than asked' ((ConvertTo-NoteKey -Text ('word-' * 40)).Length -le 60) $true
+$s = New-Store -Name 'keys'
+$r = Add-LearnedFact -MemoryDir $s.mem -Key $joined -Text 'A fact a steward handed over under two keys at once.' -Stamp '2026-11-11 12:00'
+Check 'key: a steward''s spaced key is a clean file name' "$($r.Outcome) $($r.Key)" 'new alpha-credit-one-row-alpha-dog-created-at-activation'
+Check 'key: no file name with a space was written' (@(Get-ChildItem $s.mem -Filter '* *').Count) 0
+[void](Write-MemoryNote -MemoryDir $s.mem -Key 'Bad Key Here' -Text 'Written straight, bypassing the callers.' -Stamp '2026-11-11 12:00')
+Check 'key: Write-MemoryNote normalises a key it is handed raw' (Test-Path (Join-Path $s.mem 'bad-key-here.md')) $true
+Check 'key: and indexes it by that name' ((Index-Keys $s.mem) -split ',' -contains 'bad-key-here') $true
+
 # ---- The index's topic sections survive every write ----
 # A person has grouped the index under topics; the machine's section is at the bottom.
 $topics = @"

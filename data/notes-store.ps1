@@ -379,6 +379,24 @@ function Remove-IndexLine {
 
 # ---- Writing a note --------------------------------------------------------------------------
 
+# The one way a note's key is made: lower-case letters, digits and single hyphens, cut at a hyphen
+# rather than mid-word. A key is a file name and an index link, so anything else in it is a bug
+# waiting for a reader. Both places that take a key from a model trusted it as given, trimmed and
+# lower-cased: a steward that handed over two keys run together with a space got a note named
+# "<first key> <second key cut at 56 characters>.md" - a space and a dangling one-letter word in a
+# file name every reader of the index then had to link to.
+function ConvertTo-NoteKey {
+    param([string]$Text, [int]$Max = 60)
+    $k = ("$Text".ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+    if ($k.Length -gt $Max) {
+        $cut = $k.Substring(0, $Max)
+        $dash = $cut.LastIndexOf('-')
+        if ($dash -ge [int]($Max / 2)) { $cut = $cut.Substring(0, $dash) }
+        $k = $cut.Trim('-')
+    }
+    return $k
+}
+
 function Get-NoteTitle {
     param([string]$Key)
     return (($Key -split '-') | Where-Object { $_ } |
@@ -394,6 +412,9 @@ function Write-MemoryNote {
         [string]$Ticket)
 
     if (-not $MemoryDir) { return $false }
+    # Callers make their keys with ConvertTo-NoteKey; this is the net for one that did not.
+    $Key = ConvertTo-NoteKey -Text $Key
+    if (-not $Key) { return $false }
     try {
         if (-not (Test-Path $MemoryDir)) { New-Item -ItemType Directory -Path $MemoryDir -Force | Out-Null }
         $file = Join-Path $MemoryDir "$Key.md"
@@ -614,9 +635,8 @@ function Add-LearnedFact {
         }
     }
 
-    $base = "$Key".Trim().ToLowerInvariant()
-    if (-not $base) { $base = ($Text.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-') }
-    if ($base.Length -gt 56) { $base = $base.Substring(0, 56).TrimEnd('-') }
+    $base = ConvertTo-NoteKey -Text $Key -Max 56
+    if (-not $base) { $base = ConvertTo-NoteKey -Text $Text -Max 56 }
     if (-not $base) { return $none }
     $k = $base
     $n = 2
