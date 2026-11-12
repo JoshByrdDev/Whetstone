@@ -14,7 +14,7 @@ namespace Whetstone.Services;
 /// The prefix (the project's <c>branchPrefix</c>, else the global one), then the linked issue's
 /// branch token, or <c>ticket-&lt;id&gt;</c> for a ticket with no issue. With the project's
 /// <c>branchNameStyle</c> at <c>key-slug</c>, a short slug of the ticket's title follows it:
-/// <c>jb/4334-open-the-signing-link</c>, which a teammate reviewing the pull request can read.
+/// <c>jb/123-open-the-signing-link</c>, which a teammate reviewing the pull request can read.
 /// </para>
 /// <para>
 /// It is only ever a default. A name recorded on the ticket (<see cref="Ticket.Branch"/>) - typed at
@@ -23,14 +23,27 @@ namespace Whetstone.Services;
 /// </summary>
 public static class BranchNaming
 {
-    /// <summary>The issue key alone: <c>jb/4334</c>, <c>jb/ticket-101</c>. The default.</summary>
+    /// <summary>The issue key alone: <c>jb/123</c>, <c>jb/ticket-101</c>. The default.</summary>
     public const string KeyStyle = "key";
 
-    /// <summary>The issue key and a slug of the title: <c>jb/4334-open-the-signing-link</c>.</summary>
+    /// <summary>The issue key and a slug of the title: <c>jb/123-open-the-signing-link</c>.</summary>
     public const string KeySlugStyle = "key-slug";
 
     /// <summary>How long a slug may be, before the key and the prefix.</summary>
     public const int SlugMax = 40;
+
+    /// <summary>
+    /// The folder under the worktree root a branch's worktree - or, on a project of several repos,
+    /// its workspace - is made in: <c>jb/PROJ-1</c> is <c>jb-PROJ-1</c>. Written twice, and the two
+    /// must agree: <c>Get-WorktreeDirName</c> in <c>data/worker.ps1</c> makes the folder, and this
+    /// is what a rename moves it to, so the next run finds it where it looks.
+    /// </summary>
+    public static string WorktreeDirName(string branch)
+    {
+        var name = System.Text.RegularExpressions.Regex.Replace(branch ?? "", @"[\\/:*?""<>|]", "-");
+        name = System.Text.RegularExpressions.Regex.Replace(name, @"\s+", "-");
+        return name.Trim('-', '.');
+    }
 
     /// <summary>The style a project's setting names, with anything unknown read as <see cref="KeyStyle"/>.</summary>
     public static string NormalizeStyle(string? style) =>
@@ -62,7 +75,7 @@ public static class BranchNaming
         var name = $"{prefix}{key}";
         if (NormalizeStyle(style) != KeySlugStyle) return name;
         var slug = Slug(title);
-        // A slug that only repeats the key ("4334" for an issue titled "4334") says nothing.
+        // A slug that only repeats the key ("123" for an issue titled "123") says nothing.
         if (slug.Length == 0 || string.Equals(slug, key, StringComparison.OrdinalIgnoreCase)) return name;
         var withSlug = $"{name}-{slug}";
         return TicketGitService.IsBranchName(withSlug) ? withSlug : name;

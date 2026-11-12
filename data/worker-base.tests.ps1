@@ -608,10 +608,16 @@ exit 1
     # The board names it (BranchNaming, handed over as the claim's branchName); the recorded name
     # outranks it, and only a claim without the field falls back to the key the script used to build.
     Write-Host "== Get-TicketBranchName"
-    Check 'recorded name wins over the board''s' (Get-TicketBranchName -RecordedBranch ' jb/4333-signing ' -BoardBranch 'jb/4333-other' -IssueBranchToken '4333' -BranchPrefix 'jb/' -TicketId '7') 'jb/4333-signing'
-    Check 'the board''s name, as it is' (Get-TicketBranchName -RecordedBranch '' -BoardBranch 'jb/4334-open-the-signing-link' -IssueBranchToken '4334' -BranchPrefix 'jb/' -TicketId '7') 'jb/4334-open-the-signing-link'
+    Check 'recorded name wins over the board''s' (Get-TicketBranchName -RecordedBranch ' jb/122-signing ' -BoardBranch 'jb/122-other' -IssueBranchToken '122' -BranchPrefix 'jb/' -TicketId '7') 'jb/122-signing'
+    Check 'the board''s name, as it is' (Get-TicketBranchName -RecordedBranch '' -BoardBranch 'jb/123-open-the-signing-link' -IssueBranchToken '123' -BranchPrefix 'jb/' -TicketId '7') 'jb/123-open-the-signing-link'
     Check 'no board name (an older claim): prefix and issue token' (Get-TicketBranchName -RecordedBranch '' -BoardBranch '' -IssueBranchToken 'PROJ-123' -BranchPrefix 'jb/' -TicketId '7') 'jb/PROJ-123'
     Check 'no board name, no issue: the ticket id' (Get-TicketBranchName -RecordedBranch '' -IssueBranchToken '' -BranchPrefix 'jb/' -TicketId '7') 'jb/ticket-7'
+
+    # The folder a branch's worktree is made in. BranchNaming.WorktreeDirName is the board's copy,
+    # which a rename moves the worktree to: the same cases are in TicketBranchNameTests.
+    Check 'folder: a prefix is flattened' (Get-WorktreeDirName 'jb/PROJ-1') 'jb-PROJ-1'
+    Check 'folder: path characters and spaces' (Get-WorktreeDirName 'a b\c:d') 'a-b-c-d'
+    Check 'folder: no dash or dot at either end' (Get-WorktreeDirName '/jb/x.') 'jb-x'
 
     $nm = New-Hub 'naming'
     $nwt2 = Resolve-Worktree -RepoDir $nm.hub -WorktreeRoot $nm.wt -Skill 'speculate' -TicketId '7' `

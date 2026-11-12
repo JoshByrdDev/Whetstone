@@ -40,11 +40,11 @@ public class TicketBranchNameTests : IDisposable
         WriteProject(data, "alpha", $$"""
             {
               "displayName": "Alpha", "projectPath": {{Json(_project)}}, "baseBranch": "main",
-              "branchPrefix": "jb/", "branchNameStyle": "key-slug",
+              "branchPrefix": "jb/", "branchNameStyle": "key-slug", "worktreeRoot": {{Json(Path.Combine(_root, "wt"))}},
               "repos": [ "alpha-web", "alpha-api", { "dir": "alpha-infra", "readOnly": true } ]
             }
             """);
-        WriteProject(data, "bravo", $$"""{ "displayName": "Bravo", "projectPath": {{Json(Path.Combine(_project, "alpha-web"))}} }""");
+        WriteProject(data, "bravo", $$"""{ "displayName": "Bravo", "projectPath": {{Json(Path.Combine(_project, "alpha-web"))}}, "worktreeRoot": {{Json(Path.Combine(_root, "wt-bravo"))}} }""");
         File.WriteAllText(Path.Combine(data, "config.defaults.json"), """{ "baseBranch": "main", "branchPrefix": "zz/" }""");
         _registry = new ProjectRegistry(new DashboardPaths(data));
         _git = new TicketGitService(_registry, new GitWorktreeService(NullLogger<GitWorktreeService>.Instance),
@@ -74,22 +74,22 @@ public class TicketBranchNameTests : IDisposable
     [Fact]
     public void The_key_style_is_the_prefix_and_the_issue_key_or_the_ticket_id()
     {
-        Assert.Equal("jb/4334", BranchNaming.Default("jb/", "key", 7, "4334", "Open the signing link"));
+        Assert.Equal("jb/123", BranchNaming.Default("jb/", "key", 7, "123", "Open the signing link"));
         Assert.Equal("jb/ticket-7", BranchNaming.Default("jb/", "key", 7, "", "Open the signing link"));
         Assert.Equal("PROJ-123", BranchNaming.Default("", null, 7, "PROJ-123", null));
         // Anything the setting does not know is the key style, never a guess at the other.
-        Assert.Equal("jb/4334", BranchNaming.Default("jb/", "slug-please", 7, "4334", "Open the signing link"));
+        Assert.Equal("jb/123", BranchNaming.Default("jb/", "slug-please", 7, "123", "Open the signing link"));
     }
 
     [Fact]
     public void The_key_slug_style_adds_the_title()
     {
-        Assert.Equal("jb/4334-open-the-signing-link", BranchNaming.Default("jb/", "key-slug", 7, "4334", "Open the signing link"));
+        Assert.Equal("jb/123-open-the-signing-link", BranchNaming.Default("jb/", "key-slug", 7, "123", "Open the signing link"));
         Assert.Equal("jb/ticket-7-fix-the-wizard-roles", BranchNaming.Default("jb/", "KEY-SLUG", 7, null, "Fix the wizard roles"));
         // No title to read (an unreachable tracker), or one that is only the key again: no slug.
-        Assert.Equal("jb/4334", BranchNaming.Default("jb/", "key-slug", 7, "4334", null));
+        Assert.Equal("jb/123", BranchNaming.Default("jb/", "key-slug", 7, "123", null));
         Assert.Equal("jb/PROJ-123", BranchNaming.Default("jb/", "key-slug", 7, "PROJ-123", "PROJ-123"));
-        Assert.Equal("jb/4334", BranchNaming.Default("jb/", "key-slug", 7, "4334", "!!! ???"));
+        Assert.Equal("jb/123", BranchNaming.Default("jb/", "key-slug", 7, "123", "!!! ???"));
     }
 
     [Theory]
@@ -139,11 +139,11 @@ public class TicketBranchNameTests : IDisposable
     {
         await using var ctx = new DashboardDbContext(_options);
         var svc = new TicketService(ctx);
-        var t = await svc.CreateAsync("alpha", "Story", null, null, null, TicketPhase.Backlog, branch: " jb/4333-signing ");
-        Assert.Equal("jb/4333-signing", t.Branch);
+        var t = await svc.CreateAsync("alpha", "Story", null, null, null, TicketPhase.Backlog, branch: " jb/122-signing ");
+        Assert.Equal("jb/122-signing", t.Branch);
         Assert.False(t.BranchStarted);
 
-        var made = await svc.RecordRunBranchAsync(t.Id, "jb/4333-signing");
+        var made = await svc.RecordRunBranchAsync(t.Id, "jb/122-signing");
         Assert.True(made!.BranchStarted);
     }
 
@@ -196,11 +196,140 @@ public class TicketBranchNameTests : IDisposable
         Assert.Equal(webTip, Sha(web, New));
         Assert.Equal("", Sha(web, Old));
         Assert.Equal("", Sha(api, Old));
-        // Each worktree's HEAD went with its branch, so the next run attaches where it was.
-        Assert.Equal(New, Head(webWt));
-        Assert.Equal(New, Head(apiWt));
+        // Each worktree's HEAD went with its branch, and the worktree to the new name's folder.
+        Assert.Equal(New, Head(Moved(webWt)));
+        Assert.Equal(New, Head(Moved(apiWt)));
         Assert.NotEqual("", Sha(infra, Old));
         Assert.Equal("", Sha(infra, New));
+    }
+
+    [Fact]
+    public void A_worktree_folder_is_named_as_the_worker_names_it()
+    {
+        // The same cases as worker-base.tests.ps1's Get-WorktreeDirName: the two must agree.
+        Assert.Equal("jb-PROJ-1", BranchNaming.WorktreeDirName("jb/PROJ-1"));
+        Assert.Equal("a-b-c-d", BranchNaming.WorktreeDirName("a b\\c:d"));
+        Assert.Equal("jb-x", BranchNaming.WorktreeDirName("/jb/x."));
+    }
+
+    [Fact]
+    public async Task A_rename_moves_the_whole_workspace_to_the_new_names_folder()
+    {
+        var web = Repo("alpha-web");
+        var infra = Repo("alpha-infra");
+        var webWt = Workspace("alpha-web", touch: true);
+        Workspace("alpha-api", touch: false);
+        // The read-only repo's worktree is in the workspace too, detached at its base.
+        var infraWt = Path.Combine(OldWs, "alpha-infra");
+        Git(infra, "worktree", "add", "-q", "--detach", infraWt, "main");
+        // And the conventions file the project keeps at a workspace's root.
+        File.WriteAllText(Path.Combine(OldWs, "CLAUDE.md"), "# the workspace");
+
+        var r = await _git.RenameTicketBranchAsync("alpha", Old, New);
+
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal(OldWs, r.WorkspaceFrom);
+        Assert.Equal(NewWs, r.WorkspaceTo);
+        Assert.False(Directory.Exists(OldWs));
+        Assert.Equal(New, Head(Path.Combine(NewWs, "alpha-web")));
+        Assert.Equal(New, Head(Path.Combine(NewWs, "alpha-api")));
+        Assert.Equal("HEAD", Head(Path.Combine(NewWs, "alpha-infra")));
+        Assert.Equal("# the workspace", File.ReadAllText(Path.Combine(NewWs, "CLAUDE.md")));
+        // Git knows each one where it is now, so the worker's lookup by branch finds the new folder.
+        Assert.Contains(Path.Combine(NewWs, "alpha-web").Replace('\\', '/'), Run(web, "worktree", "list", "--porcelain").Output.Replace('\\', '/'));
+        Assert.Contains(Path.Combine(NewWs, "alpha-infra").Replace('\\', '/'), Run(infra, "worktree", "list", "--porcelain").Output.Replace('\\', '/'));
+        Assert.Equal(Sha(web, New), Run(Path.Combine(NewWs, "alpha-web"), "rev-parse", "HEAD").Output.Trim());
+        Assert.False(Directory.Exists(webWt));
+    }
+
+    [Fact]
+    public async Task A_rename_onto_a_folder_that_is_already_there_is_refused_before_anything_moves()
+    {
+        var web = Repo("alpha-web");
+        var webWt = Workspace("alpha-web", touch: true);
+        Directory.CreateDirectory(NewWs);
+        File.WriteAllText(Path.Combine(NewWs, "notes.txt"), "someone's");
+
+        var r = await _git.RenameTicketBranchAsync("alpha", Old, New);
+
+        Assert.False(r.Ok);
+        Assert.Contains("not empty", r.Error);
+        Assert.NotEqual("", Sha(web, Old));
+        Assert.Equal("", Sha(web, New));
+        Assert.Equal(Old, Head(webWt));
+        Assert.Equal("someone's", File.ReadAllText(Path.Combine(NewWs, "notes.txt")));
+    }
+
+    [Fact]
+    public async Task A_worktree_that_will_not_move_puts_back_every_move_and_every_rename()
+    {
+        var web = Repo("alpha-web");
+        var api = Repo("alpha-api");
+        var webWt = Workspace("alpha-web", touch: true);
+        var apiWt = Workspace("alpha-api", touch: true);
+        File.WriteAllText(Path.Combine(OldWs, "CLAUDE.md"), "# the workspace");
+        // Git refuses to move a locked worktree: web has moved by then, api has not.
+        Git(api, "worktree", "lock", apiWt);
+
+        var r = await _git.RenameTicketBranchAsync("alpha", Old, New);
+
+        Assert.False(r.Ok);
+        Assert.Contains(apiWt, r.Error);
+        Assert.NotEqual("", Sha(web, Old));
+        Assert.Equal("", Sha(web, New));
+        Assert.NotEqual("", Sha(api, Old));
+        Assert.Equal(Old, Head(webWt));
+        Assert.Equal(Old, Head(apiWt));
+        Assert.True(File.Exists(Path.Combine(OldWs, "CLAUDE.md")));
+        Assert.False(Directory.Exists(NewWs));
+    }
+
+    [Fact]
+    public async Task A_branch_renamed_by_hand_still_has_its_workspace_moved()
+    {
+        var web = Repo("alpha-web");
+        Workspace("alpha-web", touch: true);
+        Git(web, "branch", "-m", Old, New);
+
+        var r = await _git.RenameTicketBranchAsync("alpha", Old, New);
+
+        Assert.True(r.Ok, r.Error);
+        Assert.Empty(r.Renamed);
+        Assert.Equal(NewWs, r.WorkspaceTo);
+        Assert.Equal(New, Head(Path.Combine(NewWs, "alpha-web")));
+    }
+
+    [Fact]
+    public async Task On_one_repo_the_worktree_is_the_folder_that_moves()
+    {
+        var web = Repo("alpha-web");
+        var oldWt = Path.Combine(_root, "wt-bravo", "jb-PROJ-1");
+        var newWt = Path.Combine(_root, "wt-bravo", "jb-PROJ-1-signing-foundation");
+        Git(web, "worktree", "add", "-q", "-b", Old, oldWt, "main");
+        // An empty folder under the new name is no obstacle.
+        Directory.CreateDirectory(newWt);
+
+        var r = await _git.RenameTicketBranchAsync("bravo", Old, New);
+
+        Assert.True(r.Ok, r.Error);
+        Assert.Equal(oldWt, r.WorkspaceFrom);
+        Assert.Equal(newWt, r.WorkspaceTo);
+        Assert.False(Directory.Exists(oldWt));
+        Assert.Equal(New, Head(newWt));
+    }
+
+    [Fact]
+    public async Task A_worktree_kept_outside_the_root_stays_where_it_is()
+    {
+        var web = Repo("alpha-web");
+        var mine = Path.Combine(_root, "mine", "web");
+        Git(web, "worktree", "add", "-q", "-b", Old, mine, "main");
+
+        var r = await _git.RenameTicketBranchAsync("bravo", Old, New);
+
+        Assert.True(r.Ok, r.Error);
+        Assert.Null(r.WorkspaceTo);
+        Assert.Equal(New, Head(mine));
     }
 
     [Fact]
@@ -313,6 +442,13 @@ public class TicketBranchNameTests : IDisposable
     // ---- fixtures -------------------------------------------------------------------------------
 
     private string Repo(string name) => Path.Combine(_project, name);
+
+    /// <summary>The ticket's workspace under <see cref="Old"/>'s folder, and under <see cref="New"/>'s.</summary>
+    private string OldWs => Path.Combine(_root, "wt", "jb-PROJ-1");
+    private string NewWs => Path.Combine(_root, "wt", "jb-PROJ-1-signing-foundation");
+
+    /// <summary>Where a worktree under <see cref="OldWs"/> is once the rename has moved it.</summary>
+    private string Moved(string wt) => Path.Combine(NewWs, Path.GetFileName(wt));
 
     /// <summary>
     /// The ticket's worktree in one repo, on <see cref="Old"/> forked from main, laid out as the

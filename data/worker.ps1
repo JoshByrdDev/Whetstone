@@ -506,6 +506,8 @@ function Update-MergedBranch {
 # Turn a branch name into a directory name. Branch names carry characters a path cannot ('jb/X'),
 # and nesting them as real subdirectories would bury one ticket's worktree inside another's when
 # prefixes collide. Flattening keeps every worktree a single, greppable folder under the root.
+# Written twice, and the two must agree: BranchNaming.WorktreeDirName is where the board's branch
+# rename (RenameTicketBranchAsync) moves a ticket's worktree or workspace, so the next run finds it here.
 function Get-WorktreeDirName {
     param([string]$Branch)
     $name = $Branch -replace '[\\/:*?"<>|]', '-'

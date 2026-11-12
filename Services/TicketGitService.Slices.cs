@@ -414,7 +414,7 @@ public partial class TicketGitService
         return (await ShaAsync(repo, "HEAD", ct), null);
     }
 
-    private static bool SamePath(string a, string b) =>
+    internal static bool SamePath(string a, string b) =>
         string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 }
 

@@ -282,6 +282,26 @@ try {
     Check 'a member checked out outside the workspace is refused' ($moved.reason -match "^alpha-web: branch 'jb/PROJ-1' is checked out at .*outside this ticket's workspace") $true
     git -C $web worktree move $elsewhere $wWeb *> $null
 
+    # ---- A branch renamed from the drawer ------------------------------------------------
+    # The board's rename (RenameTicketBranchAsync) is git branch -m in each writable repo plus a
+    # git worktree move of every repo's worktree into the folder the new name gives. A rename that
+    # left the workspace under the old name blocked the next run; this is the layout it leaves now.
+    Write-Host "== a branch renamed from the drawer"
+    $first = Open-Workspace -Members $members -Branch 'jb/PROJ-3'
+    Check 'a ticket to rename: ok' $first.ok $true
+    foreach ($h in @($web, $api)) { git -C $h branch -m 'jb/PROJ-3' 'jb/PROJ-3-renamed' *> $null }
+    $stale = Open-Workspace -Members $members -Branch 'jb/PROJ-3-renamed' -Skill 'implement'
+    Check 'renamed with the workspace left behind, the next run is refused' ($stale.reason -match "outside this ticket's workspace") $true
+    $renamedWs = Join-Path (Join-Path $root 'wt') (Get-WorktreeDirName 'jb/PROJ-3-renamed')
+    New-Item -ItemType Directory -Path $renamedWs -Force | Out-Null
+    foreach ($m in $members) { git -C $m.hub worktree move (Join-Path $first.path $m.dir) (Join-Path $renamedWs $m.dir) *> $null }
+    $after = Open-Workspace -Members $members -Branch 'jb/PROJ-3-renamed' -Skill 'implement'
+    Check 'with the workspace moved to the new name, it starts' $after.ok $true
+    if (-not $after.ok) { Write-Host "      $($after.reason)" -ForegroundColor Red }
+    Check '... in the moved workspace' $after.path $renamedWs
+    Check '... making nothing new' $after.created $false
+    Check '... every repo where it was moved to' "$([IO.Path]::GetFullPath((Find $after 'alpha-web').path))|$([IO.Path]::GetFullPath((Find $after 'alpha-infra').path))" "$(Join-Path $renamedWs 'alpha-web')|$(Join-Path $renamedWs 'alpha-infra')"
+
     # ---- A peer review ------------------------------------------------------------------
     # Somebody else's branch in alpha-api, forked from its own base, as their pull request has it.
     Write-Host "== a peer review"

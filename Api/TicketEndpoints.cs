@@ -807,19 +807,31 @@ public static class TicketEndpoints
 
             // Read before the record changes: the ticket is the tracked row UpdateAsync writes.
             var old = t.Branch ?? "";
+            var oldPath = t.WorktreePath;
             var renamed = await git.RenameTicketBranchAsync(t.ProjectKey, old, next, ct);
             if (!renamed.Ok) return Results.Conflict(new { error = renamed.Error });
-            try { await svc.UpdateAsync(id, null, null, null, null, next, null); }
+            // The recorded workspace follows the folder that moved - unless it named another, which
+            // a person put somewhere of their own and the rename left where it was.
+            var newPath = renamed.WorkspaceTo is { } moved
+                && (string.IsNullOrWhiteSpace(oldPath) || TicketGitService.SamePath(oldPath, renamed.WorkspaceFrom!)) ? moved : null;
+            try
+            {
+                await svc.UpdateAsync(id, null, null, null, null, next, null);
+                if (newPath is not null) await svc.SetWorktreePathAsync(id, newPath);
+            }
             catch
             {
-                // The record is half of it: put the branches back rather than leave them under a name
-                // the ticket does not know.
-                if (renamed.Renamed.Count > 0) await git.RenameTicketBranchAsync(t.ProjectKey, next, old, CancellationToken.None);
+                // The record is half of it: put the branches and the workspace back rather than leave
+                // them under a name the ticket does not know.
+                if (renamed.Renamed.Count > 0 || renamed.WorkspaceTo is not null)
+                    await git.RenameTicketBranchAsync(t.ProjectKey, next, old, CancellationToken.None);
                 throw;
             }
-            await svc.AddCommentAsync(id, renamed.Renamed.Count > 0
-                ? $"Branch renamed from `{old}` to `{next}` in {string.Join(", ", renamed.Renamed)}. Nothing was pushed."
-                : $"Branch recorded as `{next}` (was `{old}`); no repo here had `{old}` to rename.", AuthorKind.System);
+            var said = renamed.Renamed.Count > 0
+                ? $"Branch renamed from `{old}` to `{next}` in {string.Join(", ", renamed.Renamed)}."
+                : $"Branch recorded as `{next}` (was `{old}`); no repo here had `{old}` to rename.";
+            if (renamed.WorkspaceTo is not null) said += $" Its workspace moved from `{renamed.WorkspaceFrom}` to `{renamed.WorkspaceTo}`.";
+            await svc.AddCommentAsync(id, said + " Nothing was pushed.", AuthorKind.System);
             return await Detail();
         });
 
