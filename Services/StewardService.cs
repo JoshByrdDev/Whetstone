@@ -1020,7 +1020,7 @@ public partial class StewardService
         var merged = await _git.MergeAsync(projectKey, t.Branch!, $"{t.Title} (#{t.Id})", null, ct);
         if (!merged.Ok)
             return merged.Conflicted
-                ? Refuse("conflict", "The merge conflicts and was rolled back. Send it back to NeedsImplementation naming these files.", merged.ConflictedFiles)
+                ? Refuse("conflict", "The merge conflicts and was rolled back. Send it back to NeedsImplementation naming these files - with kind rebase when the review otherwise holds.", merged.ConflictedFiles)
                 : Refuse("refused", merged.Error ?? "The merge was refused.");
 
         var sha = merged.MergeSha?[..Math.Min(7, merged.MergeSha.Length)];
@@ -1202,7 +1202,7 @@ public partial class StewardService
 
         var before = await _git.BranchChangeAsync(projectKey, t.Branch, ct);
         var r = await _git.RebaseAsync(projectKey, t.Branch, ct);
-        if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files." +
+        if (r.Conflicted) return Refuse("conflict", "The rebase conflicts and was rolled back: nothing was changed. Send it back to NeedsImplementation naming these files - with kind rebase when the review otherwise holds." +
             (r.Error is { } e && e.Contains("resolver") ? $" {e}" : ""), r.ConflictedFiles);
         if (!r.Ok) return Refuse("refused", r.Error ?? "The rebase was refused.");
         if (r.Resolved.Count == 0)
@@ -1270,6 +1270,35 @@ public partial class StewardService
     /// check or the record is missing, NeedsSpeculation when the plan was wrong.
     /// </summary>
     public async Task<StewardReply> SendBackAsync(string projectKey, int ticketId, string phase, string note, CancellationToken ct = default)
+        => await SendBackAsync(projectKey, ticketId, phase, note, SendBackKind.Change, ct);
+
+    /// <summary>
+    /// What a send-back is for. <see cref="SendBackKind.Change"/> is the ordinary kind: something
+    /// in the work is wrong. The other two are the two reasons finished, reviewed work used to go
+    /// round the whole loop for nothing - and each now costs only what it needs.
+    /// </summary>
+    public enum SendBackKind
+    {
+        Change,
+        /// <summary>
+        /// The review holds and only the rebase failed. It goes back as a conflict, so it is logged as a
+        /// <see cref="RebaseReturn"/>: the run that rebases it judges whether the rebase reaches what
+        /// QA and refinement passed, and only then does it go through them again.
+        /// </summary>
+        Rebase,
+        /// <summary>
+        /// The review holds and a merge check failed on something the ticket does not touch. Nothing
+        /// moves: the ticket stays at NeedsReview and a later run merges it again. A second time at
+        /// the same tip is the owner's, as a check that keeps running out of time is.
+        /// </summary>
+        Rerun,
+    }
+
+    /// <summary>How the record of a merge re-run held at review starts; what finds the last one.</summary>
+    public const string RerunMark = "Merge re-run held";
+
+    public async Task<StewardReply> SendBackAsync(string projectKey, int ticketId, string phase, string note, SendBackKind kind,
+        CancellationToken ct = default)
     {
         var (cfg, off) = await WritableAsync(projectKey);
         if (cfg is null) return off!;
@@ -1287,6 +1316,13 @@ public partial class StewardService
         // A gate the owner put the ticket on by hand is theirs to pass or send back, not ours.
         if (Gates.Contains(t.Phase) && await OwnerPlacedAsync(t, ct))
             return Refuse("owner", $"The owner put ticket {ticketId} at {t.Phase} by hand, so they mean to look themselves. Leave it there.");
+        if (kind != SendBackKind.Change && t.Phase != TicketPhase.NeedsReview)
+            return Refuse("refused", $"A {kind.ToString().ToLowerInvariant()} send-back is for reviewed work at NeedsReview; ticket {ticketId} is at {t.Phase}.");
+        if (kind == SendBackKind.Rebase && to != TicketPhase.NeedsImplementation)
+            return Refuse("refused", "A rebase goes to NeedsImplementation: only an implementation run can settle a conflict.");
+        if (kind == SendBackKind.Rerun)
+            return await HoldForRerunAsync(projectKey, cfg, t, note, ct);
+
         var before = await SendBacksAsync(ticketId);
         if (before >= cfg.Steward.SendBacksPerTicket)
             return Refuse("limit", $"Ticket {ticketId} has been sent back {before} time(s) already. The next is the owner's: ask.");
@@ -1305,7 +1341,12 @@ public partial class StewardService
         if (cfg.StewardMode == StewardMode.Propose)
             return Proposed($"send ticket {ticketId} back to {to} with: {Head(note, 200)}");
 
-        var body = $"Sent back to {to} ({before + 1} of {cfg.Steward.SendBacksPerTicket}).\n\n{note.Trim()}";
+        // A rebase says so in its first line, which is the move's reason: "conflicts with" is what logs
+        // it as a rebase return and counts its run as a conflict rather than a reviewer's changes.
+        var head = kind == SendBackKind.Rebase
+            ? $"Sent back to {to} ({before + 1} of {cfg.Steward.SendBacksPerTicket}): rebase only - the branch {RunEntryReasons.ConflictMarker} its base."
+            : $"Sent back to {to} ({before + 1} of {cfg.Steward.SendBacksPerTicket}).";
+        var body = $"{head}\n\n{note.Trim()}";
         if (to == TicketPhase.NeedsRefinement)
         {
             // Nothing to build: the note is the directive, and the move is a plain one.
@@ -1318,6 +1359,39 @@ public partial class StewardService
                 replan: to == TicketPhase.NeedsSpeculation, actor: TransitionActor.Steward);
         }
         return new StewardReply("sent-back", null, new { to = to.ToString() });
+    }
+
+    /// <summary>
+    /// A merge check failed on something the ticket does not touch: hold it at review for a later run
+    /// to merge again, rather than sending reviewed work round the loop to change nothing. Once per
+    /// branch tip - the second is the owner's.
+    /// </summary>
+    private async Task<StewardReply> HoldForRerunAsync(string projectKey, ProjectConfig cfg, Ticket t, string note, CancellationToken ct)
+    {
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        var tip = change?.Tip ?? change?.ChangeId ?? "unknown";
+        tip = tip[..Math.Min(12, tip.Length)];
+        var mark = $"{RerunMark} at {tip}:";
+        var last = await _db.StewardEntries.AsNoTracking()
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Call && e.TicketId == t.Id && e.Text.StartsWith(RerunMark))
+            .OrderByDescending(e => e.Id).Select(e => e.Text).FirstOrDefaultAsync(ct);
+        if (last is not null && last.StartsWith(mark))
+            return Refuse("owner", $"Ticket {t.Id} was already held once at this tip for a merge check to run again, and it failed again. "
+                + "A failure that repeats is not a flake you can wave through: ask the owner whether it is the machine, the test, or the ticket.");
+        if (cfg.StewardMode == StewardMode.Propose)
+            return Proposed($"hold ticket {t.Id} at NeedsReview to merge again later: {Head(note, 200)}");
+
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = t.Id,
+            Text = $"{mark} {Head(note, 400)} Left at NeedsReview to merge again on a later run.",
+        });
+        await StewardDue.MarkAsync(_db, projectKey, $"#{t.Id} waits to merge again after a merge check failed on something it does not touch");
+        await _db.SaveChangesAsync(ct);
+        _heartbeat?.Wake();
+        return new StewardReply("held", $"Ticket {t.Id} stays at NeedsReview, and a later run merges it again. Nothing goes back to a worker: "
+            + "the work is reviewed, and a check that fails on what it does not touch says nothing about it. If the same check fails again at this tip, it is the owner's.",
+            new { tip });
     }
 
     // ---- blocked tickets, and tickets that were wrong -------------------------------

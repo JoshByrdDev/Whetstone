@@ -956,6 +956,11 @@ public class TicketService
             if (await UnclassifiedCycleEscapeAsync(t, to) is { } escape)
                 throw new HandoffRequirementException(EscapeGateMessage(escape), t.Phase, to, PhaseMachine.NextPhasesFor(t));
 
+            // Work that left review only to be rebased waits, the same way, for the run that rebased it
+            // to say whether the rebase reaches what QA and refinement proved: that is what routes it.
+            if (await UnjudgedCycleRebaseReturnAsync(t, to) is { } rebaseReturn)
+                throw new HandoffRequirementException(RebaseReturnGateMessage(rebaseReturn), t.Phase, to, PhaseMachine.NextPhasesFor(t));
+
             // A block that says nothing stops the work and withholds the one thing needed to restart
             // it: nobody can answer a question that was never asked, and the board shows the bare
             // word "Blocked". Refused rather than defaulted, and refused the same way a missing
@@ -1081,6 +1086,14 @@ public class TicketService
                 Build = string.IsNullOrWhiteSpace(build) ? null : build, At = movedAt,
             });
 
+        // Finished work going back only to be rebased (RebaseReturn): logged with the move, unjudged.
+        if (RebaseReturn.IsReturn(t.Track, from, to, actor, reason))
+            _db.RebaseReturns.Add(new RebaseReturn
+            {
+                TicketId = t.Id, ProjectKey = t.ProjectKey, Track = t.Track, Actor = actor,
+                Reason = string.IsNullOrWhiteSpace(reason) ? null : reason.Trim(), At = movedAt,
+            });
+
         // The two arrivals a project's steward exists to answer: finished work to sign off, and a
         // question somebody has to settle. Not its own moves - a run does not owe itself another.
         if (actor != TransitionActor.Steward && to is TicketPhase.NeedsReview or TicketPhase.Blocked)
@@ -1119,6 +1132,22 @@ public class TicketService
         if (from == TicketPhase.Implementing && to == TicketPhase.NeedsImplementationReview && t.ShortLoopReview)
             return await TransitionAsync(id, TicketPhase.NeedsReview,
                 "short loop - the reviewer asked for this change back without a full QA and refinement cycle");
+
+        // Back from review only to be rebased: the run that rebased it judged where it goes. Back to
+        // review when nothing the base brought in reaches what QA and refinement proved - they passed
+        // the build before, and the steward reviews the rebase itself before it merges; otherwise on
+        // to QA, which measures from the rebase rather than re-driving everything. Recorded on the
+        // return either way, so whether a verdict held can be read from what happens next.
+        if (from == TicketPhase.Implementing && to == TicketPhase.NeedsImplementationReview
+            && await CycleRebaseReturnAsync(id) is { Verdict: not null, HandedOffTo: null } back)
+        {
+            var home = back.Verdict == RebaseVerdict.BackToReview;
+            back.HandedOffTo = home ? TicketPhase.NeedsReview : to;
+            back.HandedOffAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync();
+            if (home)
+                return await TransitionAsync(id, TicketPhase.NeedsReview, RebaseOnlyReason);
+        }
 
         // A human review gate this ticket doesn't want is passed straight through, so the pipeline
         // never stalls waiting on a review nobody asked for. Only the automated hand-off skips —
@@ -1719,6 +1748,68 @@ public class TicketService
         + "(Owner, PrReview or Other), and a why of one or two sentences - for RequirementChange, the why must "
         + "quote what the owner's note asks for that the description and master notes did not. "
         + "Then call set_phase again with the same phase.";
+
+    /// <summary>The reason a rebase return judged back to review goes home with; what the steward's skill looks for.</summary>
+    public const string RebaseOnlyReason =
+        "rebase only - the run that rebased it judged that nothing the base brought in reaches what QA and refinement passed";
+
+    /// <summary>
+    /// The rebase return that started this implementation cycle - logged at the latest move into
+    /// NeedsImplementation - or null when that move was anything else.
+    /// </summary>
+    public async Task<RebaseReturn?> CycleRebaseReturnAsync(int ticketId)
+    {
+        var move = await _db.PhaseTransitions.AsNoTracking()
+            .Where(p => p.TicketId == ticketId && p.To == TicketPhase.NeedsImplementation)
+            .OrderByDescending(p => p.At).ThenByDescending(p => p.Id)
+            .Select(p => (DateTime?)p.At).FirstOrDefaultAsync();
+        if (move is null) return null;
+        return await _db.RebaseReturns
+            .Where(r => r.TicketId == ticketId && r.At == move)
+            .OrderByDescending(r => r.Id).FirstOrDefaultAsync();
+    }
+
+    /// <summary>The rebase return a worker's forward move out of Implementing must judge first, or null when it may go.</summary>
+    private async Task<RebaseReturn?> UnjudgedCycleRebaseReturnAsync(Ticket t, TicketPhase to)
+    {
+        if (t.Phase != TicketPhase.Implementing || to == TicketPhase.Blocked) return null;
+        if (PhaseMachine.ProgressRank(to) <= PhaseMachine.ProgressRank(t.Phase)) return null;
+        var r = await CycleRebaseReturnAsync(t.Id);
+        return r is { Verdict: null } ? r : null;
+    }
+
+    private static string RebaseReturnGateMessage(RebaseReturn r) =>
+        "This ticket came back from review only because its branch no longer merged with the base"
+        + (string.IsNullOrWhiteSpace(r.Reason) ? "" : $" (\"{r.Reason.Trim()}\")")
+        + ". QA and refinement passed the build before, so say whether what the rebase brought in reaches what they proved: "
+        + "call judge_rebase_return with this ticket's id, BackToReview or Retest, and a why that names the base commits "
+        + "you read and what each touches. Then call set_phase again with the same phase.";
+
+    /// <summary>
+    /// The implementation run's verdict on the rebase return that started this cycle. Returns the
+    /// return, or why it was refused.
+    /// </summary>
+    public async Task<(RebaseReturn? Return, string? Problem)> JudgeRebaseReturnAsync(int ticketId, RebaseVerdict verdict, string? why)
+    {
+        if (string.IsNullOrWhiteSpace(why) || why.Trim().Length < 40)
+            return (null, "A verdict needs a why: the base commits the rebase brought in, what each touches, and why that does "
+                + "or does not reach what QA and refinement passed.");
+        var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId);
+        if (t is null) return (null, $"Ticket {ticketId} not found.");
+        if (t.Phase != TicketPhase.Implementing)
+            return (null, $"Ticket {ticketId} is in {t.Phase}. A rebase return is judged by the implementation run that rebased it.");
+        var r = await CycleRebaseReturnAsync(ticketId);
+        if (r is null)
+            return (null, $"Ticket {ticketId} did not come back from review for a rebase this cycle, so there is nothing to judge.");
+        if (r.HandedOffTo is not null)
+            return (null, $"This rebase return was already judged {r.Verdict} and handed off to {r.HandedOffTo}.");
+        r.Verdict = verdict;
+        r.VerdictWhy = why.Trim();
+        r.JudgedAt = DateTime.UtcNow;
+        r.JudgedByRunId = await LiveRunIdAsync(ticketId);
+        await _db.SaveChangesAsync();
+        return (r, null);
+    }
 
     /// <summary>The run holding the ticket's lease now - its id, as QA rulings record it - or null.</summary>
     private Task<int?> LiveRunIdAsync(int ticketId)

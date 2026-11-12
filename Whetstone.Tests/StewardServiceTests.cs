@@ -961,6 +961,53 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_rebase_only_send_back_goes_as_a_conflict_and_is_logged_as_a_rebase_return()
+    {
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("sent-back", (await In(s => s.SendBackAsync("alpha", id, "NeedsImplementation",
+            "The review holds. Rebasing onto main conflicts in core/index.ts; keep both sides' exports.", StewardService.SendBackKind.Rebase))).Answer);
+
+        Assert.Equal(TicketPhase.NeedsImplementation, (await Reload(id)).Phase);
+        await using var ctx = NewCtx();
+        var move = await ctx.PhaseTransitions.Where(p => p.TicketId == id && p.To == TicketPhase.NeedsImplementation).SingleAsync();
+        Assert.Equal(RunEntryReasons.Conflict, RunEntryReasons.Of(move));
+        Assert.Equal(TransitionActor.Steward, (await ctx.RebaseReturns.SingleAsync(r => r.TicketId == id)).Actor);
+    }
+
+    [Fact]
+    public async Task A_rebase_send_back_is_only_to_implementation()
+    {
+        var id = await AtReview();
+        await Begin();
+        Assert.Equal("refused", (await In(s => s.SendBackAsync("alpha", id, "NeedsRefinement",
+            "The review holds. Rebasing onto main conflicts in core/index.ts; keep both sides' exports.", StewardService.SendBackKind.Rebase))).Answer);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+    }
+
+    [Fact]
+    public async Task A_rerun_holds_the_ticket_at_review_once_per_tip_and_sends_nothing_back()
+    {
+        const string Flake = "test:db failed only on orders.db.test.ts:595, an ordering flake in a file this ticket does not touch.";
+        var id = await AtReview();
+        await Begin();
+
+        var held = await In(s => s.SendBackAsync("alpha", id, "NeedsImplementation", Flake, StewardService.SendBackKind.Rerun));
+        Assert.Equal("held", held.Answer);
+        Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
+        await using (var ctx = NewCtx())
+        {
+            Assert.False(await ctx.PhaseTransitions.AnyAsync(p => p.TicketId == id && p.Actor == TransitionActor.Steward));
+            Assert.Single(await ctx.StewardEntries.Where(e => e.TicketId == id && e.Text.StartsWith(StewardService.RerunMark)).ToListAsync());
+        }
+
+        // The same tip again is the owner's; a new tip is held again.
+        Assert.Equal("owner", (await In(s => s.SendBackAsync("alpha", id, "NeedsImplementation", Flake, StewardService.SendBackKind.Rerun))).Answer);
+        _git.Tip = "tip-after-rebase";
+        Assert.Equal("held", (await In(s => s.SendBackAsync("alpha", id, "NeedsImplementation", Flake, StewardService.SendBackKind.Rerun))).Answer);
+    }
+
+    [Fact]
     public async Task A_blocked_ticket_is_answered_back_to_the_queue_it_stopped_in()
     {
         int id;

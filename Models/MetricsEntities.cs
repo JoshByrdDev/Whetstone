@@ -755,3 +755,68 @@ public class EscapeEvent
         !string.IsNullOrWhiteSpace(why)
         && System.Text.RegularExpressions.Regex.IsMatch(why, "[\"“][^\"“”]{3,}[\"”]");
 }
+
+/// <summary>What the implementation run that rebased a <see cref="RebaseReturn"/> judged it needs next.</summary>
+public enum RebaseVerdict
+{
+    /// <summary>
+    /// Nothing the rebase brought in reaches what QA and refinement proved, and the ticket's own
+    /// change is the same change: it goes straight back to review, past QA and refinement.
+    /// </summary>
+    BackToReview,
+    /// <summary>The rebase reaches tested behaviour, or the conflict was settled by hand: QA again, measured from the rebase.</summary>
+    Retest,
+}
+
+/// <summary>
+/// One time finished work left review only because its branch no longer merged with the base:
+/// refinement's hand-off rebase conflicting, or a steward's "rebase only" send-back. QA and
+/// refinement had both passed the build before, so what the rebase brought in is the only new
+/// risk. The implementation run that resolves it says which kind it is (judge_rebase_return) and
+/// cannot hand off until it has, and the board routes the hand-off by that verdict.
+/// <para>
+/// Written with the move, like <see cref="EscapeEvent"/>; the verdict and where the hand-off went
+/// are added once. Whether a verdict held is read later from what happened next - a send-back for
+/// a defect before Done, or an escape - not stored here.
+/// </para>
+/// </summary>
+public class RebaseReturn
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    public string ProjectKey { get; set; } = "";
+    public TicketTrack Track { get; set; } = TicketTrack.Delivery;
+
+    /// <summary>Who sent it back: the board (a hand-off rebase) or the steward.</summary>
+    public TransitionActor Actor { get; set; }
+
+    /// <summary>The reason given with the move.</summary>
+    public string? Reason { get; set; }
+
+    public DateTime At { get; set; } = DateTime.UtcNow;
+
+    /// <summary>Null until the implementation run that rebased it says.</summary>
+    public RebaseVerdict? Verdict { get; set; }
+    /// <summary>Why: what the rebase brought in, and why it does or does not reach what was tested.</summary>
+    public string? VerdictWhy { get; set; }
+    public DateTime? JudgedAt { get; set; }
+    /// <summary>The run that judged it: its ticket lease id, as <see cref="EscapeEvent.ClassifiedByRunId"/>.</summary>
+    public int? JudgedByRunId { get; set; }
+
+    /// <summary>Where the implementation hand-off went: NeedsReview for a verdict of back to review, the QA path otherwise.</summary>
+    public TicketPhase? HandedOffTo { get; set; }
+    public DateTime? HandedOffAt { get; set; }
+
+    /// <summary>
+    /// Whether a move is a rebase return: off review, back to implementation, because the branch
+    /// conflicts with its base (<see cref="Whetstone.Services.RunEntryReasons.ConflictMarker"/>), by the
+    /// board or the steward. A person's send-back is an escape, whatever it says.
+    /// </summary>
+    public static bool IsReturn(TicketTrack track, TicketPhase from, TicketPhase to, TransitionActor actor, string? reason) =>
+        track == TicketTrack.Delivery
+        && from == TicketPhase.NeedsReview && to == TicketPhase.NeedsImplementation
+        && actor is TransitionActor.System or TransitionActor.Worker or TransitionActor.Steward
+        && reason?.Contains(Whetstone.Services.RunEntryReasons.ConflictMarker, StringComparison.OrdinalIgnoreCase) == true;
+}

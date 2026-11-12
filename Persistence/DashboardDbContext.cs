@@ -18,6 +18,7 @@ public class DashboardDbContext : DbContext
     public DbSet<CycleRun> CycleRuns => Set<CycleRun>();
     public DbSet<QaRulingEvent> QaRulingEvents => Set<QaRulingEvent>();
     public DbSet<EscapeEvent> EscapeEvents => Set<EscapeEvent>();
+    public DbSet<RebaseReturn> RebaseReturns => Set<RebaseReturn>();
     public DbSet<TicketDependency> TicketDependencies => Set<TicketDependency>();
     public DbSet<ResourceLease> ResourceLeases => Set<ResourceLease>();
     public DbSet<TicketAnalysis> TicketAnalyses => Set<TicketAnalysis>();
@@ -176,6 +177,18 @@ public class DashboardDbContext : DbContext
             e.Property(p => p.Kind).HasConversion<string>().HasMaxLength(24);
             e.Property(p => p.Source).HasConversion<string>().HasMaxLength(16);
             e.Property(p => p.ClassifiedBy).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.ProjectKey).HasMaxLength(128);
+            e.HasIndex(p => new { p.ProjectKey, p.At });
+            e.HasIndex(p => p.TicketId);
+            e.HasOne(p => p.Ticket).WithMany().HasForeignKey(p => p.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<RebaseReturn>(e =>
+        {
+            e.Property(p => p.Track).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.Actor).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.Verdict).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.HandedOffTo).HasConversion<string>().HasMaxLength(32);
             e.Property(p => p.ProjectKey).HasMaxLength(128);
             e.HasIndex(p => new { p.ProjectKey, p.At });
             e.HasIndex(p => p.TicketId);

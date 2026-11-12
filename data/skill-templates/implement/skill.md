@@ -162,6 +162,19 @@ When someone sent this ticket back from `NeedsReview` or `Done` - the owner afte
 
 **A `RequirementChange` has to quote its evidence.** Its `why` must quote, in double quotes, what the owner's note asks for that the description and the master notes did not; the tool refuses one that quotes nothing. The pipeline is judging its own misses here, and calling a miss a change of mind is the easy way out of one. If you cannot find words in the note that nothing earlier asked for, it was not a change of mind: it was a miss, and one of the other kinds.
 
+#### A ticket back from review only for a rebase
+
+When the ticket left review only because its branch no longer merged with the base - the latest move into `NeedsImplementation` reads `conflicts with`, from refinement's hand-off rebase, or a steward note says **rebase only** - QA and refinement had already passed the build before. The rebase is the only new thing, so this run does two jobs: settle the conflict, and say whether what the base brought in reaches what they proved. `set_phase` out of `Implementing` is refused until you have said, with **`judge_rebase_return`**.
+
+1. **Note where the branch stood first.** Before you rebase, `git merge-base HEAD <base-ref>` is the old base and `HEAD` the old tip. If the heartbeat already rebased it at the start of this run, its comment names the new tip, and the old one is the entry before it in `git reflog show <branch>`.
+2. **Rebase and settle each conflict so both sides survive**, changing nothing else of yours. Then run the tests that cover the files that conflicted.
+3. **Read what the rebase did.** `git log --oneline <old base>..<base-ref>` is what the base brought in. `git range-diff <old base>..<old tip> <base-ref>..HEAD` is how your own change moved. For each base commit, look at what it touches against what your change defines and uses: a new caller of a function you changed, a component you both edit or that it now shares, a schema, route or config you both read, a test of something you changed.
+4. **Judge it.**
+   - **`BackToReview`** - your change is the same change (the range-diff shows nothing, or only the lines you kept from both sides and a renumbered migration), and no base commit reaches what your change does or relies on. The ticket goes straight back to review, past QA and refinement.
+   - **`Retest`** - you settled a conflict by changing what your code does, or a base commit reaches the same behaviour. The ticket goes on to QA, which re-drives only what the rebase reaches.
+   - **When in doubt, `Retest`.** A wrong `BackToReview` is a regression that reaches the owner looking tested; a wrong `Retest` costs one QA pass.
+5. **Say why, in both places.** `judge_rebase_return`'s `why` names each base commit and what it touches, and why that does or does not reach this ticket. Put the same in your hand-off comment (`add_comment`): the steward reads it before it merges, and QA measures from it.
+
 ### 6. Hand off
 - `set_phase` to `NeedsImplementationReview`. That is the only legal move from `Implementing`: QA is mandatory in this pipeline, so you can never jump to `NeedsQa`, `NeedsReview` or `Done` yourself.
 - Most tickets don't ask for a human look at the code, so the dashboard forwards them straight to `NeedsQa` for you. Always hand off to `NeedsImplementationReview` regardless - the dashboard decides per ticket - and don't be surprised if a later `get_ticket` shows `NeedsQa`. If there is genuinely nothing to QA, the QA phase itself records that and moves the ticket on.

@@ -48,7 +48,7 @@ PUBLISHED = [
     "mart_phase_breakdown", "mart_time_split", "mart_rework", "mart_tool_time",
     "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
     "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
-    "mart_qa_rulings", "mart_escapes",
+    "mart_qa_rulings", "mart_escapes", "mart_rebase_returns",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an
@@ -96,6 +96,12 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         "Source": "VARCHAR", "ClassifierNote": "VARCHAR", "ClassifiedAt": "VARCHAR",
         # Added by AddEscapeClassifiedByRun: the run (or person) that classified it, and a person's override.
         "ClassifiedBy": "VARCHAR", "ClassifiedByRunId": "INTEGER", "Overridden": "BOOLEAN",
+    },
+    "RebaseReturns": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR",
+        "Actor": "VARCHAR", "Reason": "VARCHAR", "At": "VARCHAR", "Verdict": "VARCHAR",
+        "VerdictWhy": "VARCHAR", "JudgedAt": "VARCHAR", "JudgedByRunId": "INTEGER",
+        "HandedOffTo": "VARCHAR", "HandedOffAt": "VARCHAR",
     },
     "PhaseTransitions": {
         "Id": "INTEGER", "TicketId": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR",

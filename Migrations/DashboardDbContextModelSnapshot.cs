@@ -1118,6 +1118,65 @@ namespace Whetstone.Migrations
                     b.ToTable("QaShots");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.RebaseReturn", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Actor")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("HandedOffAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("HandedOffTo")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("JudgedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("JudgedByRunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Track")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Verdict")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("VerdictWhy")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("ProjectKey", "At");
+
+                    b.ToTable("RebaseReturns");
+                });
+
             modelBuilder.Entity("Whetstone.Models.ResourceLease", b =>
                 {
                     b.Property<int>("Id")
@@ -2531,6 +2590,17 @@ namespace Whetstone.Migrations
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithMany("QaShots")
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.RebaseReturn", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
                         .HasForeignKey("TicketId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

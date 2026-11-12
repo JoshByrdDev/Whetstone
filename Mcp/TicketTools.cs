@@ -451,6 +451,29 @@ public class TicketTools
                           + (reviewedOn is null ? "" : " " + UnderReviewNote(reviewedOn)) };
     }
 
+    [McpServerTool, Description(
+        "IMPLEMENTATION, on a ticket that came back from review only because its branch no longer merged with the base: say what the rebase needs next. " +
+        "QA and refinement passed the build before the rebase, so the only new risk is what the base brought in. set_phase out of Implementing is refused until this is said. " +
+        "BackToReview: your change is the same change (the conflicts were bookkeeping, or kept both sides with nothing of yours altered), and nothing the base brought in " +
+        "uses, calls, renders or tests what this ticket changed, or changes what this ticket relies on. The ticket goes straight back to review, past QA and refinement, " +
+        "and the steward reads the rebase before it merges. Retest: you settled a conflict by changing what your code does, or a base commit touches the same behaviour " +
+        "- a new caller of something you changed, a shared component, a schema both sides read. The ticket goes on to QA, which re-drives only what the rebase reaches. " +
+        "When in doubt, Retest. `why` names the base commits the rebase brought in (`git log --oneline <old base>..<base-ref>`) and what each touches.")]
+    public static async Task<object> JudgeRebaseReturn(TicketService svc,
+        [Description("The local ticket id.")] int ticketId,
+        [Description("BackToReview or Retest.")] string verdict,
+        [Description("The base commits the rebase brought in, what each touches, and why that does or does not reach what QA and refinement passed.")] string why)
+    {
+        if (!Enum.TryParse<RebaseVerdict>(verdict, true, out var v) || !Enum.IsDefined(v))
+            return new { error = $"Unknown verdict '{verdict}'. Use one of: {string.Join(", ", Enum.GetNames<RebaseVerdict>())}." };
+        var (r, problem) = await svc.JudgeRebaseReturnAsync(ticketId, v, why);
+        if (r is null) return new { error = problem, ticketId };
+        return new { r.Id, verdict = r.Verdict?.ToString(), why = r.VerdictWhy, r.JudgedAt, runId = r.JudgedByRunId,
+                     note = v == RebaseVerdict.BackToReview
+                         ? "Judged. Hand off as usual (set_phase NeedsImplementationReview): the board sends it straight back to review."
+                         : "Judged. Hand off as usual (set_phase NeedsImplementationReview): it goes on to QA, which measures from the rebase." };
+    }
+
     /// <summary>What a run is told when the ticket it is working is under PR review.</summary>
     internal static string UnderReviewNote(string reviewedOn) =>
         $"This ticket is now under review: the pull request's reviewer last saw {reviewedOn}. Leave those commits "

@@ -27,6 +27,16 @@ models:
           - accepted_values:
               arguments:
                 values: ['OutsideContract', 'InheritedBehaviour', 'UiPolish', 'Logic', 'RequirementChange', 'Other']
+  - name: stg_board__rebase_returns
+    description: Reviewed work that left review only to be rebased, and what the run that rebased it judged it needed next.
+    columns:
+      - name: return_id
+        tests: [unique, not_null]
+      - name: verdict
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['BackToReview', 'Retest']
   - name: stg_board__qa_ruling_events
     description: One ruling on one QA item - a status, a carry-over, or refinement's expiry - with the run that made it.
     columns:

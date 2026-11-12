@@ -154,12 +154,23 @@ public class StewardTools
         "tested); NeedsSpeculation when the plan was wrong. From NeedsApproval (a plan waiting for its yes): NeedsSpeculation, and the " +
         "replan stops at the gate again for you. From NeedsImplementationReview (a build before QA): NeedsImplementation. The note is an instruction the next worker must answer, so it says what is " +
         "wrong, where, and what done looks like. 'limit' means this ticket has come back too often and the next call is the " +
-        "owner's: ask.")]
+        "owner's: ask. " +
+        "kind says what the send-back is for, from NeedsReview: 'change' (the default) when something in the work is wrong; " +
+        "'rebase' when the review holds and only the rebase failed - it goes to NeedsImplementation as a conflict, and the run that " +
+        "rebases it judges whether QA and refinement must run again or it comes straight back to you; 'rerun' when the review holds " +
+        "and a merge check failed only on something the ticket does not touch - nothing moves, the ticket stays at NeedsReview and a " +
+        "later run merges it again, once per branch tip.")]
     public static Task<StewardReply> SendBack(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
         [Description("NeedsImplementation, NeedsRefinement or NeedsSpeculation.")] string phase,
-        [Description("What is wrong, where, and what done looks like.")] string note) =>
-        s.SendBackAsync(project, ticketId, phase, note);
+        [Description("What is wrong, where, and what done looks like.")] string note,
+        [Description("change (default), rebase, or rerun.")] string? kind = null)
+    {
+        var k = StewardService.SendBackKind.Change;
+        if (!string.IsNullOrWhiteSpace(kind) && (!Enum.TryParse(kind, true, out k) || !Enum.IsDefined(k)))
+            return Task.FromResult(new StewardReply("bad-request", $"Unknown kind '{kind}'. Use change, rebase or rerun."));
+        return s.SendBackAsync(project, ticketId, phase, note, k);
+    }
 
     [McpServerTool(Name = "steward_answer_blocked"), Description(
         "Answer a blocked ticket and return it to the queue it stopped in. ONLY from a decision already made: say the choice " +

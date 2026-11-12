@@ -23,6 +23,11 @@ sources:
         columns:
           - name: Id
             tests: [unique, not_null]
+      - name: RebaseReturns
+        description: Reviewed work back from review only to be rebased, with the rebasing run's verdict. Empty on a database from before RebaseReturns.
+        columns:
+          - name: Id
+            tests: [unique, not_null]
       - name: PhaseTransitions
         columns:
           - name: Id

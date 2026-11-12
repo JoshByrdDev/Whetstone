@@ -233,6 +233,12 @@ models:
       - name: overturned_failed_rate
         tests: [is_fraction]
 
+  - name: mart_rebase_returns
+    description: Reviewed work back from review only to be rebased, by the rebasing run's verdict, who sent it back, and week - how many went straight back to review, what reaching review again cost in agent minutes and hours, how many QA and refinement runs they took, and how often they were sent back afterwards for something other than a conflict, or escaped.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, dimension, dim_value]
   - name: mart_escapes
     description: Finished work a person sent back after it reached review, per hand-off to review and per ticket, by the kind of miss the implementing run that picked it up classified it as, and who found it - requirement changes and unclassified (older) escapes counted apart from misses, a person's overrides counted - by the week of the hand-off and the implementing run's model, effort, provider and skill version.
     tests:
