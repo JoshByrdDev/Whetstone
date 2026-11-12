@@ -406,6 +406,8 @@ public static class TicketEndpoints
                         // rode into its worktree; the orchestrator writes accepted facts back here.
                         memoryDir = cfg.ResolvedMemoryDir,
                         memoryIndex = cfg.ResolvedMemoryIndex,
+                        // What the maintenance pass after reflection holds the index to.
+                        notesIndexBudgetBytes = cfg.NotesIndexBudgetBytes,
                     },
                 },
             });

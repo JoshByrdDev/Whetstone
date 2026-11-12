@@ -665,6 +665,224 @@ function Remove-FinishedTicketNotes {
     return @($removed)
 }
 
+# ---- Which notes runs actually use ---------------------------------------------------------
+
+# One line per note a run used, plus one line per run, in the project's machine-local folder:
+#
+#   2026-11-11T10:42<TAB>42<TAB>implement<TAB>opened<TAB>some-note-key
+#   2026-11-11T10:42<TAB>42<TAB>implement<TAB>run<TAB>-
+#
+# "served" is a note put into the run's prompt (Get-RelevantNotes); "opened" is one the agent read
+# with its Read tool, seen in the run's own tool stream - the worker sees every call as it goes by,
+# so this costs nothing and depends on no transcript format. The run line is the denominator: a
+# note's share of runs is what decides whether it is promoted (Get-NotePromotions), and how long since
+# any run used it is what decides what goes when the index is over its budget.
+#
+# Its limits, said plainly: a codex run reads files through its shell, which records nothing here;
+# and a run on a worker host records nothing, since its project folder is a copy that never comes
+# back. Both make a note look less used than it is, never more - so they can only slow eviction down.
+$script:NoteUseLog = "note-reads.log"
+
+function Add-NoteUsage {
+    param([string]$ProjectDataDir, [string]$TicketId, [string]$Phase, [string[]]$Served, [string[]]$Opened,
+        [datetime]$When = (Get-Date))
+
+    if (-not $ProjectDataDir -or -not (Test-Path $ProjectDataDir)) { return }
+    $stamp = $When.ToString('yyyy-MM-ddTHH:mm')
+    $clean = { param($s) ("$s" -replace '[\t\r\n]', ' ').Trim() }
+    $t = & $clean $TicketId
+    $p = & $clean $Phase
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($k in @($Served | Where-Object { $_ } | Select-Object -Unique)) { [void]$sb.Append("$stamp`t$t`t$p`tserved`t$(& $clean $k)`n") }
+    foreach ($k in @($Opened | Where-Object { $_ } | Select-Object -Unique)) { [void]$sb.Append("$stamp`t$t`t$p`topened`t$(& $clean $k)`n") }
+    [void]$sb.Append("$stamp`t$t`t$p`trun`t-`n")
+    Add-Utf8Text -Path (Join-Path $ProjectDataDir $script:NoteUseLog) -Text $sb.ToString()
+}
+
+# The note a file tool was pointed at, when it was pointed at one: its key, or $null. A note is a
+# `.md` file directly in the store - the hub's, whose path the prompt names, or the copy at the same
+# place under the worktree - and never the index itself.
+function Get-NoteKeyFromPath {
+    param([string]$Path, [string]$MemoryDir)
+
+    if (-not $Path -or -not $MemoryDir) { return $null }
+    $norm = { param($x) ("$x" -replace '\\', '/').TrimEnd('/').ToLowerInvariant() }
+    $p = & $norm $Path
+    if (-not $p.EndsWith('.md')) { return $null }
+    $slash = $p.LastIndexOf('/')
+    if ($slash -lt 0) { return $null }
+    $dir  = $p.Substring(0, $slash)
+    $leaf = $p.Substring($slash + 1)
+    $key  = $leaf.Substring(0, $leaf.Length - 3)
+    if ($key -eq 'memory' -or -not $key) { return $null }
+    $store = & $norm $MemoryDir
+    # Same folder, or a folder ending in the store's last two parts (.claude/memory in a worktree).
+    $parts = $store -split '/'
+    $tail = if ($parts.Count -ge 2) { ($parts[-2..-1] -join '/') } else { $store }
+    if ($dir -ne $store -and -not $dir.EndsWith('/' + $tail)) { return $null }
+    if (-not (Test-Path (Join-Path $MemoryDir "$key.md"))) { return $null }
+    return $key
+}
+
+# What the log says, over the last $Days: how many runs there were, when tracking began, and per
+# note when it was last used and by how many distinct runs - opened, served and either - and of
+# which phases. Dictionaries rather than hashtables throughout: a note key is free text, and a
+# hashtable key such as "keys" or "count" shadows its own properties (see Find-RelatedNotes).
+function Get-NoteUsage {
+    param([string]$ProjectDataDir, [int]$Days = 3650, [datetime]$Now = (Get-Date))
+
+    $out = [pscustomobject]@{
+        Runs  = 0
+        Since = $null
+        Notes = New-Object 'System.Collections.Generic.Dictionary[string,object]' ([StringComparer]::OrdinalIgnoreCase)
+    }
+    if (-not $ProjectDataDir) { return $out }
+    $path = Join-Path $ProjectDataDir $script:NoteUseLog
+    if (-not (Test-Path $path)) { return $out }
+
+    $cutoff = $Now.AddDays(-$Days)
+    $runs = New-Object 'System.Collections.Generic.HashSet[string]'
+    foreach ($line in (Read-NoteLines -Path $path)) {
+        $f = $line -split "`t"
+        if ($f.Count -lt 5) { continue }
+        $when = [datetime]::MinValue
+        if (-not [datetime]::TryParse($f[0], [ref]$when)) { continue }
+        if ($null -eq $out.Since -or $when -lt $out.Since) { $out.Since = $when }
+        if ($when -lt $cutoff) { continue }
+        $run = "$($f[0])|$($f[1])"
+        $how = $f[3]
+        if ($how -eq 'run') { [void]$runs.Add($run); continue }
+        $key = $f[4].Trim()
+        if (-not $key) { continue }
+        if (-not $out.Notes.ContainsKey($key)) {
+            $out.Notes[$key] = [pscustomobject]@{
+                Last   = $when
+                Runs   = New-Object 'System.Collections.Generic.HashSet[string]'
+                Opened = New-Object 'System.Collections.Generic.HashSet[string]'
+                Served = New-Object 'System.Collections.Generic.HashSet[string]'
+                Phases = New-Object 'System.Collections.Generic.Dictionary[string,int]'
+            }
+        }
+        $n = $out.Notes[$key]
+        if ($when -gt $n.Last) { $n.Last = $when }
+        $first = $n.Runs.Add($run)
+        if ($how -eq 'opened') { [void]$n.Opened.Add($run) } else { [void]$n.Served.Add($run) }
+        if ($first -and $f[2]) {
+            if ($n.Phases.ContainsKey($f[2])) { $n.Phases[$f[2]] = $n.Phases[$f[2]] + 1 } else { $n.Phases[$f[2]] = 1 }
+        }
+    }
+    $out.Runs = $runs.Count
+    return $out
+}
+
+# Keep the log to what any reader of it looks at. Rewritten only once it has grown, under the same
+# lock its appends take.
+function Compress-NoteUsage {
+    param([string]$ProjectDataDir, [int]$KeepDays = 180, [long]$OverBytes = 1MB)
+
+    $path = Join-Path $ProjectDataDir $script:NoteUseLog
+    if (-not (Test-Path $path) -or (Get-Item $path).Length -lt $OverBytes) { return }
+    $cutoff = (Get-Date).AddDays(-$KeepDays)
+    Invoke-WithMutex -Name "file-$($script:NoteUseLog)" -TimeoutMs 15000 -Body {
+        $kept = @(Read-NoteLines -Path $path | Where-Object {
+            $w = [datetime]::MinValue
+            [datetime]::TryParse(($_ -split "`t")[0], [ref]$w) -and $w -ge $cutoff
+        })
+        [System.IO.File]::WriteAllLines($path, $kept, (New-Object System.Text.UTF8Encoding($false)))
+    }
+}
+
+# When a note was last written or confirmed, from its own metadata, else the file's time.
+function Get-NoteConfirmedAt {
+    param([string]$Path)
+    $raw = Read-NoteText -Path $Path
+    $when = $null
+    if ($raw -match '(?m)^\s*last-confirmed:\s*(.+?)\s*$') { $when = $Matches[1] }
+    elseif ($raw -match '(?m)^\s*learned:\s*(.+?)\s*$')     { $when = $Matches[1] }
+    $dt = [datetime]::MinValue
+    if ($when -and [datetime]::TryParse($when, [ref]$dt)) { return $dt }
+    try { return (Get-Item $Path).LastWriteTime } catch { return [datetime]::MinValue }
+}
+
+# ---- Holding the index to its budget ----------------------------------------------------------
+
+# Every entry of the index: its key, the `##` section it sits under, and what its line costs.
+function Get-IndexEntries {
+    param([string]$MemoryDir)
+    $index = Join-Path $MemoryDir "MEMORY.md"
+    $section = ""
+    $out = @()
+    foreach ($line in (Read-NoteLines -Path $index)) {
+        if ($line -match '^##\s+(.+?)\s*$') { $section = $line.Trim(); continue }
+        if ($line -match '^\s*-\s*\[[^\]]*\]\(([^)]+?)\.md\)') {
+            $out += [pscustomobject]@{
+                Key     = $Matches[1]
+                Section = $section
+                Bytes   = [System.Text.Encoding]::UTF8.GetByteCount($line) + 1
+            }
+        }
+    }
+    return $out
+}
+
+# The index's size limit, and the one that actually holds. The limit before this was a line count
+# that, once crossed, filed one suggestion and then never asked again - while the index of the
+# busiest project went on to 323 entries and 71 KB, read whole by half of 2,209 runs. This evicts.
+#
+# What goes is what no run has used for longest: a note's last use is the latest of a run opening
+# it, a run being served it, and its own last-confirmed date. Nothing used within $MinIdleDays goes,
+# however far over the budget the index is - and since a store that predates the usage log has no
+# reads on record, tracking's own start counts as a use, so nothing at all is evicted until the log
+# has that many days behind it. Lines a person placed under a topic section go after every eligible
+# line still in the machine's Unsorted section: their placement is a person saying they matter.
+#
+# Eviction deletes the note and its index line. The store is committed before and after, so a note
+# that turns out to have been needed is one `git checkout` away in the store's own history.
+#
+# Returns the keys evicted.
+function Invoke-NoteIndexBudget {
+    param([string]$MemoryDir, [string]$ProjectDataDir, [int]$BudgetBytes = 15360, [int]$MinIdleDays = 21,
+        [datetime]$Now = (Get-Date))
+
+    $index = Join-Path $MemoryDir "MEMORY.md"
+    if ($BudgetBytes -le 0 -or -not (Test-Path $index)) { return @() }
+    $bytes = (Get-Item $index).Length
+    if ($bytes -le $BudgetBytes) { return @() }
+
+    $usage = Get-NoteUsage -ProjectDataDir $ProjectDataDir -Now $Now
+    $since = if ($usage.Since) { $usage.Since } else { $Now }
+    $cutoff = $Now.AddDays(-$MinIdleDays)
+
+    $candidates = @()
+    foreach ($e in (Get-IndexEntries -MemoryDir $MemoryDir)) {
+        $file = Join-Path $MemoryDir "$($e.Key).md"
+        if (-not (Test-Path $file)) { continue }
+        $last = Get-NoteConfirmedAt -Path $file
+        if ($since -gt $last) { $last = $since }
+        if ($usage.Notes.ContainsKey($e.Key) -and $usage.Notes[$e.Key].Last -gt $last) { $last = $usage.Notes[$e.Key].Last }
+        if ($last -gt $cutoff) { continue }
+        $candidates += [pscustomobject]@{
+            Key = $e.Key; Bytes = $e.Bytes; Last = $last
+            Human = ($e.Section -and $e.Section -ne $script:MachineSection)
+        }
+    }
+    if ($candidates.Count -eq 0) { return @() }
+
+    $evicted = New-Object System.Collections.Generic.List[string]
+    foreach ($c in @($candidates | Sort-Object Human, Last)) {
+        if ($bytes -le $BudgetBytes) { break }
+        if ($evicted.Count -eq 0) { Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Before evicting unread notes (index $bytes bytes, budget $BudgetBytes)" }
+        Remove-Item (Join-Path $MemoryDir "$($c.Key).md") -Force -ErrorAction SilentlyContinue
+        Remove-IndexLine -MemoryDir $MemoryDir -Key $c.Key
+        $evicted.Add($c.Key)
+        $bytes = (Get-Item $index).Length
+    }
+    if ($evicted.Count -gt 0) {
+        Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Evicted $($evicted.Count) notes no run had used since before $($cutoff.ToString('yyyy-MM-dd')): $($evicted -join ', ')"
+    }
+    return @($evicted)
+}
+
 # ---- Maintenance ------------------------------------------------------------------------------
 
 # Why any of this exists: the index is not a filing cabinet nobody opens. Every heartbeat worker
@@ -695,7 +913,7 @@ function Remove-FinishedTicketNotes {
 # distinctive vocabulary - and on a healthy store this returns nothing. That is the correct answer:
 # the duplicate this system actually produces is caught at write time by Resolve-FactPlacement, and
 # what remains here is a backstop for stores that predate it. When the index is too big and nothing
-# here is mergeable, Invoke-NoteStoreMaintenance asks a human once rather than merging on a hunch.
+# here is mergeable, Invoke-NoteIndexBudget evicts what no run uses rather than merging on a hunch.
 if (-not ('WhetstoneNotePairs' -as [type])) {
     Add-Type -TypeDefinition @'
 using System;
@@ -899,15 +1117,20 @@ $rawB
     return [pscustomobject]@{ Kept = $keep; Dropped = $drop }
 }
 
-# The whole pass. Rate-limited by a stamp file rather than a schedule, so it runs off the back of
-# whatever cycle happens to notice it is due, and never twice in a day.
+# The whole pass, run after every reflection. Its parts cost very different amounts, so each has
+# its own trigger rather than one gate in front of all of them:
 #
-# It fires on the index crossing a line count, not on a timer: a store that is not growing does not
-# need consolidating, and one that is growing fast should be tidied sooner than a calendar would.
+#   - retiring finished tickets' notes: every pass (a frontmatter read per note).
+#   - merging near-duplicates: only while the index is over its budget, and at most once in
+#     $MinHoursBetween, because each merge is an agent call.
+#   - evicting what no run uses: every pass while the index is over its budget (file reads only).
+#
+# It used to fire on a line count and, finding nothing to merge, file one suggestion for a human and
+# then go quiet for good. Over budget now means notes leave the index, not that someone is asked.
 function Invoke-NoteStoreMaintenance {
     param(
         [string]$MemoryDir, [string]$ProjectDataDir, $ReflectCmd, [string]$RepoDir,
-        [int]$IndexLineLimit = 120, [int]$MaxMerges = 3, [int]$MinHoursBetween = 20,
+        [int]$BudgetBytes = 15360, [int]$MinIdleDays = 21, [int]$MaxMerges = 3, [int]$MinHoursBetween = 20,
         [scriptblock]$TicketPhaseOf
     )
 
@@ -918,69 +1141,46 @@ function Invoke-NoteStoreMaintenance {
     $retired = @(Remove-FinishedTicketNotes -MemoryDir $MemoryDir -PhaseOf $TicketPhaseOf)
     if ($retired.Count -gt 0) { Write-Log "  Notes: retired $($retired.Count) about finished tickets: $($retired -join ', ')" }
 
+    if ($ProjectDataDir) { Compress-NoteUsage -ProjectDataDir $ProjectDataDir }
+
     $index = Join-Path $MemoryDir "MEMORY.md"
     if (-not (Test-Path $index)) { return }
+    $bytes = (Get-Item $index).Length
+    if ($BudgetBytes -le 0 -or $bytes -le $BudgetBytes) { return }
 
-    $entries = @(Read-NoteLines -Path $index | Where-Object { $_ -match '^\s*-\s*\[' })
-    if ($entries.Count -lt $IndexLineLimit) { return }
-
-    $marker = Join-Path $ProjectDataDir "notes-maintenance.stamp"
-    if (Test-Path $marker) {
-        $last = (Get-Item $marker).LastWriteTime
-        if ((Get-Date) -lt $last.AddHours($MinHoursBetween)) { return }
-    }
-
-    Write-Log "--- Notes maintenance ($($entries.Count) index entries) ---"
+    Write-Log "--- Notes maintenance (index $bytes bytes, budget $BudgetBytes) ---"
     [void](Initialize-NoteStoreGit -MemoryDir $MemoryDir)
-    Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Before notes maintenance"
-    Set-Content -Path $marker -Value (Get-Date -Format 'o') -Encoding ASCII
 
-    $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
+    # Merging first: two notes made one keep both facts, which eviction cannot.
+    $marker = if ($ProjectDataDir) { Join-Path $ProjectDataDir "notes-maintenance.stamp" } else { $null }
+    $mergeDue = $ReflectCmd -and $marker -and
+        (-not (Test-Path $marker) -or (Get-Date) -ge (Get-Item $marker).LastWriteTime.AddHours($MinHoursBetween))
     $done = 0
-    foreach ($pair in @(Get-NoteClusters -MemoryDir $MemoryDir -Max $MaxMerges)) {
-        $r = Merge-NotePair -MemoryDir $MemoryDir -KeyA $pair.A -KeyB $pair.B `
-            -Stamp $stamp -ReflectCmd $ReflectCmd -RepoDir $RepoDir
-        if ($r) {
-            Write-Log "  Consolidated: $($r.Dropped) -> $($r.Kept)  (similarity $($pair.Score))"
-            $done++
+    if ($mergeDue) {
+        Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Before notes maintenance"
+        Set-Content -Path $marker -Value (Get-Date -Format 'o') -Encoding ASCII
+        $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        foreach ($pair in @(Get-NoteClusters -MemoryDir $MemoryDir -Max $MaxMerges)) {
+            $r = Merge-NotePair -MemoryDir $MemoryDir -KeyA $pair.A -KeyB $pair.B `
+                -Stamp $stamp -ReflectCmd $ReflectCmd -RepoDir $RepoDir
+            if ($r) {
+                Write-Log "  Consolidated: $($r.Dropped) -> $($r.Kept)  (similarity $($pair.Score))"
+                $done++
+            }
+            else { Write-Log "  Left alone: $($pair.A) / $($pair.B) (similarity $($pair.Score))" }
         }
-        else { Write-Log "  Left alone: $($pair.A) / $($pair.B) (similarity $($pair.Score))" }
+        if ($done -gt 0) { Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Notes maintenance: $done merged" }
     }
 
-    $stale = @(Get-StaleNotes -MemoryDir $MemoryDir -Days 120)
-    if ($stale.Count -gt 0) {
-        $worst = ($stale | Sort-Object Age -Descending | Select-Object -First 5 |
-            ForEach-Object { "$($_.Key) ($($_.Age)d)" }) -join ", "
-        Write-Log "  $($stale.Count) notes unconfirmed for 120+ days. Oldest: $worst"
+    $evicted = @(Invoke-NoteIndexBudget -MemoryDir $MemoryDir -ProjectDataDir $ProjectDataDir `
+        -BudgetBytes $BudgetBytes -MinIdleDays $MinIdleDays)
+    if ($evicted.Count -gt 0) {
+        Write-Log "  Evicted $($evicted.Count) notes no run had used in $MinIdleDays+ days: $($evicted -join ', ')"
     }
 
-    if ($done -gt 0) {
-        Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Notes maintenance: $done merged"
-    }
-
-    # Nothing was safely mergeable and the index is still over the limit. This is the one case in
-    # the whole pipeline that genuinely needs a person: the store is costing context on every run,
-    # and the machine has looked for duplicates and honestly found none, so what is left is a
-    # judgement about which facts still earn their place. Asked once per pass, with the numbers.
-    if ($done -eq 0 -and $ProjectDataDir) {
-        $suggestions = Join-Path $ProjectDataDir "improvement-suggestions.md"
-        $already = $false
-        if (Test-Path $suggestions) {
-            $already = @(Read-NoteLines -Path $suggestions |
-                Where-Object { $_ -match 'notes index has grown' -and $_ -match '^\s*-\s*\[ \]' }).Count -gt 0
-        }
-        if (-not $already) {
-            $staleNote = if ($stale.Count -gt 0) { " $($stale.Count) notes are 120+ days unconfirmed." } else { "" }
-            Add-Utf8Text -Path $suggestions -Text (
-                "`n- [ ] [process] The notes index has grown to $($entries.Count) entries and is read on " +
-                "every worker run, every reflection and every interactive session. No two notes were " +
-                "similar enough to merge automatically, so pruning needs a human read.$staleNote " +
-                "(key: notes-index-over-limit, $stamp)`n")
-            Write-Log "  Index over limit with nothing auto-mergeable - filed one item for review"
-        }
-    }
-
-    Write-Log "  Maintenance done: $done merged, index now $((@(Read-NoteLines -Path $index | Where-Object { $_ -match '^\s*-\s*\[' })).Count) entries"
+    $after = (Get-Item $index).Length
+    $still = if ($after -gt $BudgetBytes) { " - still over: everything left was used within $MinIdleDays days" } else { "" }
+    Write-Log "  Maintenance done: $done merged, $($evicted.Count) evicted, index now $after bytes$still"
 }
 
 Set-StrictMode -Off

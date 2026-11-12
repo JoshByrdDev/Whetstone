@@ -54,6 +54,7 @@ public class ProjectConfigReadTests : IDisposable
           "worktreeCopyFiles": [".env"],
           "diffNoisePaths": ["src/generated/**"],
           "memoryDir": ".notes",
+          "notesIndexBudgetBytes": 20000,
           "learningLabel": "Study Alpha",
           "ideUrl": "jetbrains://rider/navigate/reference?path={path}:{line}",
           "phaseResources": { "qa-test": ["app-stack", "docker:daemon"] },
@@ -75,6 +76,7 @@ public class ProjectConfigReadTests : IDisposable
         Assert.Equal(new[] { ".env" }, cfg.WorktreeCopyFiles);
         Assert.Equal(new[] { "src/generated/**" }, cfg.DiffNoisePaths);
         Assert.Equal(".notes", cfg.MemoryDir);
+        Assert.Equal(20000, cfg.NotesIndexBudgetBytes);
         Assert.Equal("Study Alpha", cfg.ResolvedLearningLabel);
         Assert.Equal("jetbrains://rider/navigate/reference?path={path}:{line}", cfg.ResolvedIdeUrl);
         Assert.Equal(new[] { "alpha:app-stack", "docker:daemon" }, cfg.ResourcesFor("qa-test"));
@@ -97,6 +99,7 @@ public class ProjectConfigReadTests : IDisposable
         Assert.Equal("Learn alpha", cfg.ResolvedLearningLabel);
         Assert.Equal("vscode://file/{path}:{line}", cfg.ResolvedIdeUrl);
         Assert.Equal(Path.GetFullPath("C:/Repos/Alpha/.claude/memory"), cfg.ResolvedMemoryDir);
+        Assert.Equal(15 * 1024, cfg.NotesIndexBudgetBytes);
         Assert.Equal(new[] { "alpha:app-stack" }, cfg.ResourcesFor("qa-test"));
         Assert.False(cfg.Stack.IsConfigured);
         Assert.Equal("", cfg.BaseBranch);                     // empty = inherit the global

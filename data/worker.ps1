@@ -1874,7 +1874,7 @@ function Remove-ReflectKey {
 # runs in $RepoDir (the worktree the run just used).
 function Invoke-Reflection {
     param($ProjectDataDir, $RepoDir, $RunLog, $MemoryDir, $TicketId, [string]$ProjectKey,
-        [string]$IssueKey, [string]$Branch)
+        [string]$IssueKey, [string]$Branch, [int]$NotesBudgetBytes = 15360)
 
     if (-not $ProjectDataDir) { return }
     # The project's reflect-prompt.md is still the switch: delete it and this project stops
@@ -2136,10 +2136,11 @@ function Invoke-Reflection {
 
         # Consolidation rides on the back of reflection because this is where the agent command and
         # the worktree are already set up, and because reflection is already outside the measured
-        # window. It is a no-op unless the index has crossed its line limit and a day has passed, so
-        # the common case costs one file read.
+        # window. Past retiring finished tickets' notes it does nothing unless the index is over
+        # its byte budget, so the common case costs a frontmatter read per note.
         Invoke-NoteStoreMaintenance -MemoryDir $MemoryDir -ProjectDataDir $ProjectDataDir `
-            -ReflectCmd $reflectCmd -RepoDir $RepoDir -TicketPhaseOf $script:TicketPhaseOf
+            -ReflectCmd $reflectCmd -RepoDir $RepoDir -TicketPhaseOf $script:TicketPhaseOf `
+            -BudgetBytes $NotesBudgetBytes
     }
     catch { Write-Log "  Reflection error: $($_.Exception.Message)" }
 }
@@ -2201,6 +2202,10 @@ if ($armRun.Id) {
 }
 $memoryDir   = "$($Claim.project.memoryDir)"
 $memoryIndex = "$($Claim.project.memoryIndex)"
+# The index's byte budget (ProjectConfig.NotesIndexBudgetBytes). A board older than this field sends
+# none, which means the default rather than no limit.
+$notesBudget = 15360
+if ($null -ne $Claim.project.notesIndexBudgetBytes) { $notesBudget = [int]$Claim.project.notesIndexBudgetBytes }
 $resumed     = if ($Claim.resumed) { "yes" } else { "no" }
 # What the ticket's pull request reviewer last saw, when it is under PR review (Ticket.ReviewedOn):
 # the branch then works in rounds on top of those commits rather than in one rewritten commit - no
@@ -2881,6 +2886,9 @@ $peakContextTokens = $null
 $contextWindow     = $null
 $compactions       = if ($AgentProvider.Key -eq 'claude') { 0 } else { $null }
 $toolCalls         = @{}
+# The notes the agent opened with its Read tool, by key (Get-NoteKeyFromPath): what eviction and
+# promotion count, recorded after the run with Add-NoteUsage.
+$notesOpened       = New-Object 'System.Collections.Generic.HashSet[string]'
 $toolResults       = New-Object System.Collections.Generic.List[object]
 
 # Carries what the stream adapter has to remember between lines. Codex reports its accounting on a
@@ -3010,6 +3018,10 @@ try {
                         $toolDetail = $e.Detail
                         $runLogLines += "> Tool: $toolName $toolDetail"
                         if ($e.Id) { $toolCalls[$e.Id] = @{ Tool = "$toolName"; Detail = "$toolDetail" } }
+                        if ($toolName -eq 'Read' -and $e.Path -and $memoryDir) {
+                            $noteKey = Get-NoteKeyFromPath -Path $e.Path -MemoryDir $memoryDir
+                            if ($noteKey) { [void]$notesOpened.Add($noteKey) }
+                        }
 
                         # The feed is a human-readable story of the ticket's progress, so we only
                         # surface ticket mutations (phase moves, work/QA items, comments). Everything
@@ -3556,9 +3568,14 @@ Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
 # and the copies a worker host is served are read-only (see ProjectKit). Its kit carries no
 # reflect-prompt.md either, which would stop it on its own; this says so where it is decided.
 if (-not $limitReset -and -not $onHost) {
+    # Which notes this run used, before reflection's maintenance pass reads the log to decide what to
+    # keep. Every run is recorded, with no notes too: that is the count a note's share is out of.
+    if ($memoryDir) {
+        Add-NoteUsage -ProjectDataDir $projectDataDir -TicketId $ticketId -Phase $skill -Served @() -Opened @($notesOpened)
+    }
     Invoke-Reflection -ProjectDataDir $projectDataDir -RepoDir $workDir -RunLog $runLogLines `
         -MemoryDir $memoryDir -TicketId $ticketId -ProjectKey $projectKey `
-        -IssueKey "$($Claim.ticket.issueKey)" -Branch "$($Claim.ticket.branch)"
+        -IssueKey "$($Claim.ticket.issueKey)" -Branch "$($Claim.ticket.branch)" -NotesBudgetBytes $notesBudget
 }
 
 # Last, because reflection is the final thing that runs the agent CLI and it needs the same setup.

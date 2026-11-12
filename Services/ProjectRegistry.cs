@@ -322,6 +322,17 @@ public class ProjectConfig
     public bool SkipClassroomAnalysisByDefault { get; init; }
 
     /// <summary>
+    /// How large the notes store's index (<c>MEMORY.md</c>) may grow, in bytes, before the worker's
+    /// maintenance pass evicts the notes no run has read lately (<c>notesIndexBudgetBytes</c>; see
+    /// <c>Invoke-NoteIndexBudget</c> in data/notes-store.ps1). The index used to be read whole by every
+    /// worker, so its size was paid on every run; 15 KB is about a hundred one-line entries.
+    /// Zero or less means no limit.
+    /// </summary>
+    public int NotesIndexBudgetBytes { get; init; } = DefaultNotesIndexBudgetBytes;
+
+    public const int DefaultNotesIndexBudgetBytes = 15 * 1024;
+
+    /// <summary>
     /// Deliver a finished ticket by merging its branch into the base branch in the hub, rather than
     /// by raising a pull request. For a project whose team does not use PRs at all - the branch is
     /// merged to main by hand and that is the review. The PR dialog keeps its preflight and diff and
@@ -664,6 +675,8 @@ public class ProjectRegistry
             LearningLabel = cfg.TryGetValue("learningLabel", out var ll) ? ll.GetString() ?? "" : "",
             IdeUrl = cfg.TryGetValue("ideUrl", out var iu) ? iu.GetString() ?? "" : "",
             Tracks = GetTracks(cfg),
+            NotesIndexBudgetBytes = cfg.TryGetValue("notesIndexBudgetBytes", out var nib) && nib.ValueKind == JsonValueKind.Number
+                && nib.TryGetInt32(out var nibv) ? nibv : ProjectConfig.DefaultNotesIndexBudgetBytes,
             SkipClassroomAnalysisByDefault = cfg.TryGetValue("skipClassroomAnalysisByDefault", out var sca)
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,

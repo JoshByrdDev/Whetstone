@@ -656,6 +656,17 @@ function Format-ToolCall {
     return $s
 }
 
+# The whole path a file tool was pointed at, or $null. The caption above keeps only the leaf, which
+# is right for a feed and not enough to tell a note in the notes store from a file of the same name
+# in the repo - the worker records which notes a run actually opened from this.
+function Get-ToolPath {
+    param($ToolInput)
+    if (-not $ToolInput) { return $null }
+    $p = Get-FirstProp $ToolInput 'file_path','absolute_path','notebook_path','path'
+    if ($p -is [string] -and $p) { return $p }
+    return $null
+}
+
 # Codex reports a tool call's arguments as either a JSON object or a JSON string holding one.
 function ConvertTo-ArgObject {
     param($Arguments)
@@ -674,6 +685,7 @@ function New-CanonicalToolUse {
         Kind     = 'tool_use'
         ToolName = $ToolName
         Detail   = (Format-ToolCall -Block ([pscustomobject]@{ name = $ToolName; input = $ToolInput }))
+        Path     = (Get-ToolPath $ToolInput)
     }
 }
 
@@ -798,7 +810,7 @@ function ConvertFrom-AgentEvent {
                     if ($block.type -eq 'tool_use') {
                         $out += [pscustomobject]@{
                             Kind = 'tool_use'; ToolName = $block.name; Detail = (Format-ToolCall -Block $block)
-                            Id = "$($block.id)"
+                            Id = "$($block.id)"; Path = (Get-ToolPath $block.input)
                         }
                     }
                     elseif ($block.type -eq 'text' -and $block.text) {
