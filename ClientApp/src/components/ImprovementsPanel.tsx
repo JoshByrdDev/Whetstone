@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useProjectList, ProjectPicker } from './ProjectPicker';
 import { PageHead, PrimaryButton } from './ui';
 import { SetupCheck } from './SetupCheck';
+import { MachinesSection } from './MachinesSection';
 
 // The three the reflection writes today, then the older pair still attached to anything filed
 // before that changed. Order matters: it is the dropdown order, knowledge kinds first.
@@ -261,6 +262,8 @@ export function ImprovementsPanel() {
       />
 
       <SetupCheck />
+
+      <MachinesSection />
 
       {/* Apply status banner */}
       {applyStatus && (

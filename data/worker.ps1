@@ -10,7 +10,7 @@
 # hung off the single orchestrator that root was shared - one agent timing out would have killed the
 # other two mid-sentence. Here the root is $PID, which is this agent and nothing else.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File worker.ps1 -ClaimFile <path> -Agent <1..N>
+# Usage: pwsh -ExecutionPolicy Bypass -File worker.ps1 -ClaimFile <path> -Agent <1..N>
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 # ============================================================
@@ -38,6 +38,35 @@ $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 # A ticket's workspace on a project whose code is several repos (docs/multi-repo-plan.md). Functions
 # only; a project of one repo takes its set-of-one path, which is Resolve-Worktree as it always was.
 . (Join-Path $DataRoot "worker-repos.ps1")
+
+# A project's workerEnv, ready to set: the names it may set, each value with {machineCache} made
+# this machine's folder for the project (<data root>/cache/<key>), and the names it may not set.
+# Refused are the names this pipeline sets or reads itself - its own WHETSTONE_* (the guard trusts
+# WHETSTONE_BOARD_HOST), the providers' logins and homes, git's, and the paths every process
+# resolves through - because a project config that could set those could route around the rules
+# that are not its to change. Dirs lists the names whose value is a {machineCache} folder, which the
+# caller creates. Pure apart from reading its arguments, so worker-env.tests.ps1 can drive it.
+function Get-WorkerEnv {
+    param($Spec, [string]$CacheRoot, [string]$ProjectKey)
+    $out = @{ Env = [ordered]@{}; Refused = @(); Dirs = [Collections.Generic.HashSet[string]]::new() }
+    if ($null -eq $Spec) { return $out }
+    $pairs = if ($Spec -is [Collections.IDictionary]) { $Spec.GetEnumerator() | ForEach-Object { @{ Name = "$($_.Key)"; Value = $_.Value } } }
+             else { $Spec.PSObject.Properties | ForEach-Object { @{ Name = $_.Name; Value = $_.Value } } }
+    $deny = '^(WHETSTONE_|CLAUDE|ANTHROPIC|CODEX|GEMINI|OPENAI|GIT_|GCM_)|^(PATH|PSMODULEPATH|PATHEXT|HOME|USERPROFILE|APPDATA|LOCALAPPDATA|TEMP|TMP|COMSPEC|SYSTEMROOT|WINDIR)$'
+    $cache = [IO.Path]::Combine($CacheRoot, $ProjectKey)
+    foreach ($p in $pairs) {
+        $name = $p.Name
+        if ($name.StartsWith('_')) { continue }
+        if ($name -notmatch '^[A-Za-z_][A-Za-z0-9_]*$' -or $name -match $deny -or $p.Value -isnot [string]) { $out.Refused += $name; continue }
+        $value = $p.Value
+        if ($value.Contains('{machineCache}')) {
+            $value = [IO.Path]::GetFullPath($value.Replace('{machineCache}', $cache))
+            [void]$out.Dirs.Add($name)
+        }
+        $out.Env[$name] = $value
+    }
+    return $out
+}
 
 # A worker is its own top-level session, never a child of one. When the app was started from inside
 # Claude Code (`dotnet run` in a session's shell), every process under it inherits that session's
@@ -2162,9 +2191,13 @@ if ($null -eq $Claim.project.mergeInsteadOfPr -and $Claim.project.dataDir) {
 # A run that cannot start, said once: a comment, a cycle row, the claim given back. -Block when it
 # needs a person; otherwise the ticket is simply left for the next claim, on whichever machine.
 function Stop-CycleEarly {
-    param([string]$Reason, [string]$Comment, [switch]$Block)
+    # -Refund: nothing was attempted and the cause is the machine, not the ticket, so the attempt is
+    # given back. Without it a give-back still counts towards the attempt cap, and a worker host
+    # whose clone is broken blocks every ticket it is sent within three passes.
+    param([string]$Reason, [string]$Comment, [switch]$Block, [switch]$Refund)
     Write-Log "  $Reason - $(if ($Block) { 'blocking' } else { 'giving back' }) ticket #$ticketId."
     if ($Block) { Block-Ticket -TicketId $ticketId -Reason $Reason }
+    elseif ($Refund) { Send-AttemptRefund -TicketId $ticketId -Reason $Reason }
     Send-TicketComment -TicketId $ticketId -Body $Comment
     Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error $Reason
     # Still a cycle: it consumed wall clock and produced nothing. A failure that leaves no row
@@ -2214,14 +2247,16 @@ if ($onHost -and $repoDir) {
     # host's origin/* has it, and the mirror is how this clone has that at all.
     $sync = Sync-BoardRefs -RepoDir $repoDir -BaseBranch $effectiveBase -MirrorSlices:$mirrorSlices
     if (-not $sync.ok) {
-        Stop-CycleEarly -Reason "Could not sync with the board host ($runHost): $($sync.reason)" `
-            -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $($sync.reason). No work was attempted; the ticket goes back to the queue."
+        # Nothing back at all means it threw; its error is in this host's heartbeat log.
+        $why = if ("$($sync.reason)") { $sync.reason } else { "the sync stopped on an error (see the heartbeat log on $runHost)" }
+        Stop-CycleEarly -Refund -Reason "Could not sync with the board host ($runHost): $why" `
+            -Comment "This run was on worker host ``$runHost`` and could not bring its clone up to the board host's repo: $why. No work was attempted; the ticket goes back to the queue, and the attempt is not counted."
     }
     $recordedBranch = if ($readsOnly) { "" } else { "$($Claim.ticket.branch)".Trim() }
     if ($recordedBranch) {
         $got = Get-BoardBranch -RepoDir $repoDir -Branch $recordedBranch
         if (-not $got.ok) {
-            Stop-CycleEarly -Reason "Could not fetch '$recordedBranch' from the board host ($runHost): $($got.reason)" `
+            Stop-CycleEarly -Refund -Reason "Could not fetch '$recordedBranch' from the board host ($runHost): $($got.reason)" `
                 -Comment "This run was on worker host ``$runHost`` and could not fetch this ticket's branch from the board host: $($got.reason). No work was attempted; the ticket goes back to the queue."
         }
         $boardStartSha = $got.sha
@@ -2437,9 +2472,12 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
     # it took 25-70s on a quiet machine, so a busy one tipped past the 90s connect timeout and QA
     # tickets blocked on a healthy browser. npx stays as the fallback for a machine without the
     # install, which the Setup check flags.
+    # A worker host's runner installs it while idle (runner.ps1, Start-PlaywrightInstall) and marks
+    # the folder until it is done, so a run never starts on half of node_modules.
     $pwCli = Join-Path $DataRoot "playwright-mcp\node_modules\@playwright\mcp\cli.js"
+    $pwBusy = Test-Path -LiteralPath (Join-Path $DataRoot "playwright-mcp\.installing")
     $pwArgs = @("--headless", "--isolated", "--output-dir", $qaShotDir)
-    if (Test-Path -LiteralPath $pwCli) {
+    if ((Test-Path -LiteralPath $pwCli) -and -not $pwBusy) {
         $mcpServers.playwright = @{ type = "stdio"; command = "node"; args = @($pwCli) + $pwArgs }
     } else {
         Write-Log "  Playwright not installed in data/playwright-mcp - falling back to npx, which can be slow to start"
@@ -2472,6 +2510,17 @@ $toolSetup = New-AgentToolSetup -Provider $AgentProvider -Servers $mcpServers -R
 # is safe precisely because this script IS one agent working one ticket - the isolation the fleet
 # relies on is the process boundary, so there is nobody else in here to disturb.
 foreach ($k in $toolSetup.Env.Keys) { Set-Item -Path "Env:$k" -Value $toolSetup.Env[$k] }
+
+# The project's own environment (workerEnv in its config): what its tooling reads and the platform
+# has no word for, such as one build cache shared by every worktree on this machine. Set after the
+# provider's and before the platform's own WHETSTONE_* below, which Get-WorkerEnv refuses anyway.
+$workerEnv = Get-WorkerEnv -Spec $Claim.project.workerEnv -CacheRoot (Join-Path $DataRoot 'cache') -ProjectKey $projectKey
+foreach ($k in $workerEnv.Refused) { Write-Log "  workerEnv: $k is not a project's to set - ignored." }
+foreach ($k in $workerEnv.Env.Keys) {
+    if ($workerEnv.Dirs.Contains($k)) { New-Item -ItemType Directory -Force -Path $workerEnv.Env[$k] -ErrorAction SilentlyContinue | Out-Null }
+    Set-Item -Path "Env:$k" -Value $workerEnv.Env[$k]
+}
+if ($workerEnv.Env.Count -gt 0) { Write-Log "  workerEnv: $(@($workerEnv.Env.Keys) -join ', ')" }
 
 # Which run this is, for the hooks. A hook is a child of the agent CLI, which is a child of this
 # process, so the environment is the one channel that reaches it without a file per run - and the

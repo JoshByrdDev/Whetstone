@@ -14,7 +14,7 @@
 # under it, which is the same lesson the live instance taught (CLAUDE.md, "Build and run"). Start
 # it at logon from Task Scheduler - see docs/worker-host-setup.md.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File data/runner.ps1 [-HostFile <path>]
+# Usage: pwsh -ExecutionPolicy Bypass -File data/runner.ps1 [-HostFile <path>]
 # Stop:  create data/runner.stop. It takes nothing new and exits once its runs have finished.
 #
 # It keeps itself on the board host's commit. The board gives work only to a runner on its exact
@@ -42,6 +42,7 @@ param(
 
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $DataRoot "heartbeat-common.ps1")
+. (Join-Path $DataRoot "machine-info.ps1")
 
 $ErrorActionPreference = 'Continue'
 $env:GCM_INTERACTIVE     = 'never'
@@ -56,7 +57,58 @@ $RunnerUpdatedExit = 75
 # How long to wait before fetching again for a board commit this checkout cannot see yet.
 $RunnerFetchBackoffMinutes = 5
 
+# QA's browser server, installed in data/playwright-mcp so a run starts it in seconds. The folder's
+# node_modules is gitignored, so a worker host's checkout never had it: every QA run there went
+# through `npx @playwright/mcp@latest`, which asks the npm registry each launch, and on a busy host
+# it missed the 90s connect timeout twice running and blocked the ticket on a healthy browser. The
+# runner installs it itself, in the background and only while idle (an install deletes the files a
+# live run's browser has open). While it runs, the marker tells workers to keep using npx, so none
+# starts on a half-written install. worker.ps1 reads the same marker.
+$PlaywrightDir = Join-Path $DataRoot 'playwright-mcp'
+$PlaywrightInstallingMarker = '.installing'
+$PlaywrightRetryMinutes = 30
+
 # ---- Pure helpers (data/runner.tests.ps1 lifts these) ---------------------------------------
+
+# Whether data/playwright-mcp holds the version its package.json pins, finished. Returns
+# @{ ok; pinned; installed }.
+function Test-PlaywrightInstall {
+    param([string]$Dir)
+    $pinned = ''; $installed = ''
+    try { $pinned = "$((Get-Content -Raw -LiteralPath (Join-Path $Dir 'package.json') | ConvertFrom-Json).dependencies.'@playwright/mcp')".Trim() } catch { }
+    $mcpPkg = Join-Path $Dir 'node_modules\@playwright\mcp\package.json'
+    if (Test-Path -LiteralPath $mcpPkg) {
+        try { $installed = "$((Get-Content -Raw -LiteralPath $mcpPkg | ConvertFrom-Json).version)".Trim() } catch { }
+    }
+    $busy = Test-Path -LiteralPath (Join-Path $Dir $PlaywrightInstallingMarker)
+    return @{ ok = [bool]($pinned -and $installed -eq $pinned -and -not $busy); pinned = $pinned; installed = $installed }
+}
+
+# Start `npm ci` in data/playwright-mcp in the background, the marker written first. Returns the
+# process, or $null when it could not start.
+function Start-PlaywrightInstall {
+    param([string]$Dir, [string]$LogDir)
+    Set-Content -LiteralPath (Join-Path $Dir $PlaywrightInstallingMarker) -Value "npm ci started $(Get-Date -Format s)" -Encoding ascii
+    $out = Join-Path $LogDir 'playwright-install.log'
+    $err = Join-Path $LogDir 'playwright-install.err.log'
+    try {
+        $npmArgs = @('ci', '--no-audit', '--no-fund')
+        $p = if ($OnWindows) {
+            Start-Process -FilePath 'cmd.exe' -ArgumentList (@('/c', 'npm') + $npmArgs) -WorkingDirectory $Dir `
+                -RedirectStandardOutput $out -RedirectStandardError $err -WindowStyle Hidden -PassThru
+        } else {
+            Start-Process -FilePath 'npm' -ArgumentList $npmArgs -WorkingDirectory $Dir `
+                -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
+        }
+        try { $null = $p.Handle } catch { }
+        return $p
+    }
+    catch {
+        Remove-Item -LiteralPath (Join-Path $Dir $PlaywrightInstallingMarker) -Force -ErrorAction SilentlyContinue
+        Write-Log "Could not start the QA browser install: $($_.Exception.Message)"
+        return $null
+    }
+}
 
 # host.json, checked. Returns @{ ok; name; projects = @{ key = @{ path; worktreeRoot } }; reason }.
 function Read-HostConfig {
@@ -401,6 +453,56 @@ function Test-SupervisorAlive {
     return (Test-RunsScript -CommandLine $p.CommandLine -Script (Join-Path $DataRoot 'runner.ps1'))
 }
 
+# Windows PowerShell 5.1 is not a host the fleet runs on, but a runner set up before that rule can
+# still be started on it: by a scheduled task whose action names powershell.exe, and then by the
+# supervisor that task started, which starts every runner after it on the host it read at its own
+# start. Whether this runner is in such a chain - itself on 5.1, or under a supervisor that is.
+function Test-OnWindowsPowerShell {
+    param([string]$Edition = "$($PSVersionTable.PSEdition)", [string]$SupervisorName = '')
+    return ($Edition -eq 'Desktop') -or ("$SupervisorName" -match '^(?i)powershell(\.exe)?$')
+}
+
+# The action a scheduled task should have instead of one that starts Windows PowerShell: the same
+# arguments, on 7. $null for an action that already starts something else.
+function Get-PwshTaskAction {
+    param([string]$Execute, [string]$Arguments, [string]$PsHost)
+    $leaf = Split-Path -Leaf ("$Execute".Trim().Trim('"'))
+    if ($leaf -notmatch '^(?i)powershell(\.exe)?$') { return $null }
+    return @{ Execute = $PsHost; Arguments = "$Arguments" }
+}
+
+# The scheduled task whose action runs this checkout's runner.ps1, or $null.
+function Find-RunnerTask {
+    param([string]$Script = (Join-Path $DataRoot 'runner.ps1'))
+    $want = [IO.Path]::GetFullPath($Script)
+    foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+        foreach ($a in @($t.Actions)) {
+            if ("$($a.Execute) $($a.Arguments)" -like "*$want*") { return $t }
+        }
+    }
+    return $null
+}
+
+# Point a scheduled task that starts the runner on Windows PowerShell at 7 instead, keeping its
+# arguments, triggers and settings. 'moved', or 'same' when it already starts 7. Throws when the
+# task cannot be changed.
+function Move-RunnerTaskToPwsh {
+    param($Task)
+    $changed = $false
+    $actions = @(foreach ($a in @($Task.Actions)) {
+        $n = Get-PwshTaskAction -Execute $a.Execute -Arguments $a.Arguments -PsHost $PsHost
+        if (-not $n) { $a; continue }
+        $changed = $true
+        $new = @{ Execute = $n.Execute }
+        if ($n.Arguments) { $new.Argument = $n.Arguments }
+        if ($a.WorkingDirectory) { $new.WorkingDirectory = $a.WorkingDirectory }
+        New-ScheduledTaskAction @new
+    })
+    if (-not $changed) { return 'same' }
+    Set-ScheduledTask -TaskName $Task.TaskName -TaskPath $Task.TaskPath -Action $actions -ErrorAction Stop | Out-Null
+    return 'moved'
+}
+
 # Run the runner as a child for as long as it keeps exiting with $RunnerUpdatedExit, starting it
 # again each time; return the first other exit code. A function so the tests can drive it with a
 # stand-in child script rather than the runner itself.
@@ -442,17 +544,31 @@ if (-not $single.WaitOne(0)) { Write-Log "Another runner is already running on t
 
 $script:AgentSlot = 0
 $commit = Get-OwnCommit
+# On 5.1, or under a supervisor that is: moved to 7 as soon as nothing is running here (below).
+$supervisorName = $(if ($SupervisorPid -gt 0) { "$((Get-ProcessTable -Id $SupervisorPid | Select-Object -First 1).Name)" } else { '' })
+$onWindowsPs = $OnWindows -and (Test-OnWindowsPowerShell -SupervisorName $supervisorName)
+$psMoveTried = $false
 Write-Log "Runner '$($HostCfg.name)' on commit $commit, board host $DashboardUrl, projects: $(@($HostCfg.projects.Keys) -join ', '), auto-update $(if ($HostCfg.autoUpdate) { 'on' } else { 'off' }), supervisor $(if ($SupervisorPid -gt 0) { "pid $SupervisorPid" } else { 'none' })"
 $ownRepo = Split-Path -Parent $DataRoot
 # What has already been said, so a waiting or refused update is logged once per board commit and
 # not on every check-in; and when a commit not fetchable yet may be tried for again.
 $updateSaid = @{}
 $updateRetryAt = @{}
+$pwInstall = $null
+$pwRetryAt = [datetime]::MinValue
+$pwState = Test-PlaywrightInstall -Dir $PlaywrightDir
+if (-not $pwState.ok) { Write-Log "QA browser in data/playwright-mcp is $(if ($pwState.installed) { "at $($pwState.installed)" } else { 'not installed' }) (wants $($pwState.pinned)) - installing it once this host is idle; QA uses npx until then." }
 
 $Runs = Find-SurvivingRuns
 foreach ($slot in $Runs.Keys) { Write-Log "  Adopted run $($Runs[$slot].RunId) in slot $slot (ticket #$($Runs[$slot].TicketId), pid $($Runs[$slot].Pid))" }
 
 $failures = 0
+# This machine's hardware goes with the first check-in and hourly after (the board keeps it only
+# when it changed), its load at most once a minute. docs/machine-limits-plan.md.
+$MachineInventoryMinutes = 60
+$machineSentAt = $null
+$machineTriedAt = $null
+$machineLoadAt = $null
 while ($true) {
     # Finished runs are reported for a while and then forgotten; the orchestrator reads an absent
     # run as finished too, so dropping one never strands a slot.
@@ -478,6 +594,18 @@ while ($true) {
 
     # Read afresh each time: a login signed in or out here reaches the board on the next check-in.
     $script:ClaudeLogins = @(Get-ClaudeLogins)
+    $inventory = $null; $load = $null
+    # Tried again after a failed check-in, but not on every one of a run of them: reading the tools'
+    # versions takes seconds.
+    $inventoryDue = (-not $machineSentAt -or ((Get-Date) - $machineSentAt).TotalMinutes -ge $MachineInventoryMinutes) -and
+        (-not $machineTriedAt -or ((Get-Date) - $machineTriedAt).TotalMinutes -ge 5)
+    if ($inventoryDue) {
+        $machineTriedAt = Get-Date
+        try { $inventory = Get-MachineInventory -DataRoot $DataRoot } catch { Write-Log "Could not read this machine's hardware: $($_.Exception.Message)" }
+    }
+    if (-not $machineLoadAt -or ((Get-Date) - $machineLoadAt).TotalSeconds -ge 55) {
+        try { $load = Get-MachineLoad -DataRoot $DataRoot; $machineLoadAt = Get-Date } catch { }
+    }
     $body = @{
         commit = $commit
         runs = (Get-RunReport -Runs $Runs)
@@ -485,6 +613,10 @@ while ($true) {
         usageLimits = (Get-HostUsageLimits -Logins $script:ClaudeLogins)
         waitSeconds = $(if ($Once) { 0 } else { 20 })
         dataRoot = $DataRoot
+        inventory = $inventory
+        load = $load
+        psVersion = "$($PSVersionTable.PSVersion)"
+        windowsPowerShell = $onWindowsPs
     } | ConvertTo-Json -Depth 6 -Compress
 
     $resp = $null
@@ -493,6 +625,7 @@ while ($true) {
             -ContentType $JsonContentType -Body (ConvertTo-JsonBody $body) -TimeoutSec 60
         if ($failures -gt 0) { Write-Log "Board host reachable again after $failures failed check-in(s)." }
         $failures = 0
+        if ($inventory) { $machineSentAt = Get-Date }
     }
     catch {
         $failures++
@@ -531,6 +664,9 @@ while ($true) {
     # acted on first; and only ever while idle - see Get-UpdateAction.
     $boardSha = "$($resp.boardCommit)".Trim()
     $liveNow = @($Runs.Values | Where-Object { -not $_.ExitedAt }).Count
+    # A QA browser install holds the update back like a run: restarting under it would leave an
+    # npm ci going with nothing to clear its marker, and the next runner would start a second.
+    if ($pwInstall -and -not $pwInstall.HasExited) { $liveNow++ }
     $action = Get-UpdateAction -Own $commit -Board $boardSha -LiveRuns $liveNow -Stopping (Test-Path $RunnerStopFile) -Enabled $HostCfg.autoUpdate
     if ($action -eq 'wait' -and $updateSaid[$boardSha] -ne 'wait') {
         Write-Log "Board host is on commit $boardSha; this runner is on $commit. Updating once its $liveNow run(s) finish."
@@ -567,6 +703,62 @@ while ($true) {
             $updateRetryAt[$boardSha] = [datetime]::MaxValue
             Write-Log "Not updating to the board host's commit ${boardSha}: $($result.reason). This host gets no work until its checkout is on that commit."
         }
+    }
+
+    # Off Windows PowerShell 5.1, once, while idle: the scheduled task is pointed at 7 for every
+    # logon after this one, and this runner starts a new supervisor on 7 and steps aside - which
+    # ends the 5.1 supervisor too, since this is not an update exit. Tried once per runner: a task
+    # that cannot be changed is said in the log, and the board shows the host as still on 5.1.
+    if ($onWindowsPs -and -not $psMoveTried -and $liveNow -eq 0 -and -not (Test-Path $RunnerStopFile)) {
+        $psMoveTried = $true
+        if (-not (Get-Command $PsHost -ErrorAction SilentlyContinue)) {
+            Write-Log "This runner is on Windows PowerShell 5.1 and PowerShell 7 is not installed here: winget install --id Microsoft.PowerShell, then double-click Update-Runner.bat."
+        }
+        else {
+            $task = Find-RunnerTask
+            if ($task) {
+                try {
+                    if ((Move-RunnerTaskToPwsh -Task $task) -eq 'moved') { Write-Log "Scheduled task '$($task.TaskName)' now starts the runner on PowerShell 7 ($PsHost)." }
+                }
+                catch { Write-Log "Could not point the scheduled task '$($task.TaskName)' at PowerShell 7: $($_.Exception.Message). Change its action to $PsHost by hand (docs/worker-host-setup.md, step 12)." }
+            }
+            Write-Log "This runner was started on Windows PowerShell 5.1 - starting it again on PowerShell 7 ($PsHost)."
+            $restart = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path)
+            if ($HostFile) { $restart += @('-HostFile', $HostFile) }
+            $single.ReleaseMutex()
+            try {
+                Start-Process -FilePath $PsHost -ArgumentList $restart -WindowStyle Hidden | Out-Null
+                exit 0
+            }
+            catch {
+                Write-Log "Could not start PowerShell 7 ($PsHost): $($_.Exception.Message). Staying on 5.1."
+                $null = $single.WaitOne(0)
+            }
+        }
+    }
+
+    # The QA browser install, after the update: an update exits this runner, and an install it had
+    # just started would outlive it with its marker never cleared.
+    if ($pwInstall) {
+        if ($pwInstall.HasExited) {
+            $code = try { $pwInstall.ExitCode } catch { $null }
+            Remove-Item -LiteralPath (Join-Path $PlaywrightDir $PlaywrightInstallingMarker) -Force -ErrorAction SilentlyContinue
+            $pwState = Test-PlaywrightInstall -Dir $PlaywrightDir
+            if ($code -eq 0 -and $pwState.ok) { Write-Log "QA browser installed in data/playwright-mcp ($($pwState.installed)); QA starts it directly from now on." }
+            else {
+                # A half-written install is worse than none: npx is slow, a broken copy fails outright.
+                Remove-Item -LiteralPath (Join-Path $PlaywrightDir 'node_modules') -Recurse -Force -ErrorAction SilentlyContinue
+                $pwRetryAt = (Get-Date).AddMinutes($PlaywrightRetryMinutes)
+                Write-Log "QA browser install failed (exit $code; see logs\playwright-install.err.log) - QA keeps using npx; trying again in $PlaywrightRetryMinutes min."
+            }
+            $pwInstall = $null
+        }
+    }
+    elseif ((Get-Date) -ge $pwRetryAt -and -not (Test-Path $RunnerStopFile) -and
+            @($Runs.Values | Where-Object { -not $_.ExitedAt }).Count -eq 0 -and -not (Test-PlaywrightInstall -Dir $PlaywrightDir).ok) {
+        Write-Log "Installing the QA browser in data/playwright-mcp (npm ci) while this host is idle."
+        $pwInstall = Start-PlaywrightInstall -Dir $PlaywrightDir -LogDir $LogDir
+        if (-not $pwInstall) { $pwRetryAt = (Get-Date).AddMinutes($PlaywrightRetryMinutes) }
     }
 }
 

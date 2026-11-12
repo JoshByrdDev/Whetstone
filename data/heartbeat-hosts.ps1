@@ -11,7 +11,7 @@
 # Seen once the runner has reported the run as started.
 #
 # Dot-sourced by heartbeat.ps1 after heartbeat-common.ps1. Functions only.
-# Tests: powershell -NoProfile -ExecutionPolicy Bypass -File data/heartbeat-hosts.tests.ps1
+# Tests: pwsh -NoProfile -ExecutionPolicy Bypass -File data/heartbeat-hosts.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 # ============================================================

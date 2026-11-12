@@ -399,8 +399,8 @@ function New-AgentToolSetup {
     # has a rule about $path - one whose repo is the thing the fleet itself runs from, say.
     $guardMatcher = 'Bash|PowerShell|.*navigate.*'
     # The hooks run on the fleet's PowerShell (Get-PsHost in heartbeat-common.ps1), quoted because
-    # 7's standard path has a space in it. A caller that never loaded that file gets 5.1, as before.
-    $hookShell = if ($PsHost) { "`"$PsHost`"" } else { 'powershell' }
+    # 7's standard path has a space in it. A caller that never loaded that file gets pwsh by name.
+    $hookShell = if ($PsHost) { "`"$PsHost`"" } else { 'pwsh' }
     if ($guardArgs -and (Test-ProjectGuardsEdits -Project $Project)) {
         $guardMatcher += '|Edit|Write|MultiEdit|NotebookEdit'
     }

@@ -35,12 +35,12 @@ public class SetupCheckTests
     }
 
     [Fact]
-    public void Without_powershell_7_the_fleet_runs_on_5_1_and_says_so()
+    public void Without_powershell_7_the_fleet_cannot_start_and_says_so()
     {
         var item = Item(SetupCheckService.Evaluate(Machine(missing: new[] { "pwsh" }), AllClaude, Array.Empty<(string, string)>()), "pwsh");
-        Assert.Equal("warn", item.State);
-        Assert.False(item.Required);
-        Assert.Contains("5.1", item.Detail);
+        Assert.Equal("missing", item.State);
+        Assert.True(item.Required);
+        Assert.Contains("not a fallback", item.Detail);
         Assert.Contains("wix", item.Fix);
     }
 
@@ -184,5 +184,26 @@ public class SetupCheckTests
             Assert.Null(SetupCheckService.FindOnPath("absent", path, ".EXE;.CMD"));
         }
         finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void Prototype_screenshots_are_not_mentioned_until_a_project_names_hosts_for_them()
+    {
+        var items = SetupCheckService.Evaluate(Machine(), AllClaude, Array.Empty<(string, string)>());
+        Assert.DoesNotContain(items, i => i.Key == "prototype-capture");
+    }
+
+    [Fact]
+    public void Prototype_screenshots_switched_on_without_the_install_warn_and_say_what_blocks()
+    {
+        var probe = Machine() with { PrototypeCapture = () => (new[] { "alpha" }, "the board's browser is not installed") };
+        var item = Item(SetupCheckService.Evaluate(probe, AllClaude, Array.Empty<(string, string)>()), "prototype-capture");
+        Assert.Equal("warn", item.State);
+        Assert.Contains("alpha", item.Detail);
+        Assert.Contains("data/playwright-mcp", item.Fix);
+
+        var ok = Item(SetupCheckService.Evaluate(Machine() with { PrototypeCapture = () => (new[] { "alpha" }, null) },
+            AllClaude, Array.Empty<(string, string)>()), "prototype-capture");
+        Assert.Equal("ok", ok.State);
     }
 }

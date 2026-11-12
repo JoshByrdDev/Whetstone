@@ -37,9 +37,12 @@ public class AnalysisRunner : IAnalysisExecutor
     /// <summary>
     /// A run that has not produced a document in this long is not going to. Without it, one wedged
     /// process holds the single slot — and now the whole queue behind it — until the dashboard
-    /// restarts.
+    /// restarts. Thirty rather than fifteen: a Full analysis of a ticket across several repos takes
+    /// ten minutes on a quiet machine, and the gate's run lands right after QA, beside whatever the
+    /// fleet is running - fifteen timed out a run that was most likely only slow, and since a failed
+    /// gate run now blocks the ticket, a cap that is too tight costs a person an unblock.
     /// </summary>
-    private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(30);
 
     private readonly IServiceScopeFactory _scopes;
     private readonly ProjectRegistry _registry;

@@ -361,13 +361,20 @@ public class TicketService
             var resumed = target == t.Phase;
 
             // Refinement waits for its independent analysis the way a ticket waits on a dependency:
-            // passed over, not blocked, and eligible the moment the analysis lands. Asked here -
+            // passed over, not blocked, and eligible the moment the analysis lands - unless the run
+            // it asked for failed, which blocks it rather than refining unread. Asked here -
             // below the skill check, so a ticket that is about to be Blocked never costs an analysis
             // run - and never on a resume, which already has whatever this pass was handed.
             GateReadiness? gate = null;
             if (!resumed && _classroomGate is not null && t.Phase == TicketPhase.NeedsRefinement)
             {
                 gate = await _classroomGate.CheckAsync(t);
+                if (gate.Block is { } blockReason)
+                {
+                    await TransitionAsync(t.Id, TicketPhase.Blocked, blockReason);
+                    trace?.Skip(ClaimSkip.BlockedNow);
+                    continue;
+                }
                 if (!gate.Ready) { trace?.Skip(ClaimSkip.Analysis); continue; }
             }
 

@@ -5,6 +5,22 @@ import { GhostButton } from './ui';
 import type { AgentState, DashboardState } from '../types/events';
 
 /**
+ * Whether the hard stop would kill anything: an agent out or a steward run going. A heartbeat
+ * between passes with every berth empty loses nothing to a stop, so the are-you-sure is noise
+ * there. Unknown (the state could not be read) counts as yes - the dialog is the safe side.
+ */
+export async function fleetHasWorkOut(): Promise<boolean> {
+  try {
+    const r = await fetch('/api/state');
+    if (!r.ok) return true;
+    const s: DashboardState = await r.json();
+    return (s.agents?.length ?? 0) > 0 || !!s.steward;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The are-you-sure in front of the hard stop (POST /api/heartbeat/stop). That stop kills every
  * worker mid-phase, on this machine and on every worker host, so whatever they had not committed
  * is lost. The dialog names what is out right now and points at the gentler stop beside it.

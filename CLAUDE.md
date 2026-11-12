@@ -13,7 +13,7 @@ things that are *not* discoverable from the code in front of you.
   than failing quietly where nobody looks.
 - Build with `-c Release`. `bin\Debug` is held open by the running instance.
 - Restarting the app kills in-flight heartbeat workers. Verify against an isolated QA copy, started
-  from a worktree with `powershell -File data/qa-copy.ps1` (`-Stop` to stop it): this checkout's
+  from a worktree with `pwsh -File data/qa-copy.ps1` (`-Stop` to stop it): this checkout's
   Release build on 5340, its Vite dev server on 5341, over a throwaway data folder with placeholder
   projects. It runs with `WHETSTONE_QA_ISOLATION=1` and refuses everything that would reach past
   that folder - heartbeat, steward, agent runs, tracker, notifications, the Claude login, docker,
@@ -28,7 +28,9 @@ things that are *not* discoverable from the code in front of you.
   waits for the drain, restarts the board through the .bat and starts the heartbeat again. The two
   hand off through `data/board.restart` (`BoardRestart`); its log is `data/logs/restart-board.log`.
 - Editing `ClientApp/tailwind.config.js` needs a Vite restart; a reload silently serves the old CSS.
-- `.ps1` files under `data/` must stay pure ASCII (PS 5.1 parses them as cp1252).
+- The fleet runs on PowerShell 7 (`pwsh`) only, on Windows and macOS; 5.1 is not a fallback
+  (`PowerShellHost`, `Get-PsHost`). `.ps1` files under `data/` still stay pure ASCII: a TFVC repo's
+  own hook and an older runner supervisor may still start one on 5.1, which parses them as cp1252.
 - Classroom walkthroughs are voiced by Kokoro under Node from `data/narrator/`. Run `npm install` there
   once per machine (its first run also downloads the ~90MB voice model); without it a walkthrough is
   still written but plays as captions only, and says so.
@@ -100,7 +102,7 @@ Changing the guard? Run its tests. They encode the commands a fleet legitimately
 string — and a false positive here stops every worker at once:
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-guard.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-guard.tests.ps1
 ```
 
 **A project's rules ride on the shared ones and can only narrow them.** `providers.ps1` starts the
@@ -152,7 +154,7 @@ A place that reads `baseBranch` straight off the project for a ticket's git is w
 project, however right it is on every other.
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
 ```
 
 ## A branch under PR review is not rewritten
@@ -174,7 +176,7 @@ review** section, which is a pipeline rule in every copy. A new rewrite of a tic
 does not ask is how the reviewer's threads get lost.
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-review.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-review.tests.ps1
 ```
 
 ```bash
@@ -206,7 +208,7 @@ The skills' "Several repos" section is conditional on it, and it is a pipeline r
 every template and every project's copy, word for word.
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-repos.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-repos.tests.ps1
 ```
 
 ```bash
@@ -497,15 +499,15 @@ discoverable from the code:
   host's agent is handed a file it cannot open.
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
 ```
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/heartbeat-hosts.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/heartbeat-hosts.tests.ps1
 ```
 
 ```bash
-powershell -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
+pwsh -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
 ```
 
 ```bash

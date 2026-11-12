@@ -9,7 +9,7 @@
 # What the board host's accept route does is simulated here with update-ref; the route itself is
 # the API's and is tested there.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-board.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 
@@ -180,6 +180,16 @@ try {
     git -C $sl.clone worktree add --quiet (Join-Path $sl.cloneWt 'held') 'slice/01-first' *> $null
     $r = Sync-BoardRefs -RepoDir $sl.clone -BaseBranch main -MirrorSlices
     Check 'a mirrored slice checked out in a clone worktree: refused' $r.ok $false
+
+    # A detached worktree git still lists after its folder went (a killed run's): the base lookup
+    # asks it for a stopped rebase, and that used to throw the whole sync away.
+    $gone = New-Pair 'sync-prunable'
+    $goneWt = Join-Path $gone.cloneWt 'gone'
+    git -C $gone.clone worktree add --quiet --detach $goneWt *> $null
+    Remove-Item -Recurse -Force -LiteralPath $goneWt
+    $r = Sync-BoardRefs -RepoDir $gone.clone -BaseBranch main
+    Check 'a prunable detached worktree in the clone: synced' ($null -ne $r -and $r.ok) $true
+    Check '... and the base mirrored' (Get-Sha $gone.clone 'refs/heads/main') (Get-Sha $gone.board 'refs/heads/main')
 
     # ---- Get-BoardBranch ------------------------------------------------------
     Write-Host "== Get-BoardBranch"

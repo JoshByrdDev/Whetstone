@@ -358,6 +358,16 @@ public class ProjectConfig
     public bool ParallelStacks { get; init; }
 
     /// <summary>
+    /// Environment variables this project's workers run with, set by <c>worker.ps1</c> before the
+    /// agent starts. For what a project's own tooling reads and the platform has no word for - a
+    /// build cache several worktrees on one machine can share, a test runner's thread count. A
+    /// value may name <c>{machineCache}</c>: a folder for this project under the data root of the
+    /// machine the run is on, so a worker host's cache is its own. Names the platform sets or
+    /// reads itself are refused there, never here (<c>Get-WorkerEnv</c>), so the list is in one place.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> WorkerEnv { get; init; } = new Dictionary<string, string>();
+
+    /// <summary>
     /// How this project's steward works: its limits, its plan, what its merge checks and refuses.
     /// See <see cref="StewardConfig"/>.
     /// </summary>
@@ -415,6 +425,12 @@ public class ProjectConfig
     /// project has no such thing - which is the default, and renders nothing.
     /// </summary>
     public StackConfig Stack { get; init; } = new();
+
+    /// <summary>
+    /// Which prototype and design links in a ticket the board may open and photograph for the fleet
+    /// (<see cref="PrototypeCaptureService"/>). Off unless the project names its hosts.
+    /// </summary>
+    public PrototypeCaptureConfig PrototypeCapture { get; init; } = PrototypeCaptureConfig.Off;
 
     /// <summary>
     /// The lease the stack control takes, fully qualified - by default the SAME
@@ -653,10 +669,12 @@ public class ProjectRegistry
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
             SliceBranches = cfg.TryGetValue("sliceBranches", out var sb) && sb.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
+            WorkerEnv = GetStrMap(cfg, "workerEnv"),
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
             ResourcePaths = GetStrArrayMap(cfg, "resourcePaths"),
             Tracker = TrackerConfig.From(cfg),
             Stack = GetStack(cfg),
+            PrototypeCapture = PrototypeCaptureConfig.From(cfg),
             Steward = StewardConfig.From(cfg),
             StewardModeSetting = StewardConfig.ParseMode(
                 cfg.TryGetValue("stewardMode", out var sm) && sm.ValueKind == JsonValueKind.String ? sm.GetString() : null),
@@ -715,6 +733,16 @@ public class ProjectRegistry
     }
 
     /// <summary>Read a <c>{ "key": ["a","b"] }</c> object out of config, skipping anything malformed.</summary>
+    private static Dictionary<string, string> GetStrMap(Dictionary<string, JsonElement> cfg, string key)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (!cfg.TryGetValue(key, out var v) || v.ValueKind != JsonValueKind.Object) return map;
+        foreach (var prop in v.EnumerateObject())
+            if (!prop.Name.StartsWith('_') && prop.Value.ValueKind == JsonValueKind.String)
+                map[prop.Name] = prop.Value.GetString()!;
+        return map;
+    }
+
     private static Dictionary<string, string[]> GetStrArrayMap(Dictionary<string, JsonElement> cfg, string key)
     {
         var map = new Dictionary<string, string[]>();

@@ -275,6 +275,19 @@ public class EventStore
         }
     }
 
+    /// <summary>
+    /// The phase each running worker in the slots <paramref name="slot"/> accepts is on, counted:
+    /// what a machine's berths were doing at one minute, for its load sample. The steward is not a
+    /// worker and is left out.
+    /// </summary>
+    public Dictionary<string, int> RunningPhases(Func<int, bool> slot)
+    {
+        lock (_agentLock)
+            return _agents.Where(kv => kv.Value.Status == "running" && slot(kv.Key) && kv.Value.Phase != EventPhases.Steward)
+                .GroupBy(kv => kv.Value.Phase ?? "unknown", StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+    }
+
     public List<HeartbeatEvent> GetRecent(int count = 50)
     {
         return _events.ToArray()

@@ -16,7 +16,7 @@
 # What this script owns is the launch: which model, which tools, the prompt, the timeout, and
 # making sure the run's lock is given back whatever happened to the agent.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File steward.ps1 -Project <key> -Agent <slot>
+# Usage: pwsh -ExecutionPolicy Bypass -File steward.ps1 -Project <key> -Agent <slot>
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 # ============================================================

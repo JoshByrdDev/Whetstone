@@ -45,6 +45,9 @@ public static class ConfigEndpoints
         "claudeAccounts",
         // Moving down the account list by itself as each one fills. See ClaudeSmartSwitch.
         ClaudeSmartSwitch.ConfigKey,
+        // The suggestion rules' knobs, and the automatic-mode switch that is off and does nothing
+        // yet. See MachineLimitsConfig and docs/machine-limits-plan.md.
+        MachineLimitsConfig.ConfigKey,
     };
 
     /// <summary>One entry in a provider's model dropdown, as the Settings panel reads it.</summary>
@@ -346,6 +349,8 @@ public static class ConfigEndpoints
                 notificationEventCatalog = NotificationEvents,
                 notificationChannels = NotificationChannels,
                 showWorkerHosts = ShowWorkerHosts(g),
+                // Every knob with its default filled in, so a save sends back the whole object.
+                machineLimits = MachineLimitsConfig.Read(g),
                 // While remote work is in use the section cannot be hidden; Settings locks the box.
                 workerHostsInUse = WorkerHostsInUse(g),
             });

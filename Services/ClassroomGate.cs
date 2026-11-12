@@ -10,10 +10,15 @@ namespace Whetstone.Services;
 /// <param name="AnalysisId">The analysis refinement is to rule on, when there is one.</param>
 /// <param name="Note">Why refinement is going ahead WITHOUT an analysis, when that is the reason
 /// there is none - posted on the ticket so the gap is on the record rather than silent. Null when
-/// the ticket was simply set to skip.</param>
-public record GateReadiness(bool Ready, int? AnalysisId = null, string? Note = null)
+/// the ticket was simply set to skip, and only ever for a ticket with nothing to read - an analysis
+/// that was asked for and failed is <paramref name="Block"/>, not a note.</param>
+/// <param name="Block">The analysis this trip asked for failed: the claim blocks the ticket with this
+/// reason rather than refining without it. Not Ready.</param>
+public record GateReadiness(bool Ready, int? AnalysisId = null, string? Note = null, string? Block = null)
 {
     public static readonly GateReadiness NotYet = new(false);
+
+    public static GateReadiness Blocked(string reason) => new(false, Block: reason);
 }
 
 /// <summary>
@@ -95,10 +100,15 @@ public class ClassroomGate : IClassroomGate
         if (current is { WalkthroughOf: null } c && c.TicketId == t.Id) return GateReadiness.NotYet;
         if (pending.Any(p => p.WalkthroughOf is null && p.TicketId == t.Id)) return GateReadiness.NotYet;
 
-        // A failure since the ticket arrived here is final for this trip: refinement goes ahead and
-        // says so. Retrying would park the ticket for as long as whatever broke the run stays broken,
-        // and the queue's history is in memory - a restart forgets it, which is a retry, which is the
-        // right thing after a restart anyway.
+        // A failure since the ticket arrived here blocks it. Reading the analysis's risks is part of
+        // what refinement is for, and a refinement that went ahead without one passed a ticket to
+        // review that nothing independent had read - with a note on the record that is easy to miss
+        // among the phase changes. Blocked rather than retried in place, because a retry loop would
+        // park the ticket silently for as long as whatever broke the run stays broken; a block puts
+        // it in front of a person. Unblocking moves it back into NeedsRefinement, which is a new
+        // arrival, so the next claim asks for a fresh run - and one a person generated meanwhile from
+        // the Classroom counts like any other. The queue's history is in memory, so a restart
+        // forgets the failure, which is a retry, which is the right thing after a restart anyway.
         var arrived = await _db.PhaseTransitions.AsNoTracking()
             .Where(p => p.TicketId == t.Id && p.To == TicketPhase.NeedsRefinement)
             .OrderByDescending(p => p.At)
@@ -106,7 +116,10 @@ public class ClassroomGate : IClassroomGate
             .FirstOrDefaultAsync() ?? DateTime.MinValue;
         var failed = recent.FirstOrDefault(o => o.TicketId == t.Id && o.AnalysisId is null && o.FinishedAt >= arrived);
         if (failed is not null)
-            return new GateReadiness(true, Note: $"the analysis failed: {failed.Error ?? "no reason given"}");
+            return GateReadiness.Blocked(
+                $"The independent Classroom analysis failed: {failed.Error ?? "no reason given"}. "
+                + "Refinement does not go ahead without it - its risks are part of what refinement rules on. "
+                + "Unblock to run it again, generate one from the Classroom first, or set this ticket to skip the analysis.");
 
         // A full queue refuses; the next cycle simply asks again.
         _queue.Enqueue(t.Id, AnalysisLens.Full);

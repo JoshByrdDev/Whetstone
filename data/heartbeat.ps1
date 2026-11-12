@@ -13,7 +13,7 @@
 # and the dashboard leases each ticket exclusively - so there is no distributed race to lose, and
 # adding agents cannot produce two workers on one branch.
 #
-# Usage: powershell -ExecutionPolicy Bypass -File heartbeat.ps1
+# Usage: pwsh -ExecutionPolicy Bypass -File heartbeat.ps1
 # Stop:  Ctrl+C, or the dashboard "Stop After Cycle" button (lock auto-cleans)
 #
 # ASCII ONLY - see heartbeat-common.ps1.

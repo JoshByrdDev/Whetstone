@@ -40,6 +40,8 @@ public class DashboardDbContext : DbContext
     public DbSet<StewardInstruction> StewardInstructions => Set<StewardInstruction>();
     public DbSet<StewardFollowUp> StewardFollowUps => Set<StewardFollowUp>();
     public DbSet<CapacitySample> CapacitySamples => Set<CapacitySample>();
+    public DbSet<MachineInventory> MachineInventories => Set<MachineInventory>();
+    public DbSet<MachineLoadSample> MachineLoadSamples => Set<MachineLoadSample>();
     public DbSet<BugLink> BugLinks => Set<BugLink>();
     public DbSet<BugTrace> BugTraces => Set<BugTrace>();
     public DbSet<TicketCommit> TicketCommits => Set<TicketCommit>();
@@ -185,6 +187,20 @@ public class DashboardDbContext : DbContext
             e.Property(c => c.Place).HasMaxLength(64);
             e.Property(c => c.Reason).HasMaxLength(32);
             e.HasIndex(c => c.At);
+        });
+
+        b.Entity<MachineInventory>(e =>
+        {
+            e.Property(m => m.Place).HasMaxLength(64);
+            e.Property(m => m.Hash).HasMaxLength(64);
+            e.HasIndex(m => new { m.Place, m.LastSeen });
+        });
+
+        b.Entity<MachineLoadSample>(e =>
+        {
+            e.Property(m => m.Place).HasMaxLength(64);
+            e.HasIndex(m => new { m.Place, m.At });
+            e.HasIndex(m => m.At);
         });
 
         b.Entity<ResourceLease>(e =>

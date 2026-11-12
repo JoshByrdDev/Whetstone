@@ -1,0 +1,11 @@
+Processes: 512 total, 3 running, 509 sleeping, 2600 threads 
+2026/11/11 12:00:00
+Load Avg: 3.10, 2.80, 2.50 
+CPU usage: 10.00% user, 5.00% sys, 85.00% idle 
+SharedLibs: 500M resident, 80M data, 40M linkedit.
+
+Processes: 512 total, 3 running, 509 sleeping, 2600 threads 
+2026/11/11 12:00:01
+Load Avg: 3.10, 2.80, 2.50 
+CPU usage: 30.25% user, 12.25% sys, 57.50% idle 
+SharedLibs: 500M resident, 80M data, 40M linkedit.

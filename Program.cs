@@ -160,6 +160,11 @@ builder.Services.AddSingleton<QaShotStore>();
 builder.Services.AddSingleton<TicketFileStore>();
 builder.Services.AddSingleton<IssueAttachmentStore>();
 builder.Services.AddSingleton<IssueSnapshotService>();
+builder.Services.AddSingleton<IPageCapturer, NodePageCapturer>();
+builder.Services.AddSingleton<PrototypeCaptureService>();
+// Off the claim's path: a claim's caller gives up after fifteen seconds, and a browser can take longer.
+builder.Services.AddSingleton<PrototypeCaptureQueue>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<PrototypeCaptureQueue>());
 builder.Services.AddSingleton<IssueContextBuilder>();
 // Reads and cleans up the per-ticket git worktrees the heartbeat creates. Creation lives in the
 // heartbeat (it owns branch naming); this side only lists, prunes and removes.
@@ -179,7 +184,22 @@ builder.Services.AddSingleton<ProjectStackService>();
 if (!isolation.On) builder.Services.AddHostedService<StackProbeService>();
 // Reads the board and writes its own table, nothing past the data folder - so it runs on the QA
 // copy too, where it says "stopped", which is the truth there.
-builder.Services.AddSingleton<CapacitySampler>();
+// Each machine's latest load: a worker host's from its check-in, this one's from MachineProbeService,
+// which reads only this machine (and leaves docker alone on a QA copy). docs/machine-limits-plan.md.
+builder.Services.AddSingleton<MachineLoadBook>();
+builder.Services.AddHostedService<MachineProbeService>();
+builder.Services.AddScoped<MachineLimitsService>();
+builder.Services.AddSingleton(sp =>
+{
+    var events = sp.GetRequiredService<EventStore>();
+    var hosts = sp.GetRequiredService<WorkerHostService>();
+    return new CapacitySampler(sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<CapacitySnapshot>(),
+        sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<ILogger<CapacitySampler>>(),
+        sp.GetRequiredService<MachineLoadBook>(),
+        place => place == CapacityPlaces.Board
+            ? events.RunningPhases(slot => slot >= 1 && slot <= HeartbeatManager.MaxWorkers)
+            : hosts.Find(place) is { } h ? events.RunningPhases(h.OwnsSlot) : new Dictionary<string, int>());
+});
 builder.Services.AddHostedService(sp => sp.GetRequiredService<CapacitySampler>());
 
 // How much subscription rate-limit headroom is left, polled once for every open tab. Reads Claude
@@ -259,7 +279,6 @@ if (isolation.On)
 app.MapGet("/api/qa-isolation", (DashboardPaths p) => Results.Ok(new { isolated = isolation.On, dataRoot = isolation.On ? p.DataRoot : null }));
 
 var paths = app.Services.GetRequiredService<DashboardPaths>();
-PowerShellHost.UseConfig(paths);
 var registry = app.Services.GetRequiredService<ProjectRegistry>();
 // Every project-scoped endpoint takes ?project= and is refused without it.
 //
@@ -346,6 +365,7 @@ app.MapEscapeEndpoints();
 // The Classroom: on-demand teaching analyses of a ticket. Read-only over the pipeline.
 app.MapAnalysisEndpoints();
 app.MapWalkthroughEndpoints();
+app.MapPrototypeCaptureEndpoints();
 app.MapUnitReportEndpoints();
 
 // The owner's filing tags. Separate routes and separate DTOs from the ticket API, so a label can
@@ -606,6 +626,7 @@ app.MapStackEndpoints();
 
 // Worker hosts: check-in and orders for their runners, branch hand-back, the project kit.
 app.MapWorkerHostEndpoints();
+app.MapMachineEndpoints();
 
 // Per-ticket git actions for the human: checkout, and PR preflight + create.
 app.MapGitEndpoints();

@@ -192,11 +192,28 @@ public class ClassroomGateTests : IDisposable
 
         await using var ctx = NewCtx();
         var result = await new TicketService(ctx,
-                classroomGate: new FakeGate(new GateReadiness(true, Note: "the analysis failed: timed out")))
+                classroomGate: new FakeGate(new GateReadiness(true, Note: "there is no checkout of this branch on disk for it to read")))
             .ClaimNextAsync(null, AllSkillsExist);
 
         Assert.Null(result!.Ticket.GateAnalysisId);
-        Assert.Contains(result.Ticket.Comments, c => c.Body.Contains("without an independent Classroom analysis: the analysis failed: timed out"));
+        Assert.Contains(result.Ticket.Comments, c => c.Body.Contains("without an independent Classroom analysis: there is no checkout"));
+    }
+
+    [Fact]
+    public async Task A_failed_analysis_blocks_the_ticket_instead_of_refining_without_it()
+    {
+        var (id, _) = await SeedRefinable();
+        var reason = "The independent Classroom analysis failed: the analysis timed out after 30 minutes. Unblock to run it again.";
+
+        await using (var ctx = NewCtx())
+            Assert.Null(await new TicketService(ctx, classroomGate: new FakeGate(GateReadiness.Blocked(reason)))
+                .ClaimNextAsync(null, AllSkillsExist));
+
+        await using var check = NewCtx();
+        var t = (await check.Tickets.FindAsync(id))!;
+        Assert.Equal(TicketPhase.Blocked, t.Phase);
+        Assert.Equal(TicketPhase.NeedsRefinement, t.PhaseBeforeBlock);
+        Assert.Equal(reason, t.BlockedReason);
     }
 
     [Fact]

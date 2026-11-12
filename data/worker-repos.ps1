@@ -22,7 +22,7 @@
 # Get-TicketBranchName, Get-SetupFailedMarker) and on heartbeat-common.ps1 (Write-Log,
 # Invoke-WithMutex).
 #
-# Tests: powershell -NoProfile -ExecutionPolicy Bypass -File data/worker-repos.tests.ps1
+# Tests: pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-repos.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 # ============================================================

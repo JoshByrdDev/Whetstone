@@ -13,7 +13,7 @@
 # do - so this is also how a change to the runner's supervisor lines takes effect without a logon.
 #
 # Usage: double-click Update-Runner.bat, or
-#        powershell -ExecutionPolicy Bypass -File data/update-runner.ps1 [-WaitMinutes 60]
+#        pwsh -ExecutionPolicy Bypass -File data/update-runner.ps1 [-WaitMinutes 60]
 #
 # Never from a Claude session: the runner it starts would belong to that session's tree.
 #
@@ -39,17 +39,6 @@ $ErrorActionPreference = 'Continue'
 function Get-RunnerProcesses {
     @(Get-ProcessTable -Shells |
         Where-Object { $_.ProcessId -ne $PID -and (Test-RunsScript -CommandLine $_.CommandLine -Script $RunnerScript) })
-}
-
-# The scheduled task whose action runs this checkout's runner.ps1, or $null.
-function Find-RunnerTask {
-    $want = [IO.Path]::GetFullPath($RunnerScript)
-    foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
-        foreach ($a in @($t.Actions)) {
-            if ("$($a.Execute) $($a.Arguments)" -like "*$want*") { return $t }
-        }
-    }
-    return $null
 }
 
 # The -HostFile a command line passes runner.ps1, or ''.
@@ -83,7 +72,7 @@ function Find-OtherRunners {
 
 # Which host file the runner reads: the one given, else the one its scheduled task passes, else
 # data\host.json - the same default as the runner's own.
-$task = Find-RunnerTask
+$task = Find-RunnerTask -Script $RunnerScript
 $hostFile = $UpdaterHostFile
 if (-not $hostFile -and $task) {
     foreach ($a in @($task.Actions)) { $arg = Get-HostFileArg "$($a.Arguments)"; if ($arg) { $hostFile = $arg } }
@@ -166,6 +155,11 @@ else {
 
 # ---- 3. Start the runner again ----
 if ($task) {
+    # A task set up before the fleet left Windows PowerShell 5.1 still starts powershell.exe.
+    try {
+        if ((Move-RunnerTaskToPwsh -Task $task) -eq 'moved') { Write-Log "The scheduled task '$($task.TaskName)' started the runner on Windows PowerShell 5.1; it now starts it on PowerShell 7 ($PsHost)." }
+    }
+    catch { Write-Log "Could not point the scheduled task '$($task.TaskName)' at PowerShell 7: $($_.Exception.Message). Change its action to $PsHost by hand (docs/worker-host-setup.md, step 12)." }
     if ($task.State -eq 'Running') { Stop-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue }
     Start-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath
     Write-Log "Started the scheduled task '$($task.TaskName)'."

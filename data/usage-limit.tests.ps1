@@ -5,7 +5,7 @@
 # heartbeat-common.ps1 reads the machine's real config as it loads, so the functions are lifted out
 # of its syntax tree and run over a config and a run folder this file hands them.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/usage-limit.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/usage-limit.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

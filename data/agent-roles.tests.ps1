@@ -5,7 +5,7 @@
 # heartbeat-common.ps1 reads the machine's real config as it loads, so its two role functions are
 # lifted out of its syntax tree and run over a config this file hands them.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/agent-roles.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/agent-roles.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 

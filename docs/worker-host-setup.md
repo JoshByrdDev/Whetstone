@@ -85,9 +85,14 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
 
 6. **Tools.** Install git, and the agent CLI logged in to this machine's own account, plus whatever
    the project's implement skill builds and tests with (its SDKs, Node, and so on). It needs no
-   .NET, because this machine runs no board.
+   .NET, because this machine runs no board. Node and npm are needed in any case: the runner
+   installs QA's browser server in `data/playwright-mcp` itself (`npm ci`, the first time it is
+   idle and again whenever the pinned version changes). Until that has finished, QA runs start the
+   browser through `npx`, which can miss its 90-second start-up window on a busy machine and block a
+   QA ticket.
 
-   Check: the CLI answers a one-line prompt. A project build runs in a scratch clone.
+   Check: the CLI answers a one-line prompt. A project build runs in a scratch clone. After the
+   runner's first idle minute, its log says "QA browser installed in data/playwright-mcp".
 
 7. **Credentials for the share**, stored for the account the runner will run as:
 
@@ -179,17 +184,22 @@ Phase 1 sends a worker host only `speculate`, `implement` and `refine`. QA stays
     `worktreeRoot` per project is optional. It defaults to `D:\src\.worktrees\alpha`, beside the
     clone, as on the board host.
 
-    Check: run `powershell -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -Once`. The
+    Check: run `pwsh -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -Once`. The
     board's **Heartbeat** page then lists `bravo-host` under *Worker hosts* as having checked in.
     Click **Add**. It is added switched off, with no projects. If it was added by name in step 5,
     it shows "switched off" with a fresh check-in and its commit instead.
 
 12. **Start it at logon.** In Task Scheduler, create a task:
     - Trigger: at log on of this user.
-    - Action: `powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1`
+    - Action: `pwsh.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1`
     - Select "Run only when user is logged on". The CLI's login and the share's stored credential
       are this user's.
     - Clear "Stop the task if it runs longer than...".
+
+    A task made before the fleet left Windows PowerShell 5.1 names `powershell.exe`. The runner
+    points it at `pwsh.exe` itself, and restarts on 7, the first time this machine is idle; until
+    then its card on the Heartbeat page says "on Windows PowerShell 5.1". `Update-Runner.bat` does
+    the same.
 
     Never start the runner from a Claude session. Whatever owns its tree can kill every worker
     under it.
@@ -238,6 +248,11 @@ Optional. Leave it out and QA stays on the board host.
     Check: send one ticket through QA on the worker host. Its screenshots appear on the ticket, and
     the worker host's log shows `Captures mirrored to the board host as they land`. QA on the board
     host can run at the same time.
+
+    A project's `workerEnv` (environment its workers run with, such as a build cache every
+    worktree shares) reaches a worker host in the claim, and `{machineCache}` in it is that host's
+    own folder, `data/cache/<key>` under its Whetstone checkout. Nothing to set up: the folder is
+    made the first time a run needs it, and it is never sent back to the board host.
 
 ## Day to day
 

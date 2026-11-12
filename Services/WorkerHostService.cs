@@ -135,7 +135,8 @@ public record WorkerHostView(
     bool Online, DateTime? LastCheckin, string? Commit, bool CommitMatches,
     IReadOnlyList<HostRun> Runs, int PendingOrders, DateTime? UsageLimitUntil,
     int QaLeases = 1, bool RemoteOn = true,
-    HostAccountChoice? Claude = null, IReadOnlyList<HostClaudeLogin>? ClaudeLogins = null)
+    HostAccountChoice? Claude = null, IReadOnlyList<HostClaudeLogin>? ClaudeLogins = null,
+    string? PsVersion = null, bool WindowsPowerShell = false)
 {
     /// <summary>
     /// Whether the orchestrator may give it new work: remote work switched on, this host switched on,
@@ -178,6 +179,8 @@ public class WorkerHostService
         public List<HostUsageLimit> Limits = new();
         public List<HostClaudeLogin> Logins = new();
         public string? DataRoot;
+        public string? PsVersion;
+        public bool WindowsPowerShell;
         public TaskCompletionSource Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -247,7 +250,8 @@ public class WorkerHostService
     public async Task<IReadOnlyList<HostOrder>?> CheckInAsync(
         string name, string? commit, IReadOnlyList<HostRun> runs, DateTime? usageLimitUntil, TimeSpan wait,
         CancellationToken ct = default, string? dataRoot = null,
-        IReadOnlyList<HostClaudeLogin>? logins = null, IReadOnlyList<HostUsageLimit>? limits = null)
+        IReadOnlyList<HostClaudeLogin>? logins = null, IReadOnlyList<HostUsageLimit>? limits = null,
+        string? psVersion = null, bool windowsPowerShell = false)
     {
         if (Find(name) is null)
         {
@@ -276,6 +280,8 @@ public class WorkerHostService
             s.Logins = (logins ?? Array.Empty<HostClaudeLogin>())
                 .Where(l => !string.IsNullOrWhiteSpace(l.Uuid)).ToList();
             if (!string.IsNullOrWhiteSpace(dataRoot)) s.DataRoot = dataRoot.Trim();
+            s.PsVersion = string.IsNullOrWhiteSpace(psVersion) ? null : psVersion.Trim();
+            s.WindowsPowerShell = windowsPowerShell;
             if (s.Orders.Count > 0 || wait <= TimeSpan.Zero) return Drain(s);
             if (s.Signal.Task.IsCompleted) s.Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
             signal = s.Signal.Task;
@@ -391,7 +397,7 @@ public class WorkerHostService
                 result.Add(new WorkerHostView(h.Name, h.Enabled, h.Slots, h.FirstSlot, h.Skills, h.Projects,
                     online, s?.LastCheckin, s?.Commit, matches,
                     s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.QaLeases, remoteOn,
-                    claude, logins));
+                    claude, logins, s?.PsVersion, s?.WindowsPowerShell ?? false));
             }
         }
         return result;

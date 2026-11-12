@@ -143,31 +143,24 @@ if ($HeartbeatWorkers -gt $MaxHeartbeatWorkers) { $HeartbeatWorkers = $MaxHeartb
 
 # --- Which PowerShell starts the fleet's own scripts ---
 #
-# psHost in the global config: 'auto' (the default) is PowerShell 7 where it is installed and Windows
-# PowerShell where it is not; 'powershell' pins 5.1, the way back if 7 misbehaves; 'pwsh' asks for 7
-# even where it cannot be found. Every Start-Process of a worker, steward, runner or hook asks here
-# rather than naming one. Written twice and the two must agree: here, and PowerShellHost in C#.
+# PowerShell 7 (pwsh), on Windows and macOS alike. Windows PowerShell 5.1 is not a fallback: where 7
+# cannot be found this answers 'pwsh' by name, so the start fails loudly rather than running the
+# fleet on a shell it no longer supports. Every Start-Process of a worker, steward, runner or hook
+# asks here rather than naming one. Written twice and the two must agree: here, and PowerShellHost
+# in C#. Kept parseable by 5.1 for as long as a heartbeat started on it may still dot-source this.
 function Get-PsHost {
-    $setting = "$(Get-Global 'psHost')".Trim().ToLowerInvariant()
-    if ($setting -eq 'powershell') { return 'powershell' }
     $onWindows = ($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows
-    $pwsh = $null
-    if ($onWindows) {
-        # The running 7 itself where this is one; otherwise one on PATH, or in its standard install
-        # folder - a process started before 7 was installed still has the PATH it started with.
-        if ($PSVersionTable.PSEdition -eq 'Core') { try { $pwsh = (Get-Process -Id $PID).Path } catch { } }
-        if (-not $pwsh) {
-            $cmd = Get-Command 'pwsh.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($cmd) { $pwsh = $cmd.Source }
-        }
-        if (-not $pwsh -and $env:ProgramFiles) {
-            $standard = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
-            if (Test-Path -LiteralPath $standard) { $pwsh = $standard }
-        }
+    if (-not $onWindows) { return 'pwsh' }
+    # The running 7 itself where this is one; otherwise one on PATH, or in its standard install
+    # folder - a process started before 7 was installed still has the PATH it started with.
+    if ($PSVersionTable.PSEdition -eq 'Core') { try { return (Get-Process -Id $PID).Path } catch { } }
+    $cmd = Get-Command 'pwsh.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
+    if ($env:ProgramFiles) {
+        $standard = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+        if (Test-Path -LiteralPath $standard) { return $standard }
     }
-    if ($pwsh) { return $pwsh }
-    if ($setting -eq 'pwsh' -or -not $onWindows) { return 'pwsh' }
-    return 'powershell'
+    return 'pwsh'
 }
 $PsHost = Get-PsHost
 

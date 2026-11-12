@@ -42,11 +42,11 @@
 
 .EXAMPLE
     # Look first.
-    powershell -ExecutionPolicy Bypass -File data\migrate-projects-to-nested-repos.ps1 -DryRun
+    pwsh -ExecutionPolicy Bypass -File data\migrate-projects-to-nested-repos.ps1 -DryRun
 
 .EXAMPLE
     # Do it, keep it local, inspect, push by hand.
-    powershell -ExecutionPolicy Bypass -File data\migrate-projects-to-nested-repos.ps1
+    pwsh -ExecutionPolicy Bypass -File data\migrate-projects-to-nested-repos.ps1
 #>
 [CmdletBinding()]
 param(

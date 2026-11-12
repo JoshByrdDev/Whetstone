@@ -6,7 +6,7 @@
 # runner.ps1 cannot be dot-sourced (it starts a loop), so its functions are lifted out of its
 # syntax tree, as worker-base.tests.ps1 does for worker.ps1.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
+#   pwsh -NoProfile -ExecutionPolicy Bypass -File data/runner.tests.ps1
 #
 # ASCII ONLY - see heartbeat-common.ps1.
 
@@ -161,6 +161,23 @@ try {
     Check 'differ, auto-update off: leave it' (Get-UpdateAction -Own $a -Board $b -LiveRuns 0 -Stopping $false -Enabled $false) 'none'
     Check 'differ and idle: update' (Get-UpdateAction -Own $a -Board $b -LiveRuns 0 -Stopping $false -Enabled $true) 'update'
 
+    # ---- Off Windows PowerShell 5.1 ----------------------------------------------
+    Write-Host "== Test-OnWindowsPowerShell / Get-PwshTaskAction"
+    Check 'a runner on 5.1 is' (Test-OnWindowsPowerShell -Edition 'Desktop' -SupervisorName 'pwsh.exe') $true
+    Check 'a runner on 7 under a 5.1 supervisor is' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName 'powershell.exe') $true
+    Check 'a 5.1 supervisor named another case is' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName 'PowerShell.EXE') $true
+    Check 'on 7 under 7 is not' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName 'pwsh.exe') $false
+    Check 'on 7 with no supervisor is not' (Test-OnWindowsPowerShell -Edition 'Core' -SupervisorName '') $false
+    $pw = 'C:\Program Files\PowerShell\7\pwsh.exe'
+    $taskArgs = '-WindowStyle Hidden -ExecutionPolicy Bypass -File C:\Whetstone\data\runner.ps1 -HostFile D:\h.json'
+    $n = Get-PwshTaskAction -Execute 'powershell.exe' -Arguments $taskArgs -PsHost $pw
+    Check 'a task on powershell.exe moves to 7' $n.Execute $pw
+    Check 'keeping its arguments word for word' $n.Arguments $taskArgs
+    Check 'a full, quoted path to 5.1 moves too' ((Get-PwshTaskAction -Execute '"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"' -Arguments $taskArgs -PsHost $pw).Execute) $pw
+    Check 'a task already on pwsh is left' (Get-PwshTaskAction -Execute 'pwsh.exe' -Arguments $taskArgs -PsHost $pw) $null
+    Check 'a task on a full pwsh path is left' (Get-PwshTaskAction -Execute $pw -Arguments $taskArgs -PsHost $pw) $null
+    Check 'an action that is something else is left' (Get-PwshTaskAction -Execute 'cmd.exe' -Arguments '/c x.bat' -PsHost $pw) $null
+
     # ---- Update-OwnCheckout, against real repos -------------------------------
     Write-Host "== Update-OwnCheckout"
     $env:GIT_TERMINAL_PROMPT = '0'
@@ -278,7 +295,7 @@ try {
         Check '... and another checkout''s runner.ps1 is not' (@($found | ForEach-Object { $_.ProcessId }) -contains $p2.Id) $false
     }
     finally { foreach ($p in $p1, $p2) { try { $p.Kill() } catch { } } }
-    Check 'no scheduled task runs a stand-in: none found' ($null -eq (Find-RunnerTask)) $true
+    Check 'no scheduled task runs a stand-in: none found' ($null -eq (Find-RunnerTask -Script $RunnerScript)) $true
     Check 'a task''s -HostFile is read, quoted' (Get-HostFileArg '-File C:\W\data\runner.ps1 -HostFile "D:\cfg\my host.json"') 'D:\cfg\my host.json'
     Check '... or bare' (Get-HostFileArg '-File C:\W\data\runner.ps1 -HostFile D:\cfg\host.json') 'D:\cfg\host.json'
     Check '... and none is none' (Get-HostFileArg '-File C:\W\data\runner.ps1') ''
@@ -421,27 +438,41 @@ exit 3
     Check '... the worker is told why, to turn a Claude phase down' $claim.claudeAccount.refused 'A weekly 85% >= 80%'
     Check '... with no folder' "$($claim.claudeAccount.configDir)" ''
 
+    # ---- QA's browser install ----------------------------------------------------------
+    Write-Host "== Test-PlaywrightInstall"
+    $PlaywrightInstallingMarker = '.installing'
+    $pw = Join-Path $root 'playwright-mcp'
+    New-Item -ItemType Directory -Path $pw -Force | Out-Null
+    Write-Json (Join-Path $pw 'package.json') '{ "dependencies": { "@playwright/mcp": "0.0.84" } }'
+    $s = Test-PlaywrightInstall -Dir $pw
+    Check 'nothing installed: not ready' $s.ok $false
+    Check '... and says what it wants' $s.pinned '0.0.84'
+    $mcp = Join-Path $pw 'node_modules\@playwright\mcp'
+    New-Item -ItemType Directory -Path $mcp -Force | Out-Null
+    Write-Json (Join-Path $mcp 'package.json') '{ "version": "0.0.80" }'
+    Check 'an older version: not ready, so it is installed again' (Test-PlaywrightInstall -Dir $pw).ok $false
+    Write-Json (Join-Path $mcp 'package.json') '{ "version": "0.0.84" }'
+    Check 'the pinned version: ready' (Test-PlaywrightInstall -Dir $pw).ok $true
+    Set-Content -LiteralPath (Join-Path $pw '.installing') -Value 'npm ci started' -Encoding ascii
+    Check 'an install under way (or one a runner died in): not ready' (Test-PlaywrightInstall -Dir $pw).ok $false
+
     # ---- Which PowerShell the fleet starts ---------------------------------------------
     # Get-PsHost is heartbeat-common.ps1's too. Mirrors PowerShellHost in C#.
     Write-Host "== Get-PsHost"
     . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq 'Get-PsHost' }, $false) | Select-Object -First 1).Extent.Text))
-    $script:PsSetting = 'powershell'
-    function Get-Global { param([string]$Key) if ($Key -eq 'psHost') { return $script:PsSetting } return $null }
-    Check 'psHost powershell pins 5.1, whatever runs this' (Get-PsHost) 'powershell'
-    $script:PsSetting = $null
-    $auto = Get-PsHost
+    function Get-Global { param([string]$Key) if ($Key -eq 'psHost') { return 'powershell' } return $null }
+    $got = Get-PsHost
+    Check 'never Windows PowerShell, whatever an old psHost setting says' ($got -notmatch '(?i)(^|[\\/])powershell(\.exe)?$') $true
     if ($PSVersionTable.PSEdition -eq 'Core') {
-        Check 'auto, run on 7: this very PowerShell' $auto $Self
+        Check 'run on 7: this very PowerShell' $got $Self
     }
     else {
         $installed = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
         $want = if (Get-Command 'pwsh.exe' -CommandType Application -ErrorAction SilentlyContinue) { 'a pwsh.exe' }
-                elseif (Test-Path -LiteralPath $installed) { 'a pwsh.exe' } else { 'powershell' }
-        $got = if ($auto -like '*pwsh.exe') { 'a pwsh.exe' } else { $auto }
-        Check 'auto, run on 5.1: 7 where it is installed, else 5.1' $got $want
+                elseif (Test-Path -LiteralPath $installed) { 'a pwsh.exe' } else { 'pwsh' }
+        $shown = if ($got -like '*pwsh.exe') { 'a pwsh.exe' } else { $got }
+        Check 'run on 5.1: 7 where it is installed, else pwsh by name' $shown $want
     }
-    $script:PsSetting = 'PWSH '
-    Check 'the setting is read whatever its case and spacing' ((Get-PsHost) -ne 'powershell') $true
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.
