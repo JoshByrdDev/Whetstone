@@ -1887,7 +1887,6 @@ function Invoke-Reflection {
     try {
         $suggestionsFile = Join-Path $ProjectDataDir "improvement-suggestions.md"
         $keysFile        = Join-Path $ProjectDataDir "reflection-keys.txt"
-        $memoryIndex     = if ($MemoryDir) { Join-Path $MemoryDir "MEMORY.md" } else { $null }
 
         $guidance = Get-ReflectGuidance -Path $reflectFile
 
@@ -1907,9 +1906,12 @@ function Invoke-Reflection {
             }
         }
 
-        # The index, not the notes themselves: it is one line per fact, so it fits, and a reflection
-        # that can see the titles of everything already recorded stops rediscovering them.
-        $lessonsContent = if ($memoryIndex -and (Test-Path $memoryIndex)) { Get-Content -Path $memoryIndex -Raw } else { "(none)" }
+        # The key list is the whole of what reflection is shown of the store. It used to be handed
+        # the index as well, which is the same keys again with a summary beside each - about 18k
+        # tokens on every reflection of the busiest project, to answer a question the keys already
+        # answer. Whether a finding is really new is not left to the model reading titles anyway: a
+        # repeated key is caught mechanically, and a fact recorded under another name is found by
+        # Find-RelatedNotes when it is placed.
 
         $logForReflect = $RunLog
         if ($logForReflect.Count -gt 200) { $logForReflect = $logForReflect[-200..-1] }
@@ -1919,7 +1921,6 @@ function Invoke-Reflection {
             $guidance,
             $ReflectOutputContract,
             "`n---`n`n# KNOWN FACTS (already recorded - do not report these again)`n`n$knownBlock",
-            "`n---`n`n# THE REPO'S NOTES STORE (index of everything already recorded)`n`n$lessonsContent",
             "`n---`n`n# RUN LOG TO ANALYSE`n`n" + ($logForReflect -join "`n")
         ) -join "`n"
 

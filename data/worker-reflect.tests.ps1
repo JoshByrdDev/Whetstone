@@ -61,7 +61,7 @@ function Check {
 $fakeCli = Join-Path $root 'agent.cmd'
 Set-Content -Path $fakeCli -Encoding ascii -Value @'
 @echo off
-more > nul
+if defined FAKE_PROMPT_OUT (more > "%FAKE_PROMPT_OUT%") else (more > nul)
 if "%FAKE_WARN%"=="1" echo Permission allow rule (.claude\settings.json): Write(.cache/**) is not matched by file permission checks 1>&2
 if exist "%FAKE_REPLY%" type "%FAKE_REPLY%"
 '@
@@ -217,6 +217,21 @@ $q = 'Reporting migration numbering in the reporting schema is sequential.'
 Check 'related: a ticket note is a candidate when asked for all' ((@(Find-RelatedNotes -MemoryDir $fmem -Text $q -Threshold 0.01) | ForEach-Object Key) -contains 'clash-note') $true
 Check 'related: but not when asked for durable notes' ((@(Find-RelatedNotes -MemoryDir $fmem -Text $q -Threshold 0.01 -DurableOnly) | ForEach-Object Key) -contains 'clash-note') $false
 $script:TicketPhaseOf = $null
+
+# --- Reflection is shown the store's keys, not its index ---
+$dir = Join-Path $root 'keys-only'; $proj = Join-Path $dir 'proj'; $repo = Join-Path $dir 'repo'; $mem = Join-Path $repo '.claude\memory'
+New-Item -ItemType Directory -Path $proj, $mem -Force | Out-Null
+Set-Content -Path (Join-Path $proj 'reflect-prompt.md') -Value 'Look.' -Encoding ascii
+Set-Content -Path (Join-Path $mem 'MEMORY.md') -Value "# Notes`n`n- [Db](db-on-1433.md) - SUMMARY-ONLY-IN-THE-INDEX" -Encoding ascii
+Set-Content -Path (Join-Path $mem 'db-on-1433.md') -Value "---`nname: db-on-1433`n---`n`nThe database listens on localhost,1433." -Encoding ascii
+Set-Content -Path (Join-Path $dir 'reply.txt') -Value '[]' -Encoding ascii
+$env:FAKE_REPLY = Join-Path $dir 'reply.txt'
+$env:FAKE_PROMPT_OUT = Join-Path $dir 'prompt.txt'
+Invoke-Reflection -ProjectDataDir $proj -RepoDir $repo -RunLog (1..10 | ForEach-Object { "line $_" }) -MemoryDir $mem -TicketId 'PROJ-1' -ProjectKey 'alpha' 2>$null
+Remove-Item Env:FAKE_PROMPT_OUT
+$sent = [IO.File]::ReadAllText((Join-Path $dir 'prompt.txt'))
+Check 'reflection prompt: lists the known keys' ($sent -match '(?m)^- db-on-1433\s*$') $true
+Check 'reflection prompt: does not carry the index' ($sent -match 'SUMMARY-ONLY-IN-THE-INDEX') $false
 
 # --- Not an answer: discarded, and nothing is claimed or written ---
 $r = Invoke-Case -Name 'chatter' -Reply 'You have hit your limit - resets 11:30am' -Warn
