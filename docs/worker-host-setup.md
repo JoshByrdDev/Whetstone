@@ -245,6 +245,15 @@ Optional. Leave it out and QA stays on the board host.
     (`WHETSTONE_STACK_SLOT`) picks its own compose project name and ports. Without it, a second
     QA run on the same machine would start the same stack on the same ports.
 
+    On Windows, the NAT service under Hyper-V, WSL and Docker (winnat) reserves blocks of ports at
+    every boot, and nothing can listen inside one. A project that writes its stack's ports into
+    `project.defaults.json` as `"stackPorts": { "ports": [<slot 0's ports>], "slotStep": <per slot> }`
+    gets those ports checked before each run that holds its stack. If one is reserved, the ticket
+    is blocked before any agent starts, with the elevated commands that reserve those ports for
+    good. Doing that when you set the machine up saves one ticket finding out:
+    `net stop winnat`, then `netsh int ipv4 add excludedportrange protocol=tcp startport=<port> numberofports=<n>`
+    for every slot the machine runs, then `net start winnat`.
+
     Check: send one ticket through QA on the worker host. Its screenshots appear on the ticket, and
     the worker host's log shows `Captures mirrored to the board host as they land`. QA on the board
     host can run at the same time.

@@ -379,6 +379,16 @@ public class ProjectConfig
     public IReadOnlyDictionary<string, string> WorkerEnv { get; init; } = new Dictionary<string, string>();
 
     /// <summary>
+    /// The TCP ports this project's stack listens on, as slot 0 uses them, and how far each moves
+    /// per stack slot (<c>"stackPorts": { "ports": [8080, 8081], "slotStep": 10 }</c>: slot N is
+    /// each port plus 10N). Optional, and said only so a run can check them before its agent
+    /// starts: on Windows the NAT service reserves blocks of ports at boot, and a run whose slot
+    /// lands inside one cannot start the stack at all (<c>Test-StackPortsFree</c> in worker.ps1).
+    /// Which ports a slot means stays the project's to say; this only lets the platform read it.
+    /// </summary>
+    public StackPortsConfig? StackPorts { get; init; }
+
+    /// <summary>
     /// How this project's steward works: its limits, its plan, what its merge checks and refuses.
     /// See <see cref="StewardConfig"/>.
     /// </summary>
@@ -513,6 +523,29 @@ public record StackLink(string Label, string Url);
 /// does not) - supervising a foreground process is a different job with different failure modes,
 /// and this config would only pretend to cover it.
 /// </summary>
+/// <summary>
+/// A project's stack ports for slot 0 and the step between slots - see
+/// <see cref="ProjectConfig.StackPorts"/>. Null from <see cref="From"/> when the block is missing
+/// or names no usable port, so a malformed one checks nothing rather than everything.
+/// </summary>
+public record StackPortsConfig(int[] Ports, int SlotStep)
+{
+    public static StackPortsConfig? From(Dictionary<string, JsonElement> cfg)
+    {
+        if (!cfg.TryGetValue("stackPorts", out var v) || v.ValueKind != JsonValueKind.Object) return null;
+        var ports = v.TryGetProperty("ports", out var p) && p.ValueKind == JsonValueKind.Array
+            ? p.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Number && e.TryGetInt32(out var n) && n is > 0 and < 65536)
+                .Select(e => e.GetInt32()).Distinct().ToArray()
+            : Array.Empty<int>();
+        if (ports.Length == 0) return null;
+        var step = v.TryGetProperty("slotStep", out var s) && s.ValueKind == JsonValueKind.Number && s.TryGetInt32(out var sv) && sv > 0 ? sv : 0;
+        return new StackPortsConfig(ports, step);
+    }
+
+    /// <summary>The ports stack slot <paramref name="slot"/> listens on.</summary>
+    public int[] ForSlot(int slot) => Ports.Select(p => p + SlotStep * slot).ToArray();
+}
+
 public class StackConfig
 {
     /// <summary>Where the commands run, relative to <c>projectPath</c> (absolute also accepted).</summary>
@@ -683,6 +716,7 @@ public class ProjectRegistry
             SliceBranches = cfg.TryGetValue("sliceBranches", out var sb) && sb.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
             WorkerEnv = GetStrMap(cfg, "workerEnv"),
+            StackPorts = StackPortsConfig.From(cfg),
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
             ResourcePaths = GetStrArrayMap(cfg, "resourcePaths"),
             Tracker = TrackerConfig.From(cfg),

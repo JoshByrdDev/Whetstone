@@ -407,6 +407,9 @@ public static class TicketEndpoints
                         // The project's own environment for its workers, {machineCache} unexpanded:
                         // the machine the run lands on says where its cache is (Get-WorkerEnv).
                         workerEnv = cfg.WorkerEnv,
+                        // Slot 0's ports and the step per slot, for the worker's check that this
+                        // machine has not reserved them (Test-StackPortsFree). Null when unsaid.
+                        stackPorts = cfg.StackPorts is { } sp ? new { ports = sp.Ports, slotStep = sp.SlotStep } : null,
                         // A project of several repos: each one's folder, hub, base and setup, in
                         // order (Get-RepoMembers in data/worker-repos.ps1). Empty for a project that
                         // is one repo, which the worker reads as the set of one built from the keys

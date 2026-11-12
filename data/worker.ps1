@@ -68,6 +68,76 @@ function Get-WorkerEnv {
     return $out
 }
 
+# Windows' reserved TCP port ranges, from netsh's tables (IPv4 and IPv6 run together): each row's
+# Start and End, and Administered when a person reserved it (netsh marks those with *). A reserved
+# range refuses every bind inside it - node says "listen EACCES" - except an administered one,
+# which only keeps the NAT service from taking those ports, so the stack that owns them still can.
+# The NAT service (winnat, under Hyper-V, WSL and Docker) picks its blocks again at every boot.
+# Pure, so worker-stack-ports.tests.ps1 hands it netsh's text.
+function ConvertFrom-ExcludedPortRanges {
+    param([string]$Text)
+    $out = [Collections.Generic.List[object]]::new()
+    foreach ($line in ("$Text" -split "`r?`n")) {
+        if ($line -match '^\s*(\d+)\s+(\d+)\s*(\*)?\s*$') {
+            $out.Add([pscustomobject]@{ Start = [int]$Matches[1]; End = [int]$Matches[2]; Administered = [bool]$Matches[3] })
+        }
+    }
+    return ,$out.ToArray()
+}
+
+# This machine's reserved ranges as netsh prints them; empty off Windows, where nothing reserves
+# ports this way, and when netsh cannot be asked (the check then passes, as it did before it existed).
+function Get-ExcludedPortText {
+    if (-not $IsWindows) { return '' }
+    try {
+        $v4 = & netsh interface ipv4 show excludedportrange protocol=tcp 2>$null
+        $v6 = & netsh interface ipv6 show excludedportrange protocol=tcp 2>$null
+        return ((@($v4) + @($v6)) -join "`n")
+    } catch { return '' }
+}
+
+# Whether stack slot $Slot can listen on its ports here: $null when it can, else the ports a
+# reserved range holds (Port, Start, End) and what to reserve instead (Start, Count - contiguous
+# runs of slots 0..$Slot's ports that no administered range covers yet, so reserving them keeps the
+# NAT service off every slot up to this one). $Spec is the claim's project.stackPorts: slot 0's
+# ports and the step per slot (ProjectConfig.StackPorts). Pure; the live call is the caller's.
+function Get-StackPortProblem {
+    param($Spec, [int]$Slot, $Ranges)
+    if ($null -eq $Spec -or -not $Spec.ports) { return $null }
+    $step = [int]$Spec.slotStep
+    $base = @($Spec.ports | ForEach-Object { [int]$_ })
+    $held = @(foreach ($port in ($base | ForEach-Object { $_ + $step * $Slot })) {
+        $r = @($Ranges | Where-Object { -not $_.Administered -and $port -ge $_.Start -and $port -le $_.End }) | Select-Object -First 1
+        if ($r) { [pscustomobject]@{ Port = $port; Start = $r.Start; End = $r.End } }
+    })
+    if ($held.Count -eq 0) { return $null }
+    $want = @(foreach ($n in 0..$Slot) { foreach ($b in $base) { $b + $step * $n } }) | Sort-Object -Unique |
+        Where-Object { $p = $_; -not @($Ranges | Where-Object { $_.Administered -and $p -ge $_.Start -and $p -le $_.End }) }
+    $reserve = [Collections.Generic.List[object]]::new()
+    foreach ($p in @($want)) {
+        $last = if ($reserve.Count) { $reserve[$reserve.Count - 1] } else { $null }
+        if ($last -and $p -eq $last.Start + $last.Count) { $last.Count++ }
+        else { $reserve.Add([pscustomobject]@{ Start = $p; Count = 1 }) }
+    }
+    return [pscustomobject]@{ Held = $held; Reserve = $reserve.ToArray() }
+}
+
+# What the ticket is told when its slot's ports are reserved: which, why it is the machine's and
+# not the ticket's, and the commands that fix it for good - in an elevated shell, because only an
+# administrator can stop the NAT service or reserve ports.
+function Format-StackPortComment {
+    param($Problem, [int]$Slot, [string]$Machine)
+    $ports = ($Problem.Held | ForEach-Object { "$($_.Port) (reserved in $($_.Start)-$($_.End))" }) -join ', '
+    $cmds = @('net stop winnat') +
+        @($Problem.Reserve | ForEach-Object { "netsh int ipv4 add excludedportrange protocol=tcp startport=$($_.Start) numberofports=$($_.Count)" }) +
+        @('net start winnat', 'netsh interface ipv4 show excludedportrange protocol=tcp')
+    return "This run could not start: $Machine has reserved the ports stack slot $Slot listens on - $ports. " +
+        "Windows' NAT service (Hyper-V, WSL, Docker) takes blocks of ports at boot, and nothing can listen inside one, so the stack would fail with ``listen EACCES``. " +
+        "Nothing on this ticket is at fault and no agent was started. To fix it for good, run these on $Machine in an elevated PowerShell while no QA runs there (stopping winnat briefly drops Docker and WSL networking; restart Docker if it does not recover):`n`n" +
+        "``````powershell`n" + ($cmds -join "`n") + "`n```````n`n" +
+        "The ports you reserve show with a ``*`` in the last listing and stay yours across reboots. Then unblock this ticket."
+}
+
 # A worker is its own top-level session, never a child of one. When the app was started from inside
 # Claude Code (`dotnet run` in a session's shell), every process under it inherits that session's
 # variables: CLAUDECODE=1 makes claude refuse to launch at all ("cannot be launched inside another
@@ -2480,6 +2550,24 @@ if ($repoDir) {
     if ($baseProblem) {
         Stop-CycleEarly -Block -Reason $baseProblem `
             -Comment "This ticket could not start: $baseProblem. Push the branch to origin, or clear the ticket's base from the drawer while it has no branch of its own, then unblock it."
+    }
+}
+
+# The ports this run's stack slot listens on, checked before anything is set up: on Windows the
+# NAT service reserves blocks of ports at boot, a slot inside one cannot start the stack at all, and
+# a run that found out from its own `listen EACCES` used to spend itself and then improvise a port
+# outside the slot table. Only for a run holding one of the project's own leases (its stack) on a
+# project that says its ports (stackPorts). Blocked rather than given back: the next claim on this
+# machine's slot would find the same range, and freeing it takes an administrator.
+$ownStackLease = @($Claim.leases | Where-Object { ("$_" -split '@')[0] -like "${projectKey}:*" })
+if ($Claim.project.stackPorts -and $ownStackLease.Count -gt 0) {
+    $portSlot = if ($null -ne $Claim.stackSlot) { [int]$Claim.stackSlot } else { 0 }
+    $portProblem = Get-StackPortProblem -Spec $Claim.project.stackPorts -Slot $portSlot `
+        -Ranges (ConvertFrom-ExcludedPortRanges -Text (Get-ExcludedPortText))
+    if ($portProblem) {
+        $machine = if ($runHost) { $runHost } else { "$env:COMPUTERNAME" }
+        Stop-CycleEarly -Block -Reason "stack slot $portSlot's ports are reserved on $machine ($(($portProblem.Held | ForEach-Object Port) -join ', '))" `
+            -Comment (Format-StackPortComment -Problem $portProblem -Slot $portSlot -Machine $machine)
     }
 }
 
