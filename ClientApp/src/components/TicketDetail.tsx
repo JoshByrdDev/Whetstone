@@ -742,12 +742,16 @@ export function TicketDetail({
                 recorded when the ticket was created, and is not ours to retype. Offering "set
                 branch" here would write Ticket.Branch, which every other feature reads as "the
                 branch this ticket authored". */}
+            {/* One route either way: before a run has made the branch it only records the name; after,
+                it renames the branch in every repo that has it, or refuses and says why (a run holds
+                the ticket, its pull request is open, a worker host has it). */}
             {t.track !== 'Review' && (
-              <BranchChip branch={t.branch ?? ''} base={t.baseBranch} onSave={v => run(() => api.updateTicket(t.id, { branch: v }))} />
+              <BranchChip branch={t.branch ?? ''} base={t.baseBranch} started={!!t.branchStarted}
+                onSave={v => { if (v !== (t.branch ?? '')) run(() => api.setTicketBranchName(t.id, v)); }} />
             )}
-            {/* Its own base, while there is still a choice to make: before the ticket has a branch.
-                After that the base is on the branch chip, and fixed. */}
-            {t.track !== 'Review' && !t.branch && !t.worktreePath && (
+            {/* Its own base, while there is still a choice to make: before a run has made its branch. A
+                name chosen for the branch is not that. After it the base is on the branch chip, and fixed. */}
+            {t.track !== 'Review' && !t.branchStarted && (
               <BaseChip base={t.baseBranch ?? ''} onSave={v => run(() => api.setTicketBaseBranch(t.id, v))} />
             )}
             <WorktreeChip path={t.worktreePath ?? ''} />
@@ -1863,16 +1867,21 @@ function RenameControl({ title, onSave }: { title: string; onSave: (v: string) =
   );
 }
 
-function BranchChip({ branch, base, onSave }: { branch: string; base?: string | null; onSave: (v: string) => void }) {
+// The ticket's branch. Before a run has made it, a name for the first run to use (blank is the
+// board's default); after, renaming it renames the branch itself in every repo, through the server.
+function BranchChip({ branch, base, started, onSave }: {
+  branch: string; base?: string | null; started: boolean; onSave: (v: string) => void;
+}) {
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(branch);
   useEffect(() => setVal(branch), [branch]);
   if (!editing) {
+    const what = started ? 'Rename the branch in every repo' : 'Name the branch the first run creates';
     return (
       <button
         onClick={() => setEditing(true)}
-        title={base && branch ? `Edit branch. Forked from ${base}, and delivered into it` : 'Edit branch'}
-        className="text-[10px] font-mono font-semibold px-2 py-1 rounded bg-panel border border-hair text-gray-400 hover:text-gray-200 hover:border-gray-600 transition-colors min-w-0 truncate"
+        title={base && branch ? `${what}. Forked from ${base}, and delivered into it` : what}
+        className="orbit-tap text-[10px] font-mono font-semibold px-2 py-1 rounded bg-panel border border-hair text-gray-400 min-w-0 truncate"
       >
         ⎇ {branch || 'set branch'}
         {/* The ticket's own base, beside the branch it is the base of: `jb/4334 <- feature/4333`. */}
@@ -1881,14 +1890,16 @@ function BranchChip({ branch, base, onSave }: { branch: string; base?: string | 
     );
   }
   return (
-    <span className="flex items-center gap-1.5">
+    <span className="flex items-center gap-1.5 min-w-0">
       <input
-        autoFocus value={val} onChange={e => setVal(e.target.value)} placeholder="feature branch"
+        autoFocus value={val} onChange={e => setVal(e.target.value)}
+        placeholder={started ? 'new name' : "the board's default"}
+        spellCheck={false} autoCapitalize="off"
         onKeyDown={e => {
           if (e.key === 'Enter') { onSave(val.trim()); setEditing(false); }
           if (e.key === 'Escape') { setVal(branch); setEditing(false); }
         }}
-        className="w-44 bg-panel border border-hair rounded px-2 py-1 text-[11px] font-mono text-gray-200 focus:outline-none focus:border-gray-500"
+        className="w-44 min-w-0 bg-panel border border-hair rounded px-2 py-1 text-[11px] font-mono text-gray-200 focus:outline-none focus:border-gray-500"
       />
       <button onClick={() => { onSave(val.trim()); setEditing(false); }} className="text-[10px] text-blue-400 hover:text-blue-300">Save</button>
       <button onClick={() => { setVal(branch); setEditing(false); }} className="text-[10px] text-gray-500">Cancel</button>

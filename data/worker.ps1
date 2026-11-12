@@ -787,13 +787,19 @@ function Wait-OrphanSetup {
     if (-not $p.WaitForExit([int]($TimeoutMinutes * 60000))) { Stop-ProcessTree -Id $p.Id }
 }
 
-# The name of the branch a ticket owns: the one it already has, else one from its linked issue, else
-# one from its own id. Every repo of a project of several gets the same one.
+# The name of the branch a ticket owns: the one it already has, else the name the board gave it on
+# the claim (branchName - BranchNaming in the board's C#, which applies the project's prefix and
+# branchNameStyle, so the name the new-ticket form showed is the name made here). Only a claim from a
+# board without that field reaches the last two: one from its linked issue, else one from its own id.
+# Every repo of a project of several gets the same one.
 function Get-TicketBranchName {
-    param([string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix, [string]$TicketId)
+    param([string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix, [string]$TicketId,
+          [string]$BoardBranch)
     $recorded = if ($RecordedBranch) { $RecordedBranch.Trim() } else { "" }
+    $board    = if ($BoardBranch) { $BoardBranch.Trim() } else { "" }
     $issue    = if ($IssueBranchToken) { $IssueBranchToken.Trim() } else { "" }
     if ($recorded) { return $recorded }
+    if ($board)    { return $board }
     if ($issue)    { return "$BranchPrefix$issue" }
     return "${BranchPrefix}ticket-$TicketId"
 }
@@ -825,7 +831,7 @@ function Get-TicketBranchName {
 function Resolve-Worktree {
     param(
         [string]$RepoDir, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
-        [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BaseBranch, [string]$BranchPrefix,
+        [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BaseBranch, [string]$BranchPrefix, [string]$BoardBranch,
         [string[]]$CopyFiles, [string[]]$Setup, [string]$ReviewBranch, [bool]$MergeLocally, [bool]$OnBase,
         [string]$WorktreeName, [switch]$MayCreate, [switch]$NoSetup, [switch]$BackgroundSetup
     )
@@ -957,7 +963,7 @@ function Resolve-Worktree {
         return $res
     }
 
-    $branchName = Get-TicketBranchName -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken `
+    $branchName = Get-TicketBranchName -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken -BoardBranch $BoardBranch `
         -BranchPrefix $BranchPrefix -TicketId $TicketId
     $dirName = if ($WorktreeName) { $WorktreeName } else { Get-WorktreeDirName $branchName }
 
@@ -2586,13 +2592,13 @@ if ($repoDir) {
     # below loops over. A project of one takes exactly the call it always did.
     $wt = if ($multiRepo) {
         Resolve-Workspace -Members $repoMembers -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
-            -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
+            -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" -BoardBranch "$($Claim.branchName)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BranchPrefix $effectivePrefix `
             -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -ReviewRepo $reviewRepo `
             -MergeLocally $mergeLocally -OnBase $isWalkthrough
     } else {
         Resolve-Worktree -RepoDir $repoDir -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
-            -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" `
+            -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" -BoardBranch "$($Claim.branchName)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BaseBranch $effectiveBase -BranchPrefix $effectivePrefix `
             -CopyFiles @($Claim.project.worktreeCopyFiles) -Setup @($Claim.project.worktreeSetup) `
             -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase $isWalkthrough `

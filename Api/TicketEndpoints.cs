@@ -29,10 +29,19 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     // The branch the ticket forks from and is delivered into, when it is not the project's base: a
     // feature branch a set of tickets builds on (Ticket.BaseBranch). Blank or the project's base is
     // the project's base. Fixed once the ticket has a branch.
-    string? BaseBranch = null);
+    string? BaseBranch = null,
+    // The name its branch will have, instead of the board's default (BranchNaming). Blank is the
+    // default. Refused when another open ticket of the project has it, or a writable repo already does.
+    string? Branch = null);
 
 /// <summary>The owner setting a ticket's own base before it has a branch. Blank is the project's base.</summary>
 public record SetBaseBranchRequest(string? BaseBranch);
+
+/// <summary>
+/// The owner naming a ticket's branch: a plain record edit before a run has made it, a rename in
+/// every repo after. Blank, before a run, goes back to the default.
+/// </summary>
+public record SetBranchNameRequest(string? Branch);
 
 /// <summary>Staging one piece of feedback. Everything but the body has a sensible default.</summary>
 public record AddReviewCommentRequest(string Body, string? FilePath = null, int? Line = null,
@@ -130,6 +139,39 @@ public static class TicketEndpoints
     }
 
     /// <summary>
+    /// Why <paramref name="name"/> cannot be a new branch name for a ticket of <paramref name="projectKey"/>,
+    /// or null when it can: another open ticket of the project has it, or git refuses it
+    /// (<see cref="TicketGitService.NewBranchNameProblemAsync"/>).
+    /// </summary>
+    public static async Task<string?> BranchNameProblemAsync(TicketService svc, TicketGitService git,
+        string projectKey, string name, int? except)
+    {
+        if (await svc.OpenTicketWithBranchAsync(projectKey, name, except) is { } other)
+            return $"'{name}' is already ticket #{other}'s branch.";
+        return await git.NewBranchNameProblemAsync(projectKey, name);
+    }
+
+    /// <summary>
+    /// Why a run's branch must not be renamed now, or null when it may: a run holds the ticket (its
+    /// worktree is in use, and the run would hand back or record the old name), its pull request is
+    /// under review (the reviewer's threads are on the old name), or a worker host has run it (its
+    /// clone keeps the branch and the ref it agreed with the board on under the old name, and a rename
+    /// here would leave anything only that clone has under a name nothing looks for). Public for the tests.
+    /// </summary>
+    public static async Task<string?> RenameRefusalAsync(Ticket t, TicketService svc, ResourceLeaseService leases)
+    {
+        if (await leases.HolderOfAsync(ResourceLeaseService.TicketKey(t.Id)) is { } run)
+            return $"A run holds this ticket right now ({run.HolderLabel ?? run.Skill ?? "a worker"}), working on '{t.Branch}'. Rename it once the run has finished.";
+        if (t.UnderReview)
+            return $"This ticket's pull request is under review ({t.ReviewedOn}), and its threads are on '{t.Branch}': a pull request cannot follow a renamed branch. "
+                + "If it really has to change, take the ticket out of review on its drawer and rename it on origin yourself first.";
+        if ((await svc.WorkerHostsRunOnAsync(t.Id)) is { Count: > 0 } hosts)
+            return $"This ticket has run on worker host {string.Join(", ", hosts)}, whose clone keeps '{t.Branch}' under that name. "
+                + "A rename here would leave that clone's copy behind under a name nothing looks for, so it is refused for a ticket that has been on a worker host.";
+        return null;
+    }
+
+    /// <summary>
     /// Parse a priority name off a request body. Returns false only for a value that was supplied
     /// and is not one of the five — a missing one is legal and yields null (create: Normal;
     /// update: leave it alone). Enum.TryParse alone would not do: it happily accepts any number in
@@ -209,7 +251,7 @@ public static class TicketEndpoints
         // Atomically claim the next ticket for the one global heartbeat: most-progressed
         // workable ticket across all projects (or the given subset). Locks it into its "-ing"
         // phase and returns everything the orchestrator needs to launch the worker.
-        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments, PrototypeCaptureQueue captures, DashboardDbContext db) =>
+        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments, PrototypeCaptureQueue captures, DashboardDbContext db, TicketBranchNamer namer) =>
         {
             bool SkillExists(string projectKey, string skill) => File.Exists(paths.SkillFile(projectKey, skill));
 
@@ -400,6 +442,11 @@ public static class TicketEndpoints
                     // Empty for an unlinked ticket, which is what the script already branches on.
                     issueBranchToken = result.Ticket.IssueKey is { Length: > 0 } bk ? tracker.BranchToken(bk) : "",
                     issueCommitRef = result.Ticket.IssueKey is { Length: > 0 } ck ? tracker.CommitRef(ck) : "",
+                    // The ticket's branch, named once here (BranchNaming): the one recorded on it, else
+                    // the default the project's prefix and branchNameStyle give. The worker takes it as
+                    // it is (Get-TicketBranchName), so the name the form showed is the name made.
+                    // Empty for a review ticket, which owns no branch.
+                    branchName = result.Ticket.Track == TicketTrack.Review ? "" : await namer.ForTicketAsync(result.Ticket),
                     blockNote,
                     ownerNotes,
                     project = new
@@ -719,6 +766,78 @@ public static class TicketEndpoints
             return Results.Ok(TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable, tracker: trackers.For(t.ProjectKey)));
         });
 
+        // The owner naming the ticket's branch from the drawer. Before a run has made it, the name is
+        // only recorded (blank goes back to the default) and the first run creates it. After, it is a
+        // rename of the real branch in every writable repo that has it, then the record - all or
+        // nothing - and refused where a rename would lose track of work (RenameRefusalAsync, and the
+        // branch on origin). Never pushes. A REST route with no tool behind it, like the base.
+        app.MapPut("/api/tickets/{id:int}/branch-name", async (int id, SetBranchNameRequest req, TicketService svc,
+            TicketGitService git, ResourceLeaseService leases, LinkedIssueResolver resolver, IssueTrackerFactory trackers,
+            CancellationToken ct) =>
+        {
+            var t = await svc.GetAsync(id);
+            if (t is null) return Results.NotFound();
+            if (t.Track == TicketTrack.Review)
+                return Results.BadRequest(new { error = "A peer review ticket owns no branch: it reads the one its pull request is from." });
+            var next = req.Branch?.Trim() ?? "";
+            async Task<IResult> Detail()
+            {
+                var now = (await svc.GetAsync(id))!;
+                var r = await resolver.ResolveAsync(now);
+                return Results.Ok(TicketMapper.ToDetail(now, r.Title, r.Description, r.Unavailable, tracker: trackers.For(now.ProjectKey)));
+            }
+            if (string.Equals(next, t.Branch ?? "", StringComparison.Ordinal)) return await Detail();
+
+            if (!t.BranchStarted)
+            {
+                if (next.Length > 0 && await BranchNameProblemAsync(svc, git, t.ProjectKey, next, id) is { } problem)
+                    return Results.BadRequest(new { error = problem });
+                await svc.UpdateAsync(id, null, null, null, null, next, null);
+                return await Detail();
+            }
+
+            if (next.Length == 0)
+                return Results.BadRequest(new { error = $"This ticket's branch exists as '{t.Branch}', so it can be renamed but not cleared." });
+            if (!TicketGitService.IsBranchName(next))
+                return Results.BadRequest(new { error = $"'{next}' is not a branch name git would take." });
+            if (await svc.OpenTicketWithBranchAsync(t.ProjectKey, next, id) is { } other)
+                return Results.Conflict(new { error = $"'{next}' is already ticket #{other}'s branch." });
+            if (await RenameRefusalAsync(t, svc, leases) is { } refusal)
+                return Results.Conflict(new { error = refusal });
+
+            // Read before the record changes: the ticket is the tracked row UpdateAsync writes.
+            var old = t.Branch ?? "";
+            var renamed = await git.RenameTicketBranchAsync(t.ProjectKey, old, next, ct);
+            if (!renamed.Ok) return Results.Conflict(new { error = renamed.Error });
+            try { await svc.UpdateAsync(id, null, null, null, null, next, null); }
+            catch
+            {
+                // The record is half of it: put the branches back rather than leave them under a name
+                // the ticket does not know.
+                if (renamed.Renamed.Count > 0) await git.RenameTicketBranchAsync(t.ProjectKey, next, old, CancellationToken.None);
+                throw;
+            }
+            await svc.AddCommentAsync(id, renamed.Renamed.Count > 0
+                ? $"Branch renamed from `{old}` to `{next}` in {string.Join(", ", renamed.Renamed)}. Nothing was pushed."
+                : $"Branch recorded as `{next}` (was `{old}`); no repo here had `{old}` to rename.", AuthorKind.System);
+            return await Detail();
+        });
+
+        // The name a ticket filed now would get, for the new-ticket form's placeholder. An unlinked
+        // ticket's id is not known until it is filed, so its name is shown with "<id>" in its place.
+        app.MapGet("/api/projects/{key}/default-branch", async (string key, string? issueKey, string? title,
+            ProjectRegistry registry, TicketBranchNamer namer, IssueTrackerFactory trackers) =>
+        {
+            if (!registry.IsEnabled(key)) return Results.NotFound();
+            var tracker = trackers.For(key);
+            var linked = TryNormalizeIssueKey(tracker, issueKey, out var normalized) && normalized is not null;
+            var name = await namer.DefaultForAsync(new Ticket
+            {
+                ProjectKey = key, IssueKey = linked ? normalized : null, Title = linked ? null : title,
+            });
+            return Results.Ok(new { branch = linked ? name : name.Replace("ticket-0", "ticket-<id>") });
+        });
+
         // What the new-ticket form offers under "Based on": the project's base, and the bases open
         // tickets of the project already use - most used first - so a feature's twelfth ticket is
         // one pick, not a branch name typed right eleven times.
@@ -817,11 +936,18 @@ public static class TicketEndpoints
             var (ownBase, baseError) = await OwnBaseAsync(git, projectKey, req.BaseBranch);
             if (baseError is not null) return Results.BadRequest(new { error = baseError });
 
+            // A branch name of its own, which the first run creates. A review ticket owns no branch.
+            string? branch = string.IsNullOrWhiteSpace(req.Branch) ? null : req.Branch.Trim();
+            if (branch is not null && track == TicketTrack.Review)
+                return Results.BadRequest(new { error = "A peer review ticket owns no branch: it reads the one its pull request is from." });
+            if (branch is not null && await BranchNameProblemAsync(svc, git, projectKey, branch, null) is { } branchError)
+                return Results.BadRequest(new { error = branchError });
+
             var t = await svc.CreateAsync(projectKey, title, req.Description, issueKey, issueUrl, phase,
                 req.RequiresSpeculationReview ?? false, req.RequiresImplementationReview ?? false, req.MasterNotes,
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,
-                ownBase);
+                ownBase, branch);
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             // Photographed now, while it waits in its queue, so the first run already has the pictures.
             captures.Enqueue(t.Id);
@@ -840,6 +966,13 @@ public static class TicketEndpoints
 
             var cur = await svc.GetAsync(id);
             if (cur is null) return Results.NotFound();
+
+            // A branch a run has made is renamed in git or not at all: rewriting only the record left
+            // the next run looking for a branch that was not there, beside one nothing pointed at.
+            if (req.Branch is not null && cur.BranchStarted
+                && !string.Equals(req.Branch.Trim(), cur.Branch ?? "", StringComparison.Ordinal))
+                return Results.Conflict(new { error = "This ticket's branch exists already, so a new name has to rename it in git too: "
+                    + $"PUT /api/tickets/{id}/branch-name, which the drawer's branch chip uses." });
 
             // The tracker of the project the ticket will END UP on, since a move is legal here and
             // the two projects need not share one.
@@ -913,10 +1046,12 @@ public static class TicketEndpoints
         // Record the ticket's feature branch and, optionally, the worktree it is checked out in.
         // Deliberately narrow (the branch half mirrors the set_branch MCP tool) so the heartbeat's
         // deterministic workspace setup can persist both without touching title/description/issue link.
+        // A run's record, so it marks the branch as made (Ticket.BranchMadeAt): a rename from here on
+        // goes through PUT .../branch-name, which renames it in git too.
         app.MapPost("/api/tickets/{id:int}/branch", async (int id, SetBranchRequest req, TicketService svc) =>
         {
             var t = req.Branch is null ? await svc.GetAsync(id)
-                                       : await svc.UpdateAsync(id, null, null, null, null, req.Branch, null);
+                                       : await svc.RecordRunBranchAsync(id, req.Branch);
             if (t is null) return Results.NotFound();
             if (req.WorktreePath is not null) t = await svc.SetWorktreePathAsync(id, req.WorktreePath);
             return t is null ? Results.NotFound() : Results.Ok(new { t.Id, t.Branch, t.WorktreePath });

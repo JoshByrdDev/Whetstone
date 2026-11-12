@@ -264,7 +264,10 @@ public record TicketDetailDto(
     DateTime? ReviewedOnAt = null,
     // The base its owner filed it on (Ticket.BaseBranch); null is the project's base or its slice's
     // branch. Readable by a worker; set only by the owner, and only before the ticket has a branch.
-    string? BaseBranch = null);
+    string? BaseBranch = null,
+    // Whether Branch is a branch a run made (Ticket.BranchStarted) rather than a name chosen for the
+    // first run to make: the drawer's base chip goes and its branch chip renames from then on.
+    bool BranchStarted = false);
 
 /// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
 public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
@@ -415,7 +418,8 @@ public static class TicketMapper
         t.Needs,
         t.ReviewedOn,
         t.ReviewedOnAt,
-        SliceBranches.OwnBase(t));
+        SliceBranches.OwnBase(t),
+        t.BranchStarted);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

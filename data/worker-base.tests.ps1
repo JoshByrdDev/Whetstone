@@ -603,6 +603,32 @@ exit 1
     $nwt = New-TicketWorktree -Repo $fb -Branch 'jb/other' -MergeLocally $false
     Check 'a neighbour of the same project, no base of its own: forks from origin/main' (Get-Sha $nwt.path HEAD) (Get-Sha $fb.hub 'origin/main')
     Check '... with none of the feature in it' (Test-Path (Join-Path $nwt.path 'feature.txt')) $false
+
+    # ---- a ticket's branch name ---------------------------------------------------------------
+    # The board names it (BranchNaming, handed over as the claim's branchName); the recorded name
+    # outranks it, and only a claim without the field falls back to the key the script used to build.
+    Write-Host "== Get-TicketBranchName"
+    Check 'recorded name wins over the board''s' (Get-TicketBranchName -RecordedBranch ' jb/4333-signing ' -BoardBranch 'jb/4333-other' -IssueBranchToken '4333' -BranchPrefix 'jb/' -TicketId '7') 'jb/4333-signing'
+    Check 'the board''s name, as it is' (Get-TicketBranchName -RecordedBranch '' -BoardBranch 'jb/4334-open-the-signing-link' -IssueBranchToken '4334' -BranchPrefix 'jb/' -TicketId '7') 'jb/4334-open-the-signing-link'
+    Check 'no board name (an older claim): prefix and issue token' (Get-TicketBranchName -RecordedBranch '' -BoardBranch '' -IssueBranchToken 'PROJ-123' -BranchPrefix 'jb/' -TicketId '7') 'jb/PROJ-123'
+    Check 'no board name, no issue: the ticket id' (Get-TicketBranchName -RecordedBranch '' -IssueBranchToken '' -BranchPrefix 'jb/' -TicketId '7') 'jb/ticket-7'
+
+    $nm = New-Hub 'naming'
+    $nwt2 = Resolve-Worktree -RepoDir $nm.hub -WorktreeRoot $nm.wt -Skill 'speculate' -TicketId '7' `
+        -RecordedBranch '' -BoardBranch 'jb/PROJ-123-open-the-link' -IssueBranchToken 'PROJ-123' -BaseBranch 'main' -BranchPrefix 'jb/' `
+        -CopyFiles @() -Setup @() -ReviewBranch '' -MergeLocally $false
+    Check 'speculate makes the branch under the board''s name' $nwt2.branch 'jb/PROJ-123-open-the-link'
+    Check '... and it is a real branch in the hub' ([bool](git -C $nm.hub rev-parse --verify --quiet 'refs/heads/jb/PROJ-123-open-the-link')) $true
+
+    # A rename from the drawer is git branch -m in the hub: the worktree's HEAD goes with it, and the
+    # next run, handed the new name, finds the same worktree rather than making another.
+    git -C $nm.hub branch -m 'jb/PROJ-123-open-the-link' 'jb/PROJ-123-renamed' *> $null
+    $again = Resolve-Worktree -RepoDir $nm.hub -WorktreeRoot $nm.wt -Skill 'implement' -TicketId '7' `
+        -RecordedBranch 'jb/PROJ-123-renamed' -BoardBranch 'jb/PROJ-123-renamed' -IssueBranchToken 'PROJ-123' -BaseBranch 'main' -BranchPrefix 'jb/' `
+        -CopyFiles @() -Setup @() -ReviewBranch '' -MergeLocally $false
+    Check 'after a rename, the next run attaches to the same worktree' ([IO.Path]::GetFullPath($again.path)) ([IO.Path]::GetFullPath($nwt2.path))
+    Check '... on the new name' (git -C $again.path rev-parse --abbrev-ref HEAD) 'jb/PROJ-123-renamed'
+    Check '... and makes nothing new' $again.created $false
 }
 finally {
     # Worktree .git files are read-only on Windows; -Force is what removes them.

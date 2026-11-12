@@ -537,7 +537,7 @@ public class TicketTools
               + "when the ticket was created and not yours to change") is { } refusal)
             return refusal;
 
-        var t = await svc.UpdateAsync(ticketId, null, null, null, null, branch, null);
+        var t = await svc.RecordRunBranchAsync(ticketId, branch);
         return t is null ? new { error = $"Ticket {ticketId} not found" } : new { t.Id, t.Branch };
     }
 

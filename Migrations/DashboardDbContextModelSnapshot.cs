@@ -1963,6 +1963,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("Branch")
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("BranchMadeAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 

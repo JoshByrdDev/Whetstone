@@ -61,6 +61,13 @@ public class ProjectConfig
     public string BranchPrefix { get; init; } = "";
 
     /// <summary>
+    /// How a ticket's branch is named when nobody chose one (<c>branchNameStyle</c>): <c>key</c>, the
+    /// prefix and the issue key alone, or <c>key-slug</c>, with a short slug of the title after it.
+    /// See <see cref="BranchNaming"/>.
+    /// </summary>
+    public string BranchNameStyle { get; init; } = BranchNaming.KeyStyle;
+
+    /// <summary>
     /// Root directory the heartbeat creates per-ticket worktrees under. Empty = derive it from
     /// <see cref="ProjectPath"/> — see <see cref="ResolvedWorktreeRoot"/>.
     /// </summary>
@@ -699,6 +706,8 @@ public class ProjectRegistry
                 cfg.TryGetValue("repoType", out var rt) && rt.ValueKind == JsonValueKind.String ? rt.GetString() : null),
             TfvcFolders = GetStrArray(cfg, "tfvcFolders"),
             BranchPrefix = cfg.TryGetValue("branchPrefix", out var bp) ? bp.GetString() ?? "" : "",
+            BranchNameStyle = BranchNaming.NormalizeStyle(
+                cfg.TryGetValue("branchNameStyle", out var bns) && bns.ValueKind == JsonValueKind.String ? bns.GetString() : null),
             WorktreeRoot = cfg.TryGetValue("worktreeRoot", out var wr) ? wr.GetString() ?? "" : "",
             WorktreeSetup = GetStrArray(cfg, "worktreeSetup"),
             WorktreeCopyFiles = GetStrArray(cfg, "worktreeCopyFiles"),

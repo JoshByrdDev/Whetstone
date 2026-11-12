@@ -154,7 +154,14 @@ public class TicketBaseBranchTests : IDisposable
         Assert.Null((await svc.GetAsync(t.Id))!.BaseBranch);
         Assert.Equal(TicketService.BaseBranchChange.Set, await svc.SetBaseBranchAsync(t.Id, Feature));
 
+        // A name its owner chose is not a start: nothing has been forked from the base yet.
         await svc.UpdateAsync(t.Id, null, null, null, null, "jb/123", null);
+        Assert.Equal(TicketService.BaseBranchChange.Unchanged, await svc.SetBaseBranchAsync(t.Id, Feature));
+        Assert.Equal(TicketService.BaseBranchChange.Set, await svc.SetBaseBranchAsync(t.Id, "feature/other"));
+        Assert.Equal(TicketService.BaseBranchChange.Set, await svc.SetBaseBranchAsync(t.Id, Feature));
+
+        // A run recording the branch it made is.
+        await svc.RecordRunBranchAsync(t.Id, "jb/123");
         Assert.Equal(TicketService.BaseBranchChange.Started, await svc.SetBaseBranchAsync(t.Id, "feature/other"));
         Assert.Equal(TicketService.BaseBranchChange.Started, await svc.SetBaseBranchAsync(t.Id, null));
         Assert.Equal(Feature, (await svc.GetAsync(t.Id))!.BaseBranch);

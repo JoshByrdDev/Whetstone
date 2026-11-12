@@ -621,7 +621,7 @@ public class TicketService
         bool requiresSpeculationReview = false, bool requiresImplementationReview = false, string? masterNotes = null,
         bool skipQaTesting = false, TicketPriority priority = TicketPriority.Normal,
         TicketTrack track = TicketTrack.Delivery, ReviewTarget? reviewTarget = null,
-        bool skipClassroomAnalysis = false, string? baseBranch = null)
+        bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null)
     {
         // A ticket's own base is a delivery ticket's: a review ticket is read against the target
         // its pull request names (ReviewTarget.TargetBranch).
@@ -650,6 +650,8 @@ public class TicketService
             Track = track,
             MasterNotes = string.IsNullOrWhiteSpace(masterNotes) ? null : masterNotes.Trim(),
             BaseBranch = string.IsNullOrWhiteSpace(baseBranch) ? null : baseBranch.Trim(),
+            // A name chosen at filing, which the first run creates. Not BranchMadeAt: nothing exists yet.
+            Branch = track == TicketTrack.Review || string.IsNullOrWhiteSpace(branch) ? null : branch.Trim(),
         };
 
         // A Review ticket without a branch to review has nothing to work on, and the phase that
@@ -744,12 +746,54 @@ public class TicketService
         var next = string.IsNullOrWhiteSpace(baseBranch) ? null : baseBranch.Trim();
         if (next == t.BaseBranch) return BaseBranchChange.Unchanged;
         if (t.Track == TicketTrack.Review) return BaseBranchChange.ReviewTrack;
-        if (!string.IsNullOrWhiteSpace(t.Branch) || !string.IsNullOrWhiteSpace(t.WorktreePath))
-            return BaseBranchChange.Started;
+        // A branch name chosen but not yet made is not a start: nothing has been forked yet.
+        if (t.BranchStarted) return BaseBranchChange.Started;
         t.BaseBranch = next;
         t.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return BaseBranchChange.Set;
+    }
+
+    /// <summary>
+    /// The id of another open ticket of <paramref name="projectKey"/> whose branch is
+    /// <paramref name="branch"/>, or null. Compared without case, as git does on Windows and macOS.
+    /// </summary>
+    public async Task<int?> OpenTicketWithBranchAsync(string projectKey, string branch, int? except)
+    {
+        var lower = branch.Trim().ToLower();
+        var id = await _db.Tickets.AsNoTracking()
+            .Where(t => t.ProjectKey == projectKey && t.Phase != TicketPhase.Done && t.Branch != null
+                        && t.Branch.ToLower() == lower && (except == null || t.Id != except))
+            .Select(t => (int?)t.Id).FirstOrDefaultAsync();
+        return id;
+    }
+
+    /// <summary>
+    /// The worker hosts a run of this ticket has been on, by name. A worker host's clone keeps the
+    /// ticket's branch under its name, beside the ref it last agreed with the board on, so the branch
+    /// lives there as well as here.
+    /// </summary>
+    public async Task<List<string>> WorkerHostsRunOnAsync(int ticketId) =>
+        await _db.CycleRuns.AsNoTracking()
+            .Where(r => r.TicketId == ticketId && r.Host != null && r.Host != WorkerHostSettings.Board)
+            .Select(r => r.Host!).Distinct().ToListAsync();
+
+    /// <summary>
+    /// A run recording the branch it made or works on: the worker's <c>POST /api/tickets/{id}/branch</c>
+    /// and the <c>set_branch</c> tool. Unlike the owner's edits it stamps <see cref="Ticket.BranchMadeAt"/>,
+    /// because from now on the name is a branch in git, and changing it is a rename.
+    /// </summary>
+    public async Task<Ticket?> RecordRunBranchAsync(int id, string branch)
+    {
+        var t = await _db.Tickets.FindAsync(id);
+        if (t is null) return null;
+        var name = string.IsNullOrWhiteSpace(branch) ? null : branch.Trim();
+        if (name is null) return await GetAsync(id);
+        t.Branch = name;
+        t.BranchMadeAt ??= DateTime.UtcNow;
+        t.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return await GetAsync(id);
     }
 
     /// <summary>

@@ -244,7 +244,7 @@ function Invoke-WorkspaceSetup {
 function Resolve-Workspace {
     param(
         [object[]]$Members, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
-        [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix,
+        [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix, [string]$BoardBranch,
         [string]$ReviewBranch, [string]$ReviewRepo, [bool]$MergeLocally, [bool]$OnBase,
         [double]$SetupTimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 })
     )
@@ -256,7 +256,7 @@ function Resolve-Workspace {
     if (-not (Test-MultiRepo $all)) {
         $m = $all[0]
         $wt = Resolve-Worktree -RepoDir $m.hub -WorktreeRoot $WorktreeRoot -Skill $Skill -TicketId $TicketId `
-            -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken -BaseBranch $m.baseBranch `
+            -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken -BoardBranch $BoardBranch -BaseBranch $m.baseBranch `
             -BranchPrefix $BranchPrefix -CopyFiles @($m.copy) -Setup @($m.setup) -ReviewBranch $ReviewBranch `
             -MergeLocally $MergeLocally -OnBase $OnBase
         if ($wt.ok -and $wt.path) {
@@ -272,7 +272,7 @@ function Resolve-Workspace {
     if ($MergeLocally) { return @{ ok = $false; reason = "a project of several repos delivers by pull request; mergeInsteadOfPr is refused for it" } }
     if (-not $WorktreeRoot) { return @{ ok = $false; reason = "no worktree root configured for this project and none could be derived from its path" } }
 
-    $branch = Get-TicketBranchName -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken `
+    $branch = Get-TicketBranchName -RecordedBranch $RecordedBranch -IssueBranchToken $IssueBranchToken -BoardBranch $BoardBranch `
         -BranchPrefix $BranchPrefix -TicketId $TicketId
     $workspace = Join-Path $WorktreeRoot (Get-WorktreeDirName $branch)
 

@@ -658,6 +658,8 @@ public static class ConfigEndpoints
             baseBranch = Str(cfg, "baseBranch", ""),
             // Empty = inherit the global branchPrefix.
             branchPrefix = Str(cfg, "branchPrefix", ""),
+            // How a ticket's branch is named when nobody chose one: "key" or "key-slug" (BranchNaming).
+            branchNameStyle = typed.BranchNameStyle,
             // Which pipelines this project runs, so the board knows which lanes to draw and the New
             // Ticket form knows which tracks to offer. Read through the typed config so a malformed
             // or missing list arrives here as delivery-only rather than as an empty set of
@@ -778,6 +780,8 @@ public static class ConfigEndpoints
         if (req.DisplayName is not null) defaults["displayName"] = req.DisplayName.Trim();
         if (req.BaseBranch is not null) defaults["baseBranch"] = req.BaseBranch.Trim();
         if (req.BranchPrefix is not null) defaults["branchPrefix"] = req.BranchPrefix.Trim();
+        // How the team names a branch, so committed beside the prefix. Normalised on the way in.
+        if (req.BranchNameStyle is not null) defaults["branchNameStyle"] = BranchNaming.NormalizeStyle(req.BranchNameStyle);
         // Which pipelines this project runs. A property of the team's work rather than of this
         // machine, so it rides in the committed defaults beside displayName. Normalised on the way
         // in as well as on the way out, so a hand-typed name cannot sit in the file looking like a
@@ -1005,7 +1009,9 @@ public record ProjectUpsertRequest(
     bool? MergeInsteadOfPr = null,
     // A steward merge check's time limit in minutes, keyed by the check's name. A name that is not
     // one of the project's checks is ignored; null leaves every check alone.
-    Dictionary<string, int>? MergeCheckTimeouts = null);
+    Dictionary<string, int>? MergeCheckTimeouts = null,
+    // "key" or "key-slug": how a ticket's branch is named when nobody chose one. Null leaves it alone.
+    string? BranchNameStyle = null);
 
 /// <param name="Kind">"jira", "azureDevOps", or "none".</param>
 /// <param name="BaseUrl">The Jira site, or the Azure DevOps organisation URL.</param>

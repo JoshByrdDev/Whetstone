@@ -78,6 +78,8 @@ builder.Services.AddSingleton<CapacitySnapshot>();
 // names one.
 builder.Services.AddSingleton<IssueTrackerFactory>();
 builder.Services.AddSingleton<LinkedIssueResolver>();
+// The name a ticket's branch gets when nobody chose one, worked out once for the claim and the form.
+builder.Services.AddSingleton<TicketBranchNamer>();
 builder.Services.AddSingleton<HeartbeatManager>();
 // Restart-after-drain: the marker file the board and data/restart-board.ps1 hand a restart through.
 builder.Services.AddSingleton<BoardRestart>();

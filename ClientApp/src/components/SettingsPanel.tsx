@@ -333,6 +333,8 @@ interface ProjectDetail {
   projectPath: string;
   baseBranch: string;
   branchPrefix: string;
+  /** How a ticket's branch is named when nobody chose one: the key alone, or the key and a slug of its title. */
+  branchNameStyle?: 'key' | 'key-slug';
   // Where per-ticket agent worktrees are created. Blank = derived beside the repo, which the
   // server reports back as resolvedWorktreeRoot so the placeholder can show what blank means.
   worktreeRoot: string;
@@ -1587,7 +1589,7 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
           displayName: p.displayName, projectPath: p.projectPath, tracks: p.tracks,
           skipClassroomAnalysisByDefault: p.skipClassroomAnalysisByDefault ?? false,
           mergeInsteadOfPr: p.mergeInsteadOfPr ?? false,
-          baseBranch: p.baseBranch, branchPrefix: p.branchPrefix,
+          baseBranch: p.baseBranch, branchPrefix: p.branchPrefix, branchNameStyle: p.branchNameStyle ?? 'key',
           worktreeRoot: p.worktreeRoot ?? '', worktreeSetup: p.worktreeSetup ?? [], worktreeCopyFiles: p.worktreeCopyFiles ?? [],
           tracker: p.tracker, qaApiPort: p.qaApiPort, qaWebPort: p.qaWebPort, qaLogin: p.qaLogin,
           mergeCheckTimeouts: Object.fromEntries((p.mergeChecks ?? []).map(c => [c.name, c.timeoutMinutes])),
@@ -1770,6 +1772,14 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
             <Field label="Base Branch" description="Branch every ticket of this project forks from and is delivered into. Blank = main. Saved to the committed project.defaults.json, so it is a lasting change for the whole project, not a switch for one feature: to build a feature on its own branch, set Based on when filing its tickets." value={p.baseBranch} onChange={v => update({ baseBranch: v })} placeholder="main" />
             <Field label="Branch Prefix" description="Prefix for auto-created branches, e.g. jb/ → jb/PROJ-123." value={p.branchPrefix} onChange={v => update({ branchPrefix: v })} placeholder="jb/" />
           </div>
+          <SelectField label="Branch Names"
+            description="What a new ticket's branch is called when nobody types a name at filing. A name typed then, or the branch a run already made, is never changed by this."
+            value={p.branchNameStyle ?? 'key'} onChange={v => update({ branchNameStyle: v as 'key' | 'key-slug' })}
+            options={[
+              { value: 'key', label: 'Key only (jb/PROJ-123)' },
+              { value: 'key-slug', label: 'Key and title (jb/PROJ-123-open-the-signing-link)' },
+            ]} />
+
           <FolderField label="Project Path" description="Absolute path to the repo this project works on. Yours to work in — the heartbeat never runs here." value={p.projectPath}
             onPick={path => update({ projectPath: path })} />
 

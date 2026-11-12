@@ -56,7 +56,21 @@ export const createTicket = (body: {
   // Delivery only: the branch to fork from and deliver into instead of the project's base. Blank is
   // the project's base. Refused when a writable repo lacks it (on origin, for a pull-request project).
   baseBranch?: string;
+  // Delivery only: the name its branch is created under, instead of the board's default. Refused
+  // when another open ticket of the project or a writable repo already has it.
+  branch?: string;
 }) => fetch('/api/tickets', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);
+
+// The name a ticket filed now would get (the new-ticket form's placeholder).
+export const getDefaultBranch = (projectKey: string, issueKey: string, title: string) =>
+  fetch(`/api/projects/${encodeURIComponent(projectKey)}/default-branch?`
+    + new URLSearchParams({ issueKey, title }).toString()).then(json<{ branch: string }>);
+
+// Name a ticket's branch. Before a run has made it, only the record (blank is the default again);
+// after, a rename of the branch in every repo that has it - or a refusal saying why not.
+export const setTicketBranchName = (id: number, branch: string) =>
+  fetch(`/api/tickets/${id}/branch-name`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ branch }) })
+    .then(json<TicketDetail>);
 
 // A ticket's own base, before it has a branch. Blank puts it back on the project's base.
 export const setTicketBaseBranch = (id: number, baseBranch: string) =>

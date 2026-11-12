@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Phase, Priority, ProjectInfo, Track } from '../types/tickets';
 import { PHASE_LABEL, DEFAULT_PRIORITY } from '../types/tickets';
-import { createTicket, getTicketBases, getUnlinkedIssues } from '../api/tickets';
+import { createTicket, getDefaultBranch, getTicketBases, getUnlinkedIssues } from '../api/tickets';
 import type { TicketBases, UnlinkedIssue } from '../api/tickets';
 import { TicketOptions } from './TicketOptions';
 import { useVeil } from '../hooks/useVeil';
@@ -85,6 +85,13 @@ export function CreateTicketModal({
   const projectBase = bases?.projectBase ?? 'main';
   const offBase = baseBranch.trim().length > 0 && baseBranch.trim() !== projectBase;
 
+  // What its branch will be called. Blank, the default, is the name the board would give it - shown
+  // as the placeholder, worked out by the board itself (BranchNaming) so the form and the first run
+  // cannot disagree. Typed, it is stored on the ticket and the first run creates it under that name.
+  const [branchName, setBranchName] = useState('');
+  const [defaultBranch, setDefaultBranch] = useState('');
+  useEffect(() => setBranchName(''), [projectKey]);
+
   // The board unmounts this the moment onClose fires, so leaving is something the panel does to
   // itself. Every way out goes through it, a successful create included - a panel that fades when
   // you cancel and blinks out when you submit reads as two different panels.
@@ -117,6 +124,18 @@ export function CreateTicketModal({
 
   // When an issue key is entered, title/description are pulled from the tracker — we do not collect them.
   const linked = issueKey.trim().length > 0;
+
+  // The branch-name placeholder follows the key and title as they are typed, a beat behind them.
+  useEffect(() => {
+    if (!projectKey) { setDefaultBranch(''); return; }
+    let live = true;
+    const timer = setTimeout(() => {
+      getDefaultBranch(projectKey, linked ? issueKey.trim() : '', linked ? '' : title.trim())
+        .then(b => { if (live) setDefaultBranch(b.branch); })
+        .catch(() => { /* only a placeholder */ });
+    }, 300);
+    return () => { live = false; clearTimeout(timer); };
+  }, [projectKey, linked, issueKey, title]);
 
   // Issues assigned to me that no local ticket has claimed yet — the suggestions behind the key
   // field, so the common case is a click rather than typing a number from memory. Fetched on open
@@ -224,6 +243,8 @@ export function CreateTicketModal({
         masterNotes: masterNotes.trim() || undefined,
         // Delivery only: a review ticket is read against its pull request's target.
         ...(!reviewing && offBase ? { baseBranch: baseBranch.trim() } : {}),
+        // Delivery only: a review ticket owns no branch.
+        ...(!reviewing && branchName.trim() ? { branch: branchName.trim() } : {}),
         ...(reviewing ? {
           track,
           sourceBranch: sourceBranch.trim(),
@@ -378,6 +399,25 @@ export function CreateTicketModal({
               <p className="text-[11px] text-gray-500 mt-1">
                 Forks from <span className="font-mono text-gray-300">{baseBranch.trim()}</span>, is compared with it and
                 is delivered into it, instead of <span className="font-mono">{projectBase}</span>. Fixed once the ticket has a branch.
+              </p>
+            )}
+          </Labeled>
+        )}
+
+        {!reviewing && (
+          <Labeled label="Branch name">
+            <input
+              value={branchName}
+              onChange={e => setBranchName(e.target.value)}
+              placeholder={defaultBranch || 'the board\'s default'}
+              spellCheck={false}
+              autoCapitalize="off"
+              className={`${inputCls} font-mono`}
+            />
+            {branchName.trim() && (
+              <p className="text-[11px] text-gray-500 mt-1">
+                The first run creates <span className="font-mono text-gray-300">{branchName.trim()}</span> in every repo
+                it writes to. Renaming it later, from the drawer, renames the branch too.
               </p>
             )}
           </Labeled>

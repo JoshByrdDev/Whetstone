@@ -469,6 +469,9 @@ export interface TicketDetail {
   // The branch its owner filed it on, when it is not the project's base; null otherwise. Settable
   // from the drawer only while the ticket has no branch (setTicketBaseBranch).
   baseBranch?: string | null;
+  // Whether `branch` is a branch a run made, rather than a name chosen for the first run to make.
+  // From then on the base is fixed and a new name is a rename in git (setTicketBranchName).
+  branchStarted?: boolean;
   blockedReason?: string | null;
   // The same block as the questions the agent actually asked, when it asked in questions. Absent for
   // a fault report, a hand-written block, or anything blocked before the structured form existed —

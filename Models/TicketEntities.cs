@@ -236,8 +236,28 @@ public class Ticket
     public string? IssueKey { get; set; }
     public string? IssueUrl { get; set; }
 
-    /// <summary>Feature branch in the target repo, once implementation starts.</summary>
+    /// <summary>
+    /// This ticket's branch in every writable repo. Before a run has made it, a name its owner chose
+    /// (at filing, or from the drawer), which the first run creates; null until then means the board's
+    /// default (<see cref="Services.BranchNaming"/>). Once <see cref="BranchMadeAt"/> is set it names
+    /// a real branch, and changing it means renaming that branch in git as well
+    /// (<c>PUT /api/tickets/{id}/branch-name</c>), or the next run looks for one that is not there.
+    /// </summary>
     public string? Branch { get; set; }
+
+    /// <summary>
+    /// When a run first recorded <see cref="Branch"/> as the branch it made (the worker's
+    /// <c>POST /api/tickets/{id}/branch</c>, or the <c>set_branch</c> tool). Null while the name is
+    /// only a choice. Tickets that had a branch before this was recorded were stamped by the
+    /// migration that added it.
+    /// </summary>
+    public DateTime? BranchMadeAt { get; set; }
+
+    /// <summary>
+    /// Whether this ticket's branch exists as a branch somewhere and not only as a name: a run made
+    /// it, or it has a worktree. What fixes its base, and what makes a new name a rename.
+    /// </summary>
+    public bool BranchStarted => BranchMadeAt is not null || !string.IsNullOrWhiteSpace(WorktreePath);
 
     /// <summary>
     /// The branch this ticket's work forks from, is measured against and is delivered into, when it
