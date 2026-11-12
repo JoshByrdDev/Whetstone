@@ -186,7 +186,8 @@ function Get-NoteTokens {
 # -DurableOnly leaves out notes that belong to one ticket. A durable fact folded into one of those
 # would be deleted with it when that ticket is done.
 function Find-RelatedNotes {
-    param([string]$MemoryDir, [string]$Text, [double]$Threshold = 0.25, [int]$Top = 3, [switch]$DurableOnly)
+    param([string]$MemoryDir, [string]$Text, [double]$Threshold = 0.25, [int]$Top = 3, [switch]$DurableOnly,
+        [double]$LengthPivot = 0.3)
 
     if (-not $MemoryDir -or -not (Test-Path $MemoryDir)) { return $null }
     $findingTokens = Get-NoteTokens -Text $Text
@@ -243,7 +244,7 @@ function Find-RelatedNotes {
         foreach ($t in $query) { if ($tokens.Contains($t)) { $w = Get-Idf $t; $dot += ($w * $w) } }
         if ($dot -le 0) { continue }
 
-        $score = $dot / ($queryNorm * [Math]::Pow($noteNorm, 0.3))
+        $score = $dot / ($queryNorm * [Math]::Pow($noteNorm, $LengthPivot))
         if ($score -ge $Threshold) {
             $scored += [pscustomobject]@{
                 Path  = $n.FullName
@@ -802,6 +803,68 @@ function Get-NoteConfirmedAt {
     $dt = [datetime]::MinValue
     if ($when -and [datetime]::TryParse($when, [ref]$dt)) { return $dt }
     try { return (Get-Item $Path).LastWriteTime } catch { return [datetime]::MinValue }
+}
+
+# ---- The notes a run is handed ----------------------------------------------------------------
+
+# The notes most likely to bear on one ticket, with their text, for the worker's prompt.
+#
+# Every worker used to be told to read the whole index and open what looked relevant. Across 2,209
+# runs on one project about half read the index - 18k tokens each time - and 11% opened any note at
+# all; 220 of its 323 notes were never opened by anybody. So the matching is done here, once, against
+# the ticket's own words, and what comes back is the notes themselves rather than a list to search.
+#
+# The same TF-IDF matcher reflection uses, with one setting changed: a ticket's title and description
+# run to thousands of characters, and against a query that long the length pivot tuned for a
+# one-sentence finding (0.3) hands every ticket the store's two or three longest notes. At 0.8,
+# measured on a real store, the top of the list is the notes about the ticket's subject. Scores are
+# not comparable between stores, so the cut is relative - within $Relative of the best match - and
+# not a number that would have to be tuned per project.
+#
+# First come the notes that belong to THIS ticket (Get-NoteTicket), every one of them: they were
+# written by earlier runs on it. Notes of other tickets are never offered.
+#
+# Returns @{ Keys = <the keys included>; Text = <the notes, ready for the prompt, or ""> }.
+function Get-RelevantNotes {
+    param([string]$MemoryDir, [string]$Text, [string]$TicketId, [int]$Top = 8, [int]$MaxChars = 16000,
+        [int]$PerNoteChars = 3000, [double]$Relative = 0.5)
+
+    $none = @{ Keys = @(); Text = "" }
+    if (-not $MemoryDir -or -not (Test-Path $MemoryDir)) { return $none }
+
+    $picked = New-Object System.Collections.Generic.List[string]
+    if ("$TicketId" -match '^\d+$') {
+        foreach ($f in (Get-ChildItem -Path $MemoryDir -Filter *.md -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+            if ($f.BaseName.ToLowerInvariant() -eq 'memory') { continue }
+            if ((Get-NoteTicket -Path $f.FullName) -eq "$TicketId" -and $picked.Count -lt $Top) { $picked.Add($f.BaseName) }
+        }
+    }
+    $related = @(Find-RelatedNotes -MemoryDir $MemoryDir -Text $Text -Threshold 0.000001 -Top ($Top * 2) `
+        -DurableOnly -LengthPivot 0.8)
+    if ($related.Count -gt 0) {
+        $floor = [double]$related[0].Score * $Relative
+        foreach ($r in $related) {
+            if ($picked.Count -ge $Top) { break }
+            if ([double]$r.Score -lt $floor) { break }
+            if (-not $picked.Contains($r.Key)) { $picked.Add($r.Key) }
+        }
+    }
+    if ($picked.Count -eq 0) { return $none }
+
+    $sb = New-Object System.Text.StringBuilder
+    $keys = New-Object System.Collections.Generic.List[string]
+    foreach ($k in $picked) {
+        $body = (Get-NoteBody -Path (Join-Path $MemoryDir "$k.md")).Trim()
+        if (-not $body) { continue }
+        if ($body.Length -gt $PerNoteChars) {
+            $body = $body.Substring(0, $PerNoteChars).TrimEnd() + "`n[... the rest is in $k.md ...]"
+        }
+        $block = "### $k`n`n$body`n`n"
+        if ($sb.Length + $block.Length -gt $MaxChars -and $keys.Count -gt 0) { break }
+        [void]$sb.Append($block)
+        $keys.Add($k)
+    }
+    return @{ Keys = @($keys); Text = $sb.ToString().TrimEnd() }
 }
 
 # ---- Holding the index to its budget ----------------------------------------------------------

@@ -2828,6 +2828,21 @@ function Get-SkillText {
 # The skill and the template are hashed as read, before anything is filled in, so the hash names the
 # version of each - not this ticket's copy of it, which would differ on every run.
 $promptTemplate = Get-Content -Path $PromptFile -Raw
+
+# The notes that bear on this ticket, by its own words (Get-RelevantNotes): printed in the prompt so
+# no run has to read the whole index to find them. What was handed over is recorded with the run.
+$relevantNotes = @{ Keys = @(); Text = "" }
+if ($memoryDir) {
+    try {
+        $relevantNotes = Get-RelevantNotes -MemoryDir $memoryDir -TicketId $ticketId `
+            -Text ("$title`n$($Claim.ticket.description)")
+    }
+    catch { Write-Log "  Notes: could not pick this ticket's notes: $($_.Exception.Message)" }
+}
+$relevantNotesText = if (-not $memoryDir) { "(This project has no notes store.)" }
+    elseif ($relevantNotes.Text) { $relevantNotes.Text }
+    else { "(No note in this project's store matched this ticket's words. The index named in step 4 lists them all.)" }
+if (@($relevantNotes.Keys).Count -gt 0) { Write-Log "  Notes in the prompt: $(@($relevantNotes.Keys) -join ', ')" }
 $skillText = Get-SkillText -Path $skillFile
 $runDetail.promptHash = Get-TextHash $promptTemplate
 $runDetail.skillHash  = Get-TextHash $skillText
@@ -2856,6 +2871,8 @@ $prompt = $promptTemplate.
     Replace('{{HOST_NOTE}}', $hostNote).
     Replace('{{STACK_NOTE}}', $stackNote).
     Replace('{{WORKTREE_NOTE}}', $worktreeNote).
+    # Next to last, so a placeholder a note happens to quote is not filled in.
+    Replace('{{RELEVANT_NOTES}}', $relevantNotesText).
     # Last, so nothing the skill happens to say is taken for a placeholder and rewritten.
     Replace('{{SKILL_TEXT}}', $skillText)
 
@@ -3571,7 +3588,8 @@ if (-not $limitReset -and -not $onHost) {
     # Which notes this run used, before reflection's maintenance pass reads the log to decide what to
     # keep. Every run is recorded, with no notes too: that is the count a note's share is out of.
     if ($memoryDir) {
-        Add-NoteUsage -ProjectDataDir $projectDataDir -TicketId $ticketId -Phase $skill -Served @() -Opened @($notesOpened)
+        Add-NoteUsage -ProjectDataDir $projectDataDir -TicketId $ticketId -Phase $skill `
+            -Served @($relevantNotes.Keys) -Opened @($notesOpened)
     }
     Invoke-Reflection -ProjectDataDir $projectDataDir -RepoDir $workDir -RunLog $runLogLines `
         -MemoryDir $memoryDir -TicketId $ticketId -ProjectKey $projectKey `

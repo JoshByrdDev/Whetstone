@@ -94,7 +94,7 @@ Comments on the linked issue are **context**, an extension of the description - 
 1. **Re-read the master notes and the owner's unanswered notes above.** If there are any, restate to yourself what they require of *this* phase before you do anything else, and keep them in mind at every decision point. Open any file an owner's note attached - that file is normally the specific thing the note is about, and a note acted on without reading it is a guess.
 2. **Read the skill.** It is the exact workflow for this phase ({{SKILL}}) in this project, and it is printed in full at the end of this prompt, under *The skill* - read all of it now. It is the text of `{{SKILL_FILE}}`, so there is no need to open that file; open it only if the end of this prompt says the skill could not be included.
 3. **Read the ticket:** call `get_ticket` for #{{TICKET_ID}} to load its description, work items, QA items, comments and any linked `issueKey`. In the comments, the ones with author `Human` are the owner speaking to you - each carries `acknowledged`, any `attachments` with a `localPath` to open, and the `acknowledgement` a previous run left. The unanswered ones are reproduced in full above; this is where you get their **ids**, which `acknowledge_note` needs.
-4. **Load what this repo already knows.** Read `{{MEMORY_INDEX}}` - one line per durable fact recorded about this project - then open the notes beside it in `{{MEMORY_DIR}}` that bear on this ticket. These are facts earlier runs and interactive sessions paid real time to learn: which command hangs, which column is never written, which convention CI enforces, which failure is a known dead end. **Read them before probing to find out.** The store sits in the main repo, outside your worktree, and is read-only to you - you have no tool that writes it, and nothing you learn is recorded by editing it. The working directory's `{{CONVENTIONS_FILE}}` governs code conventions - your CLI may already have loaded it, but read it if not.
+4. **Load what this repo already knows.** The notes from this project's store that bear most on this ticket are printed in full under *What this repo already knows*, just before the skill - picked by matching this ticket's own words against every note, so read them now. They are facts earlier runs and interactive sessions paid real time to learn: which command hangs, which column is never written, which convention CI enforces, which failure is a known dead end. **Read them before probing to find out.** The rest of the store is in `{{MEMORY_DIR}}`, listed one line per note in `{{MEMORY_INDEX}}`; you do not need to read that index as a matter of routine - open it when you hit something the notes below do not cover and suspect it has been learned before, and then open only the notes it points you to. The store sits in the main repo, outside your worktree, and is read-only to you - you have no tool that writes it, and nothing you learn is recorded by editing it. The working directory's `{{CONVENTIONS_FILE}}` governs code conventions - your CLI may already have loaded it, but read it if not.
 5. **Answer the owner's notes**, if there are any: do what each asks as part of the work below, then `acknowledge_note` for each with what you actually changed. The hand-off in the next step is refused until you have.
 6. **Execute the skill** end-to-end for this ticket. The skill is responsible for moving the ticket to its next phase when done (e.g. speculate -> NeedsApproval, implement -> NeedsImplementationReview, qa-test -> NeedsRefinement or back to NeedsImplementation). Some of those are optional human gates the dashboard skips automatically when the ticket doesn't require them, so always hand off to the phase your skill names and let the dashboard route from there.
 7. If you cannot honestly finish, **block the ticket** - see below - and stop.
@@ -155,6 +155,12 @@ Output a one-line summary:
 ```
 Ticket {{TICKET_ID}} ({{PROJECT_KEY}}): {ACTION} - {brief result}
 ```
+
+---
+
+## What this repo already knows
+
+{{RELEVANT_NOTES}}
 
 ---
 

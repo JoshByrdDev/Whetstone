@@ -130,6 +130,30 @@ Check 'maintenance: the index is brought under budget' ((Get-Item (Join-Path $s.
 Check 'maintenance: it files nothing for a human' (Test-Path (Join-Path $s.proj 'improvement-suggestions.md')) $false
 Check 'maintenance: it says what it did' ([bool]($script:log | Where-Object { $_ -like '*evicted*' })) $true
 
+# ---- The notes a run is handed ----
+$s = New-Store -Name 'relevant'
+Add-Note $s.mem 'invoice-rounding' 'Invoice totals are rounded per line in billing/totals.ts, never on the sum; the tax line is computed from the rounded lines.'
+Add-Note $s.mem 'invoice-pdf-fonts' 'The invoice PDF renderer needs the bundled fonts copied into public/fonts before it can draw totals.'
+Add-Note $s.mem 'emulator-cold-boot' 'The phone emulator needs a cold boot after the host sleeps or it never reaches the dev server.'
+Add-Note $s.mem 'compose-volumes' 'docker compose down keeps the database volume; add -v to start from an empty database.'
+Add-Note $s.mem 'seed-takes-minutes' 'The seed script takes about four minutes on a fresh database and prints nothing while it works.'
+[void](Write-MemoryNote -MemoryDir $s.mem -Key 'ours-migration' -Text 'Migration 0137 is this branch''s.' -Stamp '2026-11-01 10:00' -Ticket '42')
+[void](Write-MemoryNote -MemoryDir $s.mem -Key 'theirs-invoice' -Text 'Invoice totals for the other branch are rounded on the sum in billing/totals.ts while it is open.' -Stamp '2026-11-01 10:00' -Ticket '43')
+$ticket = "Invoice totals are off by a cent`nThe invoice total in billing/totals.ts disagrees with the sum of its rounded lines when tax applies."
+$r = Get-RelevantNotes -MemoryDir $s.mem -Text $ticket -TicketId '42'
+Check 'relevant: this ticket''s own note comes first' $r.Keys[0] 'ours-migration'
+Check 'relevant: the note about its subject is included' ($r.Keys -contains 'invoice-rounding') $true
+Check 'relevant: another ticket''s note never is' ($r.Keys -contains 'theirs-invoice') $false
+Check 'relevant: a note about something else is not' ($r.Keys -contains 'emulator-cold-boot') $false
+Check 'relevant: the text is the notes themselves' ($r.Text -match 'rounded per line in billing/totals.ts') $true
+Check 'relevant: and carries no frontmatter' ($r.Text -match 'node_type') $false
+$r = Get-RelevantNotes -MemoryDir $s.mem -Text $ticket -TicketId '42' -Top 1
+Check 'relevant: no more than asked for' "$($r.Keys.Count) $($r.Keys[0])" '1 ours-migration'
+$r = Get-RelevantNotes -MemoryDir $s.mem -Text $ticket -TicketId '7' -PerNoteChars 30
+Check 'relevant: a long note is cut and says where the rest is' ($r.Text -match 'the rest is in invoice-rounding.md') $true
+$r = Get-RelevantNotes -MemoryDir (Join-Path $root 'no-such-store') -Text $ticket -TicketId '42'
+Check 'relevant: no store, no notes' "$($r.Keys.Count)[$($r.Text)]" '0[]'
+
 Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
