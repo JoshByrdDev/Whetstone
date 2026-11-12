@@ -99,7 +99,7 @@ function Invoke-Case {
 
 $fact    = '[{"kind":"codebase","key":"migrations-need-bom","text":"Migration files must start with a UTF-8 BOM.","confidence":"high"}]'
 $twoKind = '[{"kind":"environment","key":"db-on-1433","text":"The database listens on localhost,1433.","confidence":"high"},' +
-           '{"kind":"process","key":"skill-wording","text":"The implement skill should say so.","confidence":"low"}]'
+           '{"kind":"process","key":"skill-wording","text":"The implement skill should say so.","confidence":"high"}]'
 
 # --- An empty answer is an answer, with or without the CLI warning ahead of it ---
 $r = Invoke-Case -Name 'empty-quiet' -Reply '[]'
@@ -110,7 +110,7 @@ Check 'empty reply behind a stderr warning: still nothing new' $r.last 'Reflecti
 
 # --- A fact lands in the notes store, and its key is claimed only alongside it ---
 $r = Invoke-Case -Name 'fact-quiet' -Reply $fact
-Check 'one fact: reported as written' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 0 filed for review, 0 filed as tickets, 0 already known'
+Check 'one fact: reported as written' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 0 filed for review, 0 filed as tickets, 0 already known, 0 dropped as guesses'
 Check 'one fact: the note exists' (Test-Path (Join-Path $r.mem 'migrations-need-bom.md')) $true
 Check 'one fact: its key is recorded' ((Get-Content (Join-Path $r.proj 'reflection-keys.txt')) -join ',') 'migrations-need-bom'
 
@@ -119,17 +119,38 @@ Check 'one fact behind a stderr warning: the note exists' (Test-Path (Join-Path 
 
 # --- Routing: first-hand repo and machine facts are written, pipeline proposals wait for a human ---
 $r = Invoke-Case -Name 'routing' -Reply $twoKind -Warn
-Check 'routing: one written, one filed' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 1 filed for review, 0 filed as tickets, 0 already known'
+Check 'routing: one written, one filed' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 1 filed for review, 0 filed as tickets, 0 already known, 0 dropped as guesses'
 Check 'routing: the environment fact is a note' (Test-Path (Join-Path $r.mem 'db-on-1433.md')) $true
 Check 'routing: the process proposal is not a note' (Test-Path (Join-Path $r.mem 'skill-wording.md')) $false
 Check 'routing: the process proposal is in the review file' `
     ([bool](Select-String -Path (Join-Path $r.proj 'improvement-suggestions.md') -Pattern 'key: skill-wording' -Quiet)) $true
 
+# --- A guess is dropped, whatever its kind, and its key is left for a run that sees it ---
+$guesses = '[{"kind":"codebase","key":"maybe-cache","text":"The cache is probably rebuilt on every request.","confidence":"low"},' +
+           '{"kind":"process","key":"maybe-skill","text":"The QA skill seems to forbid reseeding, which looks wrong.","confidence":"low"},' +
+           '{"kind":"environment","key":"no-confidence","text":"The emulator wants a cold boot."}]'
+$r = Invoke-Case -Name 'guesses' -Reply $guesses
+Check 'guesses: all three dropped' $r.last 'Reflection: 0 written to notes, 0 folded into existing notes, 0 filed for review, 0 filed as tickets, 0 already known, 3 dropped as guesses'
+Check 'guesses: no note' (@(Get-ChildItem $r.mem -Filter '*.md' | Where-Object { $_.Name -ne 'MEMORY.md' }).Count) 0
+Check 'guesses: nothing queued' (Test-Path (Join-Path $r.proj 'improvement-suggestions.md')) $false
+Check 'guesses: no key claimed' (Test-Path (Join-Path $r.proj 'reflection-keys.txt')) $false
+
+# --- A fact with no store to go to is not queued either ---
+$dir = Join-Path $root 'no-store'; $proj = Join-Path $dir 'proj'
+New-Item -ItemType Directory -Path $proj -Force | Out-Null
+Set-Content -Path (Join-Path $proj 'reflect-prompt.md') -Value 'Look.' -Encoding ascii
+Set-Content -Path (Join-Path $dir 'reply.txt') -Value $fact -Encoding ascii
+$env:FAKE_REPLY = Join-Path $dir 'reply.txt'
+$script:log.Clear()
+Invoke-Reflection -ProjectDataDir $proj -RepoDir $dir -RunLog (1..10 | ForEach-Object { "line $_" }) -MemoryDir '' -TicketId 'PROJ-1' -ProjectKey 'alpha' 2>$null
+Check 'no store: the fact is not queued' (Test-Path (Join-Path $proj 'improvement-suggestions.md')) $false
+Check 'no store: its key is handed back' ((@(Get-Content (Join-Path $proj 'reflection-keys.txt') | Where-Object { $_ })).Count) 0
+
 # --- A bug seen in passing is a Backlog ticket, never a note and never a queued suggestion ---
 $defect = '[{"kind":"defect","key":"invoice-total-drops-tax","text":"InvoiceTotals.Sum in billing/totals.ts adds line items but drops the tax line, so every invoice total is short by its tax.","confidence":"high"}]'
 $script:filed.Clear()
 $r = Invoke-Case -Name 'defect' -Reply $defect
-Check 'defect: reported as a ticket' $r.last 'Reflection: 0 written to notes, 0 folded into existing notes, 0 filed for review, 1 filed as tickets, 0 already known'
+Check 'defect: reported as a ticket' $r.last 'Reflection: 0 written to notes, 0 folded into existing notes, 0 filed for review, 1 filed as tickets, 0 already known, 0 dropped as guesses'
 Check 'defect: the board was asked once, for this project' "$($script:filed.Count) $($script:filed[0].Project)" '1 alpha'
 Check 'defect: the ticket says which run found it' $script:filed[0].FoundOn 'PROJ-defect'
 Check 'defect: no note was written' (Test-Path (Join-Path $r.mem 'invoice-total-drops-tax.md')) $false

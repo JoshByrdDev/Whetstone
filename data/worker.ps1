@@ -1713,7 +1713,9 @@ workflow change as "codebase" because it involves this repo. The test is only ev
 - "confidence"  - about YOUR EVIDENCE, and nothing else:
     "high" - you saw this happen in this run's log. You are reporting an observation.
     "low"  - you are inferring it, generalising from one case, or reconstructing what probably
-             happened. You are reporting a guess.
+             happened. You are reporting a guess. A guess is DROPPED, whatever its kind: it is not
+             written anywhere, and its key is not marked known, so the run that actually sees it
+             can still report it. Only say "low" when that is what it deserves.
   Do not lower it because the fact might get fixed later, or because you are unsure how long it will
   hold. How durable a fact is, is not something you can know from one run, and it is not what this
   field is for - a bug you watched happen is "high" even though someone may fix it tomorrow. Judging
@@ -1964,6 +1966,7 @@ function Invoke-Reflection {
         $claim = Invoke-WithMutex -Name "reflect-$ProjectDataDir" -TimeoutMs 60000 -Body {
             $accepted  = New-Object System.Collections.Generic.List[object]
             $duplicate = 0
+            $guesses   = 0
 
             $live = New-Object System.Collections.Generic.List[string]
             foreach ($k in (Get-ReflectKeys -Path $keysFile)) { [void]$live.Add($k) }
@@ -1978,18 +1981,26 @@ function Invoke-Reflection {
 
                 if ($live.Contains($key)) { $duplicate++; continue }
 
+                # A guess goes nowhere. The contract defines "low" as inference rather than
+                # observation, and the queue those used to land in was the evidence: of seventeen
+                # items one was actionable and one was plainly wrong - reflection had read a correct
+                # skill rule as a mistake. Not claimed either, so a later run that SEES the thing
+                # can still report it first-hand.
+                $confidence = "$($f.confidence)".Trim().ToLowerInvariant()
+                if ($confidence -ne 'high') { $guesses++; continue }
+
                 [void]$accepted.Add([pscustomobject]@{
                     Key        = $key
                     Text       = $text
                     Kind       = "$($f.kind)".Trim().ToLowerInvariant()
-                    Confidence = "$($f.confidence)".Trim().ToLowerInvariant()
+                    Confidence = $confidence
                 })
 
                 Add-Utf8Text -Path $keysFile -Text ($key + [Environment]::NewLine)
                 [void]$live.Add($key)   # so a reply that repeats itself cannot file the same fact twice
             }
 
-            return @{ accepted = $accepted; duplicate = $duplicate }
+            return @{ accepted = $accepted; duplicate = $duplicate; guesses = $guesses }
         }
 
         $promoted = 0; $merged = 0; $filed = 0; $ticketed = 0
@@ -2007,9 +2018,15 @@ function Invoke-Reflection {
             # review list once sat at ~50 unactioned items, so anything that only lands there lands
             # nowhere.
             #
-            # Everything else - anything about how the pipeline itself should behave, and anything
-            # the model is only inferring rather than reporting - is a proposal, not a fact, and it
-            # waits for a human.
+            # A change to how the pipeline itself should behave is a proposal, not a fact, and it
+            # waits for a human in the Suggestions queue - the only thing that queue now holds.
+            # Guesses were dropped in phase one.
+            if ($a.Kind -eq 'process') {
+                Add-Utf8Text -Path $suggestionsFile -Text ("`n- [ ] [process] $($a.Text)  (key: $($a.Key), $stamp)`n")
+                $filed++
+                continue
+            }
+
             # A bug is neither a fact nor a proposal about the pipeline: it is work for the owner, and
             # it goes where work goes (New-DefectTicket says why not the notes or the queue). It is
             # never written into the store, not even as the fallback when the board cannot be reached
@@ -2028,7 +2045,7 @@ function Invoke-Reflection {
             }
 
             $landed = $false
-            if ($a.Confidence -eq 'high' -and ($a.Kind -eq 'environment' -or $a.Kind -eq 'codebase') -and $MemoryDir) {
+            if (($a.Kind -eq 'environment' -or $a.Kind -eq 'codebase') -and $MemoryDir) {
 
                 # Does this already have a home? The old code asked only whether the KEY existed,
                 # which is why a fact already written up under a different name was filed for a
@@ -2054,10 +2071,12 @@ function Invoke-Reflection {
             }
 
             if (-not $landed) {
-                # Also the fallback when there is no store to write to (a project with no repo), so a
-                # fact is never silently dropped for want of somewhere to put it.
-                Add-Utf8Text -Path $suggestionsFile -Text ("`n- [ ] [$($a.Kind)] $($a.Text)  (key: $($a.Key), $stamp)`n")
-                $filed++
+                # A fact with nowhere to go - a project with no notes store, a kind the contract does
+                # not have, a write that failed. Not queued: the queue is for changes to the pipeline,
+                # and a fact parked there was a fact nobody read. Said in the log, and its key handed
+                # back so a run with somewhere to put it can.
+                Remove-ReflectKey -Path $keysFile -Key $a.Key -LockName "reflect-$ProjectDataDir"
+                Write-Log "  Reflection: nowhere to put '$($a.Key)' ($($a.Kind)) - not recorded"
             }
         }
 
@@ -2065,8 +2084,8 @@ function Invoke-Reflection {
             Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Reflection after $TicketId : $promoted new, $merged merged"
         }
 
-        if ($promoted -or $merged -or $filed -or $ticketed -or $claim.duplicate) {
-            Write-Log "  Reflection: $promoted written to notes, $merged folded into existing notes, $filed filed for review, $ticketed filed as tickets, $($claim.duplicate) already known"
+        if ($promoted -or $merged -or $filed -or $ticketed -or $claim.duplicate -or $claim.guesses) {
+            Write-Log "  Reflection: $promoted written to notes, $merged folded into existing notes, $filed filed for review, $ticketed filed as tickets, $($claim.duplicate) already known, $($claim.guesses) dropped as guesses"
         }
         else { Write-Log "  Reflection: nothing new" }
 
