@@ -115,6 +115,22 @@ function Get-NoteBody {
     return $raw
 }
 
+# The ticket a note belongs to, or $null for a durable fact. A note learned during one ticket that
+# names that ticket - its migration numbers, its branch, the clash between it and another - is true
+# only while that ticket is open, and carries `ticket: <id>` in its metadata so it can be retired
+# when the ticket is done (Remove-FinishedTicketNotes). Read from the frontmatter only: a body that
+# happens to say "ticket: 12" is prose, not a tag.
+function Get-NoteTicket {
+    param([string]$Path, [string]$Raw)
+    if (-not $Raw) { $Raw = Read-NoteText -Path $Path }
+    if (-not $Raw -or -not $Raw.StartsWith("---")) { return $null }
+    $end = $Raw.IndexOf("`n---", 3)
+    if ($end -lt 0) { return $null }
+    $front = $Raw.Substring(0, $end)
+    if ($front -match '(?m)^\s*ticket:\s*#?(\d+)\s*$') { return $Matches[1] }
+    return $null
+}
+
 # Distinctive tokens: identifiers, endpoint fragments, file names, error codes. Three characters is
 # the floor, low enough to keep "500" and "cte" and high enough to drop most grammar; the stop list
 # and the frequency weighting below handle the rest. Punctuation is a separator, so
@@ -166,8 +182,11 @@ function Get-NoteTokens {
 # 0.466 and a wrong one 0.419 on the same finding. So the matcher is deliberately recall-first, and
 # the judgement is left to the model in Resolve-FactPlacement, which sees the actual prose and can
 # answer NEW. Cheap and approximate here, expensive and accurate there.
+#
+# -DurableOnly leaves out notes that belong to one ticket. A durable fact folded into one of those
+# would be deleted with it when that ticket is done.
 function Find-RelatedNotes {
-    param([string]$MemoryDir, [string]$Text, [double]$Threshold = 0.25, [int]$Top = 3)
+    param([string]$MemoryDir, [string]$Text, [double]$Threshold = 0.25, [int]$Top = 3, [switch]$DurableOnly)
 
     if (-not $MemoryDir -or -not (Test-Path $MemoryDir)) { return $null }
     $findingTokens = Get-NoteTokens -Text $Text
@@ -175,6 +194,7 @@ function Find-RelatedNotes {
 
     $notes = @(Get-ChildItem -Path $MemoryDir -Filter *.md -File -ErrorAction SilentlyContinue |
         Where-Object { $_.BaseName.ToLowerInvariant() -ne 'memory' })
+    if ($DurableOnly) { $notes = @($notes | Where-Object { -not (Get-NoteTicket -Path $_.FullName) }) }
     if ($notes.Count -lt 2) { return $null }
 
     # One pass to read every note and count how many contain each token. The key joins the body for
@@ -333,7 +353,8 @@ function Get-NoteTitle {
 # The store lives in the HUB repo, never the worker's worktree: a worktree belongs to one ticket and
 # is thrown away with it, so a fact written there would be learned and lost in the same cycle.
 function Write-MemoryNote {
-    param([string]$MemoryDir, [string]$Key, [string]$Text, [string]$Stamp, [string]$Source = 'heartbeat-reflection')
+    param([string]$MemoryDir, [string]$Key, [string]$Text, [string]$Stamp, [string]$Source = 'heartbeat-reflection',
+        [string]$Ticket)
 
     if (-not $MemoryDir) { return $false }
     try {
@@ -342,7 +363,7 @@ function Write-MemoryNote {
         if (Test-Path $file) { return $false }
 
         $summary = Get-NoteSummary -Text $Text
-        $body = @(
+        $meta = @(
             "---",
             "name: $Key",
             "description: `"$summary`"",
@@ -351,12 +372,11 @@ function Write-MemoryNote {
             "  type: project",
             "  source: $Source",
             "  learned: $Stamp",
-            "  last-confirmed: $Stamp",
-            "---",
-            "",
-            $Text,
-            ""
-        ) -join "`n"
+            "  last-confirmed: $Stamp"
+        )
+        # Its own line in the frontmatter, so Get-NoteTicket finds it and nothing in the prose does.
+        if ("$Ticket".Trim()) { $meta += "  ticket: $("$Ticket".Trim())" }
+        $body = (@($meta) + @("---", "", $Text, "")) -join "`n"
         [System.IO.File]::WriteAllText($file, $body, (New-Object System.Text.UTF8Encoding($false)))
         Add-IndexLine -MemoryDir $MemoryDir -Key $Key -Title (Get-NoteTitle -Key $Key) -Summary $summary
         return $true
@@ -548,7 +568,7 @@ function Add-LearnedFact {
     if (-not $MemoryDir -or -not $Text) { return $none }
     if (-not (Test-Path $MemoryDir)) { New-Item -ItemType Directory -Path $MemoryDir -Force | Out-Null }
 
-    $candidates = @(Find-RelatedNotes -MemoryDir $MemoryDir -Text $Text)
+    $candidates = @(Find-RelatedNotes -MemoryDir $MemoryDir -Text $Text -DurableOnly)
     if ($candidates.Count -gt 0 -and $ReflectCmd) {
         $placement = Resolve-FactPlacement -MemoryDir $MemoryDir -Text $Text -Candidates $candidates `
             -Stamp $Stamp -ReflectCmd $ReflectCmd -RepoDir $RepoDir
@@ -599,6 +619,51 @@ function Get-StaleNotes {
     return $stale
 }
 
+
+# ---- Notes about one ticket ------------------------------------------------------------------
+
+# Retire the notes that belong to a ticket that is finished. Run by the maintenance pass after every
+# reflection rather than by a hook on Done in the board, because this script is the store's one
+# automated writer: it holds the index mutex, commits the store before and after, and is the only
+# code that already knows where a project's store is and how to keep its git history. A hook in the
+# board would be a second writer into a nested repo it otherwise never touches - and a ticket that
+# reached Done while the board was down would never fire it, where the next pass here still sees it.
+#
+# $PhaseOf is handed a ticket id and answers its phase name, 'Gone' when the board says there is no
+# such ticket, or $null when it could not be asked - and $null keeps the note: a board that is down
+# is not evidence the ticket is finished. One question per ticket, however many notes it has.
+#
+# Returns the keys removed.
+function Remove-FinishedTicketNotes {
+    param([string]$MemoryDir, [scriptblock]$PhaseOf)
+
+    if (-not $MemoryDir -or -not (Test-Path $MemoryDir) -or -not $PhaseOf) { return @() }
+    $byTicket = @{}
+    foreach ($f in (Get-ChildItem -Path $MemoryDir -Filter *.md -File -ErrorAction SilentlyContinue)) {
+        if ($f.BaseName.ToLowerInvariant() -eq 'memory') { continue }
+        $t = Get-NoteTicket -Path $f.FullName
+        if (-not $t) { continue }
+        if (-not $byTicket.ContainsKey($t)) { $byTicket[$t] = New-Object System.Collections.Generic.List[string] }
+        $byTicket[$t].Add($f.BaseName)
+    }
+
+    $removed = New-Object System.Collections.Generic.List[string]
+    foreach ($t in @($byTicket.get_Keys())) {
+        $phase = $null
+        try { $phase = & $PhaseOf $t } catch { $phase = $null }
+        if ("$phase" -ne 'Done' -and "$phase" -ne 'Gone') { continue }
+        if ($removed.Count -eq 0) { Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Before retiring notes of finished tickets" }
+        foreach ($k in $byTicket[$t]) {
+            Remove-Item (Join-Path $MemoryDir "$k.md") -Force -ErrorAction SilentlyContinue
+            Remove-IndexLine -MemoryDir $MemoryDir -Key $k
+            $removed.Add($k)
+        }
+    }
+    if ($removed.Count -gt 0) {
+        Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Retired $($removed.Count) notes of finished tickets: $($removed -join ', ')"
+    }
+    return @($removed)
+}
 
 # ---- Maintenance ------------------------------------------------------------------------------
 
@@ -713,8 +778,10 @@ function Get-NotePairScores {
 function Get-NoteClusters {
     param([string]$MemoryDir, [double]$Threshold = 0.45, [int]$Max = 3)
 
+    # A note about one ticket is not merged: it is retired with that ticket, and folding it into a
+    # durable note would make it outlive the ticket (or take the durable fact down with it).
     $notes = @(Get-ChildItem -Path $MemoryDir -Filter *.md -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.BaseName.ToLowerInvariant() -ne 'memory' })
+        Where-Object { $_.BaseName.ToLowerInvariant() -ne 'memory' -and -not (Get-NoteTicket -Path $_.FullName) })
     if ($notes.Count -lt 3) { return @() }
 
     $tokens = @{}
@@ -840,10 +907,17 @@ $rawB
 function Invoke-NoteStoreMaintenance {
     param(
         [string]$MemoryDir, [string]$ProjectDataDir, $ReflectCmd, [string]$RepoDir,
-        [int]$IndexLineLimit = 120, [int]$MaxMerges = 3, [int]$MinHoursBetween = 20
+        [int]$IndexLineLimit = 120, [int]$MaxMerges = 3, [int]$MinHoursBetween = 20,
+        [scriptblock]$TicketPhaseOf
     )
 
     if (-not $MemoryDir -or -not (Test-Path $MemoryDir)) { return }
+
+    # Every pass, not only when the index is big: it is cheap (a frontmatter read per note, one board
+    # question per ticket that has notes), and a finished ticket's notes are wrong from that moment.
+    $retired = @(Remove-FinishedTicketNotes -MemoryDir $MemoryDir -PhaseOf $TicketPhaseOf)
+    if ($retired.Count -gt 0) { Write-Log "  Notes: retired $($retired.Count) about finished tickets: $($retired -join ', ')" }
+
     $index = Join-Path $MemoryDir "MEMORY.md"
     if (-not (Test-Path $index)) { return }
 

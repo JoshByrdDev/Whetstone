@@ -1679,7 +1679,8 @@ Each element:
     "kind":       "environment" | "codebase" | "defect" | "process",
     "key":        "short-kebab-case-id",
     "text":       "One or two sentences. Specific enough to act on without this run's context.",
-    "confidence": "high" | "low"
+    "confidence": "high" | "low",
+    "ticket":     true | false
   }
 
 - "environment" - a durable fact about THIS machine or stack: a port, a path, a credential location,
@@ -1722,6 +1723,10 @@ workflow change as "codebase" because it involves this repo. The test is only ev
   durability here is what used to send first-hand discoveries to a human review queue at random.
 - "key"         - a stable identifier for the fact, so the same discovery made twice is recognised as
   one fact. Name the thing, not the incident: "migration-files-need-bom", not "bom-issue-today".
+- "ticket"      - true when the fact is only true while THIS ticket is open: it names this ticket,
+  its branch, or something it took - a migration number, a seeded row, a clash with another open
+  ticket over the same number. Such a note is kept until the ticket is done and then deleted.
+  false (or left out) for a fact about the repo or machine that outlives the ticket.
 
 WORTH REPORTING (real examples from this system):
   - migration .cs files must start with a UTF-8 BOM to match the existing convention
@@ -1814,6 +1819,37 @@ function New-DefectTicket {
     return $null
 }
 
+# Whether a finding is about the ticket it was learned on rather than about the repo. The model is
+# asked (the contract's "ticket" field); this is the half that does not depend on it remembering:
+# a finding that names the ticket, its tracker key or its branch is about that ticket. A fifth of
+# one project's store was facts like these - two tickets taking the same migration number, a row
+# one ticket seeded - none of which ever expired.
+function Test-FindingNamesTicket {
+    param([string]$Text, [string]$TicketId, [string]$IssueKey, [string]$Branch)
+    if (-not $Text) { return $false }
+    if ($TicketId -match '^\d+$' -and $Text -match "(?i)((?<![\w&])#$TicketId\b|\bticket\s*#?$TicketId\b)") { return $true }
+    if ($IssueKey -and $Text -match ("(?i)(?<![\w-])" + [regex]::Escape($IssueKey) + "(?![\w])")) { return $true }
+    if ($Branch -and $Branch.Length -ge 6 -and $Text.IndexOf($Branch, [StringComparison]::OrdinalIgnoreCase) -ge 0) { return $true }
+    return $false
+}
+
+# A ticket's phase on the board, for retiring the notes that belong to it: its phase name, 'Gone'
+# when the board says it does not exist, $null when the board could not be asked.
+function Get-BoardTicketPhase {
+    param([string]$TicketId)
+    if (-not $DashboardUrl -or -not $TicketId) { return $null }
+    try {
+        $t = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets/$TicketId" -TimeoutSec 5
+        return "$($t.phase)"
+    }
+    catch {
+        $code = $null
+        try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+        if ($code -eq 404) { return 'Gone' }
+        return $null
+    }
+}
+
 # Give a key back: a finding claimed in phase one that could not be placed in phase two (a defect the
 # board would not take) is not "known", and leaving its key claimed would stop the next run that
 # sees the same thing from filing it.
@@ -1837,7 +1873,8 @@ function Remove-ReflectKey {
 # facts go to $MemoryDir, the notes store inside the project's own repo. The reflection claude call
 # runs in $RepoDir (the worktree the run just used).
 function Invoke-Reflection {
-    param($ProjectDataDir, $RepoDir, $RunLog, $MemoryDir, $TicketId, [string]$ProjectKey)
+    param($ProjectDataDir, $RepoDir, $RunLog, $MemoryDir, $TicketId, [string]$ProjectKey,
+        [string]$IssueKey, [string]$Branch)
 
     if (-not $ProjectDataDir) { return }
     # The project's reflect-prompt.md is still the switch: delete it and this project stops
@@ -1994,6 +2031,9 @@ function Invoke-Reflection {
                     Text       = $text
                     Kind       = "$($f.kind)".Trim().ToLowerInvariant()
                     Confidence = $confidence
+                    # Either the model said so or the text names the ticket; see Test-FindingNamesTicket.
+                    Ticket     = (($f.ticket -eq $true) -or "$($f.ticket)" -eq 'true' -or
+                                  (Test-FindingNamesTicket -Text $text -TicketId $TicketId -IssueKey $IssueKey -Branch $Branch))
                 })
 
                 Add-Utf8Text -Path $keysFile -Text ($key + [Environment]::NewLine)
@@ -2052,7 +2092,12 @@ function Invoke-Reflection {
                 # human to notice by hand. Find-RelatedNotes proposes; Resolve-FactPlacement, which
                 # is the half that reads actual prose, decides - and answers 'new' for free when
                 # there is nothing close enough to be worth an agent call.
-                $candidates = @(Find-RelatedNotes -MemoryDir $MemoryDir -Text $a.Text)
+                #
+                # A fact about this ticket is never folded: into a durable note it would outlive the
+                # ticket, and a durable fact is never folded into one of these, which are deleted
+                # when their ticket is done. It is its own note, tagged with the ticket.
+                $noteTicket = if ($a.Ticket -and "$TicketId" -match '^\d+$') { "$TicketId" } else { "" }
+                $candidates = if ($a.Ticket) { @() } else { @(Find-RelatedNotes -MemoryDir $MemoryDir -Text $a.Text -DurableOnly) }
                 $placement  = @{ Outcome = 'new' }
                 if ($candidates.Count -gt 0) {
                     $placement = Resolve-FactPlacement -MemoryDir $MemoryDir -Text $a.Text `
@@ -2064,7 +2109,7 @@ function Invoke-Reflection {
                     $merged++
                     $landed = $true
                 }
-                elseif (Write-MemoryNote -MemoryDir $MemoryDir -Key $a.Key -Text $a.Text -Stamp $stamp) {
+                elseif (Write-MemoryNote -MemoryDir $MemoryDir -Key $a.Key -Text $a.Text -Stamp $stamp -Ticket $noteTicket) {
                     $promoted++
                     $landed = $true
                 }
@@ -2094,10 +2139,14 @@ function Invoke-Reflection {
         # window. It is a no-op unless the index has crossed its line limit and a day has passed, so
         # the common case costs one file read.
         Invoke-NoteStoreMaintenance -MemoryDir $MemoryDir -ProjectDataDir $ProjectDataDir `
-            -ReflectCmd $reflectCmd -RepoDir $RepoDir
+            -ReflectCmd $reflectCmd -RepoDir $RepoDir -TicketPhaseOf $script:TicketPhaseOf
     }
     catch { Write-Log "  Reflection error: $($_.Exception.Message)" }
 }
+
+# How the maintenance pass asks the board whether a ticket is finished. A variable, so the tests can
+# answer for the board.
+$script:TicketPhaseOf = { param($id) Get-BoardTicketPhase -TicketId $id }
 
 # ---- The cycle -------------------------------------------------------------------------------
 
@@ -3508,7 +3557,8 @@ Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
 # reflect-prompt.md either, which would stop it on its own; this says so where it is decided.
 if (-not $limitReset -and -not $onHost) {
     Invoke-Reflection -ProjectDataDir $projectDataDir -RepoDir $workDir -RunLog $runLogLines `
-        -MemoryDir $memoryDir -TicketId $ticketId -ProjectKey $projectKey
+        -MemoryDir $memoryDir -TicketId $ticketId -ProjectKey $projectKey `
+        -IssueKey "$($Claim.ticket.issueKey)" -Branch "$($Claim.ticket.branch)"
 }
 
 # Last, because reflection is the final thing that runs the agent CLI and it needs the same setup.

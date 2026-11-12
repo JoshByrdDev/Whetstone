@@ -75,7 +75,7 @@ $ReflectEffort = 'medium'
 # One reflection over a fresh project folder and notes store. $Reply of $null means the CLI prints
 # nothing on stdout at all.
 function Invoke-Case {
-    param([string]$Name, $Reply, [switch]$Warn)
+    param([string]$Name, $Reply, [switch]$Warn, [string]$TicketId, [string]$IssueKey)
 
     $dir  = Join-Path $root $Name
     $proj = Join-Path $dir 'proj'
@@ -92,7 +92,8 @@ function Invoke-Case {
 
     $script:log.Clear()
     Invoke-Reflection -ProjectDataDir $proj -RepoDir $repo -RunLog (1..10 | ForEach-Object { "line $_" }) `
-        -MemoryDir $mem -TicketId "PROJ-$Name" -ProjectKey 'alpha' 2>$null
+        -MemoryDir $mem -TicketId $(if ($TicketId) { $TicketId } else { "PROJ-$Name" }) -ProjectKey 'alpha' `
+        -IssueKey $IssueKey -Branch '' 2>$null
 
     return @{ proj = $proj; mem = $mem; last = $script:log[$script:log.Count - 1].Trim() }
 }
@@ -164,6 +165,58 @@ $script:boardDown = $false
 Check 'defect, board down: no note' (Test-Path (Join-Path $r.mem 'invoice-total-drops-tax.md')) $false
 Check 'defect, board down: not queued' (Test-Path (Join-Path $r.proj 'improvement-suggestions.md')) $false
 Check 'defect, board down: key left unclaimed' ((@(Get-Content (Join-Path $r.proj 'reflection-keys.txt') | Where-Object { $_ })).Count) 0
+
+# --- A fact about one ticket is tagged with it, and retired when that ticket is done ---
+# The board, as the maintenance pass asks it: ticket 42 is done, 43 is in QA, 44 is gone, and 45
+# cannot be asked. Every case below runs through Invoke-Reflection, which runs the pass.
+$script:phases = @{ '42' = 'Done'; '43' = 'NeedsQa'; '44' = 'Gone' }
+$script:TicketPhaseOf = { param($id) if ($script:phases.ContainsKey("$id")) { $script:phases["$id"] } else { $null } }
+
+$scoped = '[{"kind":"codebase","key":"migration-clash-0137","text":"Migration 0137 is taken by this branch; the other open ticket must renumber.","confidence":"high","ticket":true}]'
+$r = Invoke-Case -Name 'scoped-flag' -Reply $scoped -TicketId '43'
+Check 'ticket fact, flagged: tagged with its ticket' (Get-NoteTicket -Path (Join-Path $r.mem 'migration-clash-0137.md')) '43'
+
+$named = '[{"kind":"codebase","key":"seeded-row","text":"Ticket #43 seeded an extra advisor row into the local database for its QA pass.","confidence":"high"}]'
+$r = Invoke-Case -Name 'scoped-named' -Reply $named -TicketId '43'
+Check 'ticket fact, named in the text: tagged anyway' (Get-NoteTicket -Path (Join-Path $r.mem 'seeded-row.md')) '43'
+
+$byKey = '[{"kind":"codebase","key":"issue-fixture","text":"PROJ-77 needs the fixture user to be an admin.","confidence":"high"}]'
+$r = Invoke-Case -Name 'scoped-issue' -Reply $byKey -TicketId '43' -IssueKey 'PROJ-77'
+Check 'ticket fact, naming its tracker key: tagged' (Get-NoteTicket -Path (Join-Path $r.mem 'issue-fixture.md')) '43'
+
+$r = Invoke-Case -Name 'durable' -Reply $fact -TicketId '43'
+Check 'a durable fact is not tagged' "[$(Get-NoteTicket -Path (Join-Path $r.mem 'migrations-need-bom.md'))]" '[]'
+Check 'a mention of #430 is not ticket 43' (Test-FindingNamesTicket -Text 'See #430 for the port.' -TicketId '43') $false
+
+# Retiring: done and gone go, open and unknown stay, and the index loses their lines.
+$emem = Join-Path $root 'expire\memory'
+New-Item -ItemType Directory -Path $emem -Force | Out-Null
+Set-Content -Path (Join-Path $emem 'MEMORY.md') -Value '# Notes' -Encoding ascii
+foreach ($t in '42', '43', '44', '45') {
+    [void](Write-MemoryNote -MemoryDir $emem -Key "about-$t" -Text "Something only ticket $t needs to know." -Stamp '2026-11-01 10:00' -Ticket $t)
+}
+[void](Write-MemoryNote -MemoryDir $emem -Key 'durable-port' -Text 'The API listens on port 5100 locally.' -Stamp '2026-11-01 10:00')
+$gone = @(Remove-FinishedTicketNotes -MemoryDir $emem -PhaseOf $script:TicketPhaseOf | Sort-Object)
+Check 'retire: the done and the gone ticket notes' ($gone -join ',') 'about-42,about-44'
+Check 'retire: open, unknown and durable notes stay' ((@(Get-ChildItem $emem -Filter 'about-*.md' | ForEach-Object BaseName) + @(Get-ChildItem $emem -Filter 'durable-*.md' | ForEach-Object BaseName) | Sort-Object) -join ',') 'about-43,about-45,durable-port'
+$idx = [IO.File]::ReadAllText((Join-Path $emem 'MEMORY.md'))
+Check 'retire: the index lost their lines' (($idx -match 'about-42') -or ($idx -match 'about-44')) $false
+Check 'retire: the index kept the rest' (($idx -match 'about-43') -and ($idx -match 'durable-port')) $true
+
+# The pass runs it on every reflection, however small the index.
+$r = Invoke-Case -Name 'scoped-done' -Reply $scoped -TicketId '42'
+Check 'a fact about a ticket already done is retired by the same pass' (Test-Path (Join-Path $r.mem 'migration-clash-0137.md')) $false
+
+# A durable finding is never folded into a ticket's note: those are not candidates.
+$fmem = Join-Path $root 'fold\memory'
+New-Item -ItemType Directory -Path $fmem -Force | Out-Null
+[void](Write-MemoryNote -MemoryDir $fmem -Key 'clash-note' -Text 'The reporting migration numbering clashed between two open branches over number 0137 in the reporting schema.' -Stamp '2026-11-01 10:00' -Ticket '43')
+[void](Write-MemoryNote -MemoryDir $fmem -Key 'other' -Text 'The emulator needs a cold boot after a host sleep.' -Stamp '2026-11-01 10:00')
+[void](Write-MemoryNote -MemoryDir $fmem -Key 'third' -Text 'Docker compose down leaves the volume in place.' -Stamp '2026-11-01 10:00')
+$q = 'Reporting migration numbering in the reporting schema is sequential.'
+Check 'related: a ticket note is a candidate when asked for all' ((@(Find-RelatedNotes -MemoryDir $fmem -Text $q -Threshold 0.01) | ForEach-Object Key) -contains 'clash-note') $true
+Check 'related: but not when asked for durable notes' ((@(Find-RelatedNotes -MemoryDir $fmem -Text $q -Threshold 0.01 -DurableOnly) | ForEach-Object Key) -contains 'clash-note') $false
+$script:TicketPhaseOf = $null
 
 # --- Not an answer: discarded, and nothing is claimed or written ---
 $r = Invoke-Case -Name 'chatter' -Reply 'You have hit your limit - resets 11:30am' -Warn
