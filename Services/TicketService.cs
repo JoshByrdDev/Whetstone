@@ -1267,9 +1267,23 @@ public class TicketService
              + $"**Why it was blocked:**\n\n> {e.Reason.Replace("\n", "\n> ")}\n\n{answer}";
     }
 
+    /// <summary>
+    /// When this ticket last went backwards in a way that undoes what QA and refinement proved - the
+    /// line every pass, brief and waiver is measured against.
+    /// <para>
+    /// A rebase return that went home (<see cref="RebaseReturn.HandedOffTo"/> NeedsReview, the run
+    /// that rebased it judged BackToReview) is not one: the ticket came back to review on the
+    /// strength of the passes it already had, so counting the send-back would call every one of
+    /// them stale on the build it just vouched for, and the steward's merge would flag them all as
+    /// not passed. One judged Retest, or not yet handed off, still counts. The two share the move's
+    /// timestamp (<c>movedAt</c> in <see cref="TransitionAsync"/>), which is how they are paired.
+    /// </para>
+    /// </summary>
     public async Task<DateTime?> LastBackwardAtAsync(int ticketId) =>
         await _db.PhaseTransitions
             .Where(p => p.TicketId == ticketId && p.Backward)
+            .Where(p => !_db.RebaseReturns.Any(r => r.TicketId == p.TicketId && r.At == p.At
+                                                     && r.HandedOffTo == TicketPhase.NeedsReview))
             .OrderByDescending(p => p.At)
             .Select(p => (DateTime?)p.At)
             .FirstOrDefaultAsync();
@@ -1284,6 +1298,8 @@ public class TicketService
             ? new Dictionary<int, DateTime>()
             : await _db.PhaseTransitions
                 .Where(p => p.Backward && ticketIds.Contains(p.TicketId))
+                .Where(p => !_db.RebaseReturns.Any(r => r.TicketId == p.TicketId && r.At == p.At
+                                                         && r.HandedOffTo == TicketPhase.NeedsReview))
                 .GroupBy(p => p.TicketId)
                 .Select(g => new { TicketId = g.Key, At = g.Max(p => p.At) })
                 .ToDictionaryAsync(x => x.TicketId, x => x.At);

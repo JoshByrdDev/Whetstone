@@ -208,4 +208,62 @@ public class RebaseReturnTests : IDisposable
         Assert.Equal(TicketPhase.NeedsQa, (await Forward(id)).Phase);
         Assert.Single(await Returns(id));
     }
+    private async Task PassedEarlier(int id)
+    {
+        await using var ctx = NewCtx();
+        ctx.QaItems.Add(new QaItem
+        {
+            TicketId = id, Text = "the search step finds a book", Status = QaStatus.Passed,
+            VerifiedAt = DateTime.UtcNow.AddHours(-1),
+        });
+        await ctx.SaveChangesAsync();
+    }
+
+    private async Task<(DateTime? One, bool InBoard, string? Verdict)> Currency(int id)
+    {
+        await using var ctx = NewCtx();
+        var svc = new TicketService(ctx);
+        var one = await svc.LastBackwardAtAsync(id);
+        var board = await svc.LastBackwardAtAsync(new[] { id });
+        var q = await ctx.QaItems.AsNoTracking().SingleAsync(x => x.TicketId == id);
+        return (one, board.ContainsKey(id), HandoffRequirements.VerdictOf(q, one));
+    }
+
+    [Fact]
+    public async Task Back_to_review_keeps_the_passes_it_came_home_on_current()
+    {
+        var id = await ReturnedAndClaimed();
+        await PassedEarlier(id);
+        await Judge(id, RebaseVerdict.BackToReview);
+        await Forward(id);
+
+        var (one, inBoard, verdict) = await Currency(id);
+        Assert.Null(one);
+        Assert.False(inBoard);
+        Assert.NotEqual("Stale", verdict);
+    }
+
+    [Fact]
+    public async Task Retest_still_makes_the_passes_before_it_stale()
+    {
+        var id = await ReturnedAndClaimed();
+        await PassedEarlier(id);
+        await Judge(id, RebaseVerdict.Retest);
+        await Forward(id);
+
+        var (one, inBoard, verdict) = await Currency(id);
+        Assert.NotNull(one);
+        Assert.True(inBoard);
+        Assert.Equal("Stale", verdict);
+    }
+
+    [Fact]
+    public async Task A_return_not_yet_handed_off_still_counts()
+    {
+        var id = await ReturnedAndClaimed();
+        await PassedEarlier(id);
+        await Judge(id, RebaseVerdict.BackToReview);
+
+        Assert.Equal("Stale", (await Currency(id)).Verdict);
+    }
 }
