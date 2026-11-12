@@ -130,6 +130,62 @@ Check 'maintenance: the index is brought under budget' ((Get-Item (Join-Path $s.
 Check 'maintenance: it files nothing for a human' (Test-Path (Join-Path $s.proj 'improvement-suggestions.md')) $false
 Check 'maintenance: it says what it did' ([bool]($script:log | Where-Object { $_ -like '*evicted*' })) $true
 
+# ---- The index's topic sections survive every write ----
+# A person has grouped the index under topics; the machine's section is at the bottom.
+$topics = @"
+# Memory index
+
+## Build
+
+- [Build Cache](build-cache.md) - hand-written summary
+  - [Nested Port](./nested-port.md) - a person's own link style
+
+## Unsorted (written by reflection)
+
+- [Machine A](machine-a.md) - machine line
+
+## Release
+
+- [Release Day](release-day.md) - tuesdays
+"@
+$s = New-Store -Name 'sections' -Index $topics
+foreach ($k in 'build-cache', 'nested-port', 'machine-a', 'release-day') {
+    [IO.File]::WriteAllText((Join-Path $s.mem "$k.md"), "---`nname: $k`ndescription: `"$k`"`nmetadata:`n  learned: 2026-01-01 10:00`n---`n`nThe $k fact, with enough words in it to stand as a note of its own for a merge.`n")
+}
+function Section-Of([string]$Mem, [string]$Key) { (@(Get-IndexEntries -MemoryDir $Mem) | Where-Object Key -eq $Key | Select-Object -First 1).Section }
+function Lines-For([string]$Mem, [string]$Key) { @(Read-NoteLines (Join-Path $Mem 'MEMORY.md') | Where-Object { $_ -match (Get-IndexLinkPattern -Key $Key) }).Count }
+
+Add-IndexLine -MemoryDir $s.mem -Key 'build-cache' -Title 'Build Cache' -Summary 'rewritten by a fold'
+Check 'sections: a rewritten line stays under its topic' (Section-Of $s.mem 'build-cache') '## Build'
+Check 'sections: and its summary moves with the note' ([bool](Read-NoteLines (Join-Path $s.mem 'MEMORY.md') | Where-Object { $_ -match 'rewritten by a fold' })) $true
+Add-IndexLine -MemoryDir $s.mem -Key 'nested-port' -Title 'Nested Port' -Summary 'rewritten'
+Check 'sections: a ./ link is the same note - no second line' (Lines-For $s.mem 'nested-port') 1
+Check 'sections: and keeps its indentation' ([bool](Read-NoteLines (Join-Path $s.mem 'MEMORY.md') | Where-Object { $_ -like '  - `[Nested Port`](nested-port.md)*' })) $true
+Add-Note $s.mem 'brand-new' 'A brand new fact written by reflection after a run.'
+Check 'sections: a new line goes to Unsorted' (Section-Of $s.mem 'brand-new') '## Unsorted (written by reflection)'
+Check 'sections: the topic after Unsorted is untouched' (Section-Of $s.mem 'release-day') '## Release'
+Remove-IndexLine -MemoryDir $s.mem -Key 'brand-new'
+Check 'sections: removing a line leaves the others where they are' ((@('build-cache', 'nested-port', 'machine-a', 'release-day') | ForEach-Object { Section-Of $s.mem $_ }) -join '|') '## Build|## Build|## Unsorted (written by reflection)|## Release'
+
+# A merge whose survivor was in Unsorted while the note it absorbed had been placed by a person:
+# the merged note takes the person's place.
+$fake = Join-Path $root 'agent.cmd'
+Set-Content -Path $fake -Encoding ascii -Value "@echo off`r`nmore > nul`r`ntype `"%FAKE_REPLY%`"`r`n"
+$cmd = [pscustomobject]@{ Exe = $fake; Args = @() }
+$env:FAKE_REPLY = Join-Path $root 'merge-reply.txt'
+[IO.File]::WriteAllText($env:FAKE_REPLY, "KEEP: machine-a`n---`nname: machine-a`ndescription: `"merged machine-a and release-day`"`nmetadata:`n  last-confirmed: 2026-11-11 12:00`n---`n`nThe machine-a fact and the release-day fact, merged into one statement with every detail of both kept.`n")
+$m = Merge-NotePair -MemoryDir $s.mem -KeyA 'machine-a' -KeyB 'release-day' -Stamp '2026-11-11 12:00' -ReflectCmd $cmd -RepoDir $root
+Check 'merge: it merged' "$($m.Kept)<-$($m.Dropped)" 'machine-a<-release-day'
+Check 'merge: the survivor takes the placed line''s topic' (Section-Of $s.mem 'machine-a') '## Release'
+Check 'merge: one line for the survivor' (Lines-For $s.mem 'machine-a') 1
+Check 'merge: none for the absorbed note' (Lines-For $s.mem 'release-day') 0
+# And the other way: a survivor already under a topic stays there.
+[IO.File]::WriteAllText($env:FAKE_REPLY, "KEEP: build-cache`n---`nname: build-cache`ndescription: `"merged`"`nmetadata:`n  last-confirmed: 2026-11-11 12:00`n---`n`nThe build-cache fact and the machine-a fact, merged into one statement with every detail of both kept here.`n")
+$m = Merge-NotePair -MemoryDir $s.mem -KeyA 'build-cache' -KeyB 'machine-a' -Stamp '2026-11-11 12:00' -ReflectCmd $cmd -RepoDir $root
+Check 'merge: a placed survivor stays under its own topic' (Section-Of $s.mem 'build-cache') '## Build'
+Check 'merge: and the absorbed line is gone' (Lines-For $s.mem 'machine-a') 0
+Remove-Item Env:FAKE_REPLY
+
 # ---- Promoting what most runs look up ----
 $s = New-Store -Name 'promote'
 Add-Note $s.mem 'flag-env-var' 'The feature is off unless FEATURE_X_ON=1 is set in the API environment.'

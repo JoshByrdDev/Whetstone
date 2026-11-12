@@ -284,11 +284,30 @@ function Get-NoteSummary {
 # one-line edit that this function will not undo.
 $script:MachineSection = "## Unsorted (written by reflection)"
 
+# Whether an index line links to this key's note. A person tidying the index by hand may well write
+# the link as `(./key.md)` or `(memory/key.md)`; matching only `(key.md)` made every later write of
+# that note miss the person's line and add a second one under Unsorted, which is the person's
+# placement undone by duplication. Any folder before the leaf counts; the leaf must be exact.
+function Get-IndexLinkPattern {
+    param([string]$Key)
+    return '\((?:[^)\s]*/)?' + [regex]::Escape($Key) + '\.md\)'
+}
+
+# Write one note's line in the index. A line that is already there is rewritten where it stands -
+# under whatever `##` topic a person moved it to - and keeps its indentation; only a note the index
+# does not list yet goes to the machine's own section.
+#
+# -InPlaceOf is for a merge, where one note absorbs another: the survivor takes over the absorbed
+# note's line when the survivor has none, or when its own is still in Unsorted and the absorbed one
+# had been placed under a topic. Either way the merged note ends up where a person last put either
+# half of it, and the caller removes the absorbed note's line afterwards.
 function Add-IndexLine {
-    param([string]$MemoryDir, [string]$Key, [string]$Title, [string]$Summary)
+    param([string]$MemoryDir, [string]$Key, [string]$Title, [string]$Summary, [string]$InPlaceOf)
 
     $index = Join-Path $MemoryDir "MEMORY.md"
     $line  = "- [$Title]($Key.md) - $Summary"
+    $mine  = Get-IndexLinkPattern -Key $Key
+    $theirs = if ($InPlaceOf) { Get-IndexLinkPattern -Key $InPlaceOf } else { $null }
 
     Invoke-WithMutex -Name "notes-index" -TimeoutMs 30000 -Body {
         if (-not (Test-Path $index)) {
@@ -296,14 +315,30 @@ function Add-IndexLine {
         }
         $lines = @(Read-NoteLines -Path $index)
 
-        # Already indexed under this key: replace in place rather than adding a second line. A note
-        # that gets rewritten needs its one-line summary to move with it.
-        $existing = -1
+        # Where each line sits: its index, and the `##` heading above it.
+        $existing = -1; $existingSection = ""
+        $absorbed = -1; $absorbedSection = ""
+        $section = ""
         for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match [regex]::Escape("($Key.md)")) { $existing = $i; break }
+            if ($lines[$i] -match '^##\s') { $section = $lines[$i].Trim(); continue }
+            if ($existing -lt 0 -and $lines[$i] -match $mine) { $existing = $i; $existingSection = $section }
+            elseif ($theirs -and $absorbed -lt 0 -and $lines[$i] -match $theirs) { $absorbed = $i; $absorbedSection = $section }
         }
+        $placed = { param($s) $s -and $s -ne $script:MachineSection }
+        $indentOf = { param($l) if ($l -match '^(\s*)') { $Matches[1] } else { "" } }
+
+        # The survivor of a merge moves to the absorbed note's place when that place was a person's.
+        if ($absorbed -ge 0 -and ($existing -lt 0 -or (-not (& $placed $existingSection) -and (& $placed $absorbedSection)))) {
+            $lines[$absorbed] = (& $indentOf $lines[$absorbed]) + $line
+            if ($existing -ge 0) { $lines = @(for ($i = 0; $i -lt $lines.Count; $i++) { if ($i -ne $existing) { $lines[$i] } }) }
+            [System.IO.File]::WriteAllLines($index, $lines, (New-Object System.Text.UTF8Encoding($false)))
+            return
+        }
+
+        # Already indexed under this key: rewritten where it stands rather than added a second time.
+        # A note that gets rewritten needs its one-line summary to move with it, and nothing else.
         if ($existing -ge 0) {
-            $lines[$existing] = $line
+            $lines[$existing] = (& $indentOf $lines[$existing]) + $line
             [System.IO.File]::WriteAllLines($index, $lines, (New-Object System.Text.UTF8Encoding($false)))
             return
         }
@@ -334,9 +369,10 @@ function Remove-IndexLine {
 
     $index = Join-Path $MemoryDir "MEMORY.md"
     if (-not (Test-Path $index)) { return }
+    $pattern = Get-IndexLinkPattern -Key $Key
     Invoke-WithMutex -Name "notes-index" -TimeoutMs 30000 -Body {
         $lines = @(Read-NoteLines -Path $index |
-            Where-Object { $_ -notmatch [regex]::Escape("($Key.md)") })
+            Where-Object { $_ -notmatch $pattern })
         [System.IO.File]::WriteAllLines($index, $lines, (New-Object System.Text.UTF8Encoding($false)))
     }
 }
@@ -877,7 +913,7 @@ function Get-IndexEntries {
     $out = @()
     foreach ($line in (Read-NoteLines -Path $index)) {
         if ($line -match '^##\s+(.+?)\s*$') { $section = $line.Trim(); continue }
-        if ($line -match '^\s*-\s*\[[^\]]*\]\(([^)]+?)\.md\)') {
+        if ($line -match '^\s*-\s*\[[^\]]*\]\((?:[^)\s]*/)?([^)/\s]+?)\.md\)') {
             $out += [pscustomobject]@{
                 Key     = $Matches[1]
                 Section = $section
@@ -1238,12 +1274,14 @@ $rawB
     [System.IO.File]::WriteAllText((Join-Path $MemoryDir "$keep.md"), $body + "`n",
         (New-Object System.Text.UTF8Encoding($false)))
     Remove-Item (Join-Path $MemoryDir "$drop.md") -Force -ErrorAction SilentlyContinue
-    Remove-IndexLine -MemoryDir $MemoryDir -Key $drop
 
+    # The survivor's line first, so it can take the absorbed note's place under a person's topic
+    # (Add-IndexLine -InPlaceOf); then the absorbed note's line goes.
     $desc = ""
     if ($body -match '(?m)^description:\s*"?(.+?)"?\s*$') { $desc = $Matches[1].TrimEnd('"') }
     if (-not $desc) { $desc = "See $keep.md" }
-    Add-IndexLine -MemoryDir $MemoryDir -Key $keep -Title (Get-NoteTitle -Key $keep) -Summary $desc
+    Add-IndexLine -MemoryDir $MemoryDir -Key $keep -Title (Get-NoteTitle -Key $keep) -Summary $desc -InPlaceOf $drop
+    Remove-IndexLine -MemoryDir $MemoryDir -Key $drop
 
     return [pscustomobject]@{ Kept = $keep; Dropped = $drop }
 }
