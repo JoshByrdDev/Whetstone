@@ -1676,7 +1676,7 @@ fill the silence is worse than silence.
 Each element:
 
   {
-    "kind":       "environment" | "codebase" | "process",
+    "kind":       "environment" | "codebase" | "defect" | "process",
     "key":        "short-kebab-case-id",
     "text":       "One or two sentences. Specific enough to act on without this run's context.",
     "confidence": "high" | "low"
@@ -1686,7 +1686,16 @@ Each element:
   a tool that hangs, a container that needs a flag.
 - "codebase"    - a durable fact about THIS repo: where a thing lives, a convention that is enforced,
   a file format requirement, a build step that is required or pointless.
+- "defect"      - a bug in this project's code that the run noticed in passing and that its ticket
+  is not fixing: a wrong total, data shown to the wrong user, a check that never runs. It becomes a
+  ticket in the Backlog for the owner to triage, never a note. Say what is wrong, where (file and
+  function), and how it shows. A fact about how the repo or machine BEHAVES ("the seed script
+  takes four minutes", "sqlcmd needs -C") is not a defect - it is "environment" or "codebase".
 - "process"     - a change to how the heartbeat itself works (a skill, a prompt, this script).
+
+A BUG IS NOT A FACT. Writing one into the notes store makes every later run read it as how the code
+is meant to behave, and nobody ever fixes it - that is how privacy and money bugs sat in a store
+for weeks as "known". If the run saw the code do something wrong, it is "defect".
 
 WHICH KIND IS IT? One question decides:
 
@@ -1770,6 +1779,51 @@ function ConvertFrom-ReflectOutput {
     return , $items
 }
 
+# A bug reflection noticed in passing, filed as a ticket in the Backlog.
+#
+# Not a note: a bug written into the notes store is read by every later run as how the code is meant
+# to behave, and fixed by nobody. One project's store held a quarter bug reports - privacy and money
+# among them - none of which ever became a ticket. And not the Suggestions queue either: that queue's
+# one action is "apply", which hands its items to an agent that edits skills and prompts, so a code
+# defect there is in front of the wrong reader with the wrong button. A Backlog ticket is in front of
+# the owner, on the board, where bugs are triaged anyway - and nothing claims a Backlog ticket, so it
+# costs no run until a person moves it on. It is marked a bug so a fix of it is traced like any other.
+#
+# Returns the new ticket's id, or $null when the board could not be reached or refused it.
+function New-DefectTicket {
+    param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn)
+
+    if (-not $DashboardUrl -or -not $ProjectKey -or -not $Text) { return $null }
+    $title = Get-NoteSummary -Text $Text -Max 90
+    $desc = $Text + "`n`n---`n`n" +
+        "Filed by the heartbeat's reflection after a run on ticket #$FoundOn, which noticed this in passing " +
+        "(reflection key ``$Key``). Nobody has checked it yet: confirm it before planning a fix, and delete " +
+        "this ticket if it is wrong."
+    $body = @{
+        projectKey = $ProjectKey; title = $title; description = $desc; phase = 'Backlog'
+        isBug = $true; skipClassroomAnalysis = $true
+    } | ConvertTo-Json
+    try {
+        $t = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets" -Method Post -ContentType 'application/json' `
+            -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 15
+        if ($t -and $t.id) { return "$($t.id)" }
+    }
+    catch { Write-Log "  Reflection: the board refused defect '$Key': $($_.Exception.Message)" }
+    return $null
+}
+
+# Give a key back: a finding claimed in phase one that could not be placed in phase two (a defect the
+# board would not take) is not "known", and leaving its key claimed would stop the next run that
+# sees the same thing from filing it.
+function Remove-ReflectKey {
+    param([string]$Path, [string]$Key, [string]$LockName)
+    if (-not (Test-Path $Path)) { return }
+    Invoke-WithMutex -Name $LockName -TimeoutMs 60000 -Body {
+        $kept = @(Get-Content -Path $Path | Where-Object { $_.Trim().ToLowerInvariant() -ne $Key })
+        Set-Content -Path $Path -Value $kept -Encoding UTF8
+    } | Out-Null
+}
+
 # Write-MemoryNote moved to notes-store.ps1 when reflection gained a third outcome. Writing a fact
 # is no longer a one-liner appended to a file: it has to find the note that fact belongs to, decide
 # between creating and merging, keep the index in step, and leave a git trail. That is a subject of
@@ -1781,7 +1835,7 @@ function ConvertFrom-ReflectOutput {
 # facts go to $MemoryDir, the notes store inside the project's own repo. The reflection claude call
 # runs in $RepoDir (the worktree the run just used).
 function Invoke-Reflection {
-    param($ProjectDataDir, $RepoDir, $RunLog, $MemoryDir, $TicketId)
+    param($ProjectDataDir, $RepoDir, $RunLog, $MemoryDir, $TicketId, [string]$ProjectKey)
 
     if (-not $ProjectDataDir) { return }
     # The project's reflect-prompt.md is still the switch: delete it and this project stops
@@ -1938,7 +1992,7 @@ function Invoke-Reflection {
             return @{ accepted = $accepted; duplicate = $duplicate }
         }
 
-        $promoted = 0; $merged = 0; $filed = 0
+        $promoted = 0; $merged = 0; $filed = 0; $ticketed = 0
         # .Count on the list itself: @() around a generic List throws "Argument types do not match"
         # on 5.1, and it threw AFTER phase one had claimed the keys - so the facts were lost and
         # marked as known in the same breath.
@@ -1956,6 +2010,23 @@ function Invoke-Reflection {
             # Everything else - anything about how the pipeline itself should behave, and anything
             # the model is only inferring rather than reporting - is a proposal, not a fact, and it
             # waits for a human.
+            # A bug is neither a fact nor a proposal about the pipeline: it is work for the owner, and
+            # it goes where work goes (New-DefectTicket says why not the notes or the queue). It is
+            # never written into the store, not even as the fallback when the board cannot be reached
+            # - its key is handed back instead, so the next run that trips over it files it then.
+            if ($a.Kind -eq 'defect') {
+                $filedAs = New-DefectTicket -ProjectKey $ProjectKey -Key $a.Key -Text $a.Text -FoundOn $TicketId
+                if ($filedAs) {
+                    Write-Log "  Reflection: filed defect '$($a.Key)' as Backlog ticket #$filedAs"
+                    $ticketed++
+                }
+                else {
+                    Remove-ReflectKey -Path $keysFile -Key $a.Key -LockName "reflect-$ProjectDataDir"
+                    Write-Log "  Reflection: could not file defect '$($a.Key)' - left unclaimed for a later run"
+                }
+                continue
+            }
+
             $landed = $false
             if ($a.Confidence -eq 'high' -and ($a.Kind -eq 'environment' -or $a.Kind -eq 'codebase') -and $MemoryDir) {
 
@@ -1994,8 +2065,8 @@ function Invoke-Reflection {
             Save-NoteStoreSnapshot -MemoryDir $MemoryDir -Message "Reflection after $TicketId : $promoted new, $merged merged"
         }
 
-        if ($promoted -or $merged -or $filed -or $claim.duplicate) {
-            Write-Log "  Reflection: $promoted written to notes, $merged folded into existing notes, $filed filed for review, $($claim.duplicate) already known"
+        if ($promoted -or $merged -or $filed -or $ticketed -or $claim.duplicate) {
+            Write-Log "  Reflection: $promoted written to notes, $merged folded into existing notes, $filed filed for review, $ticketed filed as tickets, $($claim.duplicate) already known"
         }
         else { Write-Log "  Reflection: nothing new" }
 
@@ -3418,7 +3489,7 @@ Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
 # reflect-prompt.md either, which would stop it on its own; this says so where it is decided.
 if (-not $limitReset -and -not $onHost) {
     Invoke-Reflection -ProjectDataDir $projectDataDir -RepoDir $workDir -RunLog $runLogLines `
-        -MemoryDir $memoryDir -TicketId $ticketId
+        -MemoryDir $memoryDir -TicketId $ticketId -ProjectKey $projectKey
 }
 
 # Last, because reflection is the final thing that runs the agent CLI and it needs the same setup.

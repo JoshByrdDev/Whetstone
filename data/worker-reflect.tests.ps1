@@ -29,6 +29,16 @@ $tree = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PS
 foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($fn.Extent.Text))
 }
+# The board, for the one call reflection makes to it: a defect filed as a Backlog ticket. Each call
+# is recorded; $script:boardDown makes it answer as an unreachable board would.
+$script:filed = New-Object System.Collections.Generic.List[object]
+$script:boardDown = $false
+function New-DefectTicket {
+    param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn)
+    if ($script:boardDown) { return $null }
+    $script:filed.Add([pscustomobject]@{ Project = $ProjectKey; Key = $Key; Text = $Text; FoundOn = $FoundOn })
+    return "$(900 + $script:filed.Count)"
+}
 $contract = $tree.FindAll({
     $args[0] -is [System.Management.Automation.Language.AssignmentStatementAst] -and
     $args[0].Left.Extent.Text -eq '$ReflectOutputContract' }, $false) | Select-Object -First 1
@@ -82,7 +92,7 @@ function Invoke-Case {
 
     $script:log.Clear()
     Invoke-Reflection -ProjectDataDir $proj -RepoDir $repo -RunLog (1..10 | ForEach-Object { "line $_" }) `
-        -MemoryDir $mem -TicketId "PROJ-$Name" 2>$null
+        -MemoryDir $mem -TicketId "PROJ-$Name" -ProjectKey 'alpha' 2>$null
 
     return @{ proj = $proj; mem = $mem; last = $script:log[$script:log.Count - 1].Trim() }
 }
@@ -100,7 +110,7 @@ Check 'empty reply behind a stderr warning: still nothing new' $r.last 'Reflecti
 
 # --- A fact lands in the notes store, and its key is claimed only alongside it ---
 $r = Invoke-Case -Name 'fact-quiet' -Reply $fact
-Check 'one fact: reported as written' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 0 filed for review, 0 already known'
+Check 'one fact: reported as written' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 0 filed for review, 0 filed as tickets, 0 already known'
 Check 'one fact: the note exists' (Test-Path (Join-Path $r.mem 'migrations-need-bom.md')) $true
 Check 'one fact: its key is recorded' ((Get-Content (Join-Path $r.proj 'reflection-keys.txt')) -join ',') 'migrations-need-bom'
 
@@ -109,11 +119,30 @@ Check 'one fact behind a stderr warning: the note exists' (Test-Path (Join-Path 
 
 # --- Routing: first-hand repo and machine facts are written, pipeline proposals wait for a human ---
 $r = Invoke-Case -Name 'routing' -Reply $twoKind -Warn
-Check 'routing: one written, one filed' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 1 filed for review, 0 already known'
+Check 'routing: one written, one filed' $r.last 'Reflection: 1 written to notes, 0 folded into existing notes, 1 filed for review, 0 filed as tickets, 0 already known'
 Check 'routing: the environment fact is a note' (Test-Path (Join-Path $r.mem 'db-on-1433.md')) $true
 Check 'routing: the process proposal is not a note' (Test-Path (Join-Path $r.mem 'skill-wording.md')) $false
 Check 'routing: the process proposal is in the review file' `
     ([bool](Select-String -Path (Join-Path $r.proj 'improvement-suggestions.md') -Pattern 'key: skill-wording' -Quiet)) $true
+
+# --- A bug seen in passing is a Backlog ticket, never a note and never a queued suggestion ---
+$defect = '[{"kind":"defect","key":"invoice-total-drops-tax","text":"InvoiceTotals.Sum in billing/totals.ts adds line items but drops the tax line, so every invoice total is short by its tax.","confidence":"high"}]'
+$script:filed.Clear()
+$r = Invoke-Case -Name 'defect' -Reply $defect
+Check 'defect: reported as a ticket' $r.last 'Reflection: 0 written to notes, 0 folded into existing notes, 0 filed for review, 1 filed as tickets, 0 already known'
+Check 'defect: the board was asked once, for this project' "$($script:filed.Count) $($script:filed[0].Project)" '1 alpha'
+Check 'defect: the ticket says which run found it' $script:filed[0].FoundOn 'PROJ-defect'
+Check 'defect: no note was written' (Test-Path (Join-Path $r.mem 'invoice-total-drops-tax.md')) $false
+Check 'defect: nothing was queued' (Test-Path (Join-Path $r.proj 'improvement-suggestions.md')) $false
+Check 'defect: its key is claimed' ((Get-Content (Join-Path $r.proj 'reflection-keys.txt')) -join ',') 'invoice-total-drops-tax'
+
+# The board cannot be reached: still not a note, and the key is handed back for a later run.
+$script:boardDown = $true
+$r = Invoke-Case -Name 'defect-down' -Reply $defect
+$script:boardDown = $false
+Check 'defect, board down: no note' (Test-Path (Join-Path $r.mem 'invoice-total-drops-tax.md')) $false
+Check 'defect, board down: not queued' (Test-Path (Join-Path $r.proj 'improvement-suggestions.md')) $false
+Check 'defect, board down: key left unclaimed' ((@(Get-Content (Join-Path $r.proj 'reflection-keys.txt') | Where-Object { $_ })).Count) 0
 
 # --- Not an answer: discarded, and nothing is claimed or written ---
 $r = Invoke-Case -Name 'chatter' -Reply 'You have hit your limit - resets 11:30am' -Warn
