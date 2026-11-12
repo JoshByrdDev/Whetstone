@@ -448,7 +448,8 @@ public class TicketTools
         return new { e.Id, kind = e.Kind?.ToString(), source = e.Source?.ToString(), why = e.ClassifierNote,
                      e.ClassifiedAt, runId = e.ClassifiedByRunId, reviewedOn,
                      note = "Classified. set_phase out of Implementing is no longer held by this escape."
-                          + (reviewedOn is null ? "" : " " + UnderReviewNote(reviewedOn)) };
+                          + (reviewedOn is not null ? " " + UnderReviewNote(reviewedOn)
+                             : s == EscapeSource.PrReview ? " " + NotUnderReviewNote : "") };
     }
 
     [McpServerTool, Description(
@@ -473,6 +474,17 @@ public class TicketTools
                          ? "Judged. Hand off as usual (set_phase NeedsImplementationReview): the board sends it straight back to review."
                          : "Judged. Hand off as usual (set_phase NeedsImplementationReview): it goes on to QA, which measures from the rebase." };
     }
+
+    /// <summary>
+    /// What a run is told when it classified a send-back as found in PR review and the ticket still
+    /// is not under review - the send-back recorded no build to anchor it at. Nothing downstream would
+    /// stop refinement squashing the round into what the reviewer read, so the owner has to know.
+    /// </summary>
+    internal const string NotUnderReviewNote =
+        "This ticket is NOT under review: the send-back recorded no build, so there was nothing to anchor it at, "
+        + "and refinement will squash this round into the reviewed commit unless the owner turns on Under PR review "
+        + "in the drawer. Still commit this round on top of what the reviewer saw, and say in your hand-off comment, "
+        + "first, that the ticket is not under review and the owner needs to switch it on before refinement.";
 
     /// <summary>What a run is told when the ticket it is working is under PR review.</summary>
     internal static string UnderReviewNote(string reviewedOn) =>

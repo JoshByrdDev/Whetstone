@@ -1381,7 +1381,7 @@ public class TicketService
     /// </summary>
     public async Task<Ticket?> RequestChangesAsync(int id, string body, IReadOnlyList<string>? changeItems,
         bool shortLoop, IReadOnlyList<NoteAttachment>? attachments = null, TicketPriority? priority = null,
-        bool replan = false, TransitionActor actor = TransitionActor.Human, bool fullQa = false)
+        bool replan = false, TransitionActor actor = TransitionActor.Human, bool fullQa = false, string? build = null)
     {
         // A steward sends work back in the owner's place: the same note, the same move, under its
         // own name. Anything else through this door is a person.
@@ -1433,7 +1433,7 @@ public class TicketService
         var firstLine = body.Trim().Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()?.Trim() ?? "";
         if (firstLine.Length > 200) firstLine = firstLine[..197] + "...";
         return await TransitionAsync(id, target,
-            $"{(replan ? "Replan requested" : "Changes requested")}: {firstLine}", actor);
+            $"{(replan ? "Replan requested" : "Changes requested")}: {firstLine}", actor, build: build);
     }
 
     /// <summary>Whether this ticket wants the human review gate it just landed on.</summary>

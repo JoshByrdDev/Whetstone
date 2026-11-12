@@ -182,6 +182,36 @@ public class UnderReviewTests : IDisposable
         Assert.Null((await Load(id)).ReviewedOn);
     }
 
+    [Fact]
+    public async Task A_send_back_with_a_note_carries_its_build_through_to_the_review_point()
+    {
+        // The drawer's send-back is RequestChangesAsync, not a bare move: it once dropped the build,
+        // so a run classifying a PR review's send-back put nothing under review.
+        var id = await Seed(TicketPhase.NeedsReview);
+        await using (var ctx = NewCtx())
+        {
+            var svc = new TicketService(ctx);
+            await svc.RequestChangesAsync(id, "Sent back from PR review: the export ignores the date filter.", null,
+                shortLoop: false, build: "alpha-web@abc1234, alpha-api@def5678");
+            await svc.TransitionAsync(id, TicketPhase.Implementing, null, TransitionActor.System);
+            var (_, problem) = await svc.ClassifyEscapeByRunAsync(id, EscapeKind.Logic, EscapeSource.PrReview,
+                "The reviewer found the export ignores the date filter; nothing drove a filtered export.");
+            Assert.Null(problem);
+        }
+        Assert.Equal("alpha-web@abc1234, alpha-api@def5678", (await Load(id)).ReviewedOn);
+    }
+
+    [Fact]
+    public async Task A_PR_review_classification_that_puts_nothing_under_review_says_so_to_the_run()
+    {
+        var id = await SentBack(null);
+        await using var ctx = NewCtx();
+        var answer = System.Text.Json.JsonSerializer.Serialize(await Whetstone.Mcp.TicketTools.ClassifyEscape(
+            new TicketService(ctx), id, "Logic", "PrReview", "The reviewer found the export ignores the date filter."));
+        Assert.Contains("NOT under review", answer);
+        Assert.Contains("Under PR review", answer);
+    }
+
     // ---- The board will not rewrite it --------------------------------------------------------
 
     [Fact]

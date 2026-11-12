@@ -145,6 +145,22 @@ public static class TicketEndpoints
     }
 
     /// <summary>
+    /// The build a person's move sends back, for a move that is an escape (<see cref="EscapeEvent"/>):
+    /// the branch head in each repo, which is what a PR's reviewer saw when the send-back is theirs.
+    /// Null for any other move - reading it costs a git call per repo - or when it cannot be read.
+    /// Every route that sends work back records it, or a run classifying the send-back as found in
+    /// PR review has nothing to put the ticket under review at.
+    /// </summary>
+    private static async Task<string?> EscapeBuildAsync(TicketService svc, TicketGitService git, int id, TicketPhase to)
+    {
+        if (await svc.GetAsync(id) is not { } current
+            || !EscapeEvent.IsEscape(current.Track, current.Phase, to, TransitionActor.Human))
+            return null;
+        try { return QaCommits.Format(await git.BranchHeadsAsync(current.ProjectKey, current.Branch)); }
+        catch (Exception) { return null; }
+    }
+
+    /// <summary>
     /// Tidy a key a human typed, using the rules of the tracker that has to resolve it.
     /// <para>
     /// Returns false when the tracker will not recognise the value at all - which on Azure DevOps
@@ -874,14 +890,7 @@ public static class TicketEndpoints
                 return Results.BadRequest(new { error = $"Unknown phase '{req.ToPhase}'" });
             try
             {
-                // A move that sends finished work back is logged as an escape, with the build it
-                // escaped from - read only for those, since it costs a git call per repo.
-                string? build = null;
-                if (await svc.GetAsync(id) is { } current && EscapeEvent.IsEscape(current.Track, current.Phase, to, TransitionActor.Human))
-                {
-                    try { build = QaCommits.Format(await git.BranchHeadsAsync(current.ProjectKey, current.Branch)); }
-                    catch (Exception) { build = null; }
-                }
+                var build = await EscapeBuildAsync(svc, git, id, to);
 
                 // Everything that reaches the REST API is a person on the board - the heartbeat's own
                 // moves come through the MCP server or through TicketService directly.
@@ -1049,7 +1058,7 @@ public static class TicketEndpoints
         // The review gate's change request: the note, its files, the list of what to change and the
         // route home, in one call. See TicketService.RequestChangesAsync for why it is one call.
         app.MapPost("/api/tickets/{id:int}/request-changes", async (int id, HttpRequest http,
-            TicketService svc, TicketFileStore files, LinkedIssueResolver resolver) =>
+            TicketService svc, TicketFileStore files, LinkedIssueResolver resolver, TicketGitService git) =>
         {
             if (!http.HasFormContentType) return Results.BadRequest(new { error = "Expected a multipart form" });
             var form = await http.ReadFormAsync();
@@ -1073,7 +1082,11 @@ public static class TicketEndpoints
 
             try
             {
-                var t = await svc.RequestChangesAsync(id, body, items, shortLoop, saved, priority, replan, fullQa: fullQa);
+                // The same build the plain move records: without it, a run that classifies this
+                // send-back as found in PR review has nothing to put the ticket under review at.
+                var build = await EscapeBuildAsync(svc, git, id,
+                    replan ? TicketPhase.NeedsSpeculation : TicketPhase.NeedsImplementation);
+                var t = await svc.RequestChangesAsync(id, body, items, shortLoop, saved, priority, replan, fullQa: fullQa, build: build);
                 if (t is null)
                 {
                     foreach (var a in saved) files.Delete(a);
