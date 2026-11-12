@@ -130,6 +130,33 @@ Check 'maintenance: the index is brought under budget' ((Get-Item (Join-Path $s.
 Check 'maintenance: it files nothing for a human' (Test-Path (Join-Path $s.proj 'improvement-suggestions.md')) $false
 Check 'maintenance: it says what it did' ([bool]($script:log | Where-Object { $_ -like '*evicted*' })) $true
 
+# ---- Promoting what most runs look up ----
+$s = New-Store -Name 'promote'
+Add-Note $s.mem 'flag-env-var' 'The feature is off unless FEATURE_X_ON=1 is set in the API environment.'
+Add-Note $s.mem 'rare-fact' 'The legacy export runs only on the first of the month.'
+Add-Note $s.mem 'served-a-lot' 'A note whose words are common enough to be served to many tickets.'
+[void](Write-MemoryNote -MemoryDir $s.mem -Key 'ticket-only' -Text 'Only ticket 5 needs this.' -Stamp '2026-11-01 10:00' -Ticket '5')
+for ($i = 1; $i -le 60; $i++) {
+    $opened = @()
+    if ($i -le 10) { $opened += 'flag-env-var' }
+    if ($i -le 10) { $opened += 'ticket-only' }
+    if ($i -eq 1)  { $opened += 'rare-fact' }
+    $phase = if ($i -le 7) { 'implement' } elseif ($i -le 9) { 'qa-test' } else { 'refine' }
+    Add-NoteUsage -ProjectDataDir $s.proj -TicketId "$i" -Phase $phase -Served @('served-a-lot') -Opened $opened -When $now.AddDays(-($i % 20))
+}
+$p = @(Get-NotePromotions -ProjectDataDir $s.proj -MemoryDir $s.mem -Now $now)
+Check 'promote: the note most runs open, and only it' (($p | ForEach-Object Key) -join ',') 'flag-env-var'
+Check 'promote: counted out of every run' "$($p[0].Opened)/$($p[0].Total)" '10/60'
+Check 'promote: too few runs, nothing yet' (@(Get-NotePromotions -ProjectDataDir $s.proj -MemoryDir $s.mem -MinRuns 100 -Now $now).Count) 0
+$f = @(Add-NotePromotionSuggestions -ProjectDataDir $s.proj -MemoryDir $s.mem -Now $now)
+$q = [IO.File]::ReadAllText((Join-Path $s.proj 'improvement-suggestions.md'))
+Check 'promote: filed once as a process suggestion' ($q -match '- \[ \] \[process\] Note `flag-env-var` was opened by 10 of 60 runs') $true
+Check 'promote: it names the skill that reads it most' ($q -match 'skills/implement/skill.md` \(7 runs\)') $true
+Check 'promote: and not one that barely does' ($q -match 'skills/refine') $false
+Check 'promote: it offers project.json for a setting' ($q -match 'project.json') $true
+$f = @(Add-NotePromotionSuggestions -ProjectDataDir $s.proj -MemoryDir $s.mem -Now $now)
+Check 'promote: never filed twice, even once deleted from the queue' $f.Count 0
+
 # ---- The notes a run is handed ----
 $s = New-Store -Name 'relevant'
 Add-Note $s.mem 'invoice-rounding' 'Invoice totals are rounded per line in billing/totals.ts, never on the sum; the tax line is computed from the rounded lines.'

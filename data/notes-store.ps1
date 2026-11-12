@@ -946,6 +946,74 @@ function Invoke-NoteIndexBudget {
     return @($evicted)
 }
 
+# ---- Facts that belong somewhere every run already reads -------------------------------------
+
+# A note opened by a large share of a project's runs is not an occasional fact any more: it is part
+# of how work on that project is done, and the place for that is the skill those runs read or the
+# project's own settings - in front of every run, not behind a lookup. One project's note about a
+# feature-flag environment variable was opened 115 times in four weeks before a person noticed and
+# moved it into the skills.
+#
+# Counted on OPENED only. A note served in the prompt was chosen by word overlap, and a note whose
+# vocabulary is merely common would be served often and promoted for it - the review queue does not
+# need more items that are not worth acting on. A run that is handed a note and then opens it anyway
+# (because it was cut short, say) still counts.
+#
+# Returns one object per note over $Share of the runs in the window: its key, how many runs opened
+# it, out of how many, and by phase - the phases are what say which skill it should move into.
+function Get-NotePromotions {
+    param([string]$ProjectDataDir, [string]$MemoryDir, [int]$Days = 30, [int]$MinRuns = 40,
+        [double]$Share = 0.05, [datetime]$Now = (Get-Date))
+
+    $usage = Get-NoteUsage -ProjectDataDir $ProjectDataDir -Days $Days -Now $Now
+    if ($usage.Runs -lt $MinRuns) { return @() }
+    $out = @()
+    foreach ($kv in $usage.Notes.GetEnumerator()) {
+        $n = $kv.Value
+        $opened = $n.Opened.Count
+        if ($opened -le ($usage.Runs * $Share)) { continue }
+        $file = if ($MemoryDir) { Join-Path $MemoryDir "$($kv.Key).md" } else { $null }
+        if ($file -and -not (Test-Path $file)) { continue }
+        if ($file -and (Get-NoteTicket -Path $file)) { continue }
+        $phases = @($n.Phases.GetEnumerator() | Sort-Object Value -Descending |
+            ForEach-Object { [pscustomobject]@{ Phase = $_.Key; Runs = $_.Value } })
+        $out += [pscustomobject]@{ Key = $kv.Key; Opened = $opened; Total = $usage.Runs; Phases = $phases }
+    }
+    return @($out | Sort-Object Opened -Descending)
+}
+
+# File each promotion once, as a "process" suggestion naming where it should go. Remembered in the
+# project's folder (notes-promoted.txt) rather than looked for in the queue, so a person who deletes
+# the item has answered it and is not asked again tomorrow.
+function Add-NotePromotionSuggestions {
+    param([string]$ProjectDataDir, [string]$MemoryDir, [int]$Days = 30, [int]$MinRuns = 40, [double]$Share = 0.05,
+        [datetime]$Now = (Get-Date))
+
+    if (-not $ProjectDataDir -or -not (Test-Path $ProjectDataDir)) { return @() }
+    $doneFile = Join-Path $ProjectDataDir "notes-promoted.txt"
+    $done = @(Read-NoteLines -Path $doneFile | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
+    $suggestions = Join-Path $ProjectDataDir "improvement-suggestions.md"
+    $stamp = $Now.ToString('yyyy-MM-dd HH:mm')
+    $filed = @()
+    foreach ($p in @(Get-NotePromotions -ProjectDataDir $ProjectDataDir -MemoryDir $MemoryDir -Days $Days -MinRuns $MinRuns -Share $Share -Now $Now)) {
+        if ($done -contains $p.Key.ToLowerInvariant()) { continue }
+        $pct = [int][Math]::Round(100.0 * $p.Opened / $p.Total)
+        # The phases that account for most of its reads: at least a fifth each, and always the top one.
+        $main = @($p.Phases | Where-Object { $_.Runs -ge [Math]::Max(1, [int]($p.Opened * 0.2)) })
+        if ($main.Count -eq 0 -and $p.Phases.Count -gt 0) { $main = @($p.Phases[0]) }
+        $where = if ($main.Count -gt 0) {
+            ($main | ForEach-Object { "``skills/$($_.Phase)/skill.md`` ($($_.Runs) runs)" }) -join ', '
+        } else { "the skills of the phases that read it" }
+        $text = "Note ``$($p.Key)`` was opened by $($p.Opened) of $($p.Total) runs ($pct%) in the last $Days days. " +
+            "A fact this many runs look up belongs where they already read: move it into $where in this project's folder - " +
+            "or into ``project.json`` if it is a path, a port or a setting - and then delete the note from the store."
+        Add-Utf8Text -Path $suggestions -Text ("`n- [ ] [process] $text  (key: promote-note-$($p.Key), $stamp)`n")
+        Add-Utf8Text -Path $doneFile -Text ($p.Key + "`n")
+        $filed += $p.Key
+    }
+    return $filed
+}
+
 # ---- Maintenance ------------------------------------------------------------------------------
 
 # Why any of this exists: the index is not a filing cabinet nobody opens. Every heartbeat worker
@@ -1187,6 +1255,7 @@ $rawB
 #   - merging near-duplicates: only while the index is over its budget, and at most once in
 #     $MinHoursBetween, because each merge is an agent call.
 #   - evicting what no run uses: every pass while the index is over its budget (file reads only).
+#   - promoting what most runs look up: at most once in $MinHoursBetween, whatever the index's size.
 #
 # It used to fire on a line count and, finding nothing to merge, file one suggestion for a human and
 # then go quiet for good. Over budget now means notes leave the index, not that someone is asked.
@@ -1204,7 +1273,15 @@ function Invoke-NoteStoreMaintenance {
     $retired = @(Remove-FinishedTicketNotes -MemoryDir $MemoryDir -PhaseOf $TicketPhaseOf)
     if ($retired.Count -gt 0) { Write-Log "  Notes: retired $($retired.Count) about finished tickets: $($retired -join ', ')" }
 
-    if ($ProjectDataDir) { Compress-NoteUsage -ProjectDataDir $ProjectDataDir }
+    if ($ProjectDataDir) {
+        Compress-NoteUsage -ProjectDataDir $ProjectDataDir
+        $promoMarker = Join-Path $ProjectDataDir "notes-promotion.stamp"
+        if (-not (Test-Path $promoMarker) -or (Get-Date) -ge (Get-Item $promoMarker).LastWriteTime.AddHours($MinHoursBetween)) {
+            Set-Content -Path $promoMarker -Value (Get-Date -Format 'o') -Encoding ASCII
+            $promoted = @(Add-NotePromotionSuggestions -ProjectDataDir $ProjectDataDir -MemoryDir $MemoryDir)
+            if ($promoted.Count -gt 0) { Write-Log "  Notes: filed $($promoted.Count) for moving into a skill: $($promoted -join ', ')" }
+        }
+    }
 
     $index = Join-Path $MemoryDir "MEMORY.md"
     if (-not (Test-Path $index)) { return }
