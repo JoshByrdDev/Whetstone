@@ -25,8 +25,8 @@ const KINDS: { id: ReleaseKind; title: string; says: string; tier: keyof typeof 
 
 type Mark = (id: number, mark: { handled?: boolean; release?: ReleaseKind }) => Promise<void>;
 
-export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, unit, onUnit }: {
-  entries: StewardEntry[]; answered: StewardQuestion[]; onMark: Mark;
+export function StewardRecord({ entries, answered, onMark, onReadAllCalls, onKeep, onReverse, unit, onUnit }: {
+  entries: StewardEntry[]; answered: StewardQuestion[]; onMark: Mark; onReadAllCalls: () => Promise<void>;
   onKeep: (id: number) => Promise<void>; onReverse: (id: number, because: string) => Promise<void>;
   /** Show only the notes that go out with this slice; null is all of them. */
   unit: number | null; onUnit: (unit: number | null) => void;
@@ -47,14 +47,19 @@ export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, un
         meta={calls.length > 0 ? `${calls.length} in all` : undefined}>
         {calls.length === 0
           ? <Quiet>No calls recorded yet.</Quiet>
-          : <EntryList id="calls" rows={calls} onMark={onMark} tickTitle="Read" empty="Every call has been read." />}
+          : (
+            <>
+              <ReadAll unread={calls.filter(e => !e.handledAt).length} onRead={onReadAllCalls} />
+              <EntryList id="calls" rows={calls} onMark={onMark} tickTitle="Read" empty="Every call has been read." />
+            </>
+          )}
       </Fold>
 
       <Learned rows={learned} />
 
       <Fold id="OwnerSaid" title="What you told it" colour="var(--w-accent)" count={said.length}>
         {said.length === 0
-          ? <Quiet>No standing instructions.</Quiet>
+          ? <Quiet>Nothing yet. A flag you clear, or a slice's decisions you make, is noted here for the steward to read.</Quiet>
           : (
             <Panel pad={false} className="mb-8">
               {said.map(e => (
@@ -86,14 +91,43 @@ export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, un
   );
 }
 
+/** Every call read at once, behind a second press: it ticks off hundreds of lines. */
+function ReadAll({ unread, onRead }: { unread: number; onRead: () => Promise<void> }) {
+  const [sure, setSure] = useState(false);
+  const [busy, setBusy] = useState(false);
+  if (unread === 0) return null;
+  const go = async () => {
+    setBusy(true);
+    try { await onRead(); setSure(false); } finally { setBusy(false); }
+  };
+  return (
+    <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: 8 }}>
+      {sure
+        ? (
+          <>
+            <span style={{ font: `400 12px ${BODY}`, color: 'var(--w-t400)' }}>Tick off all {unread} as read?</span>
+            <GhostButton tone="go" disabled={busy} onClick={go}>{busy ? 'Marking' : 'Yes, all read'}</GhostButton>
+            <GhostButton disabled={busy} onClick={() => setSure(false)}>Cancel</GhostButton>
+          </>
+        )
+        : <GhostButton onClick={() => setSure(true)} title="Tick off every call you have not read yet">Mark all {unread} read</GhostButton>}
+    </div>
+  );
+}
+
 /** What to read before a release, by what kind of thing each note is. */
-function ReleaseNotes({ notes: every, onMark, unit, onUnit }: {
+function ReleaseNotes({ notes: all, onMark, unit, onUnit }: {
   notes: StewardEntry[]; onMark: Mark; unit: number | null; onUnit: (unit: number | null) => void;
 }) {
+  // A note of a released (or abandoned) slice holds nothing any more: it is kept to read back,
+  // apart from the notes a release is still waiting on.
+  const [released, setReleased] = useState(false);
+  const gone = all.filter(e => e.gone);
+  const every = all.filter(e => !e.gone);
   // A note goes out with one slice, and a release is one slice's: so the list can be
   // narrowed to exactly what that release is held for.
   const units = [...new Set(every.map(e => e.unit).filter((u): u is number => u != null))].sort((a, b) => a - b);
-  const notes = unit == null ? every : every.filter(e => e.unit === unit);
+  const notes = released ? gone : unit == null ? every : every.filter(e => e.unit === unit);
   const left = (k: ReleaseKind) => notes.filter(e => e.release === k && !e.handledAt).length;
   const [kind, setKind] = useState<ReleaseKind>(() => {
     const was = remembered('record.kind') as ReleaseKind | null;
@@ -103,24 +137,32 @@ function ReleaseNotes({ notes: every, onMark, unit, onUnit }: {
   });
   const choose = (k: ReleaseKind) => { setKind(k); remember('record.kind', k); };
 
-  const outstanding = notes.filter(e => !e.handledAt).length;
+  const outstanding = every.filter(e => !e.handledAt).length;
+  const ticked = every.length - outstanding;
   const now = KINDS.find(k => k.id === kind)!;
   const rows = notes.filter(e => e.release === kind);
+  const pickUnit = (u: number | null) => { setReleased(false); onUnit(u); };
 
   return (
     <Fold id="BeforeRelease" open title="To read before a release" colour={TIER.active.c} count={outstanding}
-      meta={notes.length > outstanding ? `${notes.length - outstanding} ticked off` : undefined}>
-      {every.length === 0
+      meta={[ticked > 0 ? `${ticked} ticked off` : '', gone.length > 0 ? `${gone.length} went out with released slices` : ''].filter(Boolean).join(', ') || undefined}>
+      {all.length === 0
         ? <Quiet>Nothing noted for release yet.</Quiet>
         : (
           <>
-            {(units.length > 1 || unit != null) && (
+            {(units.length > 1 || unit != null || gone.length > 0) && (
               <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 10 }}>
                 <span style={label()}>Going out with</span>
-                <Chip on={unit == null} onClick={() => onUnit(null)}>Every unit</Chip>
+                <Chip on={!released && unit == null} onClick={() => pickUnit(null)}>Every open slice</Chip>
                 {units.map(u => (
-                  <Chip key={u} on={unit === u} onClick={() => onUnit(u)}>Unit {String(u).padStart(2, '0')}</Chip>
+                  <Chip key={u} on={!released && unit === u} onClick={() => pickUnit(u)}>Slice {String(u).padStart(2, '0')}</Chip>
                 ))}
+                {gone.length > 0 && (
+                  <Chip on={released} onClick={() => setReleased(!released)}
+                    title="Notes of slices already released or abandoned: nothing is held for them, kept to read back">
+                    Released {gone.length}
+                  </Chip>
+                )}
               </div>
             )}
             <div className="flex flex-wrap gap-2" style={{ marginBottom: 8 }}>
@@ -131,7 +173,7 @@ function ReleaseNotes({ notes: every, onMark, unit, onUnit }: {
               ))}
             </div>
             <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t500)', margin: '0 0 10px 2px' }}>{now.says}</div>
-            <EntryList key={kind} id={`release.${kind}`} rows={rows} onMark={onMark} tickTitle="Dealt with" retag
+            <EntryList key={`${kind}.${released}`} id={`release.${kind}`} rows={rows} onMark={onMark} tickTitle="Dealt with" retag
               empty={rows.length === 0 ? `Nothing of this kind has been noted.` : 'Everything of this kind is ticked off.'} />
           </>
         )}
@@ -271,10 +313,13 @@ function Rulings({ rows, onKeep, onReverse }: {
   rows: StewardEntry[]; onKeep: (id: number) => Promise<void>; onReverse: (id: number, because: string) => Promise<void>;
 }) {
   const [showReversed, setShowReversed] = useState(false);
-  const live = rows.filter(e => !e.reversedAt);
+  const [showRetired, setShowRetired] = useState(false);
+  const live = rows.filter(e => !e.reversedAt && !e.retired);
   const unseen = live.filter(unseenRuling);
   const kept = live.filter(e => !unseenRuling(e));
   const reversed = rows.filter(e => e.reversedAt);
+  // It read only decisions that retired with their slices, so it is over with them.
+  const retired = rows.filter(e => !e.reversedAt && e.retired);
 
   return (
     <Fold id="Ruling" open title="Its rulings" colour="var(--w-accent)" count={unseen.length}
@@ -285,14 +330,29 @@ function Rulings({ rows, onKeep, onReverse }: {
           <div className="flex flex-col gap-2 mb-8">
             {[...unseen, ...kept].map(e => <RulingCard key={e.id} e={e} onKeep={onKeep} onReverse={onReverse} />)}
             {live.length === 0 && <Quiet>No ruling is in force.</Quiet>}
-            {reversed.length > 0 && (
+            {(reversed.length > 0 || retired.length > 0) && (
               <div>
-                <Chip on={showReversed} onClick={() => setShowReversed(!showReversed)} title="The rulings you reversed, and what you said instead">
-                  Reversed {reversed.length}
-                </Chip>
+                <div className="flex flex-wrap gap-2">
+                  {reversed.length > 0 && (
+                    <Chip on={showReversed} onClick={() => setShowReversed(!showReversed)} title="The rulings you reversed, and what you said instead">
+                      Reversed {reversed.length}
+                    </Chip>
+                  )}
+                  {retired.length > 0 && (
+                    <Chip on={showRetired} onClick={() => setShowRetired(!showRetired)}
+                      title="Rulings that read only decisions of released slices: over with them, and no longer applied">
+                      Retired with their slices {retired.length}
+                    </Chip>
+                  )}
+                </div>
                 {showReversed && (
                   <div key="rev" className="orbit-swap flex flex-col gap-2" style={{ marginTop: 8 }}>
                     {reversed.map(e => <RulingCard key={e.id} e={e} onKeep={onKeep} onReverse={onReverse} />)}
+                  </div>
+                )}
+                {showRetired && (
+                  <div key="ret" className="orbit-swap flex flex-col gap-2" style={{ marginTop: 8 }}>
+                    {retired.map(e => <RulingCard key={e.id} e={e} onKeep={onKeep} onReverse={onReverse} />)}
                   </div>
                 )}
               </div>
@@ -311,7 +371,7 @@ function RulingCard({ e, onKeep, onReverse }: {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const isNew = unseenRuling(e);
-  const gone = !!e.reversedAt;
+  const gone = !!e.reversedAt || !!e.retired;
 
   const act = async (fn: () => Promise<void>) => {
     setBusy(true); setFailed(null);
@@ -325,7 +385,7 @@ function RulingCard({ e, onKeep, onReverse }: {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0 flex-1">
           <div style={label(isNew ? 'var(--w-accent-text)' : undefined)}>
-            {isNew ? 'New' : gone ? 'Reversed' : 'Kept'}
+            {isNew ? 'New' : e.reversedAt ? 'Reversed' : e.retired ? 'Retired with its slice' : 'Kept'}
             {e.ticketId != null ? <> - from #{e.ticketId}{e.ticketTitle ? ` ${e.ticketTitle}` : ''}</> : null}
             {' - '}{ago(e.at)}
           </div>

@@ -42,13 +42,17 @@ export function StewardDecisions({ project, register, onChanged }: {
   const history = all.filter(d => d.status === 'replaced' || d.status === 'withdrawn' || d.status === 'retired');
   const list = (shown === 'force' ? force : shown === 'provisional' ? provisional : history).filter(matches);
 
-  // In force: the conventions first, then each slice in order - the order the file is written in.
+  // The conventions first, then each slice - in order while it is in force (the order the file is
+  // written in), newest first in history, where the latest slice is the one most often looked for.
   const groups = useMemo(() => {
-    if (shown !== 'force') return [{ key: shown, title: '', rows: list }];
     const out: { key: string; title: string; rows: StewardDecision[] }[] = [];
     const conventions = list.filter(d => d.convention);
     if (conventions.length > 0) out.push({ key: 'conventions', title: 'Conventions: every slice', rows: conventions });
-    const units = [...new Set(list.filter(d => d.unit != null).map(d => d.unit!))].sort((a, b) => a - b);
+    // Rules for the whole project from before slices were the top level: only ever history now.
+    const before = list.filter(d => d.unit == null && !d.convention);
+    if (before.length > 0) out.push({ key: 'before', title: 'From before slices', rows: before });
+    const units = [...new Set(list.filter(d => d.unit != null).map(d => d.unit!))]
+      .sort((a, b) => shown === 'history' ? b - a : a - b);
     for (const u of units) {
       const rows = list.filter(d => d.unit === u);
       out.push({ key: String(u), title: register?.units.find(x => x.unit === u)?.title ?? `Slice ${u}`, rows });
@@ -101,13 +105,29 @@ export function StewardDecisions({ project, register, onChanged }: {
           ? <Quiet>{needle ? 'Nothing matches.' : shown === 'force' ? 'Nothing is decided yet.' : shown === 'provisional' ? 'Nothing is provisional.' : 'Nothing has been replaced, withdrawn or retired.'}</Quiet>
           : groups.map(g => (
             <div key={g.key} className="mb-6">
-              {g.title && <div style={{ ...label('var(--w-t300)'), margin: '0 0 6px 2px' }}>{g.title} - {g.rows.length}</div>}
-              <Panel pad={false}>
-                {g.rows.map(d => (
-                  <DecisionRow key={d.number} d={d} project={project} onChanged={onChanged}
-                    onChange={() => setWriting({ replaces: d.number })} />
-                ))}
-              </Panel>
+              {shown === 'history' && !needle
+                ? (
+                  // History is long: each group shut until asked for. A search shows what it found, open.
+                  <Fold id={`decisions.history.${g.key}`} title={g.title} colour="var(--w-t300)" count={g.rows.length}>
+                    <Panel pad={false}>
+                      {g.rows.map(d => (
+                        <DecisionRow key={d.number} d={d} project={project} onChanged={onChanged}
+                          onChange={() => setWriting({ replaces: d.number })} />
+                      ))}
+                    </Panel>
+                  </Fold>
+                )
+                : (
+                  <>
+                    <div style={{ ...label('var(--w-t300)'), margin: '0 0 6px 2px' }}>{g.title} - {g.rows.length}</div>
+                    <Panel pad={false}>
+                      {g.rows.map(d => (
+                        <DecisionRow key={d.number} d={d} project={project} onChanged={onChanged}
+                          onChange={() => setWriting({ replaces: d.number })} />
+                      ))}
+                    </Panel>
+                  </>
+                )}
             </div>
           ))}
       </div>
@@ -163,7 +183,7 @@ function DecisionRow({ d, project, onChanged, onChange }: {
         {d.status === 'retired' && (
           <div style={{ font: `400 11.5px/1.5 ${BODY}`, color: 'var(--w-t400)', marginTop: 4 }}>
             {d.unit == null
-              ? 'Retired at the switch to slice branches: not kept as a convention.'
+              ? 'Retired when slices became the top level: not kept as a convention.'
               : `Retired with ${d.appliesTo}: its slice is over, and its code is the decision now.`}
           </div>
         )}
@@ -221,8 +241,10 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
   project: string; register: StewardRegister; replaces?: number; old?: StewardDecision;
   onDone: () => Promise<void>; onCancel: () => void;
 }) {
+  // A released or abandoned slice is over: what it decided retired with it, and nothing more is.
+  const open = register.units.filter(u => !u.over);
   const [rule, setRule] = useState('');
-  const [unit, setUnit] = useState<number | null>(old?.unit ?? null);
+  const [unit, setUnit] = useState<number | null>(old?.unit != null && open.some(u => u.unit === old.unit) ? old.unit : null);
   const [outcomes, setOutcomes] = useState(old?.outcomes ?? '');
   const [provisional, setProvisional] = useState(false);
   const [until, setUntil] = useState<number | null>(null);
@@ -269,7 +291,7 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
           <Chip on={unit == null} onClick={() => setUnit(null)} title="A convention: a rule every slice keeps, never retired">
             Every slice
           </Chip>
-          {register.units.map(u => (
+          {open.map(u => (
             <Chip key={u.unit} on={unit === u.unit} onClick={() => setUnit(u.unit)} title={u.title}>Slice {String(u.unit).padStart(2, '0')}</Chip>
           ))}
         </div>
@@ -284,8 +306,8 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
             <>
               <span style={label()}>until</span>
               <Chip on={until == null} onClick={() => setUntil(null)}>You say</Chip>
-              {register.units.map(u => (
-                <Chip key={u.unit} on={until === u.unit} onClick={() => setUntil(u.unit)} title={u.title}>Unit {String(u.unit).padStart(2, '0')} is built</Chip>
+              {open.map(u => (
+                <Chip key={u.unit} on={until === u.unit} onClick={() => setUntil(u.unit)} title={u.title}>Slice {String(u.unit).padStart(2, '0')} is built</Chip>
               ))}
             </>
           )}

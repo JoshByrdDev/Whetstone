@@ -127,7 +127,7 @@ function unitSubject(r: Report, unit: number, title: string): DeckSubject {
   const m = r.meta;
   return {
     key: `unit-report-${m.id}`,
-    mark: `Unit ${unit}`,
+    mark: `Slice ${unit}`,
     title,
     headline: m.headline,
     tags: [{ text: `${m.fromSha.slice(0, 7)}..${m.toSha.slice(0, 7)}`, mono: true }, { text: m.baseRef, mono: true }],

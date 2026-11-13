@@ -8,7 +8,6 @@ namespace Whetstone.Api;
 
 /// <summary>An answer, and which touched decisions it replaces; null Replaces takes the picked option's.</summary>
 public record StewardAnswerRequest(string? Answer, IReadOnlyList<int>? Replaces = null, string? Story = null);
-public record StewardSaidRequest(string? Text);
 public record StewardModeRequest(string? Mode);
 public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released, int[]? Promote = null);
@@ -97,9 +96,15 @@ public static class StewardEndpoints
                 .Select(t => new { t.Id, t.Title, t.PlanUnit }).ToDictionaryAsync(t => t.Id, ct);
             var goesOutWith = await steward.ReleaseUnitOfNotesAsync(project!, ct);
             var flagged = await steward.RulingFlagsAsync(project!, ct);
+            var retiredRulings = await steward.RetiredRulingsAsync(project!, ct);
+            // The slices that are over: a release note of one went out with it (or never will).
+            var over = (await db.StewardUnits.AsNoTracking()
+                .Where(u => u.ProjectKey == project && (u.ReleasedAt != null || u.AbandonedAt != null))
+                .Select(u => u.Unit).ToListAsync(ct)).ToHashSet();
             return Results.Ok(rows.Select(e =>
             {
                 var t = e.TicketId is { } id && tickets.TryGetValue(id, out var found) ? found : null;
+                int? unit = goesOutWith.TryGetValue(e.Id, out var with) ? with : t?.PlanUnit;
                 return new
                 {
                     e.Id,
@@ -110,7 +115,10 @@ public static class StewardEndpoints
                     // For a release note, the unit it will go out with - its ticket's, or the next
                     // to be released when it has none - so a unit's notes here are the ones its
                     // release is held for.
-                    unit = goesOutWith.TryGetValue(e.Id, out var with) ? with : t?.PlanUnit,
+                    unit,
+                    // Its slice is released or abandoned: nothing is held for it any more, so it is
+                    // no longer outstanding, ticked or not.
+                    gone = unit is { } u && over.Contains(u),
                     // A note from before notes had kinds is one to know, until its owner says otherwise.
                     release = e.Kind == StewardEntryKind.BeforeRelease ? (e.Release ?? StewardReleaseKind.Note).ToString() : null,
                     e.HandledAt,
@@ -123,6 +131,8 @@ public static class StewardEndpoints
                     // The decisions it reads, and whether one of them no longer holds.
                     reads = StewardService.Numbers(e.Reads),
                     flagged = flagged.TryGetValue(e.Id, out var flag) ? flag : null,
+                    // A ruling that read only decisions retired with their slices: over with them.
+                    retired = retiredRulings.Contains(e.Id),
                     // A learned fact's: where it went in the notes store, once placed.
                     e.Placed,
                 };
@@ -131,6 +141,13 @@ public static class StewardEndpoints
 
         // Tick a line off, or say what kind of release note it is. The owner's: there is no tool
         // for either, so a steward cannot clear its own notes out of the way of a release.
+        // Every call read at once. Calls only: a release note is ticked one by one.
+        app.MapPost("/api/steward/entries/calls/read", async (string? project, StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerReadsAllCallsAsync(project ?? "", ct);
+            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
         app.MapPut("/api/steward/entries/{id:int}", async (int id, string? project, StewardEntryMark mark,
             StewardService steward, CancellationToken ct) =>
         {
@@ -308,12 +325,6 @@ public static class StewardEndpoints
             var r = await steward.LinkTicketAsync(id, body.Unit, body.Outcomes, ct);
             return r.Answer is "linked" or "unchanged" ? Results.Ok(r)
                 : r.Answer == "not-found" ? Results.NotFound(r) : Results.BadRequest(r);
-        });
-
-        app.MapPost("/api/steward/said", async (string? project, StewardSaidRequest req, StewardService steward, CancellationToken ct) =>
-        {
-            var r = await steward.OwnerSaysAsync(project ?? "", req.Text ?? "", ct);
-            return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // The mode: the one switch on a steward, and its owner's alone. Written to the project's

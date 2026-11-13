@@ -94,6 +94,10 @@ export interface StewardEntry {
   /** A ruling's: the decisions it reads, and what happened to one that no longer holds. */
   reads?: number[];
   flagged?: string | null;
+  /** A ruling's: it read only decisions retired with their slices, so it is over with them. */
+  retired?: boolean;
+  /** A release note's: its slice is released or abandoned, so nothing is held for it any more. */
+  gone?: boolean;
   /** A ruling's: when the owner reversed it, and what they said should hold instead. */
   reversedAt?: string | null;
   reversedBecause?: string | null;
@@ -103,7 +107,7 @@ export interface StewardEntry {
 
 /** A ruling in force that the owner has not yet kept or reversed. */
 /** A ruling the owner has to look at: new, or reading a decision that no longer holds. */
-export const unseenRuling = (e: StewardEntry) => e.kind === 'Ruling' && !e.reversedAt && (!e.handledAt || !!e.flagged);
+export const unseenRuling = (e: StewardEntry) => e.kind === 'Ruling' && !e.reversedAt && !e.retired && (!e.handledAt || !!e.flagged);
 
 export type ReleaseKind = 'Migration' | 'Config' | 'Action' | 'Note';
 
@@ -354,6 +358,10 @@ export const markStewardEntry = (project: string, id: number, mark: { handled?: 
   fetch(`/api/steward/entries/${id}?${q(project)}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(mark) })
     .then(json<{ answer: string }>);
 
+/** Tick off every call the steward made: the owner has read them all. */
+export const readAllStewardCalls = (project: string) =>
+  fetch(`/api/steward/entries/calls/read?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);
+
 // ---- the register of decisions -----------------------------------------------------------
 
 /** `retired`: its slice was released or abandoned - derived, never written. */
@@ -394,7 +402,8 @@ export interface StewardInstruction {
 
 export interface StewardRegister {
   next: number;
-  units: { unit: number; title: string }[];
+  /** Every slice, with `over` once it is released or abandoned: nothing more is decided for it. */
+  units: { unit: number; title: string; over: boolean }[];
   decisions: StewardDecision[];
   /** Provisional decisions whose point has come. */
   due: number[];

@@ -494,9 +494,11 @@ public partial class StewardService
             }).ToList();
         var waiting = await _db.StewardQuestions.AsNoTracking()
             .Where(q => q.ProjectKey == projectKey && q.Answer == null).OrderBy(q => q.AskedAt).ToListAsync(ct);
-        var rulings = await _db.StewardEntries.AsNoTracking()
+        // A ruling that read only decisions retired with their slices is over with them.
+        var retiredRulings = await RetiredRulingsAsync(projectKey, ct);
+        var rulings = (await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt == null)
-            .OrderBy(e => e.At).ToListAsync(ct);
+            .OrderBy(e => e.At).ToListAsync(ct)).Where(e => !retiredRulings.Contains(e.Id)).ToList();
         var learned = await UnplacedAsync(projectKey, ct);
         var flags = await RulingFlagsAsync(projectKey, ct);
         var instructions = await OpenInstructionsAsync(projectKey, ct);
@@ -2243,31 +2245,6 @@ public partial class StewardService
     private static readonly System.Text.RegularExpressions.Regex PlanLineAt = new(
         @"(\r?\n)*\*\*(?:Plan|Slice)\*\*\r?\n\r?\n(?:Unit|Slice) \d+[^\r\n]*\s*$");
 
-    /// <summary>A standing instruction from the owner that answers no question.</summary>
-    public async Task<StewardReply> OwnerSaysAsync(string projectKey, string text, CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return Refuse("bad-request", "There is nothing to record.");
-        if (Config(projectKey) is not { } cfg) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
-        var said = new StewardEntry { ProjectKey = projectKey, Kind = StewardEntryKind.OwnerSaid, Text = text.Trim() };
-        _db.StewardEntries.Add(said);
-        await _db.SaveChangesAsync(ct);
-        // Instructions with an end are a kind of their own later (docs/plans-as-slices.md, section 3);
-        // until then the owner's word counts as decided, as it always has.
-        _db.StewardDecisions.Add(new StewardDecision
-        {
-            ProjectKey = projectKey, Number = await NextNumberAsync(projectKey, ct), Rule = said.Text,
-            Source = StewardDecisionSource.OwnerSaid, SourceRef = $"record line {said.Id}",
-            // The owner's word about no slice is a rule every slice keeps (docs/slice-branches.md, section 4).
-            Convention = true,
-            MadeAt = said.At, DeliveredAt = DateTime.UtcNow,
-        });
-        await StewardDue.MarkAsync(_db, projectKey, "the owner left an instruction");
-        await _db.SaveChangesAsync(ct);
-        var exported = await ExportDecisionsAsync(cfg, ct);
-        _heartbeat?.Wake();
-        return new StewardReply("recorded", exported);
-    }
-
     /// <summary>
     /// The owner ticks a line of the record off, or says what kind of release note it is. Either
     /// may be left out. A kind is only for a release note; a call or an instruction has none.
@@ -2288,6 +2265,20 @@ public partial class StewardService
         if (handled is { } h) e.HandledAt = h ? e.HandledAt ?? DateTime.UtcNow : null;
         await _db.SaveChangesAsync(ct);
         return new StewardReply("recorded");
+    }
+
+    /// <summary>
+    /// The owner has read every call the steward made: each is ticked off at once. Only calls - a
+    /// release note is ticked one by one, because ticking one is what lets a slice be released.
+    /// </summary>
+    public async Task<StewardReply> OwnerReadsAllCallsAsync(string projectKey, CancellationToken ct = default)
+    {
+        if (Config(projectKey) is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        var now = DateTime.UtcNow;
+        var read = await _db.StewardEntries
+            .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Call && e.HandledAt == null)
+            .ExecuteUpdateAsync(s => s.SetProperty(e => e.HandledAt, now), ct);
+        return new StewardReply("recorded", null, new { read });
     }
 
     /// <summary>

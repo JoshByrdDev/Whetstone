@@ -1070,20 +1070,21 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task An_instruction_from_the_owner_is_put_in_front_of_the_next_run_once()
+    public async Task What_the_owner_did_is_put_in_front_of_the_next_run_once()
     {
-        await In(s => s.OwnerSaysAsync("alpha", "From now on a ticket carries one whole outcome."));
-        Assert.True((await In0(s => s.DueAsync("alpha"))).Due);
+        // A line the board writes for the owner - a flag cleared, a slice's decisions made.
+        await using (var ctx = NewCtx())
+        {
+            ctx.StewardEntries.Add(new StewardEntry { ProjectKey = "alpha", Kind = StewardEntryKind.OwnerSaid, Text = "Ticket 1: the deps flag is cleared for its change as it stands." });
+            await ctx.SaveChangesAsync();
+        }
 
         var first = System.Text.Json.JsonSerializer.Serialize((await Begin()).Data);
-        Assert.Contains("one whole outcome", first);
+        Assert.Contains("the deps flag is cleared", first);
         await In(s => s.EndAsync("alpha", "applied it", true));
 
         var second = System.Text.Json.JsonSerializer.Serialize((await Begin()).Data);
-        // Not news twice: a convention is in every briefing, but as an instruction it is delivered once.
         Assert.Contains("\"newInstructions\":[]", second);
-        Assert.Contains("one whole outcome",
-            System.Text.Json.JsonSerializer.Serialize((await In(s => s.DecisionsAsync("alpha", null))).Data));
     }
 
     [Fact]
@@ -1096,13 +1097,31 @@ public partial class StewardServiceTests : IDisposable
         Assert.Empty(_git.Committed);   // nothing decided yet, so nothing to write
 
         await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "The one we already pay for."));
-        await In(s => s.OwnerSaysAsync("alpha", "A ticket carries one whole outcome."));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("A ticket carries one whole outcome.", Convention: true)));
 
         var last = _git.Committed[^1];
         Assert.Equal("docs/decisions.md", last.Path);
         Assert.Contains("- **#1** The one we already pay for. (", last.Content);
         Assert.Contains("answering `sms-provider`: Which provider sends our texts?", last.Content);
         Assert.Contains("- **#2** A ticket carries one whole outcome.", last.Content);
+    }
+
+    [Fact]
+    public async Task Every_call_is_read_at_once_and_nothing_else_is_ticked()
+    {
+        var id = await AtReview();
+        await Begin();
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.Call, id, "Kept the wording."));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.Call, id, "Took the shorter label."));
+        await using (var ctx = NewCtx())
+        {
+            ctx.StewardEntries.Add(new StewardEntry { ProjectKey = "alpha", Kind = StewardEntryKind.BeforeRelease, TicketId = id, Text = "Run the migration." });
+            await ctx.SaveChangesAsync();
+        }
+
+        Assert.Equal("recorded", (await In(s => s.OwnerReadsAllCallsAsync("alpha"))).Answer);
+        Assert.All(Entries().Where(e => e.Kind == StewardEntryKind.Call), e => Assert.NotNull(e.HandledAt));
+        Assert.Null(Entries().Single(e => e.Kind == StewardEntryKind.BeforeRelease).HandledAt);
     }
 
     [Fact]

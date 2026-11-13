@@ -27,7 +27,7 @@ public partial class StewardServiceTests
         await In(s => s.AskAsync("alpha", Question("map-provider")));
 
         await In(s => s.OwnerAnswersAsync("alpha", "sms-provider", "The one we already pay for."));
-        await In(s => s.OwnerSaysAsync("alpha", "A ticket carries one whole outcome."));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("A ticket carries one whole outcome.", Convention: true)));
         Assert.Equal("recorded", (await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Texts go out from one number.", Convention: true)))).Answer);
         // #4 to #6 are the spec's, waiting to be settled under those numbers.
         Assert.Equal(new[] { 7, 8, 9 }, Register().Select(d => d.Number));

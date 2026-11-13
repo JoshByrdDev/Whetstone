@@ -98,10 +98,6 @@ public partial class StewardServiceTests
         Assert.Equal("bad-request", none.Answer);
         Assert.Contains("convention", none.Why);
         Assert.Contains("no unit", (await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("x", Unit: 1, Convention: true)))).Why);
-
-        await In(s => s.OwnerSaysAsync("alpha", "Never text a customer after nine."));
-        await using var ctx = NewCtx();
-        Assert.True(ctx.StewardDecisions.Single(d => d.Rule == "Never text a customer after nine.").Convention);
     }
 
     [Fact]
@@ -143,5 +139,40 @@ public partial class StewardServiceTests
             Replaces: new[] { new StewardReplacing(40, "Changed our mind.") })));
         Assert.Contains("retired with its slice", replace.Why);
         Assert.Contains("is over", (await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Late.", Unit: 1)))).Why);
+    }
+
+    [Fact]
+    public async Task A_ruling_that_read_only_a_released_slices_decisions_retires_with_it_and_is_not_flagged()
+    {
+        await ReleasableSlice();
+        var conv = await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Money is whole cents everywhere.", Convention: true)));
+        var c = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(conv.Data)).GetProperty("number").GetInt32();
+        await Begin();
+        Assert.Equal("ruled", (await In(s => s.RuleAsync("alpha", "Totals are shown in dollars.", "#40", null, new[] { 40 }))).Answer);
+        Assert.Equal("ruled", (await In(s => s.RuleAsync("alpha", "Refunds are whole cents too.", "#40 and the convention", null, new[] { 40, c }))).Answer);
+        await In(s => s.EndAsync("alpha", "ruled", true));
+
+        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+
+        var only = Entries().Single(e => e.Text == "Totals are shown in dollars.").Id;
+        var mixed = Entries().Single(e => e.Text == "Refunds are whole cents too.").Id;
+        Assert.Equal(new[] { only }, await In0(s => s.RetiredRulingsAsync("alpha")));
+        // Retiring is by design, not the owner changing their mind: nothing is flagged.
+        Assert.Empty(await In0(s => s.RulingFlagsAsync("alpha")));
+        // A run is handed the one that still reads a convention, and not the retired one.
+        var status = JsonSerializer.Serialize((await In(s => s.StatusAsync("alpha"))).Data);
+        Assert.Contains("Refunds are whole cents too.", status);
+        Assert.DoesNotContain("Totals are shown in dollars.", status);
+        Assert.NotEqual(only, mixed);
+    }
+
+    [Fact]
+    public async Task The_register_says_which_slices_are_over_so_none_is_offered_a_decision()
+    {
+        await ReleasableSlice();
+        await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true));
+        var view = JsonSerializer.Serialize((await In(s => s.RegisterViewAsync("alpha"))).Data);
+        Assert.Contains("{\"unit\":1,\"title\":", view);
+        Assert.Matches("\"unit\":1,\"title\":\"[^\"]*\",\"over\":true", view);
     }
 }

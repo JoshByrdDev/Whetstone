@@ -16,7 +16,7 @@ import { isStewardEvent } from '../types/events';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
 import {
   answerStewardQuestion, getSteward, getStewardEntries, getStewardPlan, getStewardRegister,
-  getStewardStatus, keepStewardRuling, markStewardEntry, reverseStewardRuling, runStewardNow, setStewardMode, unseenRuling,
+  getStewardStatus, keepStewardRuling, markStewardEntry, readAllStewardCalls, reverseStewardRuling, runStewardNow, setStewardMode, unseenRuling,
 } from '../api/steward';
 import type {
   StewardEntry, StewardMode, StewardOwnerFlag, StewardPage, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus,
@@ -125,7 +125,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const hearing = inReview.some(t => held[t.id] === undefined);
   const waitingCount = (page?.waiting.length ?? 0) + heldCount;
   // What a release still asks of its owner: the notes that are something to do, not only to know.
-  const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && e.release !== 'Note').length;
+  const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && !e.gone && e.release !== 'Note').length;
   // Rulings the steward made that the owner has not yet seen: they apply already, so they count.
   const unseen = entries.filter(unseenRuling).length;
   const recordCount = outstanding + unseen;
@@ -239,6 +239,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
               <StewardRecord
                 entries={entries} answered={page.answered} unit={notesUnit} onUnit={setNotesUnit}
                 onMark={async (id, mark) => { await markStewardEntry(page.project, id, mark); await load(); }}
+                onReadAllCalls={async () => { await readAllStewardCalls(page.project); await load(); }}
                 onKeep={async id => { await keepStewardRuling(page.project, id); await load(); }}
                 onReverse={async (id, because) => { await reverseStewardRuling(page.project, id, because); await load(); }}
               />

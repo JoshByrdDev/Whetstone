@@ -123,29 +123,45 @@ public partial class StewardService
     // ---- rulings on decisions that no longer hold ---------------------------------------------
 
     /// <summary>
-    /// Each ruling in force that reads a decision which no longer holds, with what happened to it.
-    /// A ruling is a reading of decisions, so a reading of a dead one is flagged until the owner
-    /// reverses it or keeps it.
+    /// Each ruling in force that reads a decision which was replaced or withdrawn, with what
+    /// happened to it. A ruling is a reading of decisions, so a reading of one the owner changed is
+    /// flagged until the owner reverses it or keeps it.
     /// </summary>
-    public async Task<Dictionary<int, string>> RulingFlagsAsync(string projectKey, CancellationToken ct = default)
+    public async Task<Dictionary<int, string>> RulingFlagsAsync(string projectKey, CancellationToken ct = default) =>
+        (await RulingReadsAsync(projectKey, ct)).Flags;
+
+    /// <summary>
+    /// The rulings that read only decisions retired with their slices. A slice's decisions retire on
+    /// purpose when it is released - its code is the decision then - so a reading of nothing but
+    /// those is over too: it is neither flagged nor handed to a run, and nobody is asked about it.
+    /// Derived, never written, like the retiring of the decisions it reads.
+    /// </summary>
+    public async Task<HashSet<int>> RetiredRulingsAsync(string projectKey, CancellationToken ct = default) =>
+        (await RulingReadsAsync(projectKey, ct)).Retired;
+
+    private async Task<(Dictionary<int, string> Flags, HashSet<int> Retired)> RulingReadsAsync(string projectKey, CancellationToken ct)
     {
         var rulings = await _db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == projectKey && e.Kind == StewardEntryKind.Ruling && e.ReversedAt == null && e.Reads != null)
             .ToListAsync(ct);
         var flags = new Dictionary<int, string>();
-        if (rulings.Count == 0) return flags;
+        var retired = new HashSet<int>();
+        if (rulings.Count == 0) return (flags, retired);
         var all = await RegisterAsync(projectKey, track: false, ct);
         var map = await IndexAsync(projectKey, all, ct);
         foreach (var r in rulings)
         {
-            var dead = Numbers(r.Reads).Select(n => (n, d: all.FirstOrDefault(x => x.Number == n))).Where(x => x.d is not null)
-                .Select(x => (x.n, st: StatusOf(x.d!, map))).Where(x => x.st.Gone)
+            var read = Numbers(r.Reads).Select(n => (n, d: all.FirstOrDefault(x => x.Number == n))).Where(x => x.d is not null)
+                .Select(x => (x.n, st: StatusOf(x.d!, map))).ToList();
+            if (read.Count == 0) continue;
+            // Replaced or withdrawn is the owner changing their mind: that is worth asking about.
+            var changed = read.Where(x => x.st.Gone && x.st.Name != Retired)
                 .Select(x => x.st.Name == Withdrawn ? $"#{x.n} was withdrawn"
-                    : x.st.Name == Retired ? $"#{x.n} retired with its slice"
                     : $"#{x.n} was replaced by {string.Join(", ", x.st.ReplacedBy.Select(b => $"#{b.By}"))}").ToList();
-            if (dead.Count > 0) flags[r.Id] = string.Join("; ", dead);
+            if (changed.Count > 0) flags[r.Id] = string.Join("; ", changed);
+            else if (read.All(x => x.st.Name == Retired)) retired.Add(r.Id);
         }
-        return flags;
+        return (flags, retired);
     }
 
     // ---- provisional decisions coming due ---------------------------------------------------------

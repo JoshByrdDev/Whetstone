@@ -309,10 +309,14 @@ public partial class StewardService
         var replaced = await IndexAsync(projectKey, all, ct);
         var titles = await UnitTitlesAsync(cfg, ct);
         var built = await BuiltUnitsAsync(cfg, ct);
+        // A slice released or abandoned is over: a decision for it is refused, so none is offered.
+        var over = (await _db.StewardUnits.AsNoTracking()
+            .Where(u => u.ProjectKey == projectKey && (u.ReleasedAt != null || u.AbandonedAt != null))
+            .Select(u => u.Unit).ToListAsync(ct)).ToHashSet();
         return new StewardReply("register", null, new
         {
             next = await NextNumberAsync(projectKey, ct),
-            units = titles.OrderBy(t => t.Key).Select(t => new { unit = t.Key, title = t.Value }),
+            units = titles.OrderBy(t => t.Key).Select(t => new { unit = t.Key, title = t.Value, over = over.Contains(t.Key) }),
             decisions = all.Select(d => Shape(d, StatusOf(d, replaced), titles)),
             // Provisional decisions whose unit is built: the owner confirms, replaces or lets each lapse.
             due = all.Where(d => d.Provisional && d.WithdrawnAt is null && !replaced.ContainsKey(d.Number)
