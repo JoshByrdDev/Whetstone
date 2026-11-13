@@ -56,7 +56,7 @@ public class GitWorktreeServiceTests : IDisposable
         Assert.True(all[0].IsMain);
         var wt = Assert.Single(all, w => !w.IsMain);
         Assert.Equal("jb/ALPHA-1", wt.Branch);
-        Assert.Equal(Path.GetFullPath(path), Path.GetFullPath(wt.Path));
+        Assert.Equal(PathIdentity.Canonical(path), PathIdentity.Canonical(wt.Path));
     }
 
     [Fact]

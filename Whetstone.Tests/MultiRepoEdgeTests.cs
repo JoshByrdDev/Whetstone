@@ -172,21 +172,24 @@ public class MultiRepoEdgeTests : IDisposable
         };
         Assert.Null(QaIsolation.Escapes(inside, data));
 
+        // Spelled in this machine's own separators and root: on a Mac a backslash is part of a name.
+        var up = Path.Combine("..", "..", "..", "..", "elsewhere");
+        var elsewhereRooted = OperatingSystem.IsWindows() ? @"D:\real-repo" : "/real-repo";
         var climbing = new ProjectConfig
         {
             Name = inside.Name, ProjectPath = inside.ProjectPath, WorktreeRoot = inside.WorktreeRoot, MemoryDir = inside.MemoryDir,
             ConfiguredRepos = new[]
             {
                 new RepoMember("charlie-web", "", Array.Empty<string>(), Array.Empty<string>(), false),
-                new RepoMember(@"..\..\..\..\elsewhere", "", Array.Empty<string>(), Array.Empty<string>(), false),
+                new RepoMember(up, "", Array.Empty<string>(), Array.Empty<string>(), false),
             },
         };
-        Assert.Contains(@"repo '..\..\..\..\elsewhere'", QaIsolation.Escapes(climbing, data));
+        Assert.Contains($"repo '{up}'", QaIsolation.Escapes(climbing, data));
 
         var rooted = new ProjectConfig
         {
             Name = inside.Name, ProjectPath = inside.ProjectPath, WorktreeRoot = inside.WorktreeRoot, MemoryDir = inside.MemoryDir,
-            ConfiguredRepos = new[] { new RepoMember(@"D:\real-repo", "", Array.Empty<string>(), Array.Empty<string>(), false) },
+            ConfiguredRepos = new[] { new RepoMember(elsewhereRooted, "", Array.Empty<string>(), Array.Empty<string>(), false) },
         };
         Assert.NotNull(QaIsolation.Escapes(rooted, data));
     }

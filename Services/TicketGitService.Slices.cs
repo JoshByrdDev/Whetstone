@@ -414,8 +414,7 @@ public partial class TicketGitService
         return (await ShaAsync(repo, "HEAD", ct), null);
     }
 
-    internal static bool SamePath(string a, string b) =>
-        string.Equals(Path.GetFullPath(a).TrimEnd('\\', '/'), Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+    internal static bool SamePath(string a, string b) => PathIdentity.Same(a, b);
 }
 
 /// <summary>The first half of a slice's release: why it cannot go, or the tip and files its checks run on.</summary>

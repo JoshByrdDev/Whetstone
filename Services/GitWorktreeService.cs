@@ -168,11 +168,7 @@ public class GitWorktreeService
         return new WorktreeRemoval(false, reason);
     }
 
-    private static bool PathsEqual(string a, string b) =>
-        string.Equals(
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(a.Replace('/', Path.DirectorySeparatorChar))),
-            Path.TrimEndingDirectorySeparator(Path.GetFullPath(b.Replace('/', Path.DirectorySeparatorChar))),
-            StringComparison.OrdinalIgnoreCase);
+    private static bool PathsEqual(string a, string b) => PathIdentity.Same(a, b);
 
     private static bool IsGitRepo(string dir) =>
         !string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir) && Path.Exists(Path.Combine(dir, ".git"));

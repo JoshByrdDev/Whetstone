@@ -115,12 +115,7 @@ public partial class TicketGitService
     private static string Listed(IReadOnlyList<string> files) =>
         string.Join(", ", files.Take(8)) + (files.Count > 8 ? $" and {files.Count - 8} more" : "");
 
-    private static bool IsUnder(string path, string root)
-    {
-        if (string.IsNullOrWhiteSpace(root)) return false;
-        static string Norm(string p) => Path.GetFullPath(p.Trim()).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
-        return Norm(path).StartsWith(Norm(root), StringComparison.OrdinalIgnoreCase);
-    }
+    private static bool IsUnder(string path, string root) => PathIdentity.IsUnder(path, root);
 
     private async Task<string?> ShaOfAsync(string repo, string rev, CancellationToken ct)
     {

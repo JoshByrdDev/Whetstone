@@ -16,6 +16,10 @@ namespace Whetstone.Tests;
 /// </summary>
 public class TicketCheckinTests : IDisposable
 {
+    // What these tests feed in is tf.exe's own output, which names files by Windows path: tf.exe runs
+    // nowhere else, and neither does a TFVC project's check-in.
+    private const string TfOutput = "the canned answers are tf.exe's Windows-path output";
+
     private readonly string _root;
     private readonly string _data;
     private readonly string _repo;
@@ -53,8 +57,16 @@ public class TicketCheckinTests : IDisposable
         Git(_repo, "commit", "-m", "the ticket");
         Git(_repo, "checkout", "main");
 
-        var fakeTf = Path.Combine(_root, "tf.cmd");
-        File.WriteAllText(fakeTf, "@echo off\r\ntype \"%~dp0tf-out.txt\"\r\n");
+        // A stand-in tf that prints whatever the test last said TFVC answers: a batch file on Windows,
+        // and on a Mac, where TFVC itself never runs but this code still has to hold, a shell script.
+        var fakeTf = Path.Combine(_root, OperatingSystem.IsWindows() ? "tf.cmd" : "tf");
+        if (OperatingSystem.IsWindows())
+            File.WriteAllText(fakeTf, "@echo off\r\ntype \"%~dp0tf-out.txt\"\r\n");
+        else
+        {
+            File.WriteAllText(fakeTf, "#!/bin/sh\ncat \"$(dirname \"$0\")/tf-out.txt\"\n");
+            File.SetUnixFileMode(fakeTf, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
         TfSays("There are no pending changes.\r\n");
 
         Directory.CreateDirectory(Path.Combine(_data, "projects", "bravo"));
@@ -120,7 +132,7 @@ public class TicketCheckinTests : IDisposable
 
     // ---- stage --------------------------------------------------------------
 
-    [Fact]
+    [WindowsFact(TfOutput)]
     public async Task Staging_merges_without_committing_and_the_status_then_asks_TFVC()
     {
         var before = Sha("main");
@@ -244,7 +256,7 @@ public class TicketCheckinTests : IDisposable
     // ---- record -------------------------------------------------------------
 
     /// <summary>The whole point of the feature: a new file still under Detected Changes blocks the record.</summary>
-    [Fact]
+    [WindowsFact(TfOutput)]
     public async Task Record_refuses_and_names_a_file_that_was_never_promoted()
     {
         Assert.True((await _svc.StageCheckinAsync("bravo", "jb/1")).Ok);
@@ -260,7 +272,7 @@ public class TicketCheckinTests : IDisposable
         Assert.Equal(Sha("jb/1"), MergeHead());   // still staged, ready for another go
     }
 
-    [Fact]
+    [WindowsFact(TfOutput)]
     public async Task Record_names_every_half_of_a_rename_that_is_still_detected()
     {
         Assert.True((await _svc.StageCheckinAsync("bravo", "jb/1")).Ok);
@@ -411,7 +423,7 @@ public class TicketCheckinTests : IDisposable
 
     private static string SourceOf(TfvcSyncPreview p, string path) => p.Files.Single(f => f.Path == path).Source;
 
-    [Fact]
+    [WindowsFact(TfOutput)]
     public async Task Sync_preview_tells_the_servers_changes_from_the_humans_own()
     {
         GetLatestLanded();
@@ -431,7 +443,7 @@ public class TicketCheckinTests : IDisposable
         Assert.StartsWith("Sync with TFVC after the ", p.SuggestedMessage);
     }
 
-    [Fact]
+    [WindowsFact(TfOutput)]
     public async Task Sync_commits_only_the_servers_changes_and_leaves_the_rest_in_the_tree()
     {
         GetLatestLanded();
@@ -457,7 +469,7 @@ public class TicketCheckinTests : IDisposable
         Assert.Empty(Run(_repo, "git", "diff", "--cached", "--name-only").Trim());
     }
 
-    [Fact]
+    [WindowsFact(TfOutput)]
     public async Task Sync_refuses_a_list_that_no_longer_matches_the_hub()
     {
         GetLatestLanded();

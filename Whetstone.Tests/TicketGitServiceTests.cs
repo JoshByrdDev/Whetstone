@@ -127,7 +127,7 @@ public class TicketGitServiceTests : IDisposable
 
         Assert.True(r.Ok, r.Error);
         Assert.True(r.Forced);
-        Assert.Equal(Path.GetFullPath(wt), Path.GetFullPath(r.SharedWith!));
+        Assert.Equal(PathIdentity.Canonical(wt), PathIdentity.Canonical(r.SharedWith!));
         Assert.Equal("jb/ALPHA-1", CurrentBranch());
     }
 
@@ -308,7 +308,7 @@ public class TicketGitServiceTests : IDisposable
         var p = await _svc.PreflightAsync("alpha", "jb/ALPHA-1");
 
         Assert.Equal(1, p.WorktreeDirtyFiles);
-        Assert.Equal(Path.GetFullPath(wt), Path.GetFullPath(p.WorktreePath!));
+        Assert.Equal(PathIdentity.Canonical(wt), PathIdentity.Canonical(p.WorktreePath!));
     }
 
     [Fact]
@@ -658,7 +658,7 @@ public class TicketGitServiceTests : IDisposable
         var r = await _svc.RebaseAsync("alpha", "jb/ALPHA-1");
 
         Assert.True(r.Ok, r.Error);
-        Assert.Equal(Path.GetFullPath(wt), Path.GetFullPath(r.RanIn));
+        Assert.Equal(PathIdentity.Canonical(wt), PathIdentity.Canonical(r.RanIn));
         Assert.Equal("main", CurrentBranch());
         Assert.True(File.Exists(Path.Combine(wt, "b.txt")));
         Assert.Equal(0, (await _svc.PreflightAsync("alpha", "jb/ALPHA-1")).Behind);

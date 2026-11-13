@@ -237,6 +237,5 @@ public class WorktreeReaper : BackgroundService
         catch { return true; }
     }
 
-    private static string Normalize(string path) =>
-        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path.Replace('/', Path.DirectorySeparatorChar)));
+    private static string Normalize(string path) => PathIdentity.Canonical(path);
 }

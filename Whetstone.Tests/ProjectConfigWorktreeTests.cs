@@ -17,8 +17,11 @@ public class ProjectConfigWorktreeTests
     [Fact]
     public void Derives_a_sibling_of_the_repo_keyed_by_project()
     {
-        var expected = Path.Combine(Path.GetFullPath(@"C:\Projects"), ".worktrees", "alpha");
-        Assert.Equal(expected, Root(@"C:\Projects\Alpha"));
+        // A rooted path on whichever machine runs this: on a Mac "C:\Projects\Alpha" is one relative
+        // file name, with no folder above it to be a sibling in.
+        var projects = OperatingSystem.IsWindows() ? @"C:\Projects" : "/Projects";
+        var expected = Path.Combine(projects, ".worktrees", "alpha");
+        Assert.Equal(expected, Root(Path.Combine(projects, "Alpha")));
     }
 
     [Fact]
