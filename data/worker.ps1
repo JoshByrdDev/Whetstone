@@ -2033,7 +2033,7 @@ function Invoke-Reflection {
         # Per-ticket, not one shared name: three agents reflecting at once would otherwise overwrite
         # each other's prompt between the write and the read, and the reply would be about someone
         # else's run.
-        $tempReflectFile = Join-Path $env:TEMP "claude-reflect-prompt-$TicketId.md"
+        $tempReflectFile = Join-Path ([IO.Path]::GetTempPath()) "claude-reflect-prompt-$TicketId.md"
         Set-Content -Path $tempReflectFile -Value $reflectPrompt -Encoding UTF8
         # NB: a Start-Job runs in a separate process and does NOT inherit script variables, so the
         # whole command has to be passed in (not rebuilt from $ReflectProvider inside the block, which

@@ -10,6 +10,9 @@ using Whetstone.Models;
 using Whetstone.Services;
 using Whetstone.Services.Tracker;
 
+// A board's data folder moved to another machine: rewrite the absolute paths it holds, then exit.
+if (args.Length > 0 && args[0] == "move-paths") Environment.Exit(MachineMove.Run(args[1..], Console.Out));
+
 // Every agent this app launches - heartbeat workers, one-shot runs, the improvement applier - is its
 // own top-level Claude session. Started from inside Claude Code (`dotnet run` in a session's shell),
 // the app inherits that session's variables and passes them to all of them: CLAUDECODE=1 makes claude

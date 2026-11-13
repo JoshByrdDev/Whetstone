@@ -577,10 +577,11 @@ function Get-BoardTicketData {
         $archive = [IO.Compression.ZipFile]::OpenRead($zip)
         $count = 0
         try {
-            $root = [IO.Path]::GetFullPath($DataRoot).TrimEnd('\') + '\'
+            $sep = [IO.Path]::DirectorySeparatorChar
+            $root = [IO.Path]::GetFullPath($DataRoot).TrimEnd('\', '/') + $sep
             foreach ($entry in $archive.Entries) {
                 if (-not $entry.Name) { continue }
-                $dest = [IO.Path]::GetFullPath((Join-Path $DataRoot ($entry.FullName -replace '/', '\')))
+                $dest = [IO.Path]::GetFullPath((Join-Path $DataRoot ($entry.FullName -replace '[\\/]', $sep)))
                 # Only ever under this data root, whatever the archive says.
                 if (-not $dest.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { continue }
                 New-Item -ItemType Directory -Path (Split-Path -Parent $dest) -Force | Out-Null

@@ -59,8 +59,12 @@ public class SetupCheckService
             () => ClaudeApiCredits.Read(registry.GetGlobalConfig()) is { Enabled: true } s
                 ? (s.Keys.Count, ClaudeApiCredits.RunnerUnavailable(paths))
                 : null,
-            () => PowerShellHost.FindPwsh(Environment.GetEnvironmentVariable("PATH"),
-                Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles)),
+            // FindPwsh answers only on Windows - elsewhere "pwsh" by name is what is started - so off
+            // Windows the check asks PATH itself, or a Mac would always show pwsh missing.
+            () => OperatingSystem.IsWindows()
+                ? PowerShellHost.FindPwsh(Environment.GetEnvironmentVariable("PATH"),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles))
+                : FindOnPath("pwsh", Environment.GetEnvironmentVariable("PATH")),
             () => registry.Projects.Where(k => SafeCapture(registry, k)).ToList() is { Count: > 0 } capturing
                 ? (capturing, NodePageCapturer.UnavailableAt(paths))
                 : null))
@@ -316,11 +320,15 @@ public class SetupCheckService
     /// <summary>
     /// Where a bare command name resolves on a PATH-style list, the way PowerShell's Get-Command does
     /// for the heartbeat: each directory in order, each PATHEXT extension in order. Null when nowhere.
+    /// Off Windows there is no PATHEXT and a program is its bare name, so that is what is looked for
+    /// unless <paramref name="pathExt"/> says otherwise.
     /// </summary>
     public static string? FindOnPath(string name, string? searchPath, string? pathExt = null)
     {
-        var exts = (pathExt ?? Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
-            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        var exts = (pathExt is null && !OperatingSystem.IsWindows()
+                ? new[] { "" }
+                : (pathExt ?? Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+                    .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             .Append(".ps1");
         foreach (var dir in (searchPath ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {

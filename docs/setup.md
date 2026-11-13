@@ -154,3 +154,22 @@ whole. Worker hosts have their own guide: [`worker-host-setup.md`](worker-host-s
 `data/config.json`, every `project.json`, and `data/projects/*/` are gitignored and are this machine's
 alone. Each project folder is its own nested repo with its own private remote. A second computer gets
 its own projects, set up again from [§3](#3-first-run).
+
+The exception is moving a board to another machine, where the data folder goes with it. The
+database, `config.json` and each `project.json` then still name the old machine's folders: a
+ticket's worktree, a project's `projectPath`, a Claude login's `configDir`. With the board stopped
+on the new machine, rewrite them from a map of old folder to new, listing first and writing second:
+
+```bash
+dotnet run -c Release -- move-paths --map "C:\Projects=/Users/me/Projects" --map "C:\Users\me=/Users/me"
+```
+
+```bash
+dotnet run -c Release -- move-paths --map "C:\Projects=/Users/me/Projects" --map "C:\Users\me=/Users/me" --apply
+```
+
+It works in either direction and between drives, and rewrites only values that are paths - prose
+that mentions one stays as written. `--apply` refuses while a board answers on the folder's own
+address, and keeps a copy of each file it writes (`*.premove-<stamp>.bak`, the database's in
+`backups/`). Commands in a `project.json` (a stack's `up`, a setup step) are not paths, and a
+project worked on a Mac needs sh ones in place of cmd.

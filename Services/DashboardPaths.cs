@@ -37,8 +37,21 @@ public class DashboardPaths
         //    repo root (the folder containing Whetstone.csproj). This works
         //    for both `dotnet run` (cwd = repo root) and running the built exe
         //    from bin/Debug/net9.0.
-        foreach (var start in new[] { env.ContentRootPath, AppContext.BaseDirectory })
+        // 3. Fallback: content root
+        return FindRepoData(env.ContentRootPath, AppContext.BaseDirectory)
+            ?? Path.Combine(env.ContentRootPath, "data");
+    }
+
+    /// <summary>
+    /// The <c>data</c> folder of the checkout one of <paramref name="starts"/> is in (the first folder
+    /// up from it that holds Whetstone.csproj), or null when none is. Also used without a web host, by
+    /// the command-line verbs (<see cref="MachineMove"/>).
+    /// </summary>
+    public static string? FindRepoData(params string[] starts)
+    {
+        foreach (var start in starts)
         {
+            if (string.IsNullOrWhiteSpace(start)) continue;
             var dir = new DirectoryInfo(start);
             while (dir != null)
             {
@@ -47,9 +60,7 @@ public class DashboardPaths
                 dir = dir.Parent;
             }
         }
-
-        // 3. Fallback: content root
-        return Path.Combine(env.ContentRootPath, "data");
+        return null;
     }
 
     public string ProjectsDir => Path.Combine(DataRoot, "projects");

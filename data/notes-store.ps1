@@ -451,7 +451,7 @@ function Write-MemoryNote {
 function Invoke-AgentPrompt {
     param([string]$Prompt, $Command, [string]$WorkDir, [int]$TimeoutSec = 120, [string]$Tag = "agent")
 
-    $tempFile = Join-Path $env:TEMP "whetstone-$Tag-$PID-$(Get-Random).md"
+    $tempFile = Join-Path ([IO.Path]::GetTempPath()) "whetstone-$Tag-$PID-$(Get-Random).md"
     Set-Content -Path $tempFile -Value $Prompt -Encoding UTF8
     $reply = ""
     try {

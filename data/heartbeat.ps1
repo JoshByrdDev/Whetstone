@@ -80,6 +80,9 @@ Remove-Item -Path $StartupErrorFile -ErrorAction SilentlyContinue
 # record, which it is anyway.
 $HasConsole = $true
 try { $null = [Console]::WindowWidth } catch { $HasConsole = $false }
+# Off Windows there are no windows to hide: Start-Process refuses -WindowStyle there, and an agent
+# started with -NoNewWindow writes to wherever this process's output goes, console or not.
+if (-not $IsWindows) { $HasConsole = $true }
 
 # --- Lock ---
 # The lock records WHO holds it, not just when. Without the PID the dashboard can only tell that
