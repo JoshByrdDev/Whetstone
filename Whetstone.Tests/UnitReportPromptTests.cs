@@ -19,13 +19,13 @@ public class UnitReportPromptTests
             new Ticket
             {
                 Id = 11, ProjectKey = "alpha", Title = "Save an address", Phase = TicketPhase.Done,
-                PlanKey = "p1", PlanUnit = 1, PlanOutcomes = "A1", MergedAt = landed.AddDays(-1),
+                PlanUnit = 1, PlanOutcomes = "A1", MergedAt = landed.AddDays(-1),
                 QaShots = { new QaShot { TicketId = 11, Order = 1, Caption = "the address list", ImageFile = "1.png" } },
             },
             new Ticket
             {
                 Id = 12, ProjectKey = "alpha", Title = "Pick a default", Phase = missing ? TicketPhase.QaTesting : TicketPhase.Done,
-                PlanKey = "p1", PlanUnit = 1, PlanOutcomes = "A1,A2", MergedAt = missing ? null : landed,
+                PlanUnit = 1, PlanOutcomes = "A1,A2", MergedAt = missing ? null : landed,
                 QaShots = { new QaShot { TicketId = 12, Order = 1, Caption = "the list with a default marked", ImageFile = "1.png" } },
             },
         };
@@ -36,15 +36,15 @@ public class UnitReportPromptTests
         };
         var analyses = missing ? new[] { Analysis(5, 11) } : new[] { Analysis(5, 11), Analysis(6, 12) };
         var calls = new[] { new StewardEntry { Kind = StewardEntryKind.Call, TicketId = 12, Text = "kept the default per customer, not per visit", At = landed } };
-        return UnitMaterial.Build(new UnitMaterial.Input("p1", One,
+        return UnitMaterial.Build(new UnitMaterial.Input(One,
             new[] { new PlanGroup("A customer", new[] { new PlanOutcomeText("A1", "can save an address"), new PlanOutcomeText("A2", "can pick a default") }) },
             tickets, Array.Empty<StewardOutcome>(), calls, analyses, new Dictionary<int, UnitMaterial.BranchTip>(), new Dictionary<int, DateTime>()));
     }
 
     private static string Build(UnitMaterial.Result m, UnitRange? range = null) =>
         UnitReportPrompt.Build(new UnitReportPrompt.Context(
-            "Alpha", "", "First plan", One, "Addresses", One.Text, m,
-            new[] { new StewardOutcome { Plan = "p1", Unit = 1, Outcome = "A1", State = StewardOutcomeState.Done } },
+            "Alpha", "", One, "Addresses", One.Text, m,
+            new[] { new StewardOutcome { Unit = 1, Outcome = "A1", State = StewardOutcomeState.Done } },
             range ?? new UnitRange("main", "1111111111aa", "2222222222bb", 5, 2, new Dictionary<int, UnitMaterial.BranchTip>()),
             "C:/Repos/Alpha", new Dictionary<int, string> { [1] = "C:/data/run/unit-report/shots/1.png" },
             new Dictionary<int, IReadOnlyList<string>> { [12] = new[] { "QaTesting -> NeedsImplementation: the default was lost on refresh" } },

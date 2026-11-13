@@ -148,7 +148,7 @@ names it as `{{BASE_REF}}` and the skills say `<base-ref>`. A skill that spells 
 or bare `<base>` in a git command has reintroduced the bug for one kind of project or the other.
 
 **On a project with slice branches the base is the ticket's, not the project's**
-(`docs/slice-branches.md`, `sliceBranches` with `mergeInsteadOfPr`). A ticket of an open slice is
+(`docs/slice-branches.md`, `ProjectConfig.SliceBranchesOn`: `mergeInsteadOfPr`, one git repo). A ticket of an open slice is
 based on that slice's branch, `slice/<NN>-<name>`, which is local only; any other ticket on the
 project's base. Both functions above are handed that branch rather than finding it: the claim
 carries it (`baseBranch`, read by `Resolve-TicketBase`) and the board asks `SliceBranches.BaseFor`.
@@ -361,7 +361,7 @@ above it is.
 
 ## A project can have a steward, and its limits are code
 
-A steward stands in for a ticket's owner between worker runs: it files the next tickets from a plan
+A steward stands in for a ticket's owner between worker runs: it files the next tickets from the slices
 the owner agreed, answers blocked tickets from decisions already made, reviews and merges finished
 work, and asks the owner only what is the owner's. It is per project, off unless its owner switches
 it on, and it is the one thing in the pipeline that moves a ticket to Done without a person.
@@ -375,17 +375,16 @@ narrowing is enforced in `StewardService`, not asked for in a prompt:
 | The mode - `off`, `propose` (says what it would do), `manage` (never merges), `full` | `stewardMode` in the project's machine-local `project.json`; set only from the Steward page. No tool changes it |
 | Full means merging only where a merge is local | `ProjectConfig.StewardMode`: by pull request or TFVC it stops at `manage` however it is set |
 | A change needs a run, and one run at a time | the `steward:<key>` lease, taken by `steward_begin` |
-| Tickets only against a unit of the plan its owner agreed - a slice, on a project with slice branches | the spec's status line, read from git **as committed** - nothing a steward can run commits one. The owner can, from the Steward page: a REST route with no tool behind it, that makes the same commit |
-| A unit is released when its owner says so | `StewardUnit.ReleasedAt`, set by a REST route with no tool behind it, and refused while an outcome is not done or a note that is something to do is not ticked off. With slice branches the same press is the merge of the slice into the local base, which the board makes and never pushes |
+| Tickets only against a slice its owner agreed | the spec's status line, read from git **as committed** - nothing a steward can run commits one. The owner can, from the Steward page: a REST route with no tool behind it, that makes the same commit |
+| A slice is released when its owner says so | `StewardUnit.ReleasedAt`, set by a REST route with no tool behind it, and refused while an outcome is not done or a note that is something to do is not ticked off. The same press is the merge of the slice's branch into the local base, which the board makes and never pushes |
 | What a merge must prove, and may never carry | shared flags + the project's `steward-flags.ps1` + its `mergeChecks`, all inside `MergeAsync` |
-| A review gate the owner put a ticket on by hand is the owner's | `steward_approve` and `steward_send_back` pass a plan or a build only where a hand-off stopped it; the last move onto the gate being a person's refuses both (`OwnerPlacedAsync`). A declined expansion item is deleted from the plan, and every approval is a `Call` on the owner's record |
+| A review gate the owner put a ticket on by hand is the owner's | `steward_approve` and `steward_send_back` pass a plan or a build only where a hand-off stopped it; the last move onto the gate being a person's refuses both (`OwnerPlacedAsync`). A declined expansion item is deleted from the ticket's plan, and every approval is a `Call` on the owner's record |
 | What it asks, it cannot answer | answering a question is a REST route with no tool behind it |
 | A flag that is the owner's stops every merge until the owner clears it | `StewardClearance`, set by a REST route with no tool behind it, for one flag on one ticket's change as it stands - a rework lets it lapse, except that a flag which says what it is about - its own `about` (a project's flag script can send one: the packages and versions, say), or the diff of the files it names - is cleared for that and holds while it is the same; a rebase whose only conflicts the project's resolver settled is not rework, and carries it (`CarryClearancesAsync`, recorded as a call). A merge answers `behind` before it raises any flag, so the owner is asked about the tip that merges. An answer to a question is prose and lifts nothing |
 | What it notes for a release, it cannot clear | ticking a note off, or re-sorting it, is a REST route with no tool behind it |
-| What is decided, and whether it still is | the register (`StewardDecision`, docs/plans-as-slices.md section 3). Recording, replacing, withdrawing, and settling a pair the import flagged are REST routes with no tool behind them; `steward_decisions` only reads. A replacing is stored on the newer decision only, and a number is the project's for good. With slice branches a decision is one slice's or a convention, a slice's retire when it is released (derived, never written), and only the owner promotes one into the conventions file |
+| What is decided, and whether it still is | the register (`StewardDecision`, docs/plans-as-slices.md section 3). Recording, replacing and withdrawing are REST routes with no tool behind them; `steward_decisions` only reads. A replacing is stored on the newer decision only, and a number is the project's for good. A decision is one slice's or a convention, a slice's retire when it is released (derived, never written), and only the owner promotes one into the conventions file |
 | Ideas are the owner's; a building slice's story changes only with an answer | committing a proposed idea, and rewording a story sentence, happen only on the owner's answer to a question; `steward_draft_unit` refuses a draft no idea stands for, and a story that does not check |
-| A slice's walk-through is the board's | the board files it (`Ticket.Walkthrough`, straight to NeedsQa on the base, or on the slice's branch where it has one) and calls it done on a pass; the steward can do neither |
-| Moving to slice branches is the owner's, once | the switch (`POST /api/steward/switch`, `StewardService.Switch.cs`): a REST route with no tool behind it, refused while a slice is in flight |
+| A slice's walk-through is the board's | the board files it (`Ticket.Walkthrough`, straight to NeedsQa on the slice's branch) and calls it done on a pass; the steward can do neither |
 
 **The words are taken.** "Orchestrator" is `heartbeat.ps1` and "owner" is the human whose ticket it
 is - both everywhere in this code. The stand-in is the *steward*, and a new name for it in one file
@@ -412,26 +411,20 @@ is the prompt's rule alone - the same gap, for the same reason, as the local-onl
 
 | What is specific | Where it goes |
 |---|---|
-| Limits, the branch synced into the base, never-merged paths, merge checks | `steward` in `project.defaults.json` |
-| The plan being worked: its `key` and `name`, where its units live (`units`), the document they are cut from (`master`) | `steward.plan` there; the plans before it, readable and worked by nothing, in `steward.pastPlans` |
+| Limits, never-merged paths, merge checks, the conventions file | `steward` in `project.defaults.json` |
+| Where the slices live, and how their files are spelled when not the default | `steward.slices` there, and `steward.sliceFormat` |
 | What only that repo makes worth holding a merge for | `data/projects/<key>/steward-flags.ps1`, which like `guard.ps1` can only add a reason to wait |
 | The order of work and the judgment behind it | `data/projects/<key>/skills/steward/skill.md` (template: `data/skill-templates/steward/skill.md`) |
 
-**A project works one plan at a time, and a unit's number means nothing without its plan.** Every
-plan numbers its units from one, so a ticket and an outcome carry the plan's key beside the unit
-(`Ticket.PlanKey`, `StewardOutcome.Plan`), and anything that counts a unit's tickets filters on
-both. A count by `PlanUnit` alone is right until the day a second plan starts and wrong from then
-on. Starting one is the owner's (the Steward page, `data/plan-templates/` for the charter's, an idea's and a draft's
-shape) and is refused while the plan being worked has a ticket open.
-
-**A project with slice branches has no plan at all** (`docs/slice-branches.md`). Its slices are
-numbered by the number alone, in `steward.slices` (or the old `plan.units`); `ProjectConfig.Steward`
-reads it with no plan key, charter, past plans or `syncFrom` (`StewardConfig.ForSlices`), so
-everything that filters on the plan's key reads none, and a row that still carries an old key is
-history. What it keeps across slices is `steward.conventions`, the owner's file; at most
-`slicesInFlight` are open at once. The plan code stays only for projects that have not switched.
-The steward is told which kind it is by its prompt (`{{PLAN_LINES}}`, `{{SLICES_RULE}}`, empty on
-a project with a plan), and its skill's **Slice branches** section is a pipeline rule like any other.
+**Slices are the top level: there is no plan around them** (`docs/slice-branches.md`). A steward
+exists only where a slice's branch merges on this machine (`ProjectConfig.SliceBranchesOn`:
+`mergeInsteadOfPr`, not TFVC, one repo) - anywhere else its mode reads `off` however it is set.
+A slice is numbered for good by its number alone (`Ticket.PlanUnit`, `StewardOutcome.Unit`), an
+idea, a draft or an agreed spec in the `steward.slices` folder, built on `slice/<NN>-<name>` and
+released into the local base. What it keeps across slices is `steward.conventions`, the owner's
+file; at most `slicesInFlight` are open at once. A draft's shape is `data/slice-templates/draft.md`.
+Plans, charters, past plans, a synced-in branch and the decisions import were all removed, columns
+included; nothing reads a plan key, so do not bring one back for a second kind of project.
 
 The rules that outrank that skill are `data/steward-prompt.md`. Changing what a steward may do?
 The tests are the specification of the limits:

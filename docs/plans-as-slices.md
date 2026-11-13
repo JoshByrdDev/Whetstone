@@ -8,6 +8,10 @@
 > nothing, and a register of decisions where each decision has one status and an override is
 > declared when it is made. Each slice's story is tied to its outcomes, kept true by the decisions
 > that change it, and driven end to end before the slice counts as built.
+>
+> Superseded 2026-11-13 by `docs/slice-branches.md`: the plan, its charter, its key and the
+> decisions import are gone from the code. Read this for the slice story (section 4) and the
+> register's shape (section 3); everything here about a plan around the slices is history.
 
 ## Why
 

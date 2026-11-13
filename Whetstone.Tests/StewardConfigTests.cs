@@ -58,23 +58,28 @@ public class StewardConfigTests : IDisposable
     }
 
     [Fact]
-    public void A_plan_may_name_the_document_its_units_are_cut_from()
+    public void The_slices_folder_is_read_as_a_repo_path()
     {
-        Assert.Equal("", Load("""{ "steward": { "plan": { "units": "docs/units" } } }""").Steward.Plan.Master);
-        var plan = Load("""{ "steward": { "plan": { "units": "docs/units", "master": "/docs\\PLAN.md" } } }""").Steward.Plan;
-        Assert.Equal("docs/PLAN.md", plan.Master);
-        Assert.Equal("docs/units", plan.UnitsDir);
+        var plan = Load("""{ "steward": { "slices": "\\docs\\slices\\" } }""").Steward.Plan;
+        Assert.True(plan.Configured);
+        Assert.Equal("docs/slices", plan.UnitsDir);
+        // The shape from before slices were the top level is not read: a project on it names no slices.
+        Assert.False(Load("""{ "steward": { "plan": { "units": "docs/units" } } }""").Steward.Plan.Configured);
     }
 
     [Fact]
-    public void Full_is_only_full_where_a_merge_stays_on_this_machine()
+    public void A_steward_exists_only_where_a_slice_branch_merges_on_this_machine()
     {
-        // By pull request the last step is a push; by TFVC the one writer is the human.
-        Assert.Equal(StewardMode.Manage, Load("""{ }""", """{ "stewardMode": "full" }""").StewardMode);
-        Assert.Equal(StewardMode.Manage,
+        // By pull request the last step is a push; by TFVC the one writer is the human; a folder of
+        // repos has no one base for a slice's branch to be cut from.
+        Assert.Equal(StewardMode.Off, Load("""{ }""", """{ "stewardMode": "full" }""").StewardMode);
+        Assert.Equal(StewardMode.Off,
             Load("""{ "mergeInsteadOfPr": true, "repoType": "tfvc" }""", """{ "stewardMode": "full" }""").StewardMode);
-        Assert.Equal(StewardMode.Full,
-            Load("""{ "mergeInsteadOfPr": true }""", """{ "stewardMode": "full" }""").StewardMode);
+        Assert.Equal(StewardMode.Off,
+            Load("""{ "mergeInsteadOfPr": true, "repos": ["alpha-web", "alpha-api"] }""", """{ "stewardMode": "full" }""").StewardMode);
+        var cfg = Load("""{ "mergeInsteadOfPr": true }""", """{ "stewardMode": "full" }""");
+        Assert.Equal(StewardMode.Full, cfg.StewardMode);
+        Assert.True(cfg.SliceBranchesOn);
     }
 
     [Fact]
@@ -85,9 +90,11 @@ public class StewardConfigTests : IDisposable
           "steward": {
             "limits": { "createdPerDay": 100, "openAtOnce": 9, "sendBacksPerTicket": 3 },
             "memoMaxChars": 5000,
-            "syncFrom": "main",
             "decisionsFile": "docs\\plan\\decisions.md",
-            "plan": { "units": "docs/plan/units/", "outcome": "^## ([A-Z]\\d+)" },
+            "conventions": "docs\\conventions.md",
+            "slicesInFlight": 3,
+            "slices": "docs/plan/units/",
+            "sliceFormat": { "outcome": "^## ([A-Z]\\d+)" },
             "neverMerge": ["infra/", "deploy.config.ts"],
             "mergeChecks": [
               { "run": "npm run check" },
@@ -101,7 +108,8 @@ public class StewardConfigTests : IDisposable
         Assert.Equal(100, s.CreatedPerDay);
         Assert.Equal(9, s.OpenAtOnce);
         Assert.Equal(3, s.SendBacksPerTicket);
-        Assert.Equal("main", s.SyncFrom);
+        Assert.Equal("docs/conventions.md", s.Conventions);
+        Assert.Equal(3, s.SlicesInFlight);
         Assert.Equal("docs/plan/decisions.md", s.DecisionsFile);
         Assert.Equal("docs/plan/units", s.Plan.UnitsDir);
         Assert.Equal(@"^## ([A-Z]\d+)", s.Plan.Outcome);
@@ -116,7 +124,7 @@ public class StewardConfigTests : IDisposable
     [Fact]
     public void A_pattern_that_will_not_compile_falls_back_rather_than_breaking_every_run()
     {
-        var s = Load("""{ "steward": { "plan": { "units": "docs", "agreed": "([unclosed" } } }""").Steward;
+        var s = Load("""{ "steward": { "slices": "docs", "sliceFormat": { "agreed": "([unclosed" } } }""").Steward;
         Assert.Equal(StewardPlan.DefaultAgreed, s.Plan.Agreed);
     }
 

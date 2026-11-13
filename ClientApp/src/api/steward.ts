@@ -81,7 +81,7 @@ export interface StewardEntry {
   kind: 'Call' | 'BeforeRelease' | 'OwnerSaid' | 'TicketNote' | 'Ruling' | 'Learned';
   ticketId?: number | null;
   ticketTitle?: string | null;
-  /** The unit of the plan it belongs to, by way of its ticket. */
+  /** The slice it belongs to, by way of its ticket. */
   unit?: number | null;
   /** For a release note: what kind of thing it is. */
   release?: ReleaseKind | null;
@@ -166,11 +166,11 @@ export const answerStewardQuestion = (project: string, key: string, answer: stri
     method: 'POST', headers: jsonHeaders, body: JSON.stringify({ answer, replaces, story }),
   }).then(json<{ answer: string }>);
 
-/** A ticket's place in a plan: the plan's key, the unit's number, the outcomes it carries. */
-export interface TicketPlanLink { key: string; unit: number; outcomes: string[] }
+/** A ticket's place among the slices: the slice's number and the outcomes it carries. */
+export interface TicketPlanLink { unit: number; outcomes: string[] }
 
-/** Link a ticket to a unit of a plan (plan null is the one being worked), or unit null to take it out. */
-export const setTicketPlan = (ticketId: number, link: { plan?: string | null; unit: number | null; outcomes?: string[] }) =>
+/** Link a ticket to a slice, or unit null to take it out. */
+export const setTicketPlan = (ticketId: number, link: { unit: number | null; outcomes?: string[] }) =>
   fetch(`/api/tickets/${ticketId}/plan`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(link) })
     .then(json<{ answer: string }>);
 
@@ -188,7 +188,7 @@ export interface StewardPlanOutcome {
   tickets: StewardPlanTicket[];
 }
 
-/** One unit of the plan, whole: its spec as written, and its outcomes under the spec's own headings. */
+/** One slice, whole: its spec as written, and its outcomes under the spec's own headings. */
 export interface StewardPlanUnitView {
   unit: number;
   file: string;
@@ -269,32 +269,22 @@ export const decideStewardUnit = (project: string, unit: number,
 
 export type UnitStage = 'idea' | 'draft' | 'notAgreed' | 'agreed' | 'building' | 'built' | 'released' | 'abandoned';
 
-export interface StewardPlanName { key: string; name: string; working: boolean }
-
 export interface StewardPlanView {
-  /** Why there is no plan to show, when there is none. */
+  /** Why there are no slices to show, when there are none. */
   why?: string | null;
   plan?: {
-    /** Every plan the project has: the one being worked, then the ones it has finished. */
-    plans?: StewardPlanName[];
-    /** The plan these units are of. */
-    plan?: StewardPlanName & { unitsDir: string };
+    /** Where the slices' specs live. */
+    plan?: { unitsDir: string };
     current?: number | null;
     units?: StewardPlanUnitView[];
     /** Agreed slices whose file or number changed since they were agreed. */
     moved?: string[];
   } | null;
-  /** The older single plan document, on a plan from before charters. */
-  master?: { file: string; text: string } | null;
-  /** Why the plan exists, its words, where things are. Decides nothing. */
-  charter?: { file: string; text: string } | null;
-  /** The plan as read: charter, the project's decisions, every slice in order. Generated. */
-  readable?: string | null;
 }
 
-/** The plan being worked, or with `plan` one the project has finished. */
-export const getStewardPlan = (project: string, plan?: string | null) =>
-  fetch(`/api/steward/plan?${q(project)}${plan != null ? `&plan=${encodeURIComponent(plan)}` : ''}`).then(json<StewardPlanView>);
+/** Every slice, with its spec, outcomes and where it stands. */
+export const getStewardPlan = (project: string) =>
+  fetch(`/api/steward/plan?${q(project)}`).then(json<StewardPlanView>);
 
 /** Agree a draft unit: the commit that agrees it, made from here. */
 export const agreeStewardUnit = (project: string, unit: number) =>
@@ -323,12 +313,6 @@ export const abandonStewardUnit = (project: string, unit: number, children?: 're
       return body as { answer: 'children'; why: string; data: { children: { unit: number; branch?: string | null }[] } };
     throw new Error(body?.why ?? body?.error ?? `${res.status} ${res.statusText}`);
   });
-
-/** Start a new plan: its documents into the repo, and the project pointed at it. */
-export const startStewardPlan = (project: string,
-  plan: { key: string; name: string; folder?: string; ideas: { title: string; paragraph: string }[] }) =>
-  fetch(`/api/steward/plan/new?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(plan) })
-    .then(json<{ answer: string; data: { charter: string; ideas: string[] }; settings: string }>);
 
 /** A flag on a ticket's change that is the owner's to decide. */
 export interface StewardOwnerFlag {
@@ -372,7 +356,7 @@ export const markStewardEntry = (project: string, id: number, mark: { handled?: 
 
 // ---- the register of decisions -----------------------------------------------------------
 
-/** `retired`: its slice was released or abandoned (slice branches only) - derived, never written. */
+/** `retired`: its slice was released or abandoned - derived, never written. */
 export type DecisionStatus = 'inForce' | 'replaced' | 'provisional' | 'withdrawn' | 'retired';
 
 /** One option a question offered, as the register hands it back with the decision it made. */
@@ -386,7 +370,6 @@ export interface StewardDecision {
   appliesTo: string;
   /** A rule every slice keeps, never retired with one. */
   convention?: boolean;
-  plan?: string | null;
   unit?: number | null;
   outcomes?: string | null;
   status: DecisionStatus;
@@ -402,8 +385,6 @@ export interface StewardDecision {
   where?: string | null;
 }
 
-export interface DecisionPair { id: number; older: number; newer: number; why: string }
-
 export interface StewardFollowUp { id: number; decision: number; text: string; at: string; citedBy?: string | null; droppedAt?: string | null }
 
 export interface StewardInstruction {
@@ -413,18 +394,12 @@ export interface StewardInstruction {
 
 export interface StewardRegister {
   next: number;
-  /** Every new decision is a slice's or a convention, and a slice's retires with it. */
-  sliceBranches?: boolean;
-  plan?: string | null;
   units: { unit: number; title: string }[];
   decisions: StewardDecision[];
-  mayConflict: DecisionPair[];
   /** Provisional decisions whose point has come. */
   due: number[];
   followUps: StewardFollowUp[];
   instructions: StewardInstruction[];
-  /** The project is on the old shape and could move to slice branches (docs/slice-branches.md, piece 8). */
-  switchable?: boolean;
 }
 
 export interface NewDecision {
@@ -435,11 +410,11 @@ export interface NewDecision {
   provisional?: boolean;
   provisionalUnit?: number | null;
   replaces?: { number: number; why: string }[];
-  /** With slice branches: a rule every slice keeps, naming no unit. */
+  /** A rule every slice keeps, naming no slice. Every new decision is a slice's or a convention. */
   convention?: boolean;
 }
 
-/** The register: every decision with its status, and the pairs the import thinks may disagree. */
+/** The register: every decision with its status. */
 export const getStewardRegister = (project: string) =>
   fetch(`/api/steward/decisions?${q(project)}`).then(json<{ data: StewardRegister }>).then(r => r.data);
 
@@ -452,15 +427,6 @@ export const recordStewardDecision = (project: string, d: NewDecision) =>
 export const withdrawStewardDecision = (project: string, number: number, because: string) =>
   fetch(`/api/steward/decisions/${number}/withdraw?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ because }) })
     .then(json<{ answer: string }>);
-
-/** Settle a pair the import thought may disagree: the newer replaces the older, or both stand. */
-export const settleDecisionPair = (project: string, id: number, replaces: boolean, why?: string) =>
-  fetch(`/api/steward/decisions/pairs/${id}?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ replaces, why }) })
-    .then(json<{ answer: string }>);
-
-/** Take into the register what has arrived since it was built. */
-export const importStewardDecisions = (project: string) =>
-  fetch(`/api/steward/decisions/import?${q(project)}`, { method: 'POST' }).then(json<{ answer: string; data: unknown }>);
 
 /** A provisional decision whose point has come, confirmed so it holds like any other. */
 export const confirmStewardDecision = (project: string, number: number) =>
@@ -478,28 +444,3 @@ export const closeStewardInstruction = (project: string, id: number, note?: stri
 /** A follow-up that is nothing to take up. */
 export const dropStewardFollowUp = (project: string, id: number) =>
   fetch(`/api/steward/followups/${id}/drop?${q(project)}`, { method: 'POST' }).then(json<{ answer: string }>);
-
-/** What moving the project to slice branches would do, and what stops it yet. */
-export interface StewardSwitchView {
-  switched: boolean;
-  refusals: string[];
-  /** The base it is on now, and the one it moves to. */
-  from: string;
-  base: string;
-  conventions: string;
-  /** The slices whose work is in the base already: each is recorded released, and its decisions retire. */
-  released: { plan: string | null; unit: number; title: string }[];
-  /** The whole project's decisions in force: each one kept is a convention, the rest retire. */
-  projectWide: { number: number; rule: string; title: string | null }[];
-  /** The conventions file as first drafted, for the owner to shorten. */
-  draft: string;
-}
-
-export const getStewardSwitch = (project: string, base?: string) =>
-  fetch(`/api/steward/switch?${q(project)}${base ? `&base=${encodeURIComponent(base)}` : ''}`)
-    .then(json<{ answer: string; why: string | null; data: StewardSwitchView }>);
-
-/** The owner moves the project to slice branches. No tool reaches this. */
-export const switchStewardToSlices = (project: string, body: { base: string; conventions: string; text: string; keep: number[] }) =>
-  fetch(`/api/steward/switch?${q(project)}`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) })
-    .then(json<{ answer: string; why: string | null; data: { base: string; from: string; at: string; conventions: string | null; released: number; conventionsKept: number; retired: number } }>);

@@ -50,25 +50,14 @@ public partial class StewardServiceTests
     }
 
     [Fact]
-    public async Task Without_the_switch_a_released_unit_retires_nothing()
-    {
-        Configure("full", """ "plan": { "units": "docs/units" }, "decisionsFile": "docs/decisions.md" """);
-        await OpenSlice(1, "slice/01-first", released: true);
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("A dog has a name.", Unit: 1)));
-        Assert.Equal(new[] { "inForce" }, Statuses(await Decisions()).Values);
-        Assert.Contains("## In force: unit 1", _git.Committed[^1].Content);
-    }
-
-    [Fact]
     public async Task A_question_about_no_slice_says_which_slice_or_that_it_is_a_convention()
     {
-        SwitchToSliceBranches();
         await Begin();
-        var none = await In(s => s.AskAsync("alpha", Question()));
+        var none = await In(s => s.AskAsync("alpha", Question() with { Convention = false }));
         Assert.Equal("bad-request", none.Answer);
         Assert.Contains("slice", none.Why);
 
-        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", Question("for-slice") with { Slice = 1 }))).Answer);
+        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", Question("for-slice") with { Convention = false, Slice = 1 }))).Answer);
         Assert.Equal("asked", (await In(s => s.AskAsync("alpha", Question("for-all") with { Convention = true }))).Answer);
         await In(s => s.OwnerAnswersAsync("alpha", "for-slice", "The one we already pay for."));
         await In(s => s.OwnerAnswersAsync("alpha", "for-all", "A new one."));
@@ -82,13 +71,11 @@ public partial class StewardServiceTests
     }
 
     [Fact]
-    public async Task A_question_cannot_decide_for_a_slice_that_is_over_nor_name_a_slice_without_the_switch()
+    public async Task A_question_cannot_decide_for_a_slice_that_is_over()
     {
         await Begin();
-        Assert.Contains("no slice branches", (await In(s => s.AskAsync("alpha", Question() with { Slice = 1 }))).Why);
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first", released: true);
-        var over = await In(s => s.AskAsync("alpha", Question() with { Slice = 1 }));
+        var over = await In(s => s.AskAsync("alpha", Question() with { Convention = false, Slice = 1 }));
         Assert.Equal("bad-request", over.Answer);
         Assert.Contains("is over", over.Why);
         Assert.Contains("not both", (await In(s => s.AskAsync("alpha", Question() with { Slice = 1, Convention = true }))).Why);
@@ -97,18 +84,16 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_question_from_a_ticket_of_a_slice_needs_no_slice_and_decides_for_that_one()
     {
-        SwitchToSliceBranches();
         var ticket = await Built(1, "A1", phase: Whetstone.Models.TicketPhase.NeedsImplementation);
         await Begin();
-        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", Question() with { TicketId = ticket }))).Answer);
-        Assert.Contains("slice 1's", (await In(s => s.AskAsync("alpha", Question("other") with { TicketId = ticket, Slice = 2 }))).Why);
+        Assert.Equal("asked", (await In(s => s.AskAsync("alpha", Question() with { Convention = false, TicketId = ticket }))).Answer);
+        Assert.Contains("slice 1's", (await In(s => s.AskAsync("alpha", Question("other") with { Convention = false, TicketId = ticket, Slice = 2 }))).Why);
     }
 
     [Fact]
     public async Task The_owner_records_for_a_slice_or_as_a_convention_and_their_standing_word_is_one()
     {
-        Configure("full", """ "plan": { "units": "docs/units" } """);
-        SwitchToSliceBranches();
+        Configure("full", """ "slices": "docs/units" """);
         var none = await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Prices never differ.")));
         Assert.Equal("bad-request", none.Answer);
         Assert.Contains("convention", none.Why);
@@ -122,15 +107,14 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_slices_view_is_its_own_its_parents_and_the_conventions()
     {
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
         await OpenSlice(2, "slice/02-second", parent: 1);
         await using (var ctx = NewCtx())
         {
             ctx.StewardDecisions.AddRange(
-                new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 50, Rule = "Parent's.", PlanKey = "", PlanUnit = 1 },
-                new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 51, Rule = "Own.", PlanKey = "", PlanUnit = 2 },
-                new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 52, Rule = "Another slice's.", PlanKey = "", PlanUnit = 3 },
+                new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 50, Rule = "Parent's.", PlanUnit = 1 },
+                new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 51, Rule = "Own.", PlanUnit = 2 },
+                new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 52, Rule = "Another slice's.", PlanUnit = 3 },
                 new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 53, Rule = "Every slice's.", Convention = true });
             await ctx.SaveChangesAsync();
         }

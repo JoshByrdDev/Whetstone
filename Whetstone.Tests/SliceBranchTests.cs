@@ -48,11 +48,12 @@ public class SliceBranchTests : IDisposable
         Commit(_hub, "README.md", "init");
         Git(_hub, "push", "-q", "-u", "origin", "main");
 
-        // alpha has switched; bravo is the same hub delivered the same way, not switched; charlie
-        // has switched but raises pull requests, which slice branches do not reach yet.
-        WriteProject(data, "alpha", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main", "mergeInsteadOfPr": true, "sliceBranches": true }""");
+        // alpha and bravo merge on this machine, so they have slice branches - bravo's slice 13 has no
+        // branch of its own, so its tickets stay on the base; charlie raises pull requests, which
+        // slice branches do not reach.
+        WriteProject(data, "alpha", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main", "mergeInsteadOfPr": true }""");
         WriteProject(data, "bravo", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main", "mergeInsteadOfPr": true }""");
-        WriteProject(data, "charlie", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main", "sliceBranches": true }""");
+        WriteProject(data, "charlie", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main" }""");
         _registry = new ProjectRegistry(new DashboardPaths(data));
 
         _conn = new SqliteConnection("Data Source=:memory:");
@@ -90,9 +91,9 @@ public class SliceBranchTests : IDisposable
 
     // ---- section 2's table, as a rule -------------------------------------------------------
 
-    private static ProjectConfig Switched(bool slices = true, bool merge = true, bool multi = false) => new()
+    private static ProjectConfig Project(bool merge = true, bool multi = false) => new()
     {
-        Name = "alpha", SliceBranches = slices, MergeInsteadOfPr = merge,
+        Name = "alpha", MergeInsteadOfPr = merge,
         ConfiguredRepos = multi ? new[] { new RepoMember("alpha-api", "", Array.Empty<string>(), Array.Empty<string>(), false) } : Array.Empty<RepoMember>(),
     };
 
@@ -104,45 +105,40 @@ public class SliceBranchTests : IDisposable
 
     [Fact]
     public void A_ticket_of_an_open_slice_is_based_on_its_branch() =>
-        Assert.Equal(Slice, SliceBranches.BaseFor(Switched(), 13, Row()));
+        Assert.Equal(Slice, SliceBranches.BaseFor(Project(), 13, Row()));
 
     [Fact]
     public void A_ticket_of_no_slice_is_based_on_the_project() =>
-        Assert.Null(SliceBranches.BaseFor(Switched(), null, null));
+        Assert.Null(SliceBranches.BaseFor(Project(), null, null));
 
     [Fact]
     public void A_ticket_of_a_released_slice_is_based_on_the_project() =>
-        Assert.Null(SliceBranches.BaseFor(Switched(), 13, Row(released: true)));
+        Assert.Null(SliceBranches.BaseFor(Project(), 13, Row(released: true)));
 
     [Fact]
-    public void A_slice_agreed_before_the_switch_has_no_branch_and_its_tickets_stay_on_the_project() =>
-        Assert.Null(SliceBranches.BaseFor(Switched(), 13, Row(branch: null)));
+    public void A_slice_with_no_branch_of_its_own_keeps_its_tickets_on_the_project() =>
+        Assert.Null(SliceBranches.BaseFor(Project(), 13, Row(branch: null)));
 
     [Fact]
     public void A_row_of_another_slice_says_nothing() =>
-        Assert.Null(SliceBranches.BaseFor(Switched(), 12, Row(unit: 13)));
-
-    [Fact]
-    public void Without_the_switch_nothing_changes() =>
-        Assert.Null(SliceBranches.BaseFor(Switched(slices: false), 13, Row()));
+        Assert.Null(SliceBranches.BaseFor(Project(), 12, Row(unit: 13)));
 
     [Fact]
     public void A_project_that_raises_pull_requests_gets_no_slice_branches()
     {
-        Assert.False(Switched(merge: false).SliceBranchesOn);
-        Assert.Null(SliceBranches.BaseFor(Switched(merge: false), 13, Row()));
+        Assert.False(Project(merge: false).SliceBranchesOn);
+        Assert.Null(SliceBranches.BaseFor(Project(merge: false), 13, Row()));
     }
 
     [Fact]
     public void A_project_of_several_repos_gets_no_slice_branches() =>
-        Assert.False(Switched(multi: true).SliceBranchesOn);
+        Assert.False(Project(multi: true).SliceBranchesOn);
 
     [Fact]
-    public void The_switch_is_read_from_the_project_config()
+    public void Slice_branches_follow_from_how_the_project_delivers()
     {
         Assert.True(_registry.GetProjectConfig("alpha").SliceBranchesOn);
-        Assert.False(_registry.GetProjectConfig("bravo").SliceBranchesOn);
-        Assert.True(_registry.GetProjectConfig("charlie").SliceBranches);
+        Assert.True(_registry.GetProjectConfig("bravo").SliceBranchesOn);
         Assert.False(_registry.GetProjectConfig("charlie").SliceBranchesOn);
     }
 
@@ -160,7 +156,7 @@ public class SliceBranchTests : IDisposable
         Assert.Null(await SliceBranches.ForBranchAsync(db, alpha, "t-bug"));
         Assert.Null(await SliceBranches.ForBranchAsync(db, alpha, "t-12"));
         Assert.Null(await SliceBranches.ForBranchAsync(db, alpha, "nobody-has-this"));
-        // The same rows on a project that has not switched answer nothing.
+        // A ticket of a slice that has no row with a branch answers nothing.
         Assert.Null(await SliceBranches.ForBranchAsync(db, bravo, "b-13"));
 
         var t13 = await db.Tickets.FirstAsync(t => t.Branch == "t-13");
@@ -187,7 +183,7 @@ public class SliceBranchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_slice_ticket_is_measured_against_its_slice_and_one_of_no_switch_against_the_base()
+    public async Task A_slice_ticket_is_measured_against_its_slice_and_one_of_no_open_slice_against_the_base()
     {
         await LayOutAsync();
 
@@ -278,7 +274,7 @@ public class SliceBranchTests : IDisposable
     }
 
     [Fact]
-    public async Task A_ticket_of_a_project_without_the_switch_still_merges_into_the_base()
+    public async Task A_ticket_of_no_open_slice_still_merges_into_the_base()
     {
         await LayOutAsync();
         var sliceTip = Rev(Slice);
@@ -398,7 +394,7 @@ public class SliceBranchTests : IDisposable
         Assert.Equal("", earlier.Patch);
         Assert.Equal(1, (await _svc.FileDiffAsync("alpha", head, "mine.txt", branch: "t-13")).Added);
 
-        // Named by no ticket, or on a project without the switch, it is measured against the base as before.
+        // Named by no ticket, or of no open slice, it is measured against the base as before.
         var (whole, _) = await _svc.ChangedFilesAsync("alpha", head);
         Assert.Equal(new[] { "cards.txt", "mine.txt" }, whole.Select(f => f.Path).OrderBy(p => p));
         var (bravo, _) = await _svc.ChangedFilesAsync("bravo", Rev("b-13"), branch: "b-13");
@@ -551,8 +547,7 @@ public class SliceBranchTests : IDisposable
             new Ticket { ProjectKey = "bravo", Title = "Cards", Branch = "b-13", PlanUnit = 13 });
         db.StewardUnits.AddRange(
             new StewardUnit { ProjectKey = "alpha", Unit = 13, Branch = Slice, AgreedAt = DateTime.UtcNow },
-            new StewardUnit { ProjectKey = "alpha", Unit = 12, Branch = "slice/12-older", AgreedAt = DateTime.UtcNow, ReleasedAt = DateTime.UtcNow },
-            new StewardUnit { ProjectKey = "bravo", Unit = 13, Branch = Slice, AgreedAt = DateTime.UtcNow });
+            new StewardUnit { ProjectKey = "alpha", Unit = 12, Branch = "slice/12-older", AgreedAt = DateTime.UtcNow, ReleasedAt = DateTime.UtcNow });
         await db.SaveChangesAsync();
     }
 
@@ -581,36 +576,6 @@ public class SliceBranchTests : IDisposable
         var (code, output) = Run(_hub, args);
         Assert.Equal(0, code);
         return output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToArray();
-    }
-
-    // ---- the switch (piece 8) ------------------------------------------------------------------
-
-    [Fact]
-    public async Task The_switch_moves_the_hub_onto_the_new_base_only_once_the_old_one_is_merged_in()
-    {
-        // delta's base is an integration branch, checked out in the hub, with a commit main lacks.
-        WriteProject(Path.Combine(_root, "data"), "delta", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "develop", "mergeInsteadOfPr": true }""");
-        Git(_hub, "checkout", "-q", "-b", "develop");
-        Commit(_hub, "README.md", "integration work");
-
-        var (_, behind) = await _svc.SwitchBaseAsync("delta", "main", null, null, "", dryRun: true);
-        Assert.Contains("Merge develop into main first", behind);
-        Assert.Contains("no branch 'nope'", (await _svc.SwitchBaseAsync("delta", "nope", null, null, "", dryRun: true)).Refusal);
-
-        Git(_hub, "checkout", "-q", "main");
-        Git(_hub, "merge", "-q", "--ff-only", "develop");
-        Git(_hub, "checkout", "-q", "develop");
-        var (tip, ok) = await _svc.SwitchBaseAsync("delta", "main", null, null, "", dryRun: true);
-        Assert.Null(ok);
-        Assert.Equal(Rev("main"), tip);
-        Assert.Equal("develop", Lines("branch", "--show-current").Single());
-
-        var (sha, no) = await _svc.SwitchBaseAsync("delta", "main", "docs/conventions.md", "# Conventions\r\n\n- Whole cents.", "Slice branches: conventions", dryRun: false);
-        Assert.Null(no);
-        Assert.Equal("main", Lines("branch", "--show-current").Single());
-        Assert.Equal(Rev("main"), sha);
-        Assert.Equal("Slice branches: conventions", Lines("log", "-1", "--format=%s").Single());
-        Assert.Equal("# Conventions\n\n- Whole cents.\n", File.ReadAllText(Path.Combine(_hub, "docs", "conventions.md")));
     }
 
     private static void WriteProject(string data, string key, string json)

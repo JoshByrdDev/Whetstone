@@ -46,7 +46,7 @@ public partial class StewardService
             .ToListAsync(ct);
         return rows.OrderBy(r => r.ParentUnit is null ? 0 : 1).ThenBy(r => r.Unit)
             .Select(r => new OpenSlice(r.Unit, r.Branch!,
-                r.ParentUnit is { } p ? rows.FirstOrDefault(x => x.Unit == p && x.Plan == r.Plan)?.Branch : null))
+                r.ParentUnit is { } p ? rows.FirstOrDefault(x => x.Unit == p)?.Branch : null))
             .ToList();
     }
 
@@ -95,13 +95,13 @@ public partial class StewardService
         var p = cfg.Steward.Plan;
         var plan = await _git.PlanAsync(projectKey, ct);
         var u = plan.FirstOrDefault(x => x.Number == unit);
-        var rows = await _db.StewardUnits.Where(x => x.ProjectKey == projectKey && x.Plan == p.Key).ToListAsync(ct);
+        var rows = await _db.StewardUnits.Where(x => x.ProjectKey == projectKey).ToListAsync(ct);
         var row = rows.FirstOrDefault(r => r.Unit == unit);
-        if (u is null || !u.Agreed || row is null) return Refuse("unit-not-agreed", $"Slice {unit} is not an agreed slice of the plan.");
+        if (u is null || !u.Agreed || row is null) return Refuse("unit-not-agreed", $"Slice {unit} is not agreed.");
         if (row.ReleasedAt is not null) return Refuse("already-released", $"Slice {unit} was released; it is the base's now.");
         if (await RunOpenAsync(projectKey)) return Refuse("run-open", "A steward run is in progress. Abandon the slice once it has ended.");
 
-        var mine = (await _tickets.ListAsync(projectKey, null)).Where(t => (t.PlanKey ?? "") == p.Key).ToList();
+        var mine = (await _tickets.ListAsync(projectKey, null)).ToList();
         StewardReply? StillOpen(int n)
         {
             var open = mine.Where(t => t.PlanUnit == n && t.Phase != TicketPhase.Done).Select(t => t.Id).ToList();
@@ -161,7 +161,7 @@ public partial class StewardService
         var abandoned = new List<int>();
         foreach (var (r, spec, text) in marks)
         {
-            var (sha, _, no) = await _git.CommitFileAsync(projectKey, spec.File, text, $"Unit {r.Unit} of the plan, abandoned by its owner", ct);
+            var (sha, _, no) = await _git.CommitFileAsync(projectKey, spec.File, text, $"Slice {r.Unit}, abandoned by its owner", ct);
             if (no is not null)
             {
                 await _db.SaveChangesAsync(ct);
@@ -175,7 +175,6 @@ public partial class StewardService
         // What an abandoned slice decided retires with it, as a released one's does: none of it is
         // in the base, and nothing is left to keep it.
         await ExportDecisionsAsync(cfg, ct);
-        await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply("abandoned", null, new { abandoned, recut, branchesKept = marks.Select(m => m.Row.Branch).Where(b => b is not null) });
     }
@@ -188,7 +187,7 @@ public partial class StewardService
     /// </summary>
     private async Task<IReadOnlyList<object>> ReparentChildrenAsync(string projectKey, StewardUnit released, CancellationToken ct)
     {
-        var kids = await _db.StewardUnits.Where(x => x.ProjectKey == projectKey && x.Plan == released.Plan
+        var kids = await _db.StewardUnits.Where(x => x.ProjectKey == projectKey
             && x.ParentUnit == released.Unit && x.ReleasedAt == null && x.AbandonedAt == null).ToListAsync(ct);
         var said = new List<object>();
         foreach (var k in kids)

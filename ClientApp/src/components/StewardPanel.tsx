@@ -7,8 +7,6 @@ import type { Mood } from '../theme';
 import { ActivityFeed } from './ActivityFeed';
 import { Markdown } from './Markdown';
 import { StewardPlan } from './StewardPlan';
-import { NewPlan } from './StewardNewPlan';
-import { StewardSwitch } from './StewardSwitch';
 import { StewardRecord } from './StewardRecord';
 import { StewardDecisions } from './StewardDecisions';
 import { StewardTicketFlags } from './StewardTicketFlags';
@@ -29,13 +27,13 @@ import type {
  *
  * The steward runs unattended and brings a person only what is theirs to decide, so this page is
  * built around that: what is waiting on you comes first and is the only thing here you have to act
- * on. The plan it is working from, the decisions it works by, and the record of what it did in your
+ * on. The slices it is working from, the decisions it works by, and the record of what it did in your
  * place are each a view of their own beside that one: different reasons to open this page, and none
  * of them is helped by scrolling past the others.
  */
 
 /** The page's views, in the order of how often each is the reason somebody came. */
-type View = 'now' | 'plan' | 'decisions' | 'record' | 'new' | 'switch';
+type View = 'now' | 'plan' | 'decisions' | 'record';
 
 const MODES: { id: StewardMode; label: string; says: string }[] = [
   { id: 'off', label: 'Off', says: 'No steward. Nothing runs.' },
@@ -51,15 +49,13 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const [entries, setEntries] = useState<StewardEntry[]>([]);
   const [plan, setPlan] = useState<StewardPlanView | null>(null);
   const [register, setRegister] = useState<StewardRegister | null>(null);
-  // Which of the project's plans is being read: null is the one being worked.
-  const [planKey, setPlanKey] = useState<string | null>(null);
   // The unit whose notes the record is showing, when somebody came from that unit's release.
   const [notesUnit, setNotesUnit] = useState<number | null>(null);
-  // Another project's plans and units are another project's.
-  useEffect(() => { setPlanKey(null); setNotesUnit(null); }, [project]);
+  // Another project's slices are another project's.
+  useEffect(() => { setNotesUnit(null); }, [project]);
   const [view, setView] = useState<View>(() => {
     const v = remembered('view');
-    return v === 'plan' || v === 'decisions' || v === 'record' || v === 'new' ? v : 'now';
+    return v === 'plan' || v === 'decisions' || v === 'record' ? v : 'now';
   });
   const show = (v: View) => { setView(v); remember('view', v); };
   const [error, setError] = useState<string | null>(null);
@@ -69,17 +65,17 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
     try {
       const [p, s, e, pl, r] = await Promise.all([
         getSteward(project), getStewardStatus(project), getStewardEntries(project),
-        // The plan is read from the project's repo, and a repo that cannot be read must not be
+        // The slices are read from the project's repo, and a repo that cannot be read must not be
         // what stops a person answering a question.
-        getStewardPlan(project, planKey).catch(() => ({ why: 'The plan could not be read just now.' } as StewardPlanView)),
-        // So is the register's list of units; the decisions themselves are the board's.
+        getStewardPlan(project).catch(() => ({ why: 'The slices could not be read just now.' } as StewardPlanView)),
+        // So is the register's list of slices; the decisions themselves are the board's.
         getStewardRegister(project).catch(() => null),
       ]);
       setPage(p); setStatus(s); setEntries(e); setPlan(pl); setRegister(r); setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [project, planKey]);
+  }, [project]);
 
   // A steward's run changes this page from the outside, so it is re-read on a slow tick. Slow
   // because nothing here is urgent to the second: a question waits for a person either way.
@@ -134,7 +130,6 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   const unseen = entries.filter(unseenRuling).length;
   const recordCount = outstanding + unseen;
   const inForce = (register?.decisions ?? []).filter(d => d.status === 'inForce' || d.status === 'provisional').length;
-  const pairs = register?.mayConflict.length ?? 0;
   // Where the steward stands is the card's to say, on the Now tab; the head only says what the
   // page cannot show at all.
   const sub = !page ? 'Loading' : off ? 'No steward for this project' : undefined;
@@ -175,13 +170,11 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
             <Chip on={view === 'now'} onClick={() => show('now')} title="What is waiting on you, and what it is doing">
               Now{waitingCount > 0 ? ` ${waitingCount}` : ''}
             </Chip>
-            <Chip on={view === 'plan'} onClick={() => show('plan')}
-              title={register?.sliceBranches ? 'The slices it works from, and how far each is' : 'The plan it works from, and how far each part is'}>
-              {register?.sliceBranches ? 'The slices' : 'The plan'}
+            <Chip on={view === 'plan'} onClick={() => show('plan')} title="The slices it works from, and how far each is">
+              The slices
             </Chip>
-            <Chip on={view === 'decisions'} onClick={() => show('decisions')}
-              title={`The register: what is decided and whether it still is${pairs > 0 ? ` - ${pairs} pair${pairs === 1 ? '' : 's'} that may disagree` : ''}`}>
-              Decisions {pairs > 0 ? pairs : inForce > 0 ? inForce : ''}
+            <Chip on={view === 'decisions'} onClick={() => show('decisions')} title="The register: what is decided and whether it still is">
+              Decisions {inForce > 0 ? inForce : ''}
             </Chip>
             <Chip on={view === 'record'} onClick={() => show('record')}
               title={`What it did in your place, and what to read before a release${recordCount > 0
@@ -189,17 +182,6 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 : ''}`}>
               The record{recordCount > 0 ? ` ${recordCount}` : ''}
             </Chip>
-            {/* Slices with no plan around them: there is no next plan to start (docs/slice-branches.md). */}
-            {!register?.sliceBranches && (
-              <Chip on={view === 'new'} onClick={() => show('new')} title="Start the project's next plan, once this one is finished">
-                New plan
-              </Chip>
-            )}
-            {register?.switchable && (
-              <Chip on={view === 'switch'} onClick={() => show('switch')} title="Move this project to slices with a branch each: done once, by you">
-                Switch to slices
-              </Chip>
-            )}
           </div>
 
           {view === 'now' && (
@@ -240,26 +222,9 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
               <StewardPlan
                 project={page.project} view={plan} status={status} onChanged={load}
                 waiting={page.waiting} register={register} mode={page.mode}
-                onPlan={key => { setPlan(null); setPlanKey(key); }}
                 onNotes={unit => { setNotesUnit(unit); show('record'); }}
-                onNow={() => show('now')} onDecisions={() => show('decisions')} onNew={() => show('new')}
+                onNow={() => show('now')} onDecisions={() => show('decisions')}
               />
-            </div>
-          )}
-
-          {view === 'new' && !register?.sliceBranches && (
-            <div key="new" className="orbit-swap">
-              <NewPlan
-                project={page.project} onStarted={async () => { setPlanKey(null); await load(); }}
-                has={(plan?.plan?.units?.length ?? 0) > 0 || (plan?.plan?.plans?.length ?? 0) > 0 || !!plan?.master || !!plan?.charter}
-              />
-            </div>
-          )}
-
-          {/* Not gated on switchable: once it has switched, what it did stays on screen. */}
-          {view === 'switch' && (
-            <div key="switch" className="orbit-swap">
-              <StewardSwitch project={page.project} onSwitched={load} />
             </div>
           )}
 

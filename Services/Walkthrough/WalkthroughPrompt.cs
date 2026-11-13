@@ -49,7 +49,7 @@ public static class WalkthroughPrompt
     /// "ask" quotes the unit's spec, its shots are the report's pool, and its code is the range on the
     /// base the report read.
     /// </summary>
-    public static string BuildForUnit(string title, string planName, AnalysisDocument.Doc doc, string spec,
+    public static string BuildForUnit(string title, AnalysisDocument.Doc doc, string spec,
         IReadOnlyList<ShotMaterial> shots, IReadOnlyList<ChangedFile> changed, string fromSha, string toSha)
     {
         string Short(string sha) => sha[..Math.Min(10, sha.Length)];
@@ -62,7 +62,7 @@ public static class WalkthroughPrompt
         minutes spoken: 300 to 400 words across 7 to 10 scenes. More than 420 words is sent back to be
         cut, so choose what earns its place rather than covering everything the report says.
 
-        The unit: {{title}}, of the plan "{{planName}}".
+        The slice: {{title}}.
         Its code is the range {{Short(fromSha)}}..{{Short(toSha)}} on the base.
 
         Tell it as the unit, not as a list of tickets: what the owner asked for, what a person can now

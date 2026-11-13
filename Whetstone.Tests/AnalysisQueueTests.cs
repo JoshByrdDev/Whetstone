@@ -138,7 +138,7 @@ public class AnalysisQueueTests : IDisposable
 
     // ---- unit reports --------------------------------------------------------
 
-    private static readonly UnitSubject UnitOne = new("alpha", "p1", 1);
+    private static readonly UnitSubject UnitOne = new("alpha", 1);
 
     [Fact]
     public async Task A_unit_report_steps_aside_for_the_analyses_it_is_missing_and_runs_once_they_have()

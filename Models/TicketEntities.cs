@@ -510,13 +510,6 @@ public class Ticket
     public string? PlanOutcomes { get; set; }
 
     /// <summary>
-    /// The key of the plan <see cref="PlanUnit"/> is a unit of. Every plan numbers its units from
-    /// one, so the number names a unit only together with this. Null or empty for a plan that was
-    /// never given a key.
-    /// </summary>
-    public string? PlanKey { get; set; }
-
-    /// <summary>
     /// The commit that landed this ticket's branch in its base, and when, on a project that merges
     /// locally (by the board or by a steward). Null on a pull-request or TFVC project, where the
     /// merge happens somewhere this machine does not watch, and on every ticket merged before this

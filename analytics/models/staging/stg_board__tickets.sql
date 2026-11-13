@@ -10,7 +10,6 @@ select
     {{ board_ts('"UpdatedAt"') }}  as updated_at,
     nullif("WorktreePath", '')     as worktree_path,
     "Branch"                       as branch,
-    "PlanKey"                      as plan_key,
     "PlanUnit"                     as plan_unit,
     {{ board_ts('"MergedAt"') }}   as merged_at,
     coalesce("Walkthrough", false) as is_walkthrough,

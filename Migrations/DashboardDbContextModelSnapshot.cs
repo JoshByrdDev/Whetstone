@@ -1415,10 +1415,6 @@ namespace Whetstone.Migrations
                     b.Property<DateTime?>("DeliveredAt")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("ImportKey")
-                        .HasMaxLength(200)
-                        .HasColumnType("TEXT");
-
                     b.Property<DateTime>("MadeAt")
                         .HasColumnType("TEXT");
 
@@ -1430,10 +1426,6 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("Outcomes")
                         .HasMaxLength(200)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PlanKey")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("PlanUnit")
@@ -1497,52 +1489,10 @@ namespace Whetstone.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectKey", "ImportKey");
-
                     b.HasIndex("ProjectKey", "Number")
                         .IsUnique();
 
                     b.ToTable("StewardDecisions");
-                });
-
-            modelBuilder.Entity("Whetstone.Models.StewardDecisionConflict", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("FoundAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<int>("Newer")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("Older")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("ProjectKey")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Settled")
-                        .HasMaxLength(16)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime?>("SettledAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Why")
-                        .IsRequired()
-                        .HasMaxLength(600)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ProjectKey", "Older", "Newer")
-                        .IsUnique();
-
-                    b.ToTable("StewardDecisionConflicts");
                 });
 
             modelBuilder.Entity("Whetstone.Models.StewardDecisionReplace", b =>
@@ -1726,11 +1676,6 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("Plan")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -1749,7 +1694,7 @@ namespace Whetstone.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectKey", "Plan", "Unit", "Outcome")
+                    b.HasIndex("ProjectKey", "Unit", "Outcome")
                         .IsUnique();
 
                     b.ToTable("StewardOutcomes");
@@ -1794,10 +1739,6 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("OptionsJson")
                         .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PlanKey")
-                        .HasMaxLength(40)
                         .HasColumnType("TEXT");
 
                     b.Property<int?>("PlanUnit")
@@ -1875,9 +1816,6 @@ namespace Whetstone.Migrations
                     b.Property<string>("LastRunSummary")
                         .HasColumnType("TEXT");
 
-                    b.Property<DateTime?>("RegisterBuiltAt")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("RestingAtSha")
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
@@ -1911,11 +1849,6 @@ namespace Whetstone.Migrations
                     b.Property<int?>("ParentUnit")
                         .HasColumnType("INTEGER");
 
-                    b.Property<string>("Plan")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -1936,7 +1869,7 @@ namespace Whetstone.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectKey", "Plan", "Unit")
+                    b.HasIndex("ProjectKey", "Unit")
                         .IsUnique();
 
                     b.ToTable("StewardUnits");
@@ -2031,10 +1964,6 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("PhaseBeforeBlock")
                         .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("PlanKey")
-                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("PlanOutcomes")
@@ -2355,11 +2284,6 @@ namespace Whetstone.Migrations
                     b.Property<int>("OwnCommits")
                         .HasColumnType("INTEGER");
 
-                    b.Property<string>("Plan")
-                        .IsRequired()
-                        .HasMaxLength(128)
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("ProjectKey")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -2389,7 +2313,7 @@ namespace Whetstone.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ProjectKey", "Plan", "Unit", "GeneratedAt");
+                    b.HasIndex("ProjectKey", "Unit", "GeneratedAt");
 
                     b.ToTable("UnitReports");
                 });

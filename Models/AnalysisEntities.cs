@@ -194,8 +194,6 @@ public class UnitReport
     public int Id { get; set; }
     public string ProjectKey { get; set; } = "";
 
-    /// <summary>The plan's key, as on <see cref="StewardUnit.Plan"/>. A unit number names nothing without it.</summary>
-    public string Plan { get; set; } = "";
     public int Unit { get; set; }
 
     /// <summary>The base ref read, as resolved at generation (<c>origin/main</c> or <c>main</c>).</summary>

@@ -148,7 +148,7 @@ Small and independent; worth doing first because every report after it gets a be
 steward entries and analyses, build the run's input. No I/O, so it is tested against rows like
 `StewardServiceTests` does.
 
-- tickets of the unit: filter on **both** `PlanKey` and `PlanUnit` (the CLAUDE.md rule);
+- tickets of the unit: filter on `PlanUnit` (a slice's number is the project's for good);
 - outcomes → segments;
 - shot pool ordering;
 - per ticket: analysis headline, its `userFlow` and `coverage` blocks, `ImplementationSummary`,

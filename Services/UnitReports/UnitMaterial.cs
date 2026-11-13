@@ -27,7 +27,7 @@ public static class UnitMaterial
     public record BranchTip(string? HeadSha, string? TreeSha);
 
     /// <param name="Tickets">The project's tickets, with their QA shots loaded. Filtered here, on
-    /// both the plan's key and the unit's number: a unit's number names nothing without its plan.</param>
+    /// the slice's number.</param>
     /// <param name="Analyses">Every analysis of those tickets, any order.</param>
     /// <param name="Tips">Each ticket's branch tip, where it could be resolved.</param>
     /// <param name="DoneAt">When each ticket last moved to Done: when it landed, for tickets merged
@@ -35,7 +35,6 @@ public static class UnitMaterial
     /// <param name="CodedAt">When each ticket last left Implementing: the last time its own change
     /// could have moved. See <see cref="Pick"/>.</param>
     public record Input(
-        string PlanKey,
         PlanUnit Unit,
         IReadOnlyList<PlanGroup> Groups,
         IReadOnlyList<Ticket> Tickets,
@@ -84,7 +83,7 @@ public static class UnitMaterial
     {
         var unit = input.Unit;
         var mine = input.Tickets
-            .Where(t => (t.PlanKey ?? "") == input.PlanKey && t.PlanUnit == unit.Number)
+            .Where(t => t.PlanUnit == unit.Number)
             .OrderBy(t => t.Id)
             .ToList();
 

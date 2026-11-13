@@ -21,13 +21,12 @@ namespace Whetstone.Services;
 public record StewardCheck(string Name, string Run, string[] WhenChanged, string MachineFault, int TimeoutMinutes, string SlowFault = "");
 
 /// <summary>
-/// Where a project keeps the plan its steward works from, and how to read it.
+/// Where a project keeps its slices, and how to read them (docs/slice-branches.md, section 1).
 /// <para>
-/// A plan is a folder of spec files on the base branch, one per unit of work (a slice, a
-/// milestone, an epic - the platform does not care which), each listing outcomes by id. A unit is
-/// worked only once a person has marked it agreed, and it is read from git AS COMMITTED, never from
-/// the working tree: nothing a steward can run commits that mark, so an edit it made by hand counts
-/// for nothing.
+/// The slices are a folder of spec files on the base branch, one per slice, each listing outcomes
+/// by id and numbered from one for good. A slice is worked only once a person has marked it agreed,
+/// and it is read from git AS COMMITTED, never from the working tree: nothing a steward can run
+/// commits that mark, so an edit it made by hand counts for nothing.
 /// </para>
 /// </summary>
 public record StewardPlan(string UnitsDir, string UnitFile, string Agreed, string Draft, string Outcome)
@@ -44,41 +43,7 @@ public record StewardPlan(string UnitsDir, string UnitFile, string Agreed, strin
     /// </summary>
     public string Idea { get; init; } = DefaultIdea;
 
-    /// <summary>
-    /// The plan's charter: why it exists, its words, where things are. Direction, never a decision:
-    /// nothing is filed from it and no question is answered by it. Empty for a plan that has none.
-    /// </summary>
-    public string Charter { get; init; } = "";
-
-    /// <summary>
-    /// Where the plan as read - the charter, the project's decisions, every slice in order - is
-    /// written out for readers of the repo, or empty to write nothing. It is regenerated when a
-    /// slice changes stage, never edited.
-    /// </summary>
-    public string Readable { get; init; } = "";
-
     public bool Configured => !string.IsNullOrWhiteSpace(UnitsDir);
-
-    /// <summary>
-    /// The document the units were cut from, on a plan written before charters - the whole of what
-    /// is to be built, of which each unit is a part - or empty. Until its rules have moved into the
-    /// register its plain statements still count as decided (hard rule 3); a plan with a charter
-    /// keeps it only as history.
-    /// </summary>
-    public string Master { get; init; } = "";
-
-    /// <summary>
-    /// The plan's own short name, lowercase with hyphens, which every ticket and outcome filed
-    /// against it carries. A project works one plan after another and each numbers its units from
-    /// one, so this is what keeps "unit 1" of the next plan apart from "unit 1" of the last. Empty
-    /// for a plan that was never given one - which can be true of one plan per project, and no more.
-    /// </summary>
-    public string Key { get; init; } = "";
-
-    /// <summary>What a person calls the plan. Falls back to its key, then to "The plan".</summary>
-    public string Name { get; init; } = "";
-
-    public string DisplayName => Name.Length > 0 ? Name : Key.Length > 0 ? Key : "The plan";
 
     /// <summary>
     /// What a draft's status is rewritten to when its owner agrees it from the board. <c>{date}</c>
@@ -88,9 +53,6 @@ public record StewardPlan(string UnitsDir, string UnitFile, string Agreed, strin
     public string AgreedLine { get; init; } = DefaultAgreedLine;
 
     public const string DefaultAgreedLine = "**Status: agreed {date}.**";
-
-    /// <summary>A plan's key is short, lowercase and safe to put in a URL - or empty.</summary>
-    public static bool IsKey(string? key) => key is not null && Regex.IsMatch(key, "^[a-z0-9][a-z0-9-]{0,39}$");
 }
 
 /// <summary>
@@ -118,20 +80,12 @@ public class StewardConfig
     /// <summary>How many times the steward may send one ticket back. The next is the owner's.</summary>
     public int SendBacksPerTicket { get; init; } = 2;
 
-
-    /// <summary>
-    /// A branch merged INTO the base branch at the start of each run, or empty for none. For a
-    /// project whose base is an integration branch the plan and the owner's own fixes reach by
-    /// way of another - without this the steward would be working from a plan that has moved on.
-    /// </summary>
-    public string SyncFrom { get; init; } = "";
-
     /// <summary>
     /// A file in the repo that the owner's decisions are written out to, or empty for none.
     /// <para>
     /// The dashboard's database is the record a steward works from, and it is machine-local. What
     /// the owner decided is also part of the project's own history - it is why the code is the way
-    /// it is - so it is kept beside the plan, on the base branch, where it travels with the code
+    /// it is - so it is kept beside the slices, on the base branch, where it travels with the code
     /// and is there for whoever reads the repo without a dashboard. Written out whole each time,
     /// from the database; nothing reads it back.
     /// </para>
@@ -140,13 +94,6 @@ public class StewardConfig
 
     public StewardPlan Plan { get; init; } = new("", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed,
         StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
-
-    /// <summary>
-    /// Plans this project has finished. Kept so what was built under them can still be read - the
-    /// units, their outcomes, the tickets - and for nothing else: a steward files against
-    /// <see cref="Plan"/> alone, and no verb reaches one of these.
-    /// </summary>
-    public StewardPlan[] PastPlans { get; init; } = Array.Empty<StewardPlan>();
 
     /// <summary>
     /// Paths an unattended merge may never carry: how the project deploys, what the fleet and the
@@ -173,36 +120,8 @@ public class StewardConfig
     /// </summary>
     public bool ParallelChecks { get; init; }
 
-    /// <summary>
-    /// The folder of slice specs on a project with slice branches (<c>steward.slices</c>,
-    /// docs/slice-branches.md section 1), which stands in for <c>plan.units</c>. Empty: the plan's
-    /// folder is read instead, so a project switches without renaming anything.
-    /// </summary>
-    public string Slices { get; init; } = "";
-
     /// <summary>How many slices may be open at once - agreed and neither released nor abandoned (section 3). The owner's.</summary>
     public int SlicesInFlight { get; init; } = 3;
-
-    /// <summary>
-    /// This config as a project with slice branches reads it (docs/slice-branches.md, section 1):
-    /// slices with no plan around them. The plan's key and name, its charter and master, past plans
-    /// and <see cref="SyncFrom"/> are gone - so every count is by slice number alone, and a row
-    /// that still carries an old plan's key is history no count reads. What was written stays in
-    /// the file for the migration to read.
-    /// </summary>
-    public StewardConfig ForSlices() => new()
-    {
-        CreatedPerDay = CreatedPerDay, OpenAtOnce = OpenAtOnce, SendBacksPerTicket = SendBacksPerTicket,
-        SyncFrom = "", DecisionsFile = DecisionsFile, Conventions = Conventions,
-        Plan = Plan with
-        {
-            UnitsDir = Slices.Length > 0 ? Slices : Plan.UnitsDir,
-            Key = "", Name = "", Charter = "", Master = "",
-        },
-        PastPlans = Array.Empty<StewardPlan>(),
-        NeverMerge = NeverMerge, MergeChecks = MergeChecks, ParallelChecks = ParallelChecks,
-        Slices = Slices, SlicesInFlight = SlicesInFlight,
-    };
 
     /// <summary>Whether <paramref name="path"/> is one the steward may not merge a change to.</summary>
     public bool IsNeverMerged(string path)
@@ -245,57 +164,37 @@ public class StewardConfig
         var d = new StewardConfig();
 
         var limits = s.TryGetProperty("limits", out var l) && l.ValueKind == JsonValueKind.Object ? l : default;
-        var plan = s.TryGetProperty("plan", out var p) && p.ValueKind == JsonValueKind.Object ? p : default;
+        // How a slice's file and status lines are spelled, when a project's differ from the defaults.
+        var format = s.TryGetProperty("sliceFormat", out var f) && f.ValueKind == JsonValueKind.Object ? f : default;
 
         return new StewardConfig
         {
             CreatedPerDay = Int(limits, "createdPerDay", d.CreatedPerDay, 0, 1000),
             OpenAtOnce = Int(limits, "openAtOnce", d.OpenAtOnce, 1, 1000),
             SendBacksPerTicket = Int(limits, "sendBacksPerTicket", d.SendBacksPerTicket, 0, 20),
-            SyncFrom = Str(s, "syncFrom"),
             DecisionsFile = Str(s, "decisionsFile").Replace('\\', '/').TrimStart('/'),
             Conventions = Str(s, "conventions").Replace('\\', '/').Trim('/'),
-            Plan = PlanFrom(plan),
-            PastPlans = s.TryGetProperty("pastPlans", out var past) && past.ValueKind == JsonValueKind.Array
-                ? past.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.Object).Select(PlanFrom)
-                    .Where(x => x.Configured).ToArray()
-                : Array.Empty<StewardPlan>(),
+            Plan = PlanFrom(Str(s, "slices").Replace('\\', '/').Trim('/'), format),
             NeverMerge = StrArray(s, "neverMerge"),
             MergeChecks = Checks(s),
             ParallelChecks = s.TryGetProperty("parallelChecks", out var par) && par.ValueKind == JsonValueKind.True,
-            Slices = Str(s, "slices").Replace('\\', '/').Trim('/'),
             SlicesInFlight = Int(s, "slicesInFlight", d.SlicesInFlight, 1, 50),
         };
     }
 
-    private static StewardPlan PlanFrom(JsonElement plan)
+    private static StewardPlan PlanFrom(string folder, JsonElement format)
     {
-        var key = Str(plan, "key").ToLowerInvariant();
-        var line = Str(plan, "agreedLine");
+        var line = Str(format, "agreedLine");
         return new StewardPlan(
-            Str(plan, "units").Replace('\\', '/').Trim('/'),
-            Pattern(plan, "unitFile", StewardPlan.DefaultUnitFile),
-            Pattern(plan, "agreed", StewardPlan.DefaultAgreed),
-            Pattern(plan, "draft", StewardPlan.DefaultDraft),
-            Pattern(plan, "outcome", StewardPlan.DefaultOutcome))
+            folder,
+            Pattern(format, "unitFile", StewardPlan.DefaultUnitFile),
+            Pattern(format, "agreed", StewardPlan.DefaultAgreed),
+            Pattern(format, "draft", StewardPlan.DefaultDraft),
+            Pattern(format, "outcome", StewardPlan.DefaultOutcome))
         {
-            Master = Str(plan, "master").Replace('\\', '/').Trim('/'),
-            Charter = Str(plan, "charter").Replace('\\', '/').Trim('/'),
-            Readable = Str(plan, "readable").Replace('\\', '/').Trim('/'),
-            Idea = Pattern(plan, "idea", StewardPlan.DefaultIdea),
-            // A key that is not one reads as none: it goes into every row filed against the plan.
-            Key = StewardPlan.IsKey(key) ? key : "",
-            Name = Str(plan, "name"),
+            Idea = Pattern(format, "idea", StewardPlan.DefaultIdea),
             AgreedLine = line.Length > 0 ? line : StewardPlan.DefaultAgreedLine,
         };
-    }
-
-    /// <summary>The plan being worked, or a finished one, by key. Null when the project has neither.</summary>
-    public StewardPlan? PlanByKey(string? key)
-    {
-        var k = key?.Trim().ToLowerInvariant() ?? "";
-        if (Plan.Configured && Plan.Key == k) return Plan;
-        return PastPlans.FirstOrDefault(p => p.Key == k);
     }
 
     private static StewardCheck[] Checks(JsonElement s)

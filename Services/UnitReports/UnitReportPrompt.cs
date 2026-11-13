@@ -19,12 +19,11 @@ public static class UnitReportPrompt
     /// <param name="Spec">The unit's spec as committed: what the owner agreed.</param>
     /// <param name="ShotPaths">Pool number to the file on disk the run may open.</param>
     /// <param name="Bounces">Per ticket, every time it was sent back and why, oldest first.</param>
-    /// <param name="NextUnit">The next unit's title and outcome ids, for a <c>deferred</c> ruling to point at. Null at the end of the plan.</param>
+    /// <param name="NextUnit">The next unit's title and outcome ids, for a <c>deferred</c> ruling to point at. Null for the last slice.</param>
     /// <param name="AnalysisPaths">Per ticket, the file its whole analysis was written to, for the run to open.</param>
     public record Context(
         string Display,
         string Label,
-        string PlanName,
         PlanUnit Unit,
         string UnitTitle,
         string Spec,
@@ -135,14 +134,14 @@ public static class UnitReportPrompt
               + (c.Range.OwnCommits > 0 ? $", {c.Range.OwnCommits} of them this unit's own merges" : "")
               + (c.Range.OwnCommits > 0 && foreign > 0 ? $". The other {foreign} are not this unit's work: do not credit them to it." : ".");
 
-        var next = c.NextUnit is null ? "This is the last unit of the plan."
+        var next = c.NextUnit is null ? "This is the last slice."
             : $"The next unit, for a `deferred` ruling to point at: {c.NextUnit}";
 
         var label = string.IsNullOrWhiteSpace(c.Label) ? "the product" : c.Label;
 
         return ($$"""
         You are writing a UNIT REPORT for the "{{c.Display}}" project: one teaching document about a
-        whole unit of its plan ("{{c.PlanName}}", unit {{c.Unit.Number}}: {{c.UnitTitle}}), for its owner.
+        whole slice (slice {{c.Unit.Number}}: {{c.UnitTitle}}), for its owner.
         They agreed this unit's outcomes before any of it was built, and a steward and a pipeline of
         workers built it while they were elsewhere. The one decision left that is theirs is whether to
         release it. This document is what they read to make it - and, after that, how they learn what

@@ -44,12 +44,12 @@ public static class UnitReportEndpoints
         // The latest report on one unit, with its history, the unit's tickets as they stand, and
         // where any report for it is in the queue.
         app.MapGet("/api/steward/plan/units/{unit:int}/report", async (
-            int unit, string project, string? plan, DashboardDbContext db, ProjectRegistry registry,
+            int unit, string project, DashboardDbContext db, ProjectRegistry registry,
             TicketGitService git, AnalysisQueue queue, CancellationToken ct) =>
         {
-            var subject = new UnitSubject(project, plan ?? "", unit);
+            var subject = new UnitSubject(project, unit);
             var reports = await db.UnitReports.AsNoTracking()
-                .Where(r => r.ProjectKey == project && r.Plan == subject.Plan && r.Unit == unit)
+                .Where(r => r.ProjectKey == project && r.Unit == unit)
                 .OrderByDescending(r => r.GeneratedAt).ToListAsync(ct);
             var tickets = await UnitTicketsAsync(db, subject, ct);
             var latest = reports.FirstOrDefault();
@@ -75,19 +75,19 @@ public static class UnitReportEndpoints
         {
             var r = await db.UnitReports.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id, ct);
             if (r is null) return Results.NotFound();
-            var tickets = await UnitTicketsAsync(db, new UnitSubject(r.ProjectKey, r.Plan, r.Unit), ct);
+            var tickets = await UnitTicketsAsync(db, new UnitSubject(r.ProjectKey, r.Unit), ct);
             return Results.Ok(await ReportAsync(r, db, git, tickets, ct));
         });
 
         // Join the queue. Asked for by a person, so it runs over an unfinished unit and says so.
-        app.MapPost("/api/steward/plan/units/{unit:int}/report", (int unit, string project, string? plan, AnalysisQueue queue) =>
+        app.MapPost("/api/steward/plan/units/{unit:int}/report", (int unit, string project, AnalysisQueue queue) =>
         {
-            var (ok, message) = queue.EnqueueUnit(new UnitSubject(project, plan ?? "", unit), manual: true);
+            var (ok, message) = queue.EnqueueUnit(new UnitSubject(project, unit), manual: true);
             return ok ? Results.Ok(new { message }) : Results.BadRequest(new { message });
         });
 
-        app.MapDelete("/api/steward/plan/units/{unit:int}/report", (int unit, string project, string? plan, AnalysisQueue queue) =>
-            queue.CancelUnit(new UnitSubject(project, plan ?? "", unit))
+        app.MapDelete("/api/steward/plan/units/{unit:int}/report", (int unit, string project, AnalysisQueue queue) =>
+            queue.CancelUnit(new UnitSubject(project, unit))
                 ? Results.Ok(new { cancelled = true })
                 : Results.NotFound(new { message = "No report on that unit is queued or running." }));
 
@@ -132,7 +132,7 @@ public static class UnitReportEndpoints
         {
             var r = await db.UnitReports.AsNoTracking().FirstOrDefaultAsync(x => x.Id == id);
             if (r is null) return Results.NotFound();
-            var (ok, message) = queue.EnqueueUnitWalkthrough(new UnitSubject(r.ProjectKey, r.Plan, r.Unit), id);
+            var (ok, message) = queue.EnqueueUnitWalkthrough(new UnitSubject(r.ProjectKey, r.Unit), id);
             return ok ? Results.Accepted(value: new { message }) : Results.Conflict(new { message });
         });
     }
@@ -189,7 +189,7 @@ public static class UnitReportEndpoints
     {
         var tickets = (await db.Tickets.AsNoTracking()
                 .Where(t => t.ProjectKey == s.Project && t.PlanUnit == s.Unit).ToListAsync(ct))
-            .Where(t => (t.PlanKey ?? "") == s.Plan).OrderBy(t => t.Id).ToList();
+            .OrderBy(t => t.Id).ToList();
         var ids = tickets.Select(t => t.Id).ToList();
         var done = (await db.PhaseTransitions.AsNoTracking()
                 .Where(p => ids.Contains(p.TicketId) && p.To == TicketPhase.Done)

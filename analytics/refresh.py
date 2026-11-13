@@ -111,7 +111,7 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
     "Tickets": {
         "Id": "INTEGER", "ProjectKey": "VARCHAR", "Track": "VARCHAR", "Phase": "VARCHAR",
         "Title": "VARCHAR", "Priority": "VARCHAR", "CreatedAt": "VARCHAR", "UpdatedAt": "VARCHAR",
-        "WorktreePath": "VARCHAR", "Branch": "VARCHAR", "PlanKey": "VARCHAR", "PlanUnit": "VARCHAR",
+        "WorktreePath": "VARCHAR", "Branch": "VARCHAR", "PlanUnit": "VARCHAR",
         "MergedAt": "VARCHAR", "Walkthrough": "BOOLEAN", "IsBug": "BOOLEAN",
     },
     # Bug tracing: a bug ticket traced to the tickets whose commits wrote the lines it fixed.

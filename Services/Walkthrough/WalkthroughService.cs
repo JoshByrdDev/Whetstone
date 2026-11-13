@@ -277,8 +277,7 @@ public class WalkthroughService
         if (doc is null) return (null, "the report could not be read back");
 
         var cfg = _registry.GetProjectConfig(r.ProjectKey);
-        var plan = cfg.Steward.PlanByKey(r.Plan);
-        var unit = plan is { Configured: true } ? (await _git.PlanOfAsync(r.ProjectKey, plan, ct)).FirstOrDefault(u => u.Number == r.Unit) : null;
+        var unit = (await _git.PlanAsync(r.ProjectKey, ct)).FirstOrDefault(u => u.Number == r.Unit);
         var spec = unit?.Text ?? "";
 
         var dir = _paths.UnitReportShotsDir(r.Id);
@@ -293,8 +292,8 @@ public class WalkthroughService
         var (changed, changedError) = await _git.ChangedFilesAsync(r.ProjectKey, r.ToSha, ct, fromRef: r.FromSha);
         if (changedError is not null) return (null, changedError);
 
-        var title = unit is null ? $"Unit {r.Unit}" : $"Unit {r.Unit}: {TicketGitService.UnitTitle(unit)}";
-        var prompt = WalkthroughPrompt.BuildForUnit(title, plan?.DisplayName ?? r.Plan, doc, spec,
+        var title = unit is null ? $"Slice {r.Unit}" : $"Slice {r.Unit}: {TicketGitService.UnitTitle(unit)}";
+        var prompt = WalkthroughPrompt.BuildForUnit(title, doc, spec,
             shots.Select(s => new WalkthroughPrompt.ShotMaterial(s.shot.N, s.shot.Caption, s.path, s.w, s.h, s.shot.Focus)).ToList(),
             changed.Select(c => new WalkthroughPrompt.ChangedFile(c.Path, c.Added, c.Removed)).ToList(),
             r.FromSha, r.ToSha);

@@ -9,6 +9,12 @@
 > it. A slice may be built on one other open slice, never two. A slice's decisions are in force
 > while it is open and retire when it is released. What has to outlive a slice is promoted, on
 > purpose, into a short conventions file the owner keeps.
+>
+> Finished 2026-11-13: the one project on the old shape switched, and the switch itself went with
+> everything else of the plan - `sliceBranches`, `plan`, `pastPlans`, `syncFrom`, the charter, the
+> import and its pairs, the plan-key columns. Slices are the only shape; a steward exists only
+> where `ProjectConfig.SliceBranchesOn` holds. The order of work below is kept as the record of
+> how it got here.
 
 This replaces parts of `docs/plans-as-slices.md`: its plan (section 1's "a plan is its slices"
 keeps, the plan around them does not), its charter as a structure, and section 3's register as a

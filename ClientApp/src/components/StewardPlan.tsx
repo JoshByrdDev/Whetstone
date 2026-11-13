@@ -17,15 +17,14 @@ import type {
 } from '../api/steward';
 
 /**
- * The plan, as something to read and to move along.
+ * The slices, as something to read and to move along.
  *
- * A plan is its slices, a charter that decides nothing, and the register of decisions
- * (docs/plans-as-slices.md). A person needs three things of it at different moments: where the
- * whole stands (the slices in lanes by stage, each with the strip of its outcomes), what one slice
- * promised and how far each promise is (its story step by step, its outcomes in the spec's own words
- * and order, what stands between it and built, the decisions it is held to - see stewardSlice.tsx),
- * and the plan as read - generated from the charter, the project's decisions and the slices, never
- * maintained by hand.
+ * There is no plan around them (docs/slice-branches.md): each slice is a spec in the repo, its own
+ * branch while it is open, and its decisions in the register. A person needs two things of them at
+ * different moments: where they all stand (the slices in lanes by stage, each with the strip of its
+ * outcomes), and what one slice promised and how far each promise is (its story step by step, its
+ * outcomes in the spec's own words and order, what stands between it and built, the decisions it
+ * is held to - see stewardSlice.tsx).
  *
  * A slice goes one way: an idea, a draft, agreed, building, built, released. Two of those steps are
  * a person's and are taken here - agreeing a draft, and saying a built slice has gone out. Ideas are
@@ -33,7 +32,7 @@ import type {
  * the steward's and the fleet's, and is only shown.
  */
 
-type Selected = number | 'plan' | 'master';
+type Selected = number;
 
 /** Where a unit stands, in words, and the tier that colours it. */
 const STAGE: Record<UnitStage, { word: string; tier: keyof typeof TIER }> = {
@@ -57,7 +56,7 @@ const STEPS: { stage: UnitStage; word: string }[] = [
   { stage: 'released', word: 'Released' },
 ];
 
-export function StewardPlan({ project, view, status, waiting, register, mode, onPlan, onChanged, onNotes, onNow, onDecisions, onNew }: {
+export function StewardPlan({ project, view, status, waiting, register, mode, onChanged, onNotes, onNow, onDecisions }: {
   project: string;
   view: StewardPlanView | null;
   status: StewardStatus | null;
@@ -66,8 +65,6 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
   register: StewardRegister | null;
   /** What the steward may do, which says whose a merge is. */
   mode?: StewardMode;
-  /** Read another of the project's plans; null is the one being worked. */
-  onPlan: (key: string | null) => void;
   /** Something here changed what the page shows. */
   onChanged: () => Promise<void>;
   /** Show a unit's notes for its release, in the record. */
@@ -76,8 +73,6 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
   onNow: () => void;
   /** Go to the register. */
   onDecisions: () => void;
-  /** Go to the tab where a plan is started. */
-  onNew: () => void;
 }) {
   const current = view?.plan?.current;
   const narrow = useNarrow();
@@ -88,11 +83,7 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
     const stage: UnitStage = u.stage ?? (u.done ? 'built' : u.agreed ? (u.unit === current ? 'building' : 'agreed') : u.draft ? 'draft' : 'notAgreed');
     return { ...u, stage: stage === 'agreed' && u.progress.done + u.progress.inProgress > 0 ? 'building' as UnitStage : stage };
   });
-  const plans = view?.plan?.plans ?? [];
-  const plan = view?.plan?.plan;
   const [picked, setPicked] = useState<Selected | null>(null);
-  // Another plan's units are another set: whatever was picked in the last one means nothing here.
-  useEffect(() => { setPicked(null); }, [plan?.key]);
 
   // Until somebody picks, the page is on the slice being worked - the latest one being built - and
   // then on one that wants something of you. A release waits in its own lane, so it no longer
@@ -100,26 +91,13 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
   const building = [...units].reverse().find(u => u.stage === 'building');
   const asking = units.find(u => u.stage === 'draft' && !u.cannotAgree) ?? units.find(u => u.stage === 'built');
   const selected: Selected | null = picked ?? building?.unit ?? current ?? asking?.unit
-    ?? (units.length > 0 ? units[units.length - 1].unit : view?.readable ? 'plan' : view?.master ? 'master' : null);
-  const unit = typeof selected === 'number' ? units.find(u => u.unit === selected) : undefined;
+    ?? (units.length > 0 ? units[units.length - 1].unit : null);
+  const unit = selected != null ? units.find(u => u.unit === selected) : undefined;
 
-  if (!view) return <Quiet>Reading the plan.</Quiet>;
+  if (!view) return <Quiet>Reading the slices.</Quiet>;
 
-  const working = !plan || plan.working;
   return (
     <div className="mb-8">
-      {plans.length > 1 && (
-        <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 12 }}>
-          <span style={label()}>Plan</span>
-          {plans.map(p => (
-            <Chip key={p.key} on={plan?.key === p.key} onClick={() => onPlan(p.working ? null : p.key)}
-              title={p.working ? 'The plan being worked' : 'A plan this project has finished'}>
-              {p.name}{p.working ? '' : ' - finished'}
-            </Chip>
-          ))}
-        </div>
-      )}
-
       {(view.plan?.moved?.length ?? 0) > 0 && (
         <Panel tone={TIER.blocked.c} className="mb-3">
           {view.plan!.moved!.map((m, i) => (
@@ -128,52 +106,23 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
         </Panel>
       )}
 
-      {units.length === 0 && !view.master && !view.readable
-        ? <Quiet>{view.why ?? 'This plan has no slices yet.'}</Quiet>
+      {units.length === 0
+        ? <Quiet>{view.why ?? 'There are no slices yet. A slice starts as an idea: a spec file in the slices folder whose status line says idea.'}</Quiet>
         : (
           <>
-            {(view.readable || view.master) && (
-              <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 10 }}>
-                {view.readable && (
-                  <Chip on={selected === 'plan'} onClick={() => setPicked('plan')} title={view.charter ? 'The charter, decisions and slices, generated' : 'The decisions and slices, generated'}>
-                    Whole plan
-                  </Chip>
-                )}
-                {view.master && (
-                  <Chip on={selected === 'master'} onClick={() => setPicked('master')} title={view.master.file}>
-                    {view.charter ? 'Original plan (retired)' : 'Plan document'}
-                  </Chip>
-                )}
-              </div>
-            )}
-
             {narrow
               ? <SliceStrip units={units} selected={selected} onPick={setPicked} />
               : <Lanes units={units} selected={selected} onPick={setPicked} />}
 
-            {selected === 'plan' && view.readable && (
-              <Panel key="plan" className="orbit-swap">
-                <div style={{ maxWidth: 780 }}><Markdown doc text={view.readable} /></div>
-              </Panel>
-            )}
-            {selected === 'master' && view.master && (
-              <Panel key="master" className="orbit-swap">
-                <div style={{ maxWidth: 780 }}><Markdown doc text={view.master.text} /></div>
-              </Panel>
-            )}
             {unit && (
               <UnitView
-                key={`${plan?.key}.${unit.unit}`} project={project} plan={plan?.key} unit={unit} working={working}
+                key={unit.unit} project={project} unit={unit}
                 status={unit.unit === current ? status : null} onChanged={onChanged} onNotes={onNotes}
-                waiting={waiting} register={working ? register : null} mode={mode} onNow={onNow} onDecisions={onDecisions}
+                waiting={waiting} register={register} mode={mode} onNow={onNow} onDecisions={onDecisions}
               />
             )}
           </>
         )}
-
-      {units.length === 0 && !view.master && !view.readable && (
-        <div style={{ marginTop: 10 }}><GhostButton tone="go" onClick={onNew}>Start a plan</GhostButton></div>
-      )}
     </div>
   );
 }
@@ -181,7 +130,7 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
 type Unit = StewardPlanUnitView;
 
 /**
- * The plan's stages as lanes, so its shape reads at once: what is still an idea, what is yours to
+ * The slices' stages as lanes, so where they stand reads at once: what is still an idea, what is yours to
  * agree, what is waiting, what is moving, what is yours to release, what has gone out. Left to right,
  * the way a ticket crosses the board - so each of the owner's two steps sits where it falls.
  */
@@ -234,7 +183,7 @@ function SliceStrip({ units, selected, onPick }: { units: Unit[]; selected: Sele
   );
 }
 
-/** One slice in the plan: its number and title, where it stands, and the strip of its outcomes. */
+/** One slice: its number and title, where it stands, and the strip of its outcomes. */
 function SliceCard({ u, on, onClick }: { u: Unit; on: boolean; onClick: () => void }) {
   const s = STAGE[u.stage];
   const p = u.progress;
@@ -290,8 +239,8 @@ function Steps({ stage }: { stage: UnitStage }) {
 
 type Show = 'outcomes' | 'spec' | 'report';
 
-function UnitView({ project, plan, unit, working, status, onChanged, onNotes, waiting, register, mode, onNow, onDecisions }: {
-  project: string; plan: string | undefined; unit: StewardPlanUnitView; working: boolean; status: StewardStatus | null;
+function UnitView({ project, unit, status, onChanged, onNotes, waiting, register, mode, onNow, onDecisions }: {
+  project: string; unit: StewardPlanUnitView; status: StewardStatus | null;
   onChanged: () => Promise<void>; onNotes: (unit: number) => void;
   waiting: StewardQuestion[]; register: StewardRegister | null; mode?: StewardMode;
   onNow: () => void; onDecisions: () => void;
@@ -346,9 +295,9 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
           </div>
         )}
 
-        {working && <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes}
-          onReport={show === 'report' ? undefined : () => pick('report')} />}
-        {working && unit.agreed && (unit.openDecisions?.length ?? 0) > 0 && (
+        <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes}
+          onReport={show === 'report' ? undefined : () => pick('report')} />
+        {unit.agreed && (unit.openDecisions?.length ?? 0) > 0 && (
           <StillOpen project={project} unit={unit} onChanged={onChanged} />
         )}
         {unit.builtOn != null && unit.sliceBranch && (
@@ -356,10 +305,10 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
             Built on slice {unit.builtOn}: its branch keeps up with slice {unit.builtOn}'s, and it is released after it.
           </div>
         )}
-        {working && unit.sliceBranch && unit.stage !== 'released' && (
+        {unit.sliceBranch && unit.stage !== 'released' && (
           <Abandon project={project} unit={unit} onChanged={onChanged} />
         )}
-        {working && unit.agreed && unit.stage !== 'built' && unit.stage !== 'released' && (
+        {unit.agreed && unit.stage !== 'built' && unit.stage !== 'released' && (
           <Between unit={unit} standing={standing} onPick={id => { toggle(id); pick('outcomes'); }} onNow={onNow} render={render} />
         )}
 
@@ -369,7 +318,7 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
             <Chip on={show === 'outcomes'} onClick={() => pick('outcomes')} title="Its story, its outcomes and the decisions it is held to">The slice</Chip>
             <Chip on={show === 'spec'} onClick={() => pick('spec')} title="The unit's spec, as committed">The spec</Chip>
             {reportable && (
-              <Chip on={show === 'report'} onClick={() => pick('report')} title="One Classroom report on the whole unit">Report</Chip>
+              <Chip on={show === 'report'} onClick={() => pick('report')} title="One Classroom report on the whole slice">Report</Chip>
             )}
           </span>
         </div>
@@ -381,7 +330,7 @@ function UnitView({ project, plan, unit, working, status, onChanged, onNotes, wa
       </div>
 
       {show === 'report'
-        ? <div key="report" className="orbit-swap"><UnitReport project={project} plan={plan} unit={unit.unit} title={unit.title} onNotes={onNotes} /></div>
+        ? <div key="report" className="orbit-swap"><UnitReport project={project} unit={unit.unit} title={unit.title} onNotes={onNotes} /></div>
         : show === 'spec' || !sliceView
         ? (
           <div key="spec" className="orbit-swap" style={{ padding: '14px 16px 18px', maxWidth: 812 }}>
@@ -510,7 +459,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
           ?? <>A draft. Read the spec below; nothing is filed against it until you agree it. Agreeing commits its status line to the base branch, and the steward starts filing tickets against its outcomes on its next run.{open > 0 && <> Its spec leaves <b>{open} decision{open === 1 ? '' : 's'}</b> open, which you answer as you agree it.</>}</>)}
         {!unit.cannotAgree && open > 0 && (
           <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
-            <GhostButton tone="go" onClick={() => setSure(true)}>Agree this unit</GhostButton>
+            <GhostButton tone="go" onClick={() => setSure(true)}>Agree this slice</GhostButton>
           </div>
         )}
         {!unit.cannotAgree && open === 0 && (
@@ -524,7 +473,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
                   <GhostButton disabled={busy} onClick={() => setSure(false)}>Not yet</GhostButton>
                 </>
               )
-              : <GhostButton tone="go" onClick={() => setSure(true)}>Agree this unit</GhostButton>}
+              : <GhostButton tone="go" onClick={() => setSure(true)}>Agree this slice</GhostButton>}
           </div>
         )}
       </>
@@ -591,7 +540,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
           </div>
         )}
         <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
-          {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole unit">Read the report first</GhostButton>}
+          {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole slice">Read the report first</GhostButton>}
           {seeNotes}
           {r.outstanding === 0 && (sure
             ? (
@@ -615,7 +564,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
           ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b> still to tick off{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
           : <>Every outcome is done and nothing for its release is outstanding{r.toKnow > 0 ? ` (${r.toKnow} to know, which go out with it)` : ''}. Releasing it is yours: merge and push by hand, then say so here.</>)}
         <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
-          {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole unit">Read the report first</GhostButton>}
+          {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole slice">Read the report first</GhostButton>}
           {seeNotes}
           {r.outstanding === 0 && (sure
             ? (

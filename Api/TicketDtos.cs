@@ -269,8 +269,8 @@ public record TicketDetailDto(
     // first run to make: the drawer's base chip goes and its branch chip renames from then on.
     bool BranchStarted = false);
 
-/// <summary>A ticket's place in a plan: the plan's key (empty for one never given a key), the unit's number, its outcomes.</summary>
-public record TicketPlanDto(string Key, int Unit, IReadOnlyList<string> Outcomes);
+/// <summary>A ticket's place in a slice: the slice's number, and its outcomes.</summary>
+public record TicketPlanDto(int Unit, IReadOnlyList<string> Outcomes);
 
 /// <summary>One finding of the independent analysis, and refinement's ruling on it.</summary>
 public record GateFindingDto(int Id, string Kind, string Title, string Text,
@@ -411,7 +411,7 @@ public static class TicketMapper
         t.SkipClassroomAnalysis,
         ToIndependentReview(t),
         t.PlanUnit is { } unit
-            ? new TicketPlanDto(t.PlanKey ?? "", unit, StewardProgress.OutcomesOf(t))
+            ? new TicketPlanDto(unit, StewardProgress.OutcomesOf(t))
             : null,
         t.Walkthrough,
         t.FullQaRequired,

@@ -24,17 +24,17 @@ import type { UnitReport as Report, UnitReportTicket, UnitReportView } from '../
  * their screenshots, the diffs one click from a stop. What the server knows outright (which tickets,
  * how often each was sent back, what it cost) is drawn from the rows, never from the model's words.
  */
-export function UnitReport({ project, plan, unit, title, onNotes }: {
-  project: string; plan: string | null | undefined; unit: number; title: string; onNotes: (unit: number) => void;
+export function UnitReport({ project, unit, title, onNotes }: {
+  project: string; unit: number; title: string; onNotes: (unit: number) => void;
 }) {
   const [view, setView] = useState<UnitReportView | null>(null);
   const [picked, setPicked] = useState<Report | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(() => getUnitReportView(project, plan, unit)
+  const load = useCallback(() => getUnitReportView(project, unit)
     .then(v => { setView(v); setFailed(null); })
-    .catch(e => setFailed(e instanceof Error ? e.message : String(e))), [project, plan, unit]);
+    .catch(e => setFailed(e instanceof Error ? e.message : String(e))), [project, unit]);
   useEffect(() => { setView(null); setPicked(null); load(); }, [load]);
 
   // A report takes minutes and waits behind the tickets' own analyses: poll while it is in the line.
@@ -51,7 +51,7 @@ export function UnitReport({ project, plan, unit, title, onNotes }: {
     catch (e) { setFailed(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(false); }
   };
-  const write = () => ask(() => queueUnitReport(project, plan, unit));
+  const write = () => ask(() => queueUnitReport(project, unit));
 
   if (!view) return <Note>{failed ?? 'Reading the report…'}</Note>;
 
@@ -61,7 +61,7 @@ export function UnitReport({ project, plan, unit, title, onNotes }: {
       <span className="h-1.5 w-1.5 rounded-full animate-pulse" style={{ background: 'var(--w-active)' }} />
       {view.queue === 'running' ? 'Writing the report' : 'Waiting its turn'}
       {view.queueNote && <span style={{ color: 'var(--w-t500)' }}>- {view.queueNote}</span>}
-      <GhostButton disabled={busy} onClick={() => ask(() => cancelUnitReport(project, plan, unit))}>Stop</GhostButton>
+      <GhostButton disabled={busy} onClick={() => ask(() => cancelUnitReport(project, unit))}>Stop</GhostButton>
     </div>
   );
 

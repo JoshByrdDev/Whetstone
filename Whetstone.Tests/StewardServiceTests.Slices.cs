@@ -7,7 +7,7 @@ namespace Whetstone.Tests;
 
 /// <summary>
 /// The rest of docs/plans-as-slices.md: overrides declared when they are asked about, what is not
-/// a decision, the charter, ideas, and a slice's story checked, kept true and driven.
+/// a decision, ideas, and a slice's story checked, kept true and driven.
 /// </summary>
 public partial class StewardServiceTests
 {
@@ -16,8 +16,8 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_question_says_what_it_touches_and_an_answer_replaces_only_what_the_owner_ticked()
     {
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Texts come from one shared number.")));
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("A text names the business.")));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Texts come from one shared number.", Convention: true)));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("A text names the business.", Convention: true)));
         await Begin();
 
         // Touches is required; an empty list is a claim too.
@@ -54,7 +54,7 @@ public partial class StewardServiceTests
     [Fact]
     public async Task An_owner_can_answer_and_leave_every_touched_decision_standing()
     {
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Texts come from one shared number.")));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Texts come from one shared number.", Convention: true)));
         await Begin();
         await In(s => s.AskAsync("alpha", Question() with
         {
@@ -66,29 +66,14 @@ public partial class StewardServiceTests
         Assert.Contains("one shared number", Json(await In(s => s.DecisionsAsync("alpha", null))));
     }
 
-    // ---- pieces 4 and 5: the charter, and ideas ------------------------------------------------
+    // ---- piece 5: ideas ------------------------------------------------
 
     private const string Idea3 = "# Unit 3: the day\n\n> **Status: idea.** Written 2026-02-01.\n\nA technician sees their own visits for the day, built on invites. Not their pay.\n";
 
     [Fact]
-    public async Task The_plan_as_read_is_the_charter_the_projects_decisions_and_every_slice_in_order()
+    public async Task An_idea_is_shown_as_an_idea_and_is_never_agreed_from_the_board()
     {
-        Configure("full", """ "plan": { "units": "docs/units", "charter": "docs/charter.md", "readable": "docs/PLAN-AS-READ.md" } """);
-        _git.InRepo["docs/charter.md"] = "# The plan\n\n## Purpose\n\nTo get people booked.\n";
-        _git.First = "# Unit 1: booking\n\n> **Status: agreed 2026-01-01.**\n\n## The walk-through this unit makes possible\n\nA customer books (A1) and a business sees it (A2).\n\n- **A1.** One.\n- **A2.** Two.\n";
         _git.More[3] = ("docs/units/03-the-day.md", Idea3);
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Prices never differ.")));
-
-        var text = (await In0(s => s.PlanAsReadAsync("alpha")))!;
-        Assert.Contains("### Purpose", text);                       // the charter, its headings set under the page's
-        Assert.Contains("- **#1** Prices never differ.", text);
-        Assert.Contains("### 1. booking - building", text);
-        Assert.Contains("#### The walk-through", text);              // the slice being worked, in full
-        Assert.Contains("### 3. the day - idea", text);
-        Assert.Contains("A technician sees their own visits for the day", text);
-        Assert.True(text.IndexOf("### 1.") < text.IndexOf("### 2.") && text.IndexOf("### 2.") < text.IndexOf("### 3."));
-
-        // The plan view names an idea's stage, and an idea is never agreed from the board.
         var view = Json(await In(s => s.PlanViewAsync("alpha")));
         Assert.Contains("\"stage\":\"idea\"", view);
         Assert.Contains("An idea is drafted before it is agreed", view);
@@ -116,7 +101,7 @@ public partial class StewardServiceTests
     public async Task The_steward_proposes_an_idea_and_the_board_commits_it_only_on_the_owners_yes()
     {
         await Begin();
-        StewardAsk ProposeIdea(string key, string file, string text) => Question(key) with { Options = null, Idea = new StewardIdeaProposal(file, text) };
+        StewardAsk ProposeIdea(string key, string file, string text) => Question(key) with { Convention = false, Options = null, Idea = new StewardIdeaProposal(file, text) };
         // Never over an agreed slice's number, and only a file that reads as an idea.
         Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ProposeIdea("idea-one", "01-x.md", Idea3)))).Answer);
         Assert.Equal("bad-request", (await In(s => s.AskAsync("alpha", ProposeIdea("idea-one", "03-the-day.md", "# No status\n")))).Answer);
@@ -198,7 +183,7 @@ public partial class StewardServiceTests
         var ask = Question("invite-channel") with
         {
             Options = new[] { new BlockOption("By text", "Cheaper to read", true), new BlockOption("By email") },
-            Unit = 2,
+            Unit = 2, Convention = false,
             Story = new StewardStoryChange("A business sends an invite by email (A1).",
                 new Dictionary<string, string> { ["By text"] = "A business sends an invite by text (A1)." }),
         };
@@ -225,7 +210,7 @@ public partial class StewardServiceTests
         await In(s => s.AskAsync("alpha", Question("invite-channel") with
         {
             Options = new[] { new BlockOption("By text", null, true), new BlockOption("By email") },
-            Unit = 2,
+            Unit = 2, Convention = false,
             Story = new StewardStoryChange("A business sends an invite by email (A1).",
                 new Dictionary<string, string> { ["By text"] = "A business sends an invite by text (A1)." }),
         }));
@@ -237,14 +222,14 @@ public partial class StewardServiceTests
         await using (var ctx = NewCtx())
         {
             ctx.StewardOutcomes.AddRange(
-                new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = 2, Outcome = "A1", State = StewardOutcomeState.Done },
-                new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = 2, Outcome = "B1", State = StewardOutcomeState.Done });
+                new StewardOutcome { ProjectKey = "alpha", Unit = 2, Outcome = "A1", State = StewardOutcomeState.Done },
+                new StewardOutcome { ProjectKey = "alpha", Unit = 2, Outcome = "B1", State = StewardOutcomeState.Done });
             await ctx.SaveChangesAsync();
         }
         var late = await In(s => s.AskAsync("alpha", Question("invite-again") with
         {
             Options = new[] { new BlockOption("By text", null, true), new BlockOption("By email") },
-            Unit = 2,
+            Unit = 2, Convention = false,
             Story = new StewardStoryChange("A business sends an invite by email (A1).", new Dictionary<string, string> { ["By text"] = "x (A1)." }),
         }));
         Assert.Equal("bad-request", late.Answer);
@@ -261,7 +246,7 @@ public partial class StewardServiceTests
     {
         await using var ctx = NewCtx();
         foreach (var o in outcomes)
-            ctx.StewardOutcomes.Add(new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = unit, Outcome = o, State = StewardOutcomeState.Done });
+            ctx.StewardOutcomes.Add(new StewardOutcome { ProjectKey = "alpha", Unit = unit, Outcome = o, State = StewardOutcomeState.Done });
         await ctx.SaveChangesAsync();
     }
 
@@ -357,7 +342,7 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_follow_up_waits_until_a_question_takes_it_up()
     {
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("A technician has a role of their own.")));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("A technician has a role of their own.", Convention: true)));
         await Begin();
         Assert.Equal("bad-request", (await In(s => s.FollowUpAsync("alpha", 9, "x"))).Answer);
         Assert.Equal("noted", (await In(s => s.FollowUpAsync("alpha", 1, "Let's talk about a dynamic role."))).Answer);
@@ -372,14 +357,14 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_ruling_that_reads_a_decision_which_no_longer_holds_is_flagged()
     {
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Everyone in the team sees the same schedule.")));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Everyone in the team sees the same schedule.", Convention: true)));
         await Begin();
         Assert.Equal("bad-request", (await In(s => s.RuleAsync("alpha", "x", "y", null, new[] { 5 }))).Answer);
         Assert.Equal("ruled", (await In(s => s.RuleAsync("alpha", "A screen ticket shows the whole team's day.", "#1", null, new[] { 1 }))).Answer);
         Assert.DoesNotContain("was replaced by", Json(await In(s => s.StatusAsync("alpha"))));
 
         await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Technicians see only their own visits.",
-            Replaces: new[] { new StewardReplacing(1, "Roles.") })));
+            Replaces: new[] { new StewardReplacing(1, "Roles.") }, Convention: true)));
         Assert.Contains("\"flagged\":\"#1 was replaced by #2\"", Json(await In(s => s.StatusAsync("alpha"))));
         await In(s => s.EndAsync("alpha", "x", false));
         Assert.Contains("\"flaggedRulings\":[{\"Id\":", Json(await Begin()));
@@ -394,13 +379,13 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_provisional_decision_comes_due_when_its_unit_is_built_and_the_owner_confirms_it()
     {
-        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Texts are free for now.", Provisional: true, ProvisionalUnit: 1)));
+        await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Texts are free for now.", Provisional: true, ProvisionalUnit: 1, Convention: true)));
         Assert.Contains("\"due\":[]", Json(await In(s => s.RegisterViewAsync("alpha"))));
         await using (var ctx = NewCtx())
         {
             ctx.StewardOutcomes.AddRange(
-                new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = 1, Outcome = "A1", State = StewardOutcomeState.Done },
-                new StewardOutcome { ProjectKey = "alpha", Plan = "", Unit = 1, Outcome = "A2", State = StewardOutcomeState.Done });
+                new StewardOutcome { ProjectKey = "alpha", Unit = 1, Outcome = "A1", State = StewardOutcomeState.Done },
+                new StewardOutcome { ProjectKey = "alpha", Unit = 1, Outcome = "A2", State = StewardOutcomeState.Done });
             await ctx.SaveChangesAsync();
         }
         Assert.Contains("\"due\":[1]", Json(await In(s => s.RegisterViewAsync("alpha"))));

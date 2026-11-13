@@ -47,9 +47,9 @@ public class TicketBaseBranchTests : IDisposable
         Commit(_hub, "README.md", "init");
         Git(_hub, "push", "-q", "-u", "origin", "main");
 
-        // alpha raises pull requests; bravo merges locally and has slice branches switched on.
+        // alpha raises pull requests; bravo merges locally, so it has slice branches.
         WriteProject("alpha", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main" }""");
-        WriteProject("bravo", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main", "mergeInsteadOfPr": true, "sliceBranches": true }""");
+        WriteProject("bravo", $$"""{ "projectPath": {{Json(_hub)}}, "baseBranch": "main", "mergeInsteadOfPr": true }""");
         _registry = new ProjectRegistry(new DashboardPaths(_data));
 
         _conn = new SqliteConnection("Data Source=:memory:");

@@ -2,7 +2,7 @@ import type { Bounce, Doc, TicketCost, Walkthrough } from './classroom';
 import type { Rect } from './classroom';
 
 /**
- * A unit report: one Classroom document about a whole unit of a steward plan, written over its
+ * A unit report: one Classroom document about a whole steward slice, written over its
  * tickets' own analyses and ruled against the unit's outcomes. Read on the Steward page.
  */
 
@@ -72,20 +72,19 @@ export interface UnitReportView {
   lastError?: string | null;
 }
 
-const where = (project: string, plan: string | null | undefined) =>
-  `project=${encodeURIComponent(project)}${plan ? `&plan=${encodeURIComponent(plan)}` : ''}`;
+const where = (project: string) => `project=${encodeURIComponent(project)}`;
 
-export const getUnitReportView = (project: string, plan: string | null | undefined, unit: number) =>
-  fetch(`/api/steward/plan/units/${unit}/report?${where(project, plan)}`).then(json<UnitReportView>);
+export const getUnitReportView = (project: string, unit: number) =>
+  fetch(`/api/steward/plan/units/${unit}/report?${where(project)}`).then(json<UnitReportView>);
 
 export const getUnitReport = (id: number) => fetch(`/api/unit-reports/${id}`).then(json<UnitReport>);
 
 /** Ask for a report. It runs over an unfinished unit too, and says what is unfinished. */
-export const queueUnitReport = (project: string, plan: string | null | undefined, unit: number) =>
-  fetch(`/api/steward/plan/units/${unit}/report?${where(project, plan)}`, { method: 'POST' }).then(json<{ message: string }>);
+export const queueUnitReport = (project: string, unit: number) =>
+  fetch(`/api/steward/plan/units/${unit}/report?${where(project)}`, { method: 'POST' }).then(json<{ message: string }>);
 
-export const cancelUnitReport = (project: string, plan: string | null | undefined, unit: number) =>
-  fetch(`/api/steward/plan/units/${unit}/report?${where(project, plan)}`, { method: 'DELETE' }).then(json<{ cancelled: boolean }>);
+export const cancelUnitReport = (project: string, unit: number) =>
+  fetch(`/api/steward/plan/units/${unit}/report?${where(project)}`, { method: 'DELETE' }).then(json<{ cancelled: boolean }>);
 
 export const unitReportDiffUrl = (id: number) => `/api/unit-reports/${id}/diff`;
 

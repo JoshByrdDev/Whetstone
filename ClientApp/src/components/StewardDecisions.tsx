@@ -4,18 +4,17 @@ import { BODY, MONO, TIER } from './orbit';
 import { Fold, Quiet, label, remember, remembered } from './stewardParts';
 import {
   closeStewardInstruction, confirmStewardDecision, dropStewardFollowUp, giveStewardInstruction,
-  recordStewardDecision, settleDecisionPair, withdrawStewardDecision,
+  recordStewardDecision, withdrawStewardDecision,
 } from '../api/steward';
-import type { DecisionPair, NewDecision, StewardDecision, StewardFollowUp, StewardInstruction, StewardRegister } from '../api/steward';
+import type { NewDecision, StewardDecision, StewardFollowUp, StewardInstruction, StewardRegister } from '../api/steward';
 
 /**
- * The register of decisions, as its owner reads it: what is in force for the whole project and for
- * each slice, what is provisional, and what no longer holds with what replaced it.
+ * The register of decisions, as its owner reads it: the conventions every slice keeps, what is in
+ * force for each slice, what is provisional, and what no longer holds with what replaced it.
  *
  * The register is the one place a decision's status lives, so this is also where it changes: a
  * decision recorded directly, one replaced by a newer one (the replacing is said on the newer, and
- * the older's status follows), one withdrawn. And it is where the pairs the import thought may
- * disagree wait for the owner - the import never assumes one replaces the other.
+ * the older's status follows), one withdrawn.
  */
 
 type Shown = 'force' | 'provisional' | 'history';
@@ -43,21 +42,16 @@ export function StewardDecisions({ project, register, onChanged }: {
   const history = all.filter(d => d.status === 'replaced' || d.status === 'withdrawn' || d.status === 'retired');
   const list = (shown === 'force' ? force : shown === 'provisional' ? provisional : history).filter(matches);
 
-  // In force: the conventions and the whole project first, then each slice in order - the order
-  // the file is written in.
+  // In force: the conventions first, then each slice in order - the order the file is written in.
   const groups = useMemo(() => {
     if (shown !== 'force') return [{ key: shown, title: '', rows: list }];
     const out: { key: string; title: string; rows: StewardDecision[] }[] = [];
     const conventions = list.filter(d => d.convention);
     if (conventions.length > 0) out.push({ key: 'conventions', title: 'Conventions: every slice', rows: conventions });
-    const whole = list.filter(d => d.unit == null && !d.convention);
-    if (whole.length > 0) out.push({ key: 'project', title: register?.sliceBranches ? 'The whole project, from before slices' : 'The whole project', rows: whole });
-    const units = [...new Set(list.filter(d => d.unit != null).map(d => `${d.plan ?? ''}:${d.unit}`))];
-    units.sort((a, b) => Number(a.split(':')[1]) - Number(b.split(':')[1]));
+    const units = [...new Set(list.filter(d => d.unit != null).map(d => d.unit!))].sort((a, b) => a - b);
     for (const u of units) {
-      const rows = list.filter(d => `${d.plan ?? ''}:${d.unit}` === u);
-      const named = (register?.plan ?? '') === (rows[0].plan ?? '') ? register?.units.find(x => x.unit === rows[0].unit)?.title : undefined;
-      out.push({ key: u, title: named ?? `Unit ${rows[0].unit}${rows[0].plan ? ` of ${rows[0].plan}` : ''}`, rows });
+      const rows = list.filter(d => d.unit === u);
+      out.push({ key: String(u), title: register?.units.find(x => x.unit === u)?.title ?? `Slice ${u}`, rows });
     }
     return out;
   }, [list, shown, register]);
@@ -66,7 +60,6 @@ export function StewardDecisions({ project, register, onChanged }: {
 
   return (
     <>
-      <Pairs project={project} pairs={register.mayConflict} byNumber={byNumber} onChanged={onChanged} />
       <ComingDue project={project} due={register.due.map(n => byNumber.get(n)).filter((d): d is StewardDecision => !!d)}
         onChanged={onChanged} onChange={n => setWriting({ replaces: n })} />
       <FollowUps project={project} rows={register.followUps} byNumber={byNumber} onChanged={onChanged} />
@@ -78,7 +71,7 @@ export function StewardDecisions({ project, register, onChanged }: {
           Provisional {provisional.length}
         </Chip>
         <Chip on={shown === 'history'} onClick={() => pick('history')}
-          title={register.sliceBranches ? 'Replaced, withdrawn, or retired with a released slice' : 'Replaced or withdrawn, with what replaced each'}>
+          title="Replaced, withdrawn, or retired with a released slice">
           History {history.length}
         </Chip>
         <span className="max-sm:hidden" style={{ marginLeft: 'auto' }} />
@@ -105,7 +98,7 @@ export function StewardDecisions({ project, register, onChanged }: {
 
       <div key={shown} className="orbit-swap">
         {list.length === 0
-          ? <Quiet>{needle ? 'Nothing matches.' : shown === 'force' ? 'Nothing is decided yet.' : shown === 'provisional' ? 'Nothing is provisional.' : register.sliceBranches ? 'Nothing has been replaced, withdrawn or retired.' : 'Nothing has been replaced or withdrawn.'}</Quiet>
+          ? <Quiet>{needle ? 'Nothing matches.' : shown === 'force' ? 'Nothing is decided yet.' : shown === 'provisional' ? 'Nothing is provisional.' : 'Nothing has been replaced, withdrawn or retired.'}</Quiet>
           : groups.map(g => (
             <div key={g.key} className="mb-6">
               {g.title && <div style={{ ...label('var(--w-t300)'), margin: '0 0 6px 2px' }}>{g.title} - {g.rows.length}</div>}
@@ -119,58 +112,6 @@ export function StewardDecisions({ project, register, onChanged }: {
           ))}
       </div>
     </>
-  );
-}
-
-/** The pairs the import thought may disagree, each waiting for the owner to say which holds. */
-function Pairs({ project, pairs, byNumber, onChanged }: {
-  project: string; pairs: DecisionPair[]; byNumber: Map<number, StewardDecision>; onChanged: () => Promise<void>;
-}) {
-  if (pairs.length === 0) return null;
-  return (
-    <Fold id="decisions.pairs" open title="May disagree" colour={TIER.blocked.c} count={pairs.length}
-      meta="found by the import: none is assumed">
-      <div className="flex flex-col gap-2 mb-8">
-        {pairs.map(p => <PairCard key={p.id} project={project} p={p} byNumber={byNumber} onChanged={onChanged} />)}
-      </div>
-    </Fold>
-  );
-}
-
-function PairCard({ project, p, byNumber, onChanged }: {
-  project: string; p: DecisionPair; byNumber: Map<number, StewardDecision>; onChanged: () => Promise<void>;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
-  const older = byNumber.get(p.older);
-  const newer = byNumber.get(p.newer);
-  const settle = async (replaces: boolean, why?: string) => {
-    setBusy(true); setFailed(null);
-    try { await settleDecisionPair(project, p.id, replaces, why); await onChanged(); }
-    catch (err) { setFailed(err instanceof Error ? err.message : String(err)); setBusy(false); }
-  };
-  const side = (d: StewardDecision | undefined, n: number, word: string) => (
-    <div className="min-w-0 flex-1" style={{ minWidth: 220 }}>
-      <div style={label()}>{word} - #{n}{d ? ` - ${d.on} - ${d.appliesTo}` : ''}</div>
-      <div style={{ font: `400 12.5px/1.5 ${BODY}`, color: 'var(--w-t200)', marginTop: 3 }}>{d?.rule ?? 'No longer in the register.'}</div>
-    </div>
-  );
-  return (
-    <Panel>
-      <div className="flex gap-4 flex-wrap">
-        {side(older, p.older, 'Older')}
-        {side(newer, p.newer, 'Newer')}
-      </div>
-      <div style={{ font: `400 11.5px/1.5 ${BODY}`, color: 'var(--w-t500)', marginTop: 8 }}>{p.why}</div>
-      <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 10 }}>
-        <GhostButton tone="go" disabled={busy} onClick={() => settle(true)}>#{p.newer} replaces #{p.older}</GhostButton>
-        {/* One decision kept in two places: kept once, under the newer number, the older pointing to it. */}
-        <GhostButton disabled={busy} onClick={() => settle(true, `The same decision, kept once as #${p.newer}.`)}
-          title={`One decision written twice: #${p.older} goes to history, pointing to #${p.newer}`}>Same decision</GhostButton>
-        <GhostButton disabled={busy} onClick={() => settle(false)}>Both stand</GhostButton>
-        {failed && <span style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c }}>{failed}</span>}
-      </div>
-    </Panel>
   );
 }
 
@@ -299,8 +240,8 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
       provisional,
       provisionalUnit: provisional ? until : null,
       replaces: replaces != null ? [{ number: replaces, why: why.trim() }] : undefined,
-      // With slice branches there is no "whole project": a decision for no slice is a convention.
-      convention: register.sliceBranches && unit == null ? true : undefined,
+      // There is no "whole project": a decision for no slice is a convention.
+      convention: unit == null ? true : undefined,
     };
     try { await recordStewardDecision(project, body); await onDone(); }
     catch (err) { setFailed(err instanceof Error ? err.message : String(err)); setBusy(false); }
@@ -325,12 +266,11 @@ function Writer({ project, register, replaces, old, onDone, onCancel }: {
 
         <div className="flex flex-wrap items-center gap-2" style={{ marginTop: 10 }}>
           <span style={label()}>Applies to</span>
-          <Chip on={unit == null} onClick={() => setUnit(null)}
-            title={register.sliceBranches ? 'A convention: a rule every slice keeps, never retired' : undefined}>
-            {register.sliceBranches ? 'Every slice' : 'The project'}
+          <Chip on={unit == null} onClick={() => setUnit(null)} title="A convention: a rule every slice keeps, never retired">
+            Every slice
           </Chip>
           {register.units.map(u => (
-            <Chip key={u.unit} on={unit === u.unit} onClick={() => setUnit(u.unit)} title={u.title}>Unit {String(u.unit).padStart(2, '0')}</Chip>
+            <Chip key={u.unit} on={unit === u.unit} onClick={() => setUnit(u.unit)} title={u.title}>Slice {String(u.unit).padStart(2, '0')}</Chip>
           ))}
         </div>
         {unit != null && (

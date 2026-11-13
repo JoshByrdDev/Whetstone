@@ -62,14 +62,12 @@ public class StewardQuestion
     public int? TicketId { get; set; }
 
     /// <summary>
-    /// The unit of the plan whose open decisions this asks about, when it asks about some - so
-    /// the board can put those decisions in front of the owner instead of a summary of them. With
-    /// <see cref="PlanKey"/>, because a unit's number means nothing without its plan.
-    /// On a project with slice branches it is also the slice a question about no ticket says its
-    /// answer applies to (docs/slice-branches.md, section 4), with no decisions named.
+    /// The slice whose open decisions this asks about, when it asks about some - so the board can
+    /// put those decisions in front of the owner instead of a summary of them. It is also the slice a
+    /// question about no ticket says its answer applies to (docs/slice-branches.md, section 4), with
+    /// no decisions named.
     /// </summary>
     public int? PlanUnit { get; set; }
-    public string? PlanKey { get; set; }
 
     /// <summary>
     /// What its answer decides is a convention - a rule every slice keeps - rather than one slice's
@@ -286,19 +284,12 @@ public class StewardState
     public DateTime? LastRunEndedAt { get; set; }
     public string? LastRunSummary { get; set; }
 
-    /// <summary>
-    /// When the register of decisions was first built from what the project already had. Until
-    /// then the first read or write of the register builds it, so no decision goes missing between
-    /// the old record and the new.
-    /// </summary>
-    public DateTime? RegisterBuiltAt { get; set; }
-
     /// <summary>The local day the count below belongs to; a new day starts it again.</summary>
     public string? CreatedDay { get; set; }
     public int CreatedCount { get; set; }
 }
 
-/// <summary>Where one outcome of the plan stands, as its steward last judged it.</summary>
+/// <summary>Where one outcome of a slice stands, as its steward last judged it.</summary>
 public enum StewardOutcomeState
 {
     NotStarted,
@@ -307,7 +298,7 @@ public enum StewardOutcomeState
 }
 
 /// <summary>
-/// The steward's standing judgment on one outcome of one unit of the plan.
+/// The steward's standing judgment on one outcome of one slice.
 /// <para>
 /// Which tickets deliver an outcome is on the tickets themselves (<see cref="Ticket.PlanOutcomes"/>),
 /// and the board can count those. What it cannot count is whether they are ALL of it: an outcome
@@ -320,13 +311,6 @@ public class StewardOutcome
 {
     public int Id { get; set; }
     public string ProjectKey { get; set; } = "";
-
-    /// <summary>
-    /// The key of the plan the unit belongs to. A project works one plan after another and each
-    /// numbers its units from one, so a unit's number alone stops naming it the day a second plan
-    /// starts. Empty for a plan that was never given a key.
-    /// </summary>
-    public string Plan { get; set; } = "";
 
     public int Unit { get; set; }
 
@@ -389,22 +373,19 @@ public class StewardClearance
 }
 
 /// <summary>
-/// What the owner has done about one unit of a plan: agreed it, and released it.
+/// What the owner has done about one slice: agreed it, and released it.
 /// <para>
-/// Whether a unit is agreed is never read from here - that is the spec's own status line, as
+/// Whether a slice is agreed is never read from here - that is the spec's own status line, as
 /// committed, and this row only remembers when the owner pressed the button that committed it.
-/// Released is different: nothing in the repo says a unit's work has gone out, because going out
-/// is a merge and a push the board never makes. So it is the owner's word, recorded here, and it
-/// is what closes a unit: its notes for a release are behind it, and the page stops asking.
+/// Released is the owner's press that merges the slice's branch into the local base (or, for a
+/// slice from before slice branches, their word that its work went out). It is what closes a
+/// slice: its notes for a release are behind it, its decisions retire, and the page stops asking.
 /// </para>
 /// </summary>
 public class StewardUnit
 {
     public int Id { get; set; }
     public string ProjectKey { get; set; } = "";
-
-    /// <summary>The plan's key, as on <see cref="StewardOutcome.Plan"/>.</summary>
-    public string Plan { get; set; } = "";
 
     public int Unit { get; set; }
 
@@ -494,18 +475,16 @@ public class StewardDecision
     public string? Title { get; set; }
 
     /// <summary>
-    /// What it applies to. No unit: the project as a whole. A unit (with the plan it belongs to,
-    /// since a unit's number means nothing without its plan): that slice. With outcomes too, comma
-    /// separated: only those outcomes of it.
+    /// What it applies to. A slice: that slice, and with outcomes too, comma separated, only those
+    /// outcomes of it. No slice: a convention, or - for a decision made before slice branches - the
+    /// project as a whole, which retired with the move.
     /// </summary>
-    public string? PlanKey { get; set; }
     public int? PlanUnit { get; set; }
     public string? Outcomes { get; set; }
 
     /// <summary>
     /// A convention: a rule every slice keeps, never retired with one (docs/slice-branches.md,
-    /// section 4). Never with a unit. On a project with slice branches every new decision is either
-    /// this or a slice's; "the whole project" is what a decision made before the switch says.
+    /// section 4). Never with a unit. Every new decision is either this or a slice's.
     /// </summary>
     public bool Convention { get; set; }
 
@@ -529,9 +508,6 @@ public class StewardDecision
 
     /// <summary>Where it was read from or written to: a spec file, a plan document, a record line.</summary>
     public string? SourceRef { get; set; }
-
-    /// <summary>What the register's import knows it by, so taking in the same record twice adds nothing.</summary>
-    public string? ImportKey { get; set; }
 
     /// <summary>The day it was made, which for an imported decision is the day its source says.</summary>
     public DateTime MadeAt { get; set; } = DateTime.UtcNow;
@@ -623,24 +599,4 @@ public class StewardFollowUp
 
     /// <summary>When the owner dropped it, as nothing to take up.</summary>
     public DateTime? DroppedAt { get; set; }
-}
-
-/// <summary>
-/// Two decisions the register's import thinks may disagree, put to the owner rather than assumed.
-/// Settled by the owner: the newer replaces the older, or both stand.
-/// </summary>
-public class StewardDecisionConflict
-{
-    public int Id { get; set; }
-    public string ProjectKey { get; set; } = "";
-    public int Older { get; set; }
-    public int Newer { get; set; }
-
-    /// <summary>What the two have in common that made the import think so.</summary>
-    public string Why { get; set; } = "";
-    public DateTime FoundAt { get; set; } = DateTime.UtcNow;
-
-    /// <summary>"replaced" or "both-stand", once the owner has said.</summary>
-    public string? Settled { get; set; }
-    public DateTime? SettledAt { get; set; }
 }

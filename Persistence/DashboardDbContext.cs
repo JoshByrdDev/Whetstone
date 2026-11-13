@@ -37,7 +37,6 @@ public class DashboardDbContext : DbContext
     public DbSet<StewardClearance> StewardClearances => Set<StewardClearance>();
     public DbSet<StewardDecision> StewardDecisions => Set<StewardDecision>();
     public DbSet<StewardDecisionReplace> StewardDecisionReplaces => Set<StewardDecisionReplace>();
-    public DbSet<StewardDecisionConflict> StewardDecisionConflicts => Set<StewardDecisionConflict>();
     public DbSet<StewardInstruction> StewardInstructions => Set<StewardInstruction>();
     public DbSet<StewardFollowUp> StewardFollowUps => Set<StewardFollowUp>();
     public DbSet<CapacitySample> CapacitySamples => Set<CapacitySample>();
@@ -99,7 +98,6 @@ public class DashboardDbContext : DbContext
             e.Property(t => t.Track).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.CreatedBy).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.PlanOutcomes).HasMaxLength(256);
-            e.Property(t => t.PlanKey).HasMaxLength(64);
             e.HasIndex(t => t.Phase);
             e.HasIndex(t => t.ProjectKey);
 
@@ -281,13 +279,12 @@ public class DashboardDbContext : DbContext
         b.Entity<UnitReport>(e =>
         {
             e.Property(r => r.ProjectKey).HasMaxLength(128);
-            e.Property(r => r.Plan).HasMaxLength(128);
             e.Property(r => r.BaseRef).HasMaxLength(256);
             e.Property(r => r.FromSha).HasMaxLength(64);
             e.Property(r => r.ToSha).HasMaxLength(64);
             e.Property(r => r.Model).HasMaxLength(64);
             // Every read is "the reports of this unit, newest first".
-            e.HasIndex(r => new { r.ProjectKey, r.Plan, r.Unit, r.GeneratedAt });
+            e.HasIndex(r => new { r.ProjectKey, r.Unit, r.GeneratedAt });
         });
 
         // The owner's filing tags. Nothing here hangs off the Ticket entity on purpose — see
@@ -355,7 +352,6 @@ public class DashboardDbContext : DbContext
             e.Property(q => q.ProjectKey).HasMaxLength(128);
             e.Property(q => q.Key).HasMaxLength(64);
             e.Property(q => q.RemindedOn).HasMaxLength(10);
-            e.Property(q => q.PlanKey).HasMaxLength(40);
             e.Property(q => q.Decisions).HasMaxLength(400);
             e.Property(q => q.Touches).HasMaxLength(400);
             // Asked once, for good: this is what refuses a run that has forgotten it already asked.
@@ -375,16 +371,14 @@ public class DashboardDbContext : DbContext
             e.Property(o => o.ProjectKey).HasMaxLength(128);
             e.Property(o => o.Outcome).HasMaxLength(16);
             e.Property(o => o.State).HasConversion<string>().HasMaxLength(16);
-            e.Property(o => o.Plan).HasMaxLength(64);
-            e.HasIndex(o => new { o.ProjectKey, o.Plan, o.Unit, o.Outcome }).IsUnique();
+            e.HasIndex(o => new { o.ProjectKey, o.Unit, o.Outcome }).IsUnique();
         });
 
         b.Entity<StewardUnit>(e =>
         {
             e.Property(u => u.ProjectKey).HasMaxLength(128);
-            e.Property(u => u.Plan).HasMaxLength(64);
             e.Property(u => u.ReleasedSha).HasMaxLength(64);
-            e.HasIndex(u => new { u.ProjectKey, u.Plan, u.Unit }).IsUnique();
+            e.HasIndex(u => new { u.ProjectKey, u.Unit }).IsUnique();
         });
 
         b.Entity<StewardClearance>(e =>
@@ -402,14 +396,11 @@ public class DashboardDbContext : DbContext
         {
             e.Property(d => d.ProjectKey).HasMaxLength(128);
             e.Property(d => d.Title).HasMaxLength(300);
-            e.Property(d => d.PlanKey).HasMaxLength(64);
             e.Property(d => d.Outcomes).HasMaxLength(200);
             e.Property(d => d.Source).HasConversion<string>().HasMaxLength(16);
             e.Property(d => d.QuestionKey).HasMaxLength(64);
             e.Property(d => d.SourceRef).HasMaxLength(400);
-            e.Property(d => d.ImportKey).HasMaxLength(200);
             e.HasIndex(d => new { d.ProjectKey, d.Number }).IsUnique();
-            e.HasIndex(d => new { d.ProjectKey, d.ImportKey });
             e.HasMany(d => d.Replaces).WithOne().HasForeignKey(r => r.DecisionId).OnDelete(DeleteBehavior.Cascade);
         });
 
@@ -432,14 +423,6 @@ public class DashboardDbContext : DbContext
             e.Property(f => f.ProjectKey).HasMaxLength(128);
             e.Property(f => f.CitedBy).HasMaxLength(300);
             e.HasIndex(f => new { f.ProjectKey, f.Decision });
-        });
-
-        b.Entity<StewardDecisionConflict>(e =>
-        {
-            e.Property(c => c.ProjectKey).HasMaxLength(128);
-            e.Property(c => c.Why).HasMaxLength(600);
-            e.Property(c => c.Settled).HasMaxLength(16);
-            e.HasIndex(c => new { c.ProjectKey, c.Older, c.Newer }).IsUnique();
         });
 
         b.Entity<StewardState>(e =>

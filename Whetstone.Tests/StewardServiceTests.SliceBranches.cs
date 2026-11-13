@@ -10,20 +10,10 @@ namespace Whetstone.Tests;
 /// </summary>
 public partial class StewardServiceTests
 {
-    /// <summary>The project as <see cref="Configure"/> writes it, with slice branches switched on.</summary>
-    private void SwitchToSliceBranches()
-    {
-        var paths = new DashboardPaths(_dataRoot);
-        var file = paths.ProjectConfigDefaults("alpha");
-        var text = File.ReadAllText(file);
-        File.WriteAllText(file, text.Replace("\"mergeInsteadOfPr\": true,", "\"mergeInsteadOfPr\": true, \"sliceBranches\": true,"));
-        Assert.True(new ProjectRegistry(paths).GetProjectConfig("alpha").SliceBranchesOn);
-    }
 
     [Fact]
     public async Task Agreeing_a_slice_cuts_its_branch_and_records_it()
     {
-        SwitchToSliceBranches();
         Assert.Equal("agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 2))).Answer);
 
         Assert.Equal(new[] { "slice/02-second" }, _git.Cut);
@@ -32,29 +22,17 @@ public partial class StewardServiceTests
     }
 
     [Fact]
-    public async Task With_slice_branches_a_slice_is_agreed_whether_or_not_an_earlier_one_is()
+    public async Task A_slice_is_agreed_whether_or_not_an_earlier_one_is()
     {
         _git.More[3] = ("docs/units/03-third.md", "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n");
-        // Without the switch, units are agreed in order: unit 2 is still a draft.
-        Assert.Equal("not-next", (await In(s => s.OwnerAgreesUnitAsync("alpha", 3))).Answer);
-        SwitchToSliceBranches();
+        // A slice's number is only its id: slice 2 is still a draft, and 3 is agreed anyway.
         Assert.Equal("agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 3))).Answer);
         Assert.Equal(new[] { "slice/03-third" }, _git.Cut);
     }
 
     [Fact]
-    public async Task Without_the_switch_agreeing_cuts_nothing()
-    {
-        Assert.Equal("agreed", (await In(s => s.OwnerAgreesUnitAsync("alpha", 2))).Answer);
-        Assert.Empty(_git.Cut);
-        await using var ctx = NewCtx();
-        Assert.Null(ctx.StewardUnits.Single(u => u.Unit == 2).Branch);
-    }
-
-    [Fact]
     public async Task With_no_local_base_to_cut_from_a_slice_is_not_agreed()
     {
-        SwitchToSliceBranches();
         _git.Head = null!;
         Assert.Equal("no-base", (await In(s => s.OwnerAgreesUnitAsync("alpha", 2))).Answer);
         Assert.Empty(_git.Committed);
@@ -64,7 +42,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_branch_that_will_not_cut_leaves_the_agreement_standing_and_says_so()
     {
-        SwitchToSliceBranches();
         _git.CutRefusal = "could not cut it";
         var reply = await In(s => s.OwnerAgreesUnitAsync("alpha", 2));
         Assert.Equal("agreed", reply.Answer);
@@ -85,7 +62,7 @@ public partial class StewardServiceTests
         await using var ctx = NewCtx();
         ctx.StewardUnits.Add(new Whetstone.Models.StewardUnit
         {
-            ProjectKey = "alpha", Plan = "", Unit = unit, Branch = branch, AgreedAt = DateTime.UtcNow,
+            ProjectKey = "alpha", Unit = unit, Branch = branch, AgreedAt = DateTime.UtcNow,
             ReleasedAt = released ? DateTime.UtcNow : null, ParentUnit = parent,
         });
         await ctx.SaveChangesAsync();
@@ -94,10 +71,9 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_run_brings_each_open_slice_up_to_the_base_and_leaves_a_released_one_alone()
     {
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
         await OpenSlice(3, "slice/03-older", released: true);
-        _git.SliceSync["slice/01-first"] = new SyncFromResult("merged", 2, new[] { "src/fix.ts" }, null);
+        _git.SliceSync["slice/01-first"] = new SliceSyncResult("merged", 2, new[] { "src/fix.ts" }, null);
 
         var begin = Json(await Begin());
         Assert.Equal(new[] { ("slice/01-first", false) }, _git.Synced);
@@ -108,9 +84,8 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_slice_that_cannot_take_the_base_is_put_to_the_owner_through_the_run()
     {
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
-        _git.SliceSync["slice/01-first"] = new SyncFromResult("conflict", 1, new[] { "src/app.ts" }, "nothing was changed");
+        _git.SliceSync["slice/01-first"] = new SliceSyncResult("conflict", 1, new[] { "src/app.ts" }, "nothing was changed");
 
         var begin = Json(await Begin());
         Assert.Contains("Ask the owner", begin);
@@ -120,11 +95,10 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_slice_behind_the_base_makes_a_run_due()
     {
-        SwitchToSliceBranches();
         await Begin();
         await In(s => s.EndAsync("alpha", "x", false));
         await OpenSlice(1, "slice/01-first");
-        _git.SliceSync["slice/01-first"] = new SyncFromResult("merged", 1, Array.Empty<string>(), null);
+        _git.SliceSync["slice/01-first"] = new SliceSyncResult("merged", 1, Array.Empty<string>(), null);
 
         await using var ctx = NewCtx();
         var (due, why) = await Steward(ctx).DueAsync("alpha");
@@ -134,17 +108,8 @@ public partial class StewardServiceTests
     }
 
     [Fact]
-    public async Task Without_the_switch_no_slice_is_synced()
-    {
-        await OpenSlice(1, "slice/01-first");
-        await Begin();
-        Assert.Empty(_git.Synced);
-    }
-
-    [Fact]
     public async Task The_walk_through_of_an_open_slice_says_it_runs_on_the_slices_branch()
     {
-        SwitchToSliceBranches();
         _git.First = WithWalkthrough;
         await OpenSlice(1, "slice/01-first");
         await Done(1, "A1", "A2");
@@ -169,11 +134,10 @@ public partial class StewardServiceTests
     {
         Configure("full", $$"""
             "limits": { "createdPerDay": 2, "openAtOnce": 3, "sendBacksPerTicket": 1 },
-            "plan": { "units": "docs/units" },
+            "slices": "docs/units",
             "neverMerge": ["infra/"],
             "conventions": "{{Conventions}}"{{checks}}
             """);
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
         await Built(1, "A1, A2");
         await Begin();
@@ -182,9 +146,9 @@ public partial class StewardServiceTests
         await In(s => s.EndAsync("alpha", "x", false));
         await using var ctx = NewCtx();
         ctx.StewardDecisions.AddRange(
-            new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 40, Rule = "Prices are whole cents,\n never floats.", PlanKey = "", PlanUnit = 1 },
-            new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 41, Rule = "The card is blue.", PlanKey = "", PlanUnit = 1 },
-            new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 42, Rule = "Another slice's.", PlanKey = "", PlanUnit = 2 });
+            new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 40, Rule = "Prices are whole cents,\n never floats.", PlanUnit = 1 },
+            new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 41, Rule = "The card is blue.", PlanUnit = 1 },
+            new Whetstone.Models.StewardDecision { ProjectKey = "alpha", Number = 42, Rule = "Another slice's.", PlanUnit = 2 });
         await ctx.SaveChangesAsync();
     }
 
@@ -257,19 +221,6 @@ public partial class StewardServiceTests
     }
 
     [Fact]
-    public async Task Without_the_switch_a_release_is_only_recorded_and_promotes_nothing()
-    {
-        await OpenSlice(1, "slice/01-first");
-        await Built(1, "A1, A2");
-        await Begin();
-        await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
-        await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
-        Assert.Equal("no-slice-branch", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true, new[] { 40 }))).Answer);
-        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
-        Assert.Empty(_git.Released);
-    }
-
-    [Fact]
     public async Task The_steward_suggests_what_to_promote_and_the_release_shows_it()
     {
         await ReleasableSlice();
@@ -288,7 +239,7 @@ public partial class StewardServiceTests
     public void The_conventions_file_is_never_merged_by_the_steward()
     {
         Configure("full", """
-            "plan": { "units": "docs/units" },
+            "slices": "docs/units",
             "conventions": "docs/conventions.md"
             """);
         var cfg = new ProjectRegistry(new DashboardPaths(_dataRoot)).GetProjectConfig("alpha");
@@ -316,7 +267,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_slice_built_on_an_open_one_is_cut_from_it_and_remembers_it()
     {
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
         _git.Second = BuiltOnFirst;
         var reply = await In(s => s.OwnerAgreesUnitAsync("alpha", 2));
@@ -329,7 +279,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_parent_that_is_not_open_is_refused_before_anything_is_committed()
     {
-        SwitchToSliceBranches();
         _git.Second = BuiltOnFirst;
         // Unit 1's spec is agreed, but it was never cut: there is no branch to build on.
         Assert.Equal("parent-not-open", (await In(s => s.OwnerAgreesUnitAsync("alpha", 2))).Answer);
@@ -342,7 +291,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task Two_unreleased_parents_are_refused_and_a_released_one_is_no_parent_at_all()
     {
-        SwitchToSliceBranches();
         _git.More[3] = ("docs/units/03-third.md", "> Built on: slices 1 and 2\n> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n");
         await OpenSlice(1, "slice/01-first");
         await OpenSlice(2, "slice/02-second");
@@ -363,7 +311,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_slice_is_not_built_on_one_that_is_itself_built_on_another()
     {
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
         await OpenSlice(2, "slice/02-second", parent: 1);
         _git.More[3] = ("docs/units/03-third.md", "Built on: slice 2\n\n> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n");
@@ -376,7 +323,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_run_brings_a_parent_up_to_the_base_before_its_child_takes_the_parent()
     {
-        SwitchToSliceBranches();
         await OpenSlice(2, "slice/02-second", parent: 1);
         await OpenSlice(1, "slice/01-first");
         await Begin();
@@ -410,7 +356,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task Abandoning_a_parent_asks_the_owner_about_its_child_before_anything_moves()
     {
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
         await OpenSlice(2, "slice/02-second", parent: 1);
 
@@ -444,7 +389,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task A_child_with_work_of_its_own_is_not_recut_and_nothing_is_abandoned()
     {
-        SwitchToSliceBranches();
         await OpenSlice(1, "slice/01-first");
         await OpenSlice(2, "slice/02-second", parent: 1);
         _git.RecutRefusals["slice/02-second"] = "slice/02-second has 2 commits of its own";
@@ -458,7 +402,6 @@ public partial class StewardServiceTests
     [Fact]
     public async Task Abandoning_a_parent_and_its_child_marks_both_and_keeps_their_branches()
     {
-        SwitchToSliceBranches();
         _git.Second = AgreedSecond;
         await OpenSlice(1, "slice/01-first");
         await OpenSlice(2, "slice/02-second", parent: 1);
@@ -472,11 +415,9 @@ public partial class StewardServiceTests
     }
 
     [Fact]
-    public async Task A_slice_with_a_ticket_open_is_not_abandoned_and_nor_is_one_without_the_switch()
+    public async Task A_slice_with_a_ticket_open_is_not_abandoned()
     {
         await OpenSlice(1, "slice/01-first");
-        Assert.Equal("no-slice-branches", (await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, null))).Answer);
-        SwitchToSliceBranches();
         await Built(1, "A1", phase: Whetstone.Models.TicketPhase.NeedsImplementation);
         Assert.Equal("tickets-open", (await In(s => s.OwnerAbandonsUnitAsync("alpha", 1, null))).Answer);
         Assert.Empty(_git.Committed);

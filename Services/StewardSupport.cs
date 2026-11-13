@@ -14,14 +14,10 @@ public interface IStewardGit
 {
     Task<string?> BaseHeadAsync(string projectKey, CancellationToken ct = default);
     Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default);
-    Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default);
-    Task<string?> FileAtBaseAsync(string projectKey, string path, CancellationToken ct = default);
     Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default);
     /// <summary><see cref="BranchChange.ChangeId"/> of the branch's diff limited to <paramref name="paths"/>, or null.</summary>
     Task<string?> PathsChangeIdAsync(string projectKey, string branch, IReadOnlyList<string> paths, CancellationToken ct = default);
     Task<(string Text, bool Cut, int Length)?> BranchDiffAsync(string projectKey, string branch, string? path, int maxChars, CancellationToken ct = default);
-    Task<int> AheadOfBaseAsync(string projectKey, string from, CancellationToken ct = default);
-    Task<SyncFromResult> SyncFromAsync(string projectKey, string from, bool dryRun, CancellationToken ct = default);
     Task<(string? Sha, bool Unchanged, string? Refusal)> CommitFileAsync(string projectKey, string relativePath, string content, string message, CancellationToken ct = default);
     Task<bool> WorktreeAtTipAsync(string projectKey, string worktree, string branch, CancellationToken ct = default);
     Task<CheckRun> RunCheckAsync(string dir, string command, TimeSpan timeout, IReadOnlyDictionary<string, string>? env = null, CancellationToken ct = default);
@@ -39,12 +35,11 @@ public interface IStewardGit
     /// abandoned; refused when it has commits of its own.
     /// </summary>
     Task<(string? Sha, string? Refusal)> RecutSliceAsync(string projectKey, string slice, string parent, CancellationToken ct = default);
-    Task<(string? Sha, string? Refusal)> SwitchBaseAsync(string projectKey, string newBase, string? file, string? text, string message, bool dryRun, CancellationToken ct = default);
     /// <summary>
     /// Bring an open slice's branch up to the base with a merge, never a rebase; with
     /// <paramref name="dryRun"/>, only how far behind it is (docs/slice-branches.md, section 2).
     /// </summary>
-    Task<SyncFromResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, string? from = null, CancellationToken ct = default);
+    Task<SliceSyncResult> SyncSliceAsync(string projectKey, string slice, bool dryRun, string? from = null, CancellationToken ct = default);
     /// <summary>
     /// Ready a slice's release: the hub fenced as for any merge into the base, and the slice brought
     /// up to the base. Its tip and the files it changes, for the checks.
@@ -216,7 +211,7 @@ public static class StewardFlags
 }
 
 /// <summary>
-/// How far a unit of the plan is, as one figure a person can read at a glance.
+/// How far a slice is, as one figure a person can read at a glance.
 /// <para>
 /// Every outcome weighs the same. One its steward has called done is whole; one in progress is the
 /// share of its tickets that is behind them, with one more counted while a ticket for it is still

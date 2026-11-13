@@ -26,7 +26,7 @@ public record BranchChange(IReadOnlyList<string> Files, int Behind, int Ahead, s
     string? Tip = null, string? ChangeId = null);
 
 /// <summary>Outcome of bringing another branch into the base before a steward's run.</summary>
-public record SyncFromResult(string Answer, int Commits, IReadOnlyList<string> Files, string? Why);
+public record SliceSyncResult(string Answer, int Commits, IReadOnlyList<string> Files, string? Why);
 
 /// <summary>Outcome of one command run on a ticket's worktree before it is merged.</summary>
 /// <param name="Output">The last lines of what the check printed.</param>
@@ -107,7 +107,7 @@ public static class CheckFailures
 /// The git a project's steward needs, and nothing else it could ask for.
 /// <para>
 /// Everything here reads the base branch as COMMITTED, in the hub, and the two things that write
-/// (<see cref="SyncFromAsync"/> and <see cref="CommitFileAsync"/>) refuse unless the hub is on its
+/// (<see cref="CommitFileAsync"/>, and every merge) refuse unless the hub is on its
 /// base branch with a clean tree - the same condition <see cref="MergeAsync"/> holds, for the same
 /// reason: the hub is a person's checkout too, and nothing unattended moves it or commits over
 /// work in progress.
@@ -216,17 +216,12 @@ public partial class TicketGitService
     }
 
     /// <summary>
-    /// The project's plan: every unit spec in the configured folder, read from the base branch's
-    /// last commit. Empty when the project has no plan configured or the folder does not exist yet.
+    /// The project's slices: every spec in the configured folder, read from the base branch's last
+    /// commit. Empty when the project names no slices folder or the folder does not exist yet.
     /// </summary>
-    public Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default) =>
-        PlanOfAsync(projectKey, _registry.GetProjectConfig(projectKey).Steward.Plan, ct);
-
-    /// <summary>
-    /// The units of one plan - the one being worked or one already finished - read the same way.
-    /// </summary>
-    public async Task<IReadOnlyList<PlanUnit>> PlanOfAsync(string projectKey, StewardPlan plan, CancellationToken ct = default)
+    public async Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default)
     {
+        var plan = _registry.GetProjectConfig(projectKey).Steward.Plan;
         var (_, repo, baseBranch) = HubOf(projectKey);
         if (!plan.Configured || !IsGitRepo(repo)) return Array.Empty<PlanUnit>();
 
@@ -392,19 +387,6 @@ public partial class TicketGitService
     }
 
     /// <summary>
-    /// One file as committed on the base branch, or null when it is not there. For reading a
-    /// plan's own document; nothing is decided from what this returns.
-    /// </summary>
-    public async Task<string?> FileAtBaseAsync(string projectKey, string path, CancellationToken ct = default)
-    {
-        var (_, repo, baseBranch) = HubOf(projectKey);
-        var rel = path.Replace('\\', '/').Trim('/');
-        if (rel.Length == 0 || rel.Split('/').Contains("..") || !IsGitRepo(repo)) return null;
-        var show = await GitAsync(repo, ct, "show", $"refs/heads/{baseBranch}:{rel}");
-        return show.Ok ? show.Stdout : null;
-    }
-
-    /// <summary>
     /// What <paramref name="branch"/> changes against the project's base ref, or null when the
     /// branch does not exist. The base ref is the same one a worker forks from and a person reviews
     /// against (<see cref="BaseRefAsync"/>).
@@ -474,43 +456,6 @@ public partial class TicketGitService
         var r = await GitAsync(repo, ct, TimeSpan.FromSeconds(60), args.ToArray());
         if (!r.Ok) return null;
         return r.Stdout.Length > maxChars ? (r.Stdout[..maxChars], true, r.Stdout.Length) : (r.Stdout, false, r.Stdout.Length);
-    }
-
-    /// <summary>How many commits <paramref name="from"/> has that the base does not.</summary>
-    public async Task<int> AheadOfBaseAsync(string projectKey, string from, CancellationToken ct = default)
-    {
-        var (_, repo, baseBranch) = HubOf(projectKey);
-        if (string.IsNullOrWhiteSpace(from) || !IsGitRepo(repo)) return 0;
-        if (!(await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{from}")).Ok) return 0;
-        var r = await GitAsync(repo, ct, "rev-list", "--count", $"refs/heads/{baseBranch}..refs/heads/{from}");
-        return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
-    }
-
-    /// <summary>
-    /// Merge the local branch <paramref name="from"/> into the base, in the hub. A conflict is
-    /// aborted and changes nothing. With <paramref name="dryRun"/> it only says what it would do.
-    /// </summary>
-    public async Task<SyncFromResult> SyncFromAsync(string projectKey, string from, bool dryRun, CancellationToken ct = default)
-    {
-        var (_, repo, baseBranch) = HubOf(projectKey);
-        var none = Array.Empty<string>();
-        var waiting = await AheadOfBaseAsync(projectKey, from, ct);
-        if (waiting == 0) return new("up-to-date", 0, none, null);
-        if (dryRun) return new("proposed", waiting, none, $"merge {waiting} commit(s) from {from} into {baseBranch}");
-        if (await HubNotWritableAsync(repo, baseBranch, ct) is { } no) return new("refused", waiting, none, no);
-
-        var merge = await GitAsync(repo, ct, TimeSpan.FromMinutes(2),
-            "merge", "--no-ff", "--no-edit", "-m", $"Merge {from} into {baseBranch}", from);
-        if (!merge.Ok)
-        {
-            var conflicted = (await GitAsync(repo, ct, "diff", "--name-only", "--diff-filter=U")).Stdout
-                .Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
-            await GitAsync(repo, ct, "merge", "--abort");
-            return new("conflict", waiting, conflicted, "nothing was changed");
-        }
-        var files = (await GitAsync(repo, ct, "diff", "--name-only", "HEAD~1", "HEAD")).Stdout
-            .Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
-        return new("merged", waiting, files, null);
     }
 
     /// <summary>

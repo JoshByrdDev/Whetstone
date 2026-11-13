@@ -33,7 +33,7 @@ public class StewardTools
         "(changedDecisions: recorded, withdrawn, or now replacing another) - each is a decision made: apply them first. " +
         "When it says the last run did not finish, that run may have acted on some of them already: check the board before " +
         "acting again. " +
-        "It also hands over the result of bringing the base branch up to date, and the board's status. In 'propose' mode every tool that changes " +
+        "It also hands over the board's status. In 'propose' mode every tool that changes " +
         "something only says what it would have done: carry on exactly as normal, so the owner can read what you would do.")]
     public static Task<StewardReply> Begin(StewardService s, [Description("The project key.")] string project) =>
         s.BeginAsync(project);
@@ -52,28 +52,28 @@ public class StewardTools
 
     [McpServerTool(Name = "steward_status"), Description(
         "The board as it stands: every open ticket with its phase, what it waits on and any question it asked; the limits " +
-        "and how much of each is used; the plan's units and which are agreed; how far the unit being worked is; every outcome " +
-        "not yet Done in every agreed unit, with its state, note and tickets; what is waiting on the owner; your open ticket notes (ticketNotes), your rulings in force, facts " +
+        "and how much of each is used; the slices and which are agreed; every outcome " +
+        "not yet Done in every agreed slice, with its state, note and tickets; what is waiting on the owner; your open ticket notes (ticketNotes), your rulings in force, facts " +
         "not yet in the notes store (learnedPending), and what the last three runs did (recentRuns). Changes nothing.")]
     public static Task<StewardReply> Status(StewardService s, [Description("The project key.")] string project) =>
         s.StatusAsync(project);
 
     [McpServerTool(Name = "steward_decisions"), Description(
         "The register of decisions: what the owner has decided and is still in force, each by its number (#n). It holds " +
-        "the plan's decisions, every unit's settled decisions, the answers to your questions and the owner's standing " +
+        "every slice's settled decisions, the conventions, the answers to your questions and the owner's standing " +
         "words, in one place, with one status each. By default only what is in force comes back; a provisional one is " +
         "marked with what it lasts until. An answer comes with every option it was picked from ('offered': picked, your " +
-        "own pick, or neither), because what was turned down is decided too. Narrow it by unit (that slice's decisions " +
-        "and the project's), by outcome within a unit, or by a query - search it before answering a blocked ticket, " +
+        "own pick, or neither), because what was turned down is decided too. Narrow it by slice (passed as unit), " +
+        "by outcome within a slice, or by a query - search it before answering a blocked ticket, " +
         "writing a ticket's criteria or asking the owner. Pass history to see replaced, withdrawn and retired decisions too, " +
-        "each with what replaced it; never act on one of those. On a project with slice branches a slice's decisions " +
-        "retire when it is released - its code is the decision then - and a unit's view is that slice's, its parent's and " +
+        "each with what replaced it; never act on one of those. A slice's decisions " +
+        "retire when it is released - its code is the decision then - and a slice's view is its own, its parent's and " +
         "the conventions. 'next' is the number a draft's next open decision takes.")]
     public static Task<StewardReply> Decisions(StewardService s,
         [Description("The project key.")] string project,
         [Description("Optional text to look for in the rule, the question, its key or its options.")] string? query = null,
-        [Description("Optional unit of the plan being worked: its decisions, and the project's.")] int? unit = null,
-        [Description("Optional outcome id within that unit, like A2: only the unit's decisions that apply to it.")] string? outcome = null,
+        [Description("Optional slice number: its decisions, its parent's and the conventions.")] int? unit = null,
+        [Description("Optional outcome id within that slice, like A2: only the slice's decisions that apply to it.")] string? outcome = null,
         [Description("True to include replaced and withdrawn decisions, as history.")] bool history = false) =>
         s.DecisionsAsync(project, query, unit, outcome, history);
 
@@ -200,15 +200,15 @@ public class StewardTools
         s.AmendAsync(project, ticketId, title, description, codeReviewOnly, needs, planReview, implementationReview);
 
     [McpServerTool(Name = "steward_create"), Description(
-        "File a ticket against an AGREED unit of the plan. The agent that plans it has the repo and your description and " +
+        "File a ticket against an AGREED slice. The agent that plans it has the repo and your description and " +
         "nothing else, so the description is whole: what is wanted and why; 'Acceptance criteria' a tester can check one by " +
         "one; what is 'Out of scope'; and where the decision behind it is recorded. Name the tickets it depends on so nothing " +
         "starts on work that is not merged. 'limit' means stop creating: the next run continues. 'unit-not-agreed' means " +
-        "exactly that, however obvious the next unit looks.")]
+        "exactly that, however obvious the next slice looks.")]
     public static Task<StewardReply> Create(StewardService s,
         [Description("The project key.")] string project,
-        [Description("The number of the agreed unit this ticket belongs to.")] int unit,
-        [Description("Which of that unit's outcomes this ticket delivers, by id, like [\"A2\"].")] string[] outcomes,
+        [Description("The number of the agreed slice this ticket belongs to.")] int unit,
+        [Description("Which of that slice's outcomes this ticket delivers, by id, like [\"A2\"].")] string[] outcomes,
         [Description("One line, 10 to 110 characters.")] string title,
         [Description("The whole ask, with 'Acceptance criteria' and 'Out of scope' parts.")] string description,
         [Description("Ids of tickets that must be merged before this one starts.")] int[]? dependsOn = null,
@@ -226,12 +226,12 @@ public class StewardTools
             planReview, implementationReview));
 
     [McpServerTool(Name = "steward_set_outcome"), Description(
-        "Record where one outcome of an agreed unit stands. This, and only this, is what calls an outcome done: set it when " +
+        "Record where one outcome of an agreed slice stands. This, and only this, is what calls an outcome done: set it when " +
         "every ticket it needs is merged. While a ticket for it is still to be written, say so with moreToFile and put what " +
         "is left - and what it waits on - in the note, one line. What a merged ticket built is in the code; do not describe it.")]
     public static Task<StewardReply> SetOutcome(StewardService s,
         [Description("The project key.")] string project,
-        [Description("The unit's number.")] int unit,
+        [Description("The slice's number.")] int unit,
         [Description("The outcome's id, like A2.")] string outcome,
         [Description("NotStarted, InProgress or Done.")] string state,
         [Description("True while a ticket for this outcome is still to be written.")] bool moreToFile = false,
@@ -240,27 +240,27 @@ public class StewardTools
 
     [McpServerTool(Name = "steward_draft_unit"), Description(
         "Write or revise the DRAFT spec for the slice after the last agreed one, committed to the base branch. One draft " +
-        "ahead, never two. Where the plan has ideas, it expands the next idea IN PLACE - same file, the idea's paragraph " +
+        "ahead, never two. Where there are ideas, it expands the next idea IN PLACE - same file, the idea's paragraph " +
         "kept at the top as the story's seed - and a slice no idea stands for is refused ('no-idea'). Its status line must " +
         "say it is a draft: only the owner agrees a slice, and until they do nothing in a draft may be ticketed or used to " +
-        "answer a question. Its story ('The walk-through this unit makes possible') is checked: every sentence cites the " +
+        "answer a question. Its story ('The walk-through this slice makes possible') is checked: every sentence cites the " +
         "outcomes that make it true, like (A1) or (B1, B2), every id cited is an outcome of the draft, and it is at most " +
         "250 words - otherwise refused ('story'). The answer says what it is past 180 words and which outcomes no step " +
         "cites: say why each is not part of the walk-through. Number what it leaves open from the 'next' that " +
         "steward_decisions gives: a number the register already holds is refused ('number-taken').")]
     public static Task<StewardReply> DraftUnit(StewardService s,
         [Description("The project key.")] string project,
-        [Description("The file's name, numbered like the plan's other units.")] string fileName,
+        [Description("The file's name, numbered like the other slices.")] string fileName,
         [Description("The whole spec.")] string text) =>
         s.DraftUnitAsync(project, fileName, text);
 
     [McpServerTool(Name = "steward_ask_owner"), Description(
-        "Put ONE question to the owner, once. Only for a real decision: a choice the plan does not make, anything that " +
-        "changes the plan or costs money, a flag marked 'owner', a ticket that has come back too often. Not progress and not " +
+        "Put ONE question to the owner, once. Only for a real decision: a choice no slice or convention makes, anything that " +
+        "changes a slice or costs money, a flag marked 'owner', a ticket that has come back too often. Not progress and not " +
         "good news. Write it for someone reading on a phone with no context. It is shown on the board and announced; the " +
         "answer reaches a later run as a decision made. 'already-asked' means it was - never re-ask. Then keep everything " +
-        "else moving. When what you need is the owner's answer to decisions a unit's spec leaves open under \"To decide\", " +
-        "name the unit and those decisions' numbers instead of summarising them: the board shows the owner each one as the " +
+        "else moving. When what you need is the owner's answer to decisions a slice's spec leaves open under \"To decide\", " +
+        "name the slice (as unit) and those decisions' numbers instead of summarising them: the board shows the owner each one as the " +
         "spec writes it, with its options and your pick, and writes the answers into the spec under \"Decided\". " +
         "Before asking, search steward_decisions for the subject, and say in 'touches' every decision in force the question " +
         "bears on - an empty list is your claim that none does. The owner is shown each touched decision beside the " +
@@ -269,7 +269,7 @@ public class StewardTools
         "is asked to commit it as written, and the board commits it on a yes. Only the owner changes ideas. For a question " +
         "about a slice being built whose answer changes a step of its story, pass unit and story: the sentence as it stands " +
         "and its rewording under each option; the board commits the rewording with the decision. A built slice's story " +
-        "is never rewritten. On a project with slice branches every answer decides for one slice or is a convention: " +
+        "is never rewritten. Every answer decides for one slice or is a convention: " +
         "a question that names no unit and comes from no ticket of a slice says which, with slice or convention.")]
     public static Task<StewardReply> AskOwner(StewardService s,
         [Description("The project key.")] string project,
@@ -280,13 +280,13 @@ public class StewardTools
         [Description("The numbers of the decisions in force this question bears on, from steward_decisions. Required: an empty list when none does.")] int[] touches,
         [Description("At least two options. Put what each costs and rules out in its detail, and mark exactly one - the one you would pick - as recommended. Leave out when you name decisions: those are their own options.")] StewardOption[]? options = null,
         [Description("The ticket that raised it, when one did.")] int? ticketId = null,
-        [Description("The unit of the plan whose open decisions this asks about.")] int? unit = null,
+        [Description("The slice whose open decisions this asks about.")] int? unit = null,
         [Description("Those decisions' numbers, as the spec numbers them under \"To decide\".")] int[]? decisions = null,
         [Description("The open follow-ups this question takes up, by id: they stop waiting once it is asked.")] int[]? followUps = null,
         [Description("An idea to propose: the slice file's name (number first, no folder) and its whole text, with its status line saying idea. Asked on its own, without options: the owner commits it or leaves the ideas as they are.")] StewardIdeaProposal? idea = null,
         [Description("For a slice being built (with unit): the sentence of its story the answer changes, quoted exactly, and its rewording under each option that changes it, by the option's label.")] StewardStoryChange? story = null,
-        [Description("With slice branches: the slice the answer decides for, when the question names no unit and its ticket is of no slice. Its decision retires when that slice is released.")] int? slice = null,
-        [Description("With slice branches: the answer is a convention - a rule every slice keeps, never retired - rather than one slice's.")] bool convention = false) =>
+        [Description("The slice the answer decides for, when the question names no unit and its ticket is of no slice. Its decision retires when that slice is released.")] int? slice = null,
+        [Description("The answer is a convention - a rule every slice keeps, never retired - rather than one slice's.")] bool convention = false) =>
         s.AskAsync(project, new StewardAsk(key, question, why,
             options?.Select(o => new BlockOption(o.Label, o.Detail, o.Recommended)).ToList(), heldUp, ticketId, unit, decisions, touches,
             options?.Where(o => o.Changes is { Length: > 0 }).ToDictionary(o => o.Label, o => (IReadOnlyList<int>)o.Changes!), followUps,

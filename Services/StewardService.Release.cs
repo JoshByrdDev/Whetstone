@@ -25,7 +25,7 @@ public partial class StewardService
         var unit = u.Number;
 
         // Built on another slice: released after it, never before (section 3).
-        if (row.ParentUnit is { } parentUnit && await _db.StewardUnits.AnyAsync(x => x.ProjectKey == projectKey && x.Plan == row.Plan
+        if (row.ParentUnit is { } parentUnit && await _db.StewardUnits.AnyAsync(x => x.ProjectKey == projectKey
                 && x.Unit == parentUnit && x.ReleasedAt == null, ct))
             return Refuse("parent-unreleased", $"Slice {unit} is built on slice {parentUnit}, which is not released. Release slice {parentUnit} first.");
 
@@ -41,7 +41,6 @@ public partial class StewardService
         {
             if (cfg.Steward.Conventions.Length == 0)
                 return Refuse("no-conventions", "The project names no conventions file (steward.conventions), so there is nowhere to promote a decision to.");
-            await EnsureRegisterAsync(cfg, ct);
             var wanted = promote.Distinct().ToList();
             promoted = await _db.StewardDecisions
                 .Where(d => d.ProjectKey == projectKey && wanted.Contains(d.Number)).ToListAsync(ct);
@@ -49,7 +48,7 @@ public partial class StewardService
             {
                 var d = promoted.FirstOrDefault(x => x.Number == n);
                 if (d is null) return Refuse("bad-request", $"There is no decision #{n}.");
-                if (d.PlanUnit != unit || (d.PlanKey ?? "") != p.Key)
+                if (d.PlanUnit != unit)
                     return Refuse("bad-request", $"#{n} is not a decision of slice {unit}. Releasing a slice promotes only its own.");
                 if (d.WithdrawnAt is not null) return Refuse("bad-request", $"#{n} was withdrawn, so it is not a rule to keep.");
                 if (d.PromotedAt is not null) return Refuse("bad-request", $"#{n} is in the conventions already.");
@@ -112,7 +111,6 @@ public partial class StewardService
         var reparented = await ReparentChildrenAsync(projectKey, row, ct);
         // Its decisions retire with it, so the decisions file loses them (docs/slice-branches.md, section 4).
         await ExportDecisionsAsync(cfg, ct);
-        await WriteReadableAsync(cfg, ct);
         _heartbeat?.Wake();
         return new StewardReply("released", null, new
         {
@@ -142,13 +140,12 @@ public partial class StewardService
         if (!withdraw && why.Length == 0)
             return Refuse("bad-request", "Say in a line why it outlives its slice: a rule about money, data, or how every page behaves.");
         if (why.Length > FollowUpMaxChars) return Refuse("bad-request", $"Why is a line, at most {FollowUpMaxChars} characters.");
-        await EnsureRegisterAsync(cfg, ct);
         var d = await _db.StewardDecisions.FirstOrDefaultAsync(x => x.ProjectKey == projectKey && x.Number == decision, ct);
         if (d is null) return Refuse("bad-request", $"There is no decision #{decision}.");
         if (d.PlanUnit is not { } unit) return Refuse("bad-request", $"#{decision} is not a slice's decision, so there is no release to promote it at.");
         if (d.WithdrawnAt is not null) return Refuse("bad-request", $"#{decision} was withdrawn.");
         if (d.PromotedAt is not null) return Refuse("bad-request", $"#{decision} is in the conventions already.");
-        var released = await _db.StewardUnits.AnyAsync(x => x.ProjectKey == projectKey && x.Plan == (d.PlanKey ?? "")
+        var released = await _db.StewardUnits.AnyAsync(x => x.ProjectKey == projectKey
             && x.Unit == unit && x.ReleasedAt != null, ct);
         if (released) return Refuse("bad-request", $"Slice {unit} is released; #{decision} can be promoted from the Steward page, not suggested.");
         if (cfg.StewardMode == StewardMode.Propose)

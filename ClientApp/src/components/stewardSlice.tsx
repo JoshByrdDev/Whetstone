@@ -404,9 +404,9 @@ export interface SliceDecisionSet {
 export function sliceDecisions(unit: StewardPlanUnitView, register: StewardRegister | null, waiting: StewardQuestion[]): SliceDecisionSet | null {
   if (!register) return null;
   const live = register.decisions.filter(d => d.status === 'inForce' || d.status === 'provisional');
-  // A released slice's decisions retired with it (slice branches): still what it decided, so still shown, marked.
+  // A released slice's decisions retired with it: still what it decided, so still shown, marked.
   const own = register.decisions.filter(d => (d.status === 'inForce' || d.status === 'provisional' || d.status === 'retired')
-    && d.unit === unit.unit && (d.plan ?? '') === (register.plan ?? ''));
+    && d.unit === unit.unit);
   const ownSet = new Set(own.map(d => d.number));
   const text = `${storyOf(unit.text)?.map(s => s.text).join(' ') ?? ''} ${unit.groups.flatMap(g => g.outcomes.map(o => o.text)).join(' ')}`;
   const nums = new Set([...text.matchAll(/#(\d+)\b/g)].map(m => Number(m[1])));

@@ -351,20 +351,14 @@ public class ProjectConfig
     public bool MergeInsteadOfPr { get; init; }
 
     /// <summary>
-    /// Each agreed slice gets a branch of its own off the base, its tickets fork from it and merge
-    /// into it, and it reaches the base as one piece when its owner releases it
-    /// (docs/slice-branches.md). As written in the config (<c>sliceBranches</c>); what applies is
-    /// <see cref="SliceBranchesOn"/>. Off unless set, and a project that has not switched runs
-    /// exactly as it did before slice branches existed.
+    /// Whether this project works in slices with a branch each (docs/slice-branches.md): each
+    /// agreed slice gets a branch of its own off the base, its tickets fork from it and merge into
+    /// it, and it reaches the base as one piece when its owner releases it. Only where delivery is
+    /// a local merge, as a slice branch is local and the fleet never pushes; never on TFVC, whose one
+    /// writer is the human; and not on a project of several repos. It is the only shape a steward
+    /// works in, so a project where this is false has no steward (<see cref="StewardMode"/>).
     /// </summary>
-    public bool SliceBranches { get; init; }
-
-    /// <summary>
-    /// Whether this project's slices really get branches: only where delivery is a local merge, as
-    /// a slice branch is local and the fleet never pushes; never on TFVC, whose one writer is the
-    /// human; and not on a project of several repos, which has no steward to agree a slice.
-    /// </summary>
-    public bool SliceBranchesOn => SliceBranches && MergeInsteadOfPr && !IsTfvc && !IsMultiRepo;
+    public bool SliceBranchesOn => MergeInsteadOfPr && !IsTfvc && !IsMultiRepo;
 
     /// <summary>
     /// This project's stack can run more than once on one machine at the same time: its skill or
@@ -396,24 +390,10 @@ public class ProjectConfig
     public StackPortsConfig? StackPorts { get; init; }
 
     /// <summary>
-    /// How this project's steward works: its limits, its plan, what its merge checks and refuses.
+    /// How this project's steward works: its limits, its slices, what its merge checks and refuses.
     /// See <see cref="StewardConfig"/>.
     /// </summary>
-    /// <summary>
-    /// The steward's settings as the project is worked. With <see cref="SliceBranchesOn"/> they are
-    /// read as slices with no plan around them (<see cref="StewardConfig.ForSlices"/>): this is the
-    /// one place that happens, so nothing downstream asks which shape it is in to count a unit.
-    /// </summary>
-    public StewardConfig Steward
-    {
-        get => SliceBranchesOn ? _sliced ??= _steward.ForSlices() : _steward;
-        init { _steward = value; _sliced = null; }
-    }
-    private StewardConfig _steward = new();
-    private StewardConfig? _sliced;
-
-    /// <summary>The steward's settings exactly as written, plan and all: for the migration to read, and nothing else.</summary>
-    public StewardConfig StewardAsWritten => _steward;
+    public StewardConfig Steward { get; init; } = new();
 
     /// <summary>
     /// The mode as written in the project's config (<c>stewardMode</c>). What the steward may
@@ -424,22 +404,13 @@ public class ProjectConfig
     /// <summary>
     /// What this project's steward may do, after the limits the project itself imposes.
     /// <para>
-    /// <see cref="Models.StewardMode.Full"/> means merging, and a merge is only local where the
-    /// project delivers by merging into its base (<see cref="MergeInsteadOfPr"/>). Where delivery
-    /// is a pull request the last step is a push, which leaves this machine; where it is a TFVC
-    /// check-in the one writer is the human. On both the steward stops at
-    /// <see cref="Models.StewardMode.Manage"/> however it is set.
-    /// </para>
-    /// <para>
-    /// A project of several repos has no steward yet, whatever it is set to: its checks read one
-    /// worktree against one base (docs/multi-repo-plan.md, "Refused in phase 1").
+    /// A steward works only in slices with a branch each (<see cref="SliceBranchesOn"/>), so a
+    /// project delivered by pull request, on TFVC, or of several repos has none, whatever it is set to:
+    /// a slice branch is local and the fleet never pushes, TFVC's one writer is the human, and a
+    /// merge's checks read one worktree against one base (docs/multi-repo-plan.md).
     /// </para>
     /// </summary>
-    public StewardMode StewardMode =>
-        IsMultiRepo ? Models.StewardMode.Off
-        : StewardModeSetting == Models.StewardMode.Full && (!MergeInsteadOfPr || IsTfvc)
-            ? Models.StewardMode.Manage
-            : StewardModeSetting;
+    public StewardMode StewardMode => SliceBranchesOn ? StewardModeSetting : Models.StewardMode.Off;
 
     /// <summary>
     /// Which external issue tracker this project's tickets link to, and the credentials for it.
@@ -722,7 +693,6 @@ public class ProjectRegistry
             SkipClassroomAnalysisByDefault = cfg.TryGetValue("skipClassroomAnalysisByDefault", out var sca)
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
-            SliceBranches = cfg.TryGetValue("sliceBranches", out var sb) && sb.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
             WorkerEnv = GetStrMap(cfg, "workerEnv"),
             StackPorts = StackPortsConfig.From(cfg),

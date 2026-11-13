@@ -17,12 +17,10 @@ public record StewardUnitAbandoned(string? Children = null);
 public record StewardReverse(string? Because);
 public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
-public record StewardNewPlan(string? Key, string? Name, string? Folder, IReadOnlyList<StewardNewIdea>? Ideas = null);
-public record StewardSettlePair(bool? Replaces, string? Why);
 public record StewardInstructionRequest(string? Text, string? Until);
 public record StewardCloseRequest(string? Note);
-/// <summary>A ticket's place in a plan. <c>Unit</c> null takes it out; <c>Plan</c> null is the one being worked.</summary>
-public record TicketPlanLink(string? Plan, int? Unit, IReadOnlyList<string>? Outcomes);
+/// <summary>A ticket's place in a slice. <c>Unit</c> null takes it out.</summary>
+public record TicketPlanLink(int? Unit, IReadOnlyList<string>? Outcomes);
 
 /// <summary>
 /// The owner's side of a project's steward, and the two calls whatever launches a run needs.
@@ -96,7 +94,7 @@ public static class StewardEndpoints
             var rows = await q.OrderByDescending(e => e.At).Take(5000).ToListAsync(ct);
             var ids = rows.Where(r => r.TicketId is not null).Select(r => r.TicketId!.Value).Distinct().ToList();
             var tickets = await db.Tickets.AsNoTracking().Where(t => ids.Contains(t.Id))
-                .Select(t => new { t.Id, t.Title, t.PlanUnit, t.PlanKey }).ToDictionaryAsync(t => t.Id, ct);
+                .Select(t => new { t.Id, t.Title, t.PlanUnit }).ToDictionaryAsync(t => t.Id, ct);
             var goesOutWith = await steward.ReleaseUnitOfNotesAsync(project!, ct);
             var flagged = await steward.RulingFlagsAsync(project!, ct);
             return Results.Ok(rows.Select(e =>
@@ -108,12 +106,11 @@ public static class StewardEndpoints
                     kind = e.Kind.ToString(),
                     e.TicketId,
                     ticketTitle = t?.Title,
-                    // The unit of the plan the line belongs to, by way of its ticket.
+                    // The slice the line belongs to, by way of its ticket.
                     // For a release note, the unit it will go out with - its ticket's, or the next
                     // to be released when it has none - so a unit's notes here are the ones its
                     // release is held for.
                     unit = goesOutWith.TryGetValue(e.Id, out var with) ? with : t?.PlanUnit,
-                    plan = t?.PlanUnit is null ? null : t.PlanKey ?? "",
                     // A note from before notes had kinds is one to know, until its owner says otherwise.
                     release = e.Kind == StewardEntryKind.BeforeRelease ? (e.Release ?? StewardReleaseKind.Note).ToString() : null,
                     e.HandledAt,
@@ -175,28 +172,12 @@ public static class StewardEndpoints
             return r.Answer == "recorded" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
-        // The plan as its owner reads it: each unit's spec and outcomes, and the document the
-        // units are cut from when the project names one.
-        // With ?plan=<key>, a plan the project has finished: readable, and worked by nothing.
-        app.MapGet("/api/steward/plan", async (string? project, string? plan, ProjectRegistry registry, StewardService steward,
-            TicketGitService git, CancellationToken ct) =>
+        // The slices as their owner reads them: each slice's spec, outcomes and stage.
+        app.MapGet("/api/steward/plan", async (string? project, ProjectRegistry registry, StewardService steward, CancellationToken ct) =>
         {
             if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
-            var r = await steward.PlanViewAsync(project!, plan, ct);
-            var cfg = registry.GetProjectConfig(project!).Steward;
-            var which = plan is null ? cfg.Plan : cfg.PlanByKey(plan);
-            var file = which?.Master ?? "";
-            var text = file.Length > 0 ? await git.FileAtBaseAsync(project!, file, ct) : null;
-            var charterFile = which?.Charter ?? "";
-            var charter = charterFile.Length > 0 ? await git.FileAtBaseAsync(project!, charterFile, ct) : null;
-            return Results.Ok(new
-            {
-                r.Answer, r.Why, plan = r.Data,
-                master = text is null ? null : new { file, text },
-                charter = charter is null ? null : new { file = charterFile, text = charter },
-                // The plan as read: charter, the project's decisions in force, every slice in order.
-                readable = r.Answer == "plan" ? await steward.PlanAsReadAsync(project!, plan, ct) : null,
-            });
+            var r = await steward.PlanViewAsync(project!, ct);
+            return Results.Ok(new { r.Answer, r.Why, plan = r.Data });
         });
 
         // Agree a draft unit: the commit that has always been what agrees one, made from the board.
@@ -247,60 +228,7 @@ public static class StewardEndpoints
             return r.Answer == "abandoned" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
-        // Start a new plan: its two documents into the repo from the templates, then the project's
-        // settings pointed at it. The plan that was being worked moves to pastPlans.
-        app.MapPost("/api/steward/plan/new", async (string? project, StewardNewPlan body, ProjectRegistry registry, DashboardPaths paths,
-            StewardService steward, CancellationToken ct) =>
-        {
-            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
-            var charterTemplate = Path.Combine(paths.DataRoot, "plan-templates", "charter.md");
-            var ideaTemplate = Path.Combine(paths.DataRoot, "plan-templates", "idea.md");
-            if (!File.Exists(charterTemplate) || !File.Exists(ideaTemplate))
-                return Results.BadRequest(new { error = $"The plan templates are missing from {Path.GetDirectoryName(charterTemplate)}." });
-
-            var r = await steward.OwnerStartsPlanAsync(project!, body.Key, body.Name, body.Folder,
-                await File.ReadAllTextAsync(charterTemplate, ct), await File.ReadAllTextAsync(ideaTemplate, ct), body.Ideas, ct);
-            if (r.Answer != "started") return Results.BadRequest(r);
-
-            var made = JsonSerializer.SerializeToElement(r.Data, Json);
-            var file = paths.ProjectConfigDefaults(project!);
-            var failed = await StewardPlanFile.StartAsync(file, made.GetProperty("key").GetString()!, made.GetProperty("name").GetString()!,
-                made.GetProperty("units").GetString()!, made.GetProperty("charter").GetString()!, ct);
-            return failed is null
-                ? Results.Ok(new { r.Answer, r.Data, settings = file })
-                : Results.BadRequest(new { answer = "documents-only", why = $"The plan's documents are in the repo, but the project's settings were not changed: {failed}" });
-        });
-
-        // The switch to slice branches (docs/slice-branches.md, piece 8): what it would do, then the
-        // owner doing it. No tool reaches either. The settings are written once the board has done
-        // its part, and the decisions file is written in the new shape after that.
-        app.MapGet("/api/steward/switch", async (string? project, string? @base, ProjectRegistry registry, StewardService steward,
-            CancellationToken ct) =>
-        {
-            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
-            return Results.Ok(await steward.SwitchViewAsync(project!, @base, ct));
-        });
-        app.MapPost("/api/steward/switch", async (string? project, StewardSwitch body, ProjectRegistry registry, DashboardPaths paths,
-            StewardService steward, CancellationToken ct) =>
-        {
-            if (!registry.IsEnabled(project)) return Results.BadRequest(new { error = "Name an enabled project with ?project=" });
-            var defaults = paths.ProjectConfigDefaults(project!);
-            var local = paths.ProjectConfig(project!);
-            // Settings that cannot be read stop the switch before the board has moved anything.
-            if (await StewardPlanFile.CheckAsync(defaults, local, ct) is { } bad) return Results.BadRequest(new { answer = "bad-settings", why = bad });
-            var r = await steward.OwnerSwitchesAsync(project!, body, ct);
-            if (r.Answer != "switched") return Results.BadRequest(r);
-            var made = JsonSerializer.SerializeToElement(r.Data, Json);
-            var failed = await StewardPlanFile.SwitchAsync(defaults, local, made.GetProperty("base").GetString()!,
-                made.TryGetProperty("conventions", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null, ct);
-            if (failed is not null)
-                return Results.BadRequest(new { answer = "settings-not-written", why = $"The repo and the register are switched, but the project's settings were not: {failed}" });
-            var exported = await steward.AfterSwitchAsync(project!, ct);
-            return Results.Ok(new { r.Answer, why = exported, r.Data });
-        });
-
-        // The register of decisions: every decision with its status, and the pairs the import
-        // thinks may disagree. Everything that changes it is the owner's, with no tool behind it.
+        // The register of decisions: every decision with its status. Everything that changes it is the owner's, with no tool behind it.
         app.MapGet("/api/steward/decisions", async (string? project, StewardService steward, CancellationToken ct) =>
         {
             var r = await steward.RegisterViewAsync(project ?? "", ct);
@@ -319,14 +247,6 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerWithdrawsDecisionAsync(project ?? "", number, body.Because, ct);
             return r.Answer == "withdrawn" ? Results.Ok(r) : Results.BadRequest(r);
-        });
-
-        // Take what the project already had into the register: run on its own the first time the
-        // register is read, and again from here to fold in what has arrived since.
-        app.MapPost("/api/steward/decisions/import", async (string? project, StewardService steward, CancellationToken ct) =>
-        {
-            var r = await steward.OwnerBuildsRegisterAsync(project ?? "", ct);
-            return r.Answer == "built" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // A provisional decision whose point has come: confirmed, so it holds like any other.
@@ -355,15 +275,7 @@ public static class StewardEndpoints
             return r.Answer == "dropped" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
-        // A pair the import thought may disagree: the newer replaces the older, or both stand.
-        app.MapPost("/api/steward/decisions/pairs/{id:int}", async (int id, string? project, StewardSettlePair body,
-            StewardService steward, CancellationToken ct) =>
-        {
-            var r = await steward.OwnerSettlesConflictAsync(project ?? "", id, body.Replaces ?? false, body.Why, ct);
-            return r.Answer == "settled" ? Results.Ok(r) : Results.BadRequest(r);
-        });
-
-        // The plan and how far it is, without a run: the same figures a run is shown.
+        // The slices and how far they are, without a run: the same figures a run is shown.
         app.MapGet("/api/steward/status", async (string? project, StewardService steward, CancellationToken ct) =>
             Results.Ok(await steward.StatusAsync(project ?? "", ct)));
 
@@ -393,7 +305,7 @@ public static class StewardEndpoints
         // take the ticket out of the plan. No tool behind it, like everything else that is the owner's.
         app.MapPut("/api/tickets/{id:int}/plan", async (int id, TicketPlanLink body, StewardService steward, CancellationToken ct) =>
         {
-            var r = await steward.LinkTicketAsync(id, body.Plan, body.Unit, body.Outcomes, ct);
+            var r = await steward.LinkTicketAsync(id, body.Unit, body.Outcomes, ct);
             return r.Answer is "linked" or "unchanged" ? Results.Ok(r)
                 : r.Answer == "not-found" ? Results.NotFound(r) : Results.BadRequest(r);
         });
@@ -433,13 +345,6 @@ public static class StewardEndpoints
             var cfg = registry.GetProjectConfig(project!);
             if (cfg.StewardMode != StewardMode.Off) await steward.MarkDueAsync(project!, $"its mode was set to {cfg.StewardMode.ToString().ToLowerInvariant()}");
             return Results.Ok(new { mode = cfg.StewardMode.ToString().ToLowerInvariant(), modeSetting = cfg.StewardModeSetting.ToString().ToLowerInvariant() });
-        });
-
-        // Take in a steward's record that was kept somewhere else. The owner's, and once.
-        app.MapPost("/api/steward/import", async (string? project, StewardImport import, StewardService steward, CancellationToken ct) =>
-        {
-            var r = await steward.ImportAsync(project ?? "", import, ct);
-            return r.Answer == "imported" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // ---- for whatever launches a run -------------------------------------------------
@@ -484,14 +389,8 @@ public static class StewardEndpoints
                 // Where the facts it learns are placed after the run.
                 memoryDir = cfg.ResolvedMemoryDir,
                 planUnits = cfg.Steward.Plan.UnitsDir,
-                // Direction for every draft, deciding nothing; or, on a plan from before charters, its one document.
-                planCharter = cfg.Steward.Plan.Charter,
                 // A draft's shape, for a first draft with no agreed slice before it to follow.
-                draftTemplate = Path.Combine(paths.DataRoot, "plan-templates", "unit.md"),
-                planMaster = cfg.Steward.Plan.Master,
-                // Slices with a branch each and no plan around them (docs/slice-branches.md): the
-                // prompt then speaks of slices and the conventions file, not of a plan and its charter.
-                sliceBranches = cfg.SliceBranchesOn,
+                draftTemplate = Path.Combine(paths.DataRoot, "slice-templates", "draft.md"),
                 conventions = cfg.Steward.Conventions,
             });
         });

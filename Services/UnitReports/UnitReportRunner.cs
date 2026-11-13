@@ -6,10 +6,10 @@ using Whetstone.Persistence;
 
 namespace Whetstone.Services.UnitReports;
 
-/// <summary>Which unit of which plan of which project. A unit's number means nothing without its plan.</summary>
-public record UnitSubject(string Project, string Plan, int Unit)
+/// <summary>Which slice of which project.</summary>
+public record UnitSubject(string Project, int Unit)
 {
-    public override string ToString() => $"{Project} {(Plan.Length > 0 ? Plan + " " : "")}unit {Unit}";
+    public override string ToString() => $"{Project} slice {Unit}";
 }
 
 /// <summary>
@@ -63,24 +63,23 @@ public class UnitReportRunner
     private async Task<(Gathered? G, string? Error)> GatherAsync(UnitSubject s, CancellationToken ct)
     {
         var cfg = _registry.GetProjectConfig(s.Project);
-        if (cfg.Steward.PlanByKey(s.Plan) is not { Configured: true } plan)
-            return (null, $"{cfg.DisplayName} has no plan '{s.Plan}'");
+        if (cfg.Steward.Plan is not { Configured: true } plan)
+            return (null, $"{cfg.DisplayName} has no slices");
 
-        var all = await _git.PlanOfAsync(s.Project, plan, ct);
+        var all = await _git.PlanAsync(s.Project, ct);
         if (all.FirstOrDefault(u => u.Number == s.Unit) is not { } unit)
-            return (null, $"plan '{plan.DisplayName}' has no unit {s.Unit}");
+            return (null, $"{cfg.DisplayName} has no slice {s.Unit}");
 
         using var scope = _scopes.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<DashboardDbContext>();
 
         var tickets = await db.Tickets.AsNoTracking().Include(t => t.QaShots)
             .Where(t => t.ProjectKey == s.Project && t.PlanUnit == s.Unit).ToListAsync(ct);
-        tickets = tickets.Where(t => (t.PlanKey ?? "") == s.Plan).ToList();
         var ids = tickets.Select(t => t.Id).ToList();
 
         var analyses = await db.TicketAnalyses.AsNoTracking().Where(a => ids.Contains(a.TicketId)).ToListAsync(ct);
         var states = await db.StewardOutcomes.AsNoTracking()
-            .Where(o => o.ProjectKey == s.Project && o.Plan == s.Plan).ToListAsync(ct);
+            .Where(o => o.ProjectKey == s.Project).ToListAsync(ct);
         var entries = await db.StewardEntries.AsNoTracking()
             .Where(e => e.ProjectKey == s.Project && e.Kind == StewardEntryKind.Call && e.TicketId != null && ids.Contains(e.TicketId.Value))
             .ToListAsync(ct);
@@ -95,7 +94,7 @@ public class UnitReportRunner
 
         // The base before this unit is the last release before it, when the owner said there was one.
         var released = await db.StewardUnits.AsNoTracking()
-            .Where(u => u.ProjectKey == s.Project && u.Plan == s.Plan && u.Unit < s.Unit && u.ReleasedSha != null)
+            .Where(u => u.ProjectKey == s.Project && u.Unit < s.Unit && u.ReleasedSha != null)
             .OrderByDescending(u => u.Unit).Select(u => u.ReleasedSha).FirstOrDefaultAsync(ct);
 
         var newestHead = analyses.GroupBy(a => a.TicketId)
@@ -105,7 +104,7 @@ public class UnitReportRunner
             released, ct);
         if (range is null) return (null, rangeError);
 
-        var material = UnitMaterial.Build(new UnitMaterial.Input(s.Plan, unit,
+        var material = UnitMaterial.Build(new UnitMaterial.Input(unit,
             TicketGitService.UnitGroups(plan, unit), tickets, states, entries, analyses, range.Tips, doneAt, codedAt));
 
         var bounces = new Dictionary<int, IReadOnlyList<string>>();
@@ -200,9 +199,9 @@ public class UnitReportRunner
         {
             var next = g.All.Where(u => u.Number > g.Unit.Number).OrderBy(u => u.Number).FirstOrDefault();
             var prompt = UnitReportPrompt.Build(new UnitReportPrompt.Context(
-                g.Cfg.DisplayName, g.Cfg.LearningLabel ?? "", g.Plan.DisplayName, g.Unit, TicketGitService.UnitTitle(g.Unit),
+                g.Cfg.DisplayName, g.Cfg.LearningLabel ?? "", g.Unit, TicketGitService.UnitTitle(g.Unit),
                 g.Unit.Text, g.Material, g.States, g.Range, dir, shotPaths, g.Bounces,
-                next is null ? null : $"unit {next.Number}, {TicketGitService.UnitTitle(next)} ({string.Join(", ", next.Outcomes)})",
+                next is null ? null : $"slice {next.Number}, {TicketGitService.UnitTitle(next)} ({string.Join(", ", next.Outcomes)})",
                 analysisPaths));
 
             var provider = _providers.For(AgentRoles.Analysis);
@@ -219,7 +218,6 @@ public class UnitReportRunner
             var row = new UnitReport
             {
                 ProjectKey = s.Project,
-                Plan = s.Plan,
                 Unit = s.Unit,
                 BaseRef = g.Range.BaseRef,
                 FromSha = g.Range.FromSha,

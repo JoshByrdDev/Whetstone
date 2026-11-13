@@ -78,11 +78,8 @@ public static class SliceBranches
         CancellationToken ct = default)
     {
         if (ticket.PlanUnit is not { } unit) return null;
-        // Until the plan goes (piece 7), a ticket carries the plan key it was filed under; one that
-        // carries none is of the plan being worked.
-        var plan = string.IsNullOrWhiteSpace(ticket.PlanKey) ? cfg.Steward.Plan.Key : ticket.PlanKey;
         return await db.StewardUnits.AsNoTracking()
-            .FirstOrDefaultAsync(u => u.ProjectKey == ticket.ProjectKey && u.Plan == plan && u.Unit == unit, ct);
+            .FirstOrDefaultAsync(u => u.ProjectKey == ticket.ProjectKey && u.Unit == unit, ct);
     }
 
     /// <summary>

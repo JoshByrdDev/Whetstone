@@ -4,49 +4,43 @@ import type { StewardPlanView } from '../api/steward';
 import type { TicketDetail } from '../types/tickets';
 
 /**
- * Which unit of which plan a ticket belongs to, and which of that unit's outcomes it carries - the
- * link every count of a unit's progress is taken from. A steward sets it when it files a ticket;
- * here the owner sets it on one made by hand, moves it, or takes it out.
+ * Which slice a ticket belongs to, and which of that slice's outcomes it carries - the link every
+ * count of a slice's progress is taken from. A steward sets it when it files a ticket; here the
+ * owner sets it on one made by hand, moves it, or takes it out.
  *
- * The plan is read from the project's repo as committed, the same view the Steward page shows, so
- * the picker only offers units and outcomes that are really there. The server checks it again.
+ * The slices are read from the project's repo as committed, the same view the Steward page shows,
+ * so the picker only offers slices and outcomes that are really there. The server checks it again.
  */
 export function TicketPlanLink({ ticket, disabled, onChanged }: {
   ticket: TicketDetail; disabled?: boolean; onChanged: () => void;
 }) {
   const link = ticket.plan ?? null;
   const [editing, setEditing] = useState(false);
-  // The plan being read: the ticket's own when it has one, else the one being worked (null).
-  const [planKey, setPlanKey] = useState<string | null>(link?.key ?? null);
   const [view, setView] = useState<StewardPlanView | null>(null);
   const [unit, setUnit] = useState<number | null>(link?.unit ?? null);
   const [picked, setPicked] = useState<string[]>(link?.outcomes ?? []);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
 
-  // A key of "" is a plan never given one; the server reads null as the one being worked, so the
-  // plan named on the link is passed whenever there is a link.
   useEffect(() => {
     let live = true;
-    getStewardPlan(ticket.projectKey, planKey)
+    getStewardPlan(ticket.projectKey)
       .then(v => { if (live) setView(v); })
-      .catch(() => { if (live) setView({ why: 'The plan could not be read just now.' }); });
+      .catch(() => { if (live) setView({ why: 'The slices could not be read just now.' }); });
     return () => { live = false; };
-  }, [ticket.projectKey, planKey]);
+  }, [ticket.projectKey]);
 
-  const plans = view?.plan?.plans ?? [];
   const units = view?.plan?.units ?? [];
-  const thisPlan = view?.plan?.plan;
   const shownUnit = units.find(u => u.unit === (editing ? unit : link?.unit));
 
   const open = () => {
-    setUnit(link?.unit ?? null); setPicked(link?.outcomes ?? []); setPlanKey(link?.key ?? null);
+    setUnit(link?.unit ?? null); setPicked(link?.outcomes ?? []);
     setFailed(null); setEditing(true);
   };
   const save = async (next: { unit: number | null; outcomes?: string[] }) => {
     setBusy(true); setFailed(null);
     try {
-      await setTicketPlan(ticket.id, { plan: next.unit == null ? null : thisPlan?.key ?? planKey, ...next });
+      await setTicketPlan(ticket.id, next);
       setEditing(false);
       onChanged();
     } catch (err) {
@@ -67,21 +61,21 @@ export function TicketPlanLink({ ticket, disabled, onChanged }: {
           {link ? (
             <>
               <div className="text-[12.5px] text-gray-200 leading-snug">
-                <span className="text-gray-500">{thisPlan && thisPlan.key === link.key ? thisPlan.name : link.key || 'The plan'} › </span>
+                <span className="text-gray-500">Slice </span>
                 <span className="font-mono text-gray-400">{pad(link.unit)}</span>{' '}
-                {shownUnit?.title ?? `Unit ${link.unit}`}
+                {shownUnit?.title ?? ''}
               </div>
               <div className="mt-1.5 flex flex-wrap gap-1">
                 {link.outcomes.length > 0
                   ? link.outcomes.map(o => (
                     <span key={o} className="rounded border border-hair px-1.5 py-0.5 font-mono text-[10.5px] text-gray-300">{o}</span>
                   ))
-                  : <span className="text-[11px] text-gray-600">No outcome named - it counts toward the unit, not toward any one outcome.</span>}
+                  : <span className="text-[11px] text-gray-600">No outcome named - it counts toward the slice, not toward any one outcome.</span>}
               </div>
             </>
           ) : (
             <div className="text-[12.5px] text-gray-500">
-              Not in a plan.{view?.why ? <span className="text-gray-600"> {view.why}</span> : null}
+              Not in a slice.{view?.why ? <span className="text-gray-600"> {view.why}</span> : null}
             </div>
           )}
         </div>
@@ -89,14 +83,14 @@ export function TicketPlanLink({ ticket, disabled, onChanged }: {
           {link && (
             <button type="button" disabled={off} onClick={() => save({ unit: null })}
               className="orbit-tap rounded border border-hair px-2 py-1 text-[11px] text-gray-400 disabled:opacity-40"
-              title="Take this ticket out of the plan">
+              title="Take this ticket out of its slice">
               Unassign
             </button>
           )}
           {(units.length > 0 || link) && (
             <button type="button" disabled={off} onClick={open}
               className="orbit-tap rounded border border-hair px-2 py-1 text-[11px] text-gray-300 disabled:opacity-40">
-              {link ? 'Change' : 'Link to a plan'}
+              {link ? 'Change' : 'Link to a slice'}
             </button>
           )}
         </div>
@@ -107,23 +101,8 @@ export function TicketPlanLink({ ticket, disabled, onChanged }: {
 
   return (
     <div key="edit" className="orbit-swap rounded-lg border border-hair bg-black/20 p-2.5">
-      {plans.length > 1 && (
-        <div className="mb-2.5 flex flex-wrap gap-1">
-          {plans.map(p => {
-            const on = (thisPlan?.key ?? '') === p.key;
-            return (
-              <button key={p.key} type="button" disabled={off} aria-pressed={on}
-                onClick={() => { setPlanKey(p.key); setUnit(null); setPicked([]); }}
-                className={`orbit-tap rounded border px-2 py-1 text-[11px] ${on ? 'border-gray-400 text-gray-100 bg-white/[.06]' : 'border-hair text-gray-500'}`}>
-                {p.name}{p.working ? '' : ' (finished)'}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       {units.length === 0
-        ? <div className="text-[12px] text-gray-500">{view ? view.why ?? 'This plan has no units yet.' : 'Reading the plan'}</div>
+        ? <div className="text-[12px] text-gray-500">{view ? view.why ?? 'There are no slices yet.' : 'Reading the slices'}</div>
         : (
           <div className="flex flex-col gap-1">
             {units.map(u => {

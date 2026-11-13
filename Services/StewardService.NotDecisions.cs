@@ -76,7 +76,6 @@ public partial class StewardService
         text = text?.Trim() ?? "";
         if (text.Length == 0) return Refuse("bad-request", "Say what was left open, in a line, quoting the owner where you can.");
         if (text.Length > FollowUpMaxChars) return Refuse("bad-request", $"A follow-up is a line, at most {FollowUpMaxChars} characters.");
-        await EnsureRegisterAsync(cfg, ct);
         if (!await _db.StewardDecisions.AnyAsync(d => d.ProjectKey == projectKey && d.Number == decision, ct))
             return Refuse("bad-request", $"There is no decision #{decision}.");
         if (await _db.StewardFollowUps.AnyAsync(f => f.ProjectKey == projectKey && f.Decision == decision && f.Text == text, ct))
@@ -151,15 +150,14 @@ public partial class StewardService
 
     // ---- provisional decisions coming due ---------------------------------------------------------
 
-    /// <summary>The units of the plan being worked whose every outcome is done.</summary>
+    /// <summary>The slices whose every outcome is done.</summary>
     private async Task<HashSet<int>> BuiltUnitsAsync(ProjectConfig cfg, CancellationToken ct)
     {
         var built = new HashSet<int>();
         if (!cfg.Steward.Plan.Configured) return built;
-        var key = cfg.Steward.Plan.Key;
         var plan = await _git.PlanAsync(cfg.Name, ct);
-        var states = await StatesAsync(cfg.Name, key, ct);
-        var mine = (await _tickets.ListAsync(cfg.Name, null)).Where(t => (t.PlanKey ?? "") == key).ToList();
+        var states = await StatesAsync(cfg.Name, ct);
+        var mine = (await _tickets.ListAsync(cfg.Name, null)).ToList();
         foreach (var u in plan.Where(u => u.Agreed))
         {
             var p = StewardProgress.For(u, states, mine);
@@ -175,7 +173,6 @@ public partial class StewardService
     public async Task<StewardReply> OwnerConfirmsDecisionAsync(string projectKey, int number, CancellationToken ct = default)
     {
         if (Config(projectKey) is not { } cfg) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
-        await EnsureRegisterAsync(cfg, ct);
         var all = await RegisterAsync(projectKey, track: true, ct);
         var d = all.FirstOrDefault(x => x.Number == number);
         if (d is null) return Refuse("bad-request", $"There is no decision #{number}.");
@@ -198,59 +195,36 @@ public partial class StewardService
     private async Task<object> BriefingAsync(ProjectConfig cfg, CancellationToken ct)
     {
         var projectKey = cfg.Name;
-        await EnsureRegisterAsync(cfg, ct);
         var all = await RegisterAsync(projectKey, track: false, ct);
         var map = await IndexAsync(projectKey, all, ct);
         var titles = await UnitTitlesAsync(cfg, ct);
-        var plan = cfg.Steward.Plan.Configured ? await _git.PlanAsync(projectKey, ct) : Array.Empty<PlanUnit>();
-        var current = plan.Count == 0 ? null
-            : StewardProgress.Current(plan, await StatesAsync(projectKey, cfg.Steward.Plan.Key, ct))?.Number;
         var built = await BuiltUnitsAsync(cfg, ct);
         var standing = all.Select(d => (d, st: StatusOf(d, map))).Where(x => x.st.Name is InForce or Provisional).ToList();
         var flags = await RulingFlagsAsync(projectKey, ct);
         var rulings = flags.Count == 0 ? new List<StewardEntry>() : await _db.StewardEntries.AsNoTracking()
             .Where(e => flags.Keys.Contains(e.Id)).ToListAsync(ct);
-        if (cfg.SliceBranchesOn)
-        {
-            // Slices run side by side (docs/slice-branches.md, section 4): each open slice's own
-            // decisions, and the conventions every slice keeps. A slice built on another is shown
-            // its parent's beside its own. What retired with a released slice is not here at all.
-            var open = await OpenSlicesAsync(cfg, ct);
-            var parents = await _db.StewardUnits.AsNoTracking()
-                .Where(u => u.ProjectKey == projectKey && u.Plan == cfg.Steward.Plan.Key && u.ParentUnit != null)
-                .ToDictionaryAsync(u => u.Unit, u => u.ParentUnit, ct);
-            return new
-            {
-                slices = open.Select(s => new
-                {
-                    unit = s.Unit, branch = s.Branch, builtOn = parents.GetValueOrDefault(s.Unit),
-                    decisions = standing.Where(x => !x.d.Convention && x.d.PlanUnit == s.Unit && (x.d.PlanKey ?? "") == cfg.Steward.Plan.Key)
-                        .Select(x => Shape(x.d, x.st, titles)),
-                }),
-                conventions = new
-                {
-                    file = cfg.Steward.Conventions.Length > 0 ? cfg.Steward.Conventions : null,
-                    decisions = standing.Where(x => x.d.Convention).Select(x => Shape(x.d, x.st, titles)),
-                },
-                // Decided for the whole project before the switch: in force until the migration
-                // sorts each into a convention or retires it. A steward_decisions call away.
-                projectDecisions = standing.Count(x => x.d.PlanUnit is null && !x.d.Convention),
-                provisionalDue = standing.Where(x => x.d.Provisional && x.d.ProvisionalUnit is { } pu && built.Contains(pu))
-                    .Select(x => new { number = x.d.Number, rule = x.d.Rule, until = $"unit {x.d.ProvisionalUnit} is built" }),
-                flaggedRulings = rulings.Select(e => new { e.Id, ruling = e.Text, flag = flags[e.Id] }),
-                followUps = (await OpenFollowUpsAsync(projectKey, ct)).Select(f => new { f.Id, decision = f.Decision, f.Text }),
-                instructions = (await OpenInstructionsAsync(projectKey, ct)).Select(i => new { i.Id, i.Text, i.Until }),
-            };
-        }
+        // Slices run side by side (docs/slice-branches.md, section 4): each open slice's own
+        // decisions, and the conventions every slice keeps. A slice built on another is shown
+        // its parent's beside its own. What retired with a released slice is not here at all.
+        var open = await OpenSlicesAsync(cfg, ct);
+        var parents = await _db.StewardUnits.AsNoTracking()
+            .Where(u => u.ProjectKey == projectKey && u.ParentUnit != null)
+            .ToDictionaryAsync(u => u.Unit, u => u.ParentUnit, ct);
         return new
         {
-            slice = current,
-            // The slice's own; the project's are a steward_decisions call away, and are many.
-            sliceDecisions = current is null ? null : standing.Where(x => x.d.PlanUnit == current && (x.d.PlanKey ?? "") == cfg.Steward.Plan.Key)
-                .Select(x => Shape(x.d, x.st, titles)),
-            projectDecisions = standing.Count(x => x.d.PlanUnit is null),
-            provisionalDue = standing.Where(x => x.d.Provisional && x.d.ProvisionalUnit is { } u && built.Contains(u))
-                .Select(x => new { number = x.d.Number, rule = x.d.Rule, until = $"unit {x.d.ProvisionalUnit} is built" }),
+            slices = open.Select(s => new
+            {
+                unit = s.Unit, branch = s.Branch, builtOn = parents.GetValueOrDefault(s.Unit),
+                decisions = standing.Where(x => !x.d.Convention && x.d.PlanUnit == s.Unit)
+                    .Select(x => Shape(x.d, x.st, titles)),
+            }),
+            conventions = new
+            {
+                file = cfg.Steward.Conventions.Length > 0 ? cfg.Steward.Conventions : null,
+                decisions = standing.Where(x => x.d.Convention).Select(x => Shape(x.d, x.st, titles)),
+            },
+            provisionalDue = standing.Where(x => x.d.Provisional && x.d.ProvisionalUnit is { } pu && built.Contains(pu))
+                .Select(x => new { number = x.d.Number, rule = x.d.Rule, until = $"slice {x.d.ProvisionalUnit} is built" }),
             flaggedRulings = rulings.Select(e => new { e.Id, ruling = e.Text, flag = flags[e.Id] }),
             followUps = (await OpenFollowUpsAsync(projectKey, ct)).Select(f => new { f.Id, decision = f.Decision, f.Text }),
             instructions = (await OpenInstructionsAsync(projectKey, ct)).Select(i => new { i.Id, i.Text, i.Until }),

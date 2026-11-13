@@ -28,7 +28,7 @@ type Mark = (id: number, mark: { handled?: boolean; release?: ReleaseKind }) => 
 export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, unit, onUnit }: {
   entries: StewardEntry[]; answered: StewardQuestion[]; onMark: Mark;
   onKeep: (id: number) => Promise<void>; onReverse: (id: number, because: string) => Promise<void>;
-  /** Show only the notes that go out with this unit of the plan; null is all of them. */
+  /** Show only the notes that go out with this slice; null is all of them. */
   unit: number | null; onUnit: (unit: number | null) => void;
 }) {
   // A note with no kind is one to know: the same reading the board gives it.
@@ -90,7 +90,7 @@ export function StewardRecord({ entries, answered, onMark, onKeep, onReverse, un
 function ReleaseNotes({ notes: every, onMark, unit, onUnit }: {
   notes: StewardEntry[]; onMark: Mark; unit: number | null; onUnit: (unit: number | null) => void;
 }) {
-  // A note goes out with one unit of the plan, and a release is one unit's: so the list can be
+  // A note goes out with one slice, and a release is one slice's: so the list can be
   // narrowed to exactly what that release is held for.
   const units = [...new Set(every.map(e => e.unit).filter((u): u is number => u != null))].sort((a, b) => a - b);
   const notes = unit == null ? every : every.filter(e => e.unit === unit);

@@ -412,11 +412,11 @@ public class WalkthroughTests
     [Fact]
     public void A_units_brief_quotes_its_spec_and_reads_its_code_at_the_end_of_its_range()
     {
-        var p = WalkthroughPrompt.BuildForUnit("Unit 1: Addresses", "First plan", PromptDoc, "A1 can save an address",
+        var p = WalkthroughPrompt.BuildForUnit("Slice 1: Addresses", PromptDoc, "A1 can save an address",
             new[] { new WalkthroughPrompt.ShotMaterial(3, "the list", "C:/r/3.png", 800, 600, null) },
             new[] { new WalkthroughPrompt.ChangedFile("src/a.ts", 3, 1) }, "1111111111aa", "2222222222bb").ReplaceLineEndings("\n");
 
-        Assert.Contains("The unit: Unit 1: Addresses, of the plan \"First plan\".", p);
+        Assert.Contains("The slice: Slice 1: Addresses.", p);
         Assert.Contains("range 1111111111..2222222222", p);
         Assert.Contains("`git show 2222222222bb:<path>`", p);
         Assert.Contains("- shot 3: 800x600 at C:/r/3.png", p);

@@ -14,11 +14,11 @@ public class UnitMaterialTests
         new PlanGroup("A customer", new[] { new PlanOutcomeText("A1", "can save an address"), new PlanOutcomeText("A2", "can pick a default") }),
     };
 
-    private static Ticket T(int id, string plan = "p1", int unit = 1, TicketPhase phase = TicketPhase.Done,
+    private static Ticket T(int id, int unit = 1, TicketPhase phase = TicketPhase.Done,
         string outcomes = "A1", DateTime? merged = null, params int[] shots) => new()
     {
         Id = id, ProjectKey = "alpha", Title = $"Ticket {id}", Phase = phase,
-        PlanKey = plan, PlanUnit = unit, PlanOutcomes = outcomes, MergedAt = merged,
+        PlanUnit = unit, PlanOutcomes = outcomes, MergedAt = merged,
         QaShots = shots.Select(o => new QaShot { TicketId = id, Order = o, Caption = $"#{id} shot {o}", ImageFile = $"{o}.png" }).ToList(),
     };
 
@@ -41,14 +41,14 @@ public class UnitMaterialTests
     private static UnitMaterial.Result Build(IReadOnlyList<Ticket> tickets, IReadOnlyList<TicketAnalysis>? analyses = null,
         Dictionary<int, UnitMaterial.BranchTip>? tips = null, Dictionary<int, DateTime>? doneAt = null,
         IReadOnlyList<StewardEntry>? entries = null, Dictionary<int, DateTime>? codedAt = null) =>
-        UnitMaterial.Build(new UnitMaterial.Input("p1", One, Groups, tickets, Array.Empty<StewardOutcome>(),
+        UnitMaterial.Build(new UnitMaterial.Input(One, Groups, tickets, Array.Empty<StewardOutcome>(),
             entries ?? Array.Empty<StewardEntry>(), analyses ?? Array.Empty<TicketAnalysis>(),
             tips ?? new(), doneAt ?? new(), codedAt));
 
     [Fact]
-    public void A_unit_is_its_plans_unit_and_no_other_plans_unit_of_the_same_number()
+    public void A_slice_is_its_own_tickets_and_no_other_slices()
     {
-        var r = Build(new[] { T(1), T(2, plan: "p0"), T(3, unit: 2) });
+        var r = Build(new[] { T(1), T(3, unit: 2) });
         Assert.Equal(new[] { 1 }, r.Tickets.Select(t => t.Ticket.Id));
     }
 

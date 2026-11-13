@@ -143,7 +143,7 @@ public class TicketService
             {
                 Id = t.Id, ProjectKey = t.ProjectKey, Title = t.Title, IssueKey = t.IssueKey, Phase = t.Phase,
                 PhaseBeforeBlock = t.PhaseBeforeBlock, Track = t.Track, Walkthrough = t.Walkthrough,
-                PlanKey = t.PlanKey, PlanUnit = t.PlanUnit, PlanOutcomes = t.PlanOutcomes, Branch = t.Branch,
+                PlanUnit = t.PlanUnit, PlanOutcomes = t.PlanOutcomes, Branch = t.Branch,
                 MergeSha = t.MergeSha, MergedAt = t.MergedAt, IsBug = t.IsBug, BoardOrder = t.BoardOrder,
                 CreatedAt = t.CreatedAt, UpdatedAt = t.UpdatedAt,
             }).ToListAsync();
@@ -173,7 +173,7 @@ public class TicketService
             IssueKey = t.IssueKey, IssueUrl = t.IssueUrl, Branch = t.Branch, BaseBranch = t.BaseBranch, BoardOrder = t.BoardOrder,
             Priority = t.Priority, RequiresSpeculationReview = t.RequiresSpeculationReview,
             SkipQaTesting = t.SkipQaTesting, Walkthrough = t.Walkthrough, SkipClassroomAnalysis = t.SkipClassroomAnalysis,
-            GateAnalysisId = t.GateAnalysisId, PlanUnit = t.PlanUnit, PlanKey = t.PlanKey, IsBug = t.IsBug,
+            GateAnalysisId = t.GateAnalysisId, PlanUnit = t.PlanUnit, IsBug = t.IsBug,
             BlockedReason = t.BlockedReason, PhaseBeforeBlock = t.PhaseBeforeBlock,
             CreatedAt = t.CreatedAt, UpdatedAt = t.UpdatedAt,
         }).ToListAsync();
