@@ -121,11 +121,11 @@ public static class UnitReportEndpoints
             return Results.Ok(await git.FileDiffAsync(r.ProjectKey, r.ToSha, path, ct, fromRef: r.FromSha));
         });
 
-        app.MapGet("/api/unit-reports/{id:int}/walkthrough", async (int id, DashboardDbContext db) =>
+        app.MapGet("/api/unit-reports/{id:int}/walkthrough", async (int id, DashboardDbContext db, WalkthroughVoicing voicing) =>
         {
             if (!await db.UnitReports.AnyAsync(r => r.Id == id)) return Results.NotFound();
             var w = await db.AnalysisWalkthroughs.AsNoTracking().FirstOrDefaultAsync(x => x.UnitReportId == id);
-            return Results.Ok(WalkthroughEndpoints.Dto(w));
+            return Results.Ok(WalkthroughEndpoints.Dto(w, voicing));
         });
 
         app.MapPost("/api/unit-reports/{id:int}/walkthrough", async (int id, DashboardDbContext db, AnalysisQueue queue) =>

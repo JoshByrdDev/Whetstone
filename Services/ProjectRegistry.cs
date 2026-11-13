@@ -370,6 +370,18 @@ public class ProjectConfig
     public bool ParallelStacks { get; init; }
 
     /// <summary>
+    /// When a Classroom walkthrough is voiced: <see cref="NarrationModes.OnDemand"/> (the default)
+    /// writes its text and captions and voices nothing until someone presses Generate in the
+    /// Classroom; <see cref="NarrationModes.Always"/> voices every deck as it is written. Most decks
+    /// are never played, and voicing one costs minutes of CPU and megabytes of clips, so a project
+    /// voices them all only when it says so. Committed in <c>project.defaults.json</c> as
+    /// <c>narration</c>: how a team wants its walkthroughs is the team's, not this machine's.
+    /// </summary>
+    public string Narration { get; init; } = NarrationModes.OnDemand;
+
+    public bool NarrateAlways => Narration == NarrationModes.Always;
+
+    /// <summary>
     /// Environment variables this project's workers run with, set by <c>worker.ps1</c> before the
     /// agent starts. For what a project's own tooling reads and the platform has no word for - a
     /// build cache several worktrees on one machine can share, a test runner's thread count. A
@@ -694,6 +706,8 @@ public class ProjectRegistry
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
+            Narration = NarrationModes.Normalize(
+                cfg.TryGetValue("narration", out var nar) && nar.ValueKind == JsonValueKind.String ? nar.GetString() : null),
             WorkerEnv = GetStrMap(cfg, "workerEnv"),
             StackPorts = StackPortsConfig.From(cfg),
             PhaseResources = GetStrArrayMap(cfg, "phaseResources"),
@@ -793,4 +807,14 @@ public class ProjectRegistry
                 .Where(s => !string.IsNullOrWhiteSpace(s))
                 .ToArray()
             : Array.Empty<string>();
+}
+
+/// <summary>The values of <see cref="ProjectConfig.Narration"/>. Anything else reads as the default.</summary>
+public static class NarrationModes
+{
+    public const string Always = "always";
+    public const string OnDemand = "onDemand";
+
+    public static string Normalize(string? value) =>
+        string.Equals(value?.Trim(), Always, StringComparison.OrdinalIgnoreCase) ? Always : OnDemand;
 }

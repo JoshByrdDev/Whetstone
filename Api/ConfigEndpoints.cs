@@ -667,6 +667,8 @@ public static class ConfigEndpoints
             tracks = typed.Tracks.Select(t => t.ToString()).ToArray(),
             skipClassroomAnalysisByDefault = typed.SkipClassroomAnalysisByDefault,
             mergeInsteadOfPr = typed.MergeInsteadOfPr,
+            // "always" or "onDemand": whether a walkthrough is voiced as it is written (ProjectConfig.Narration).
+            narration = typed.Narration,
             // Every track that exists, so the form can render a checkbox for one this project does
             // not have on. Served rather than hard-coded in the client for the same reason the agent
             // provider catalogue is: the two halves of the app must not be able to disagree.
@@ -806,6 +808,8 @@ public static class ConfigEndpoints
             defaults["skipClassroomAnalysisByDefault"] = req.SkipClassroomAnalysisByDefault.Value;
         // How the team delivers - by PR or by merging to the base itself. Theirs, not this machine's.
         if (req.MergeInsteadOfPr is not null) defaults["mergeInsteadOfPr"] = req.MergeInsteadOfPr.Value;
+        // When walkthroughs are voiced - the team's choice, so committed. Normalised on the way in.
+        if (req.Narration is not null) defaults["narration"] = NarrationModes.Normalize(req.Narration);
 
         // Local, gitignored — paths + secrets. Preserve any extra keys (assignedMarker, custom fields).
         var local = LoadObject(paths.ProjectConfig(key));
@@ -1011,7 +1015,9 @@ public record ProjectUpsertRequest(
     // one of the project's checks is ignored; null leaves every check alone.
     Dictionary<string, int>? MergeCheckTimeouts = null,
     // "key" or "key-slug": how a ticket's branch is named when nobody chose one. Null leaves it alone.
-    string? BranchNameStyle = null);
+    string? BranchNameStyle = null,
+    // "always" or "onDemand": when a Classroom walkthrough is voiced. Null leaves it alone.
+    string? Narration = null);
 
 /// <param name="Kind">"jira", "azureDevOps", or "none".</param>
 /// <param name="BaseUrl">The Jira site, or the Azure DevOps organisation URL.</param>

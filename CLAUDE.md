@@ -35,7 +35,9 @@ things that are *not* discoverable from the code in front of you.
   own hook and an older runner supervisor may still start one on 5.1, which parses them as cp1252.
 - Classroom walkthroughs are voiced by Kokoro under Node from `data/narrator/`. Run `npm install` there
   once per machine (its first run also downloads the ~90MB voice model); without it a walkthrough is
-  still written but plays as captions only, and says so.
+  still written but plays as captions only, and says so. A deck is voiced as it is written only on a
+  project whose `narration` is `always`; by default (`onDemand`) it is voiced when someone presses
+  Generate in the Classroom (`WalkthroughVoicing`). "Not set up" and "not generated yet" are two notices.
 
 ## Whetstone knows no project
 

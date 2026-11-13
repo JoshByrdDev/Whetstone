@@ -175,7 +175,7 @@ public class SetupCheckService
         // ---- the narrator ----
         var narrator = probe.NarratorUnavailable();
         items.Add(narrator is null
-            ? new SetupItem("narrator", "Walkthrough voice-over", "ok", false, "Classroom walkthroughs are voiced.", null)
+            ? new SetupItem("narrator", "Walkthrough voice-over", "ok", false, "Classroom walkthroughs can be voiced: as they are written, or on demand, as each project says.", null)
             : new SetupItem("narrator", "Walkthrough voice-over", "warn", false,
                 "Walkthroughs play with captions only: " + narrator,
                 "Run npm install once in data/narrator (the first voiced walkthrough also downloads a ~90MB voice model)."));

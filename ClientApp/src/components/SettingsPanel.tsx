@@ -330,6 +330,8 @@ interface ProjectDetail {
   skipClassroomAnalysisByDefault?: boolean;
   /** Deliver by merging the ticket's branch into the base instead of raising a pull request. */
   mergeInsteadOfPr?: boolean;
+  /** When a Classroom walkthrough is voiced: as it is written, or when someone presses Generate. */
+  narration?: 'always' | 'onDemand';
   projectPath: string;
   baseBranch: string;
   branchPrefix: string;
@@ -1589,6 +1591,7 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
           displayName: p.displayName, projectPath: p.projectPath, tracks: p.tracks,
           skipClassroomAnalysisByDefault: p.skipClassroomAnalysisByDefault ?? false,
           mergeInsteadOfPr: p.mergeInsteadOfPr ?? false,
+          narration: p.narration ?? 'onDemand',
           baseBranch: p.baseBranch, branchPrefix: p.branchPrefix, branchNameStyle: p.branchNameStyle ?? 'key',
           worktreeRoot: p.worktreeRoot ?? '', worktreeSetup: p.worktreeSetup ?? [], worktreeCopyFiles: p.worktreeCopyFiles ?? [],
           tracker: p.tracker, qaApiPort: p.qaApiPort, qaWebPort: p.qaWebPort, qaLogin: p.qaLogin,
@@ -1728,6 +1731,18 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
               description="New tickets start with refinement not waiting for an independent Classroom analysis. Turn on for a project whose work is mostly small; leave off to have every ticket's findings ruled on before review."
               checked={p.skipClassroomAnalysisByDefault ?? false}
               onChange={v => update({ skipClassroomAnalysisByDefault: v })}
+            />
+          </div>
+
+          <div>
+            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+              Classroom <span className="text-gray-600 normal-case font-normal">(walkthroughs)</span>
+            </h4>
+            <CheckField
+              label="Voice every walkthrough as it is written"
+              description="Off: a walkthrough is written with captions only, and its voice-over is generated when someone presses Generate in the Classroom - most are never played, and each voiced one costs minutes of CPU and megabytes of clips. On: every walkthrough is voiced as soon as it is written."
+              checked={p.narration === 'always'}
+              onChange={v => update({ narration: v ? 'always' : 'onDemand' })}
             />
           </div>
 

@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import type {
   Analysis, ClassroomTicket, Deck, DeckBeat, DeckCode, DeckImage, DeckScene, Doc, NarratorStatus, Picture, Rect, Walkthrough,
 } from '../api/classroom';
-import { blockAt, clipUrl, getNarratorStatus, getWalkthrough, writeWalkthrough } from '../api/classroom';
+import { blockAt, clipUrl, getNarratorStatus, getWalkthrough, voiceWalkthrough, writeWalkthrough } from '../api/classroom';
 import { AnalysisContext, Callout, Question, UserFlow } from './AnalysisBlocks';
 import { lineCls } from './PatchView';
 import { PictureView } from './WalkthroughPicture';
@@ -621,19 +621,35 @@ export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
   const load = useCallback(() => current.current.load().then(setW).catch(() => {}), [subject.key]);
   useEffect(() => { setW(null); setAsked(null); load(); }, [load]);
 
-  // Poll while one is being written - it follows its analysis in the same queue slot, a few minutes behind.
+  // Generate voice-over's own ask: what the server said when it refused, or null.
+  const [voiceAsk, setVoiceAsk] = useState<{ asking: boolean; refused: string | null }>({ asking: false, refused: null });
+  useEffect(() => { setVoiceAsk({ asking: false, refused: null }); }, [subject.key]);
+
+  // Poll while one is being written - it follows its analysis in the same queue slot, a few minutes
+  // behind - and, faster, while its voice-over is being generated, which reports line by line.
   const pending = w?.status === 'Pending' || asked === 'Queued.';
+  const voicing = !!w?.voicing?.running || voiceAsk.asking;
   useEffect(() => {
-    if (!pending) return;
-    const t = window.setInterval(load, 5000);
+    if (!pending && !voicing) return;
+    const t = window.setInterval(load, voicing ? 2000 : 5000);
     return () => window.clearInterval(t);
-  }, [pending, load]);
+  }, [pending, voicing, load]);
+  useEffect(() => { if (w?.voicing?.running && voiceAsk.asking) setVoiceAsk(v => ({ ...v, asking: false })); }, [w, voiceAsk.asking]);
   useEffect(() => { if (w && w.status !== 'Pending' && asked === 'Queued.' && w.generatedAt) setAsked(null); }, [w, asked]);
 
   const write = () => subject.write().then(
     r => { setAsked(r.message); load(); },
     e => setAsked(e instanceof Error ? e.message : 'Could not queue it.'),
   );
+
+  const generate = () => {
+    if (!w?.id) return;
+    setVoiceAsk({ asking: true, refused: null });
+    voiceWalkthrough(w.id).then(
+      () => load(),
+      e => setVoiceAsk({ asking: false, refused: e instanceof Error ? e.message : 'Could not start it.' }),
+    );
+  };
 
   if (!w) return null;
   const deck = w.deck;
@@ -675,14 +691,48 @@ export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
       <div className="mt-0.5 min-w-0 break-words text-amber-200/70">
         Walkthroughs still play, with captions only. To voice them, run <code className="font-mono">npm install</code> once
         in <code className="font-mono break-all">{narrator.dir}</code> (Node required; the first voiced walkthrough also
-        downloads a ~90MB voice model), then rewrite this walkthrough. See <code className="font-mono">docs/setup.md</code>.
+        downloads a ~90MB voice model), then generate this walkthrough's voice-over. See <code className="font-mono">docs/setup.md</code>.
       </div>
+    </div>
+  );
+
+  // Not set up is above; this is set up but not asked for yet - a project that voices on demand, or
+  // a deck whose clips were voiced on another machine. Never both: without the narrator there is
+  // nothing to press.
+  const lines = deck ? deck.scenes.reduce((n, s) => n + s.beats.length, 0) : 0;
+  const silent = !!deck && w.unvoiced >= lines;
+  const voiceState = voicing ? 'voicing' : w.voicing?.error || voiceAsk.refused ? 'failed' : 'idle';
+  const offer = deck && !narrator?.unavailable && (w.unvoiced > 0 || voicing) && (
+    <div role="status" key={voiceState}
+      className="orbit-swap mt-2 flex flex-wrap items-center gap-x-3 gap-y-2 border border-hair bg-gray-950/40 px-3 py-2 text-[12px]"
+      style={{ clipPath: chamfer(6) }}>
+      {voicing ? (
+        <span className="flex min-w-0 items-center gap-2 text-gray-300">
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full animate-pulse" style={{ background: 'var(--w-active)' }} />
+          <span className="min-w-0 break-words">Generating the voice-over — {w.voicing?.activity ?? 'starting'}…</span>
+        </span>
+      ) : (
+        <>
+          <span className="min-w-0 flex-1 break-words text-gray-400">
+            {silent
+              ? 'No voice-over yet — this walkthrough plays with captions only.'
+              : `${w.unvoiced} of ${lines} line${lines === 1 ? '' : 's'} have no voice-over yet and play as captions.`}
+            {(w.voicing?.error || voiceAsk.refused) && (
+              <span className="block text-rose-400/90">{voiceAsk.refused ?? w.voicing?.error}</span>
+            )}
+          </span>
+          <button onClick={generate}
+            className="orbit-tap shrink-0 border border-amber-700/60 bg-amber-950/30 px-2.5 py-1 text-[12px] font-medium text-amber-200 hover:border-amber-500/80"
+            style={{ clipPath: chamfer(4) }}>
+            Generate voice-over
+          </button>
+        </>
+      )}
     </div>
   );
 
   if (!deck) return <div className="mb-7">{unvoiced}{notes}</div>;
 
-  const beats = deck.scenes.reduce((n, s) => n + s.beats.length, 0);
 
   return (
     <section className="mb-7">
@@ -690,10 +740,10 @@ export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
       <button
         onClick={() => setOpen(true)}
         title="Play the narrated walkthrough"
-        className="orbit-tap group flex w-full items-stretch gap-5 border border-amber-800/50 bg-amber-950/15 p-3 text-left hover:border-amber-600/70"
+        className="orbit-tap group flex w-full items-stretch gap-5 max-sm:flex-col max-sm:gap-3 border border-amber-800/50 bg-amber-950/15 p-3 text-left hover:border-amber-600/70"
         style={{ clipPath: chamfer(12) }}
       >
-        <div className="relative w-[248px] shrink-0 aspect-video overflow-hidden bg-gray-950" style={{ clipPath: chamfer(9) }}>
+        <div className="relative w-[248px] max-sm:w-full shrink-0 aspect-video overflow-hidden bg-gray-950" style={{ clipPath: chamfer(9) }}>
           {still
             ? <Framed image={still.image} zoom={still.zoom} box={null} still />
             : (
@@ -721,13 +771,13 @@ export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
 
         <div className="min-w-0 flex-1 flex flex-col justify-center gap-1.5 py-1">
           <div className="text-[10px] font-semibold uppercase tracking-[calc(var(--w-track)*0.14em)] text-amber-300/90">
-            Narrated walkthrough
+            {silent ? 'Walkthrough · captions only' : 'Narrated walkthrough'}
           </div>
           <div className="text-[16px] font-medium text-gray-100">
-            Listen before you read — {clock(w.audioSeconds)}
+            {silent ? 'Walk through it before you read' : 'Listen before you read'} — {clock(w.audioSeconds)}
           </div>
           <div className="text-[12px] text-gray-500">
-            {deck.scenes.length} scenes · {beats} lines · captions on · space to pause
+            {deck.scenes.length} scenes · {lines} lines · captions on · space to pause
           </div>
           <div className="mt-1 flex flex-wrap gap-1.5">
             {deck.scenes.map((s, i) => (
@@ -739,6 +789,7 @@ export function WalkthroughCard({ subject }: { subject: DeckSubject }) {
           </div>
         </div>
       </button>
+      {offer}
       {notes}
       {open && <WalkthroughPlayer deck={deck} subject={subject} onClose={() => setOpen(false)} />}
     </section>

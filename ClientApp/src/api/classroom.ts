@@ -465,6 +465,15 @@ export interface Walkthrough {
   model: string | null;
   durationMs: number;
   generatedAt: string | null;
+  /** The walkthrough's own id, which Generate voices; 0 when there is none. */
+  id: number;
+  /**
+   * Lines with no clip on this machine - never voiced (a project that voices on demand), or voiced
+   * elsewhere. Their beats come without a clip and play as captions; above zero, the card offers Generate.
+   */
+  unvoiced: number;
+  /** Generate's progress, while it runs and after; null when nobody asked. */
+  voicing: { running: boolean; activity: string | null; error: string | null } | null;
 }
 
 export const getWalkthrough = (analysisId: number) =>
@@ -473,6 +482,10 @@ export const getWalkthrough = (analysisId: number) =>
 /** Queue a rewrite. New analyses get theirs on their own; this is Retry, and the backfill for older ones. */
 export const writeWalkthrough = (analysisId: number) =>
   fetch(`/api/classroom/analyses/${analysisId}/walkthrough`, { method: 'POST' }).then(json<{ message: string }>);
+
+/** Generate voice-over: voice a written walkthrough's missing lines. Progress rides on its GET. */
+export const voiceWalkthrough = (id: number) =>
+  fetch(`/api/walkthroughs/${id}/voice`, { method: 'POST' }).then(json<{ message: string }>);
 
 export const clipUrl = (clip: string) => `/api/walkthrough-clips/${clip}.wav`;
 

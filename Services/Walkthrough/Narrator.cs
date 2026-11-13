@@ -58,7 +58,7 @@ public class Narrator
     /// back with its error and the rest are still voiced; a walkthrough with one silent beat is
     /// still a walkthrough.
     /// </summary>
-    public async Task<IReadOnlyList<Voiced>> VoiceAsync(IReadOnlyList<Line> lines, string voice,
+    public virtual async Task<IReadOnlyList<Voiced>> VoiceAsync(IReadOnlyList<Line> lines, string voice,
         IRunProgress progress, CancellationToken ct)
     {
         var ids = lines.Select(l => l.Id(voice)).ToList();
@@ -88,6 +88,17 @@ public class Narrator
             return seconds is double s ? new Voiced(id, s, null) : new Voiced(null, 0, "the voiced clip is missing or unreadable");
         }).ToList();
     }
+
+    /// <summary>
+    /// The lines already voiced, by content, without voicing any: what a deck written on demand
+    /// plays with until someone asks for the rest. Runs nothing.
+    /// </summary>
+    public IReadOnlyList<Voiced> Existing(IReadOnlyList<Line> lines, string voice) =>
+        lines.Select(l =>
+        {
+            var id = l.Id(voice);
+            return WavSeconds(ClipPath(id)) is double s ? new Voiced(id, s, null) : new Voiced(null, 0, null);
+        }).ToList();
 
     /// <returns>A sentence when the whole run failed; null when it ran (per-line errors land in <paramref name="errors"/>).</returns>
     private async Task<string?> RunNodeAsync(string request, int count, Dictionary<string, string> errors,

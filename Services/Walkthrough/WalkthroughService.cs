@@ -11,7 +11,7 @@ namespace Whetstone.Services.Walkthrough;
 
 /// <summary>
 /// Writes an analysis's walkthrough: gathers what it may point at, has Claude script it, checks every
-/// pointer (with one repair round), voices it, and stores the deck on its own row.
+/// pointer (with one repair round), voices it if its project says to, and stores the deck on its own row.
 /// <para>
 /// Runs inside the analysis queue's single slot - straight after a new analysis, or as a
 /// walkthrough-only item for a retry. It <b>never fails the analysis</b>: whatever goes wrong here
@@ -131,29 +131,12 @@ public class WalkthroughService
         foreach (var p in result.Problems) _log.LogInformation("Walkthrough of {Subject} dropped: {Problem}", subject, p);
 
         // ---- the voice ----
+        // Voiced now only where the project says so (ProjectConfig.Narration). On demand, a deck is
+        // written with whatever lines are already on disk and the Classroom's Generate does the rest.
         var voice = Narrator.DefaultVoice;
-        var say = Pronunciation.ForProject(_paths, m.ProjectKey);
-        var beats = result.Scenes.SelectMany(s => s.Beats).ToList();
-        var lines = beats.Select(b => new Narrator.Line(Pronunciation.Sentences(b.Say).Select(say.Speak).ToList())).ToList();
-        var voiced = await _narrator.VoiceAsync(lines, voice, progress, ct);
-
-        var i = 0;
-        var scenes = result.Scenes.Select(s => s with
-        {
-            Beats = s.Beats.Select(b =>
-            {
-                var v = voiced[i];
-                var spoken = string.Join(" ", lines[i++].Sentences);
-                // A line that could not be voiced still gets a slot, timed at a reading pace, so the
-                // deck plays through with a caption where the voice would have been.
-                var dur = v.Clip is not null ? v.Seconds : Math.Max(2.0, b.Say.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length / 2.6);
-                return b with { Spoken = spoken, Clip = v.Clip, Dur = Math.Round(dur, 3) };
-            }).ToList(),
-        }).ToList();
-
-        var unvoiced = voiced.Where(v => v.Error is not null).ToList();
-        var warning = unvoiced.Count == 0 ? null
-            : $"{unvoiced.Count} of {voiced.Count} lines could not be voiced and play as captions only: {unvoiced[0].Error}";
+        var generate = _registry.GetProjectConfig(m.ProjectKey).NarrateAlways;
+        var (scenes, warning) = await WalkthroughVoicing.VoiceScenesAsync(_narrator, _paths, m.ProjectKey, voice,
+            result.Scenes, generate, progress, ct);
 
         using (var scope = _scopes.CreateScope())
         {
@@ -164,7 +147,7 @@ public class WalkthroughService
             row.DeckJson = Serialize(new Deck(voice, scenes));
             row.Voice = voice;
             row.Dropped = result.Problems.Count;
-            row.AudioSeconds = Math.Round(scenes.SelectMany(s => s.Beats).Sum(b => b.Dur), 1);
+            row.AudioSeconds = WalkthroughVoicing.AudioSeconds(scenes);
             row.InputTokens = tally.Input;
             row.OutputTokens = tally.Output;
             row.CacheReadTokens = tally.CacheRead;
