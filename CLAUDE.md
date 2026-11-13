@@ -27,6 +27,8 @@ things that are *not* discoverable from the code in front of you.
   a pending stop, then `data/restart-board.ps1` - launched through explorer for the same reason -
   waits for the drain, restarts the board through the .bat and starts the heartbeat again. The two
   hand off through `data/board.restart` (`BoardRestart`); its log is `data/logs/restart-board.log`.
+  On a Mac the launcher is `Start-Whetstone.command` (`open` it, or double-click it in Finder, which
+  hands it to Terminal), and the restart script is started under `nohup` rather than explorer.
 - Editing `ClientApp/tailwind.config.js` needs a Vite restart; a reload silently serves the old CSS.
 - The fleet runs on PowerShell 7 (`pwsh`) only, on Windows and macOS; 5.1 is not a fallback
   (`PowerShellHost`, `Get-PsHost`). `.ps1` files under `data/` still stay pure ASCII: a TFVC repo's

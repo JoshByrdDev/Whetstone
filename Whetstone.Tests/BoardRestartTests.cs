@@ -25,8 +25,9 @@ public class BoardRestartTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* temp dir */ }
     }
 
+    // The Windows launcher on any machine, so these mean the same wherever they run.
     private BoardRestart Restart(Action<string>? launch = null) =>
-        new(new DashboardPaths(_root), launch ?? _launched.Add);
+        new(new DashboardPaths(_root), launch ?? _launched.Add, mac: false, windows: true);
 
     private string Marker => Path.Combine(_root, BoardRestart.MarkerName);
 
@@ -108,6 +109,28 @@ public class BoardRestartTests : IDisposable
         File.Delete(Path.Combine(_root, "restart-board.bat"));
         Assert.False(Restart().Request(true, 5338).Ok);
         Assert.Null(Restart().Read());
+        Assert.Empty(_launched);
+    }
+
+    [Fact]
+    public void On_a_mac_the_script_itself_is_launched()
+    {
+        File.WriteAllText(Path.Combine(_root, "restart-board.ps1"), "# script");
+        var mac = new BoardRestart(new DashboardPaths(_root), _launched.Add, mac: true, windows: false);
+
+        Assert.True(mac.Request(false, 5338).Ok);
+        Assert.EndsWith("restart-board.ps1", Assert.Single(_launched));
+    }
+
+    [Fact]
+    public void A_machine_with_no_launcher_is_refused_before_anything_is_written()
+    {
+        var other = new BoardRestart(new DashboardPaths(_root), _launched.Add, mac: false, windows: false);
+
+        var (ok, message) = other.Request(true, 5338);
+        Assert.False(ok);
+        Assert.Contains("Windows and macOS", message);
+        Assert.Null(other.Read());
         Assert.Empty(_launched);
     }
 

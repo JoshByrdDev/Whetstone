@@ -6,12 +6,15 @@ namespace Whetstone.Services;
 
 /// <summary>
 /// A restart of the live board that waits for the fleet: a pending stop, the drain, the restart
-/// through <c>Start-Whetstone.bat</c>, and the heartbeat started again.
+/// through <c>Start-Whetstone.bat</c> (<c>Start-Whetstone.command</c> on a Mac), and the heartbeat
+/// started again.
 /// <para>
-/// The board cannot do the middle of that itself. <c>dotnet run</c> holds the app, the heartbeat
-/// and every worker in one kill-on-close job, so whatever stops the app has to be outside it. The
-/// work is <c>data/restart-board.ps1</c>, launched through <c>explorer.exe</c>, which no process
-/// here owns. The two talk through one file, <c>data/board.restart</c>: the board writes it, the
+/// The board cannot do the middle of that itself: whatever stops the app has to be outside it. On
+/// Windows <c>dotnet run</c> holds the app, the heartbeat and every worker in one kill-on-close job,
+/// so the work, <c>data/restart-board.ps1</c>, is launched through <c>explorer.exe</c>, which no
+/// process here owns. On a Mac it is started under <c>nohup</c> by a shell that exits at once, so
+/// it is handed to launchd and is in no tree the script stops - and ignores the hangup the board's
+/// Terminal window sends when the board goes. Elsewhere there is no launcher, and it is refused. The two talk through one file, <c>data/board.restart</c>: the board writes it, the
 /// script writes its phase into it and deletes it when done, and the board deleting it is how a
 /// restart still waiting on the drain is called off.
 /// </para>
@@ -23,18 +26,28 @@ public class BoardRestart
     private static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
     private readonly string _marker;
-    private readonly string _launcher;
+    private readonly string? _launcher;
     private readonly Action<string> _launch;
 
     public BoardRestart(DashboardPaths paths) : this(paths, Launch) { }
 
     /// <param name="launch">Starts the launcher at the given path; replaced in tests.</param>
-    public BoardRestart(DashboardPaths paths, Action<string> launch)
+    /// <param name="mac">Which machine's launcher to use; null asks this one, as does <paramref name="windows"/>.</param>
+    public BoardRestart(DashboardPaths paths, Action<string> launch, bool? mac = null, bool? windows = null)
     {
         _marker = Path.Combine(paths.DataRoot, MarkerName);
-        _launcher = Path.Combine(paths.DataRoot, "restart-board.bat");
+        _launcher = LauncherFor(paths.DataRoot, mac ?? OperatingSystem.IsMacOS(), windows ?? OperatingSystem.IsWindows());
         _launch = launch;
     }
+
+    /// <summary>
+    /// What starts the restart: the .bat that launches the script on Windows, the script itself on
+    /// a Mac (see <see cref="Launch"/>), and nothing on any other machine.
+    /// </summary>
+    public static string? LauncherFor(string dataRoot, bool mac, bool windows) =>
+        mac ? Path.Combine(dataRoot, "restart-board.ps1")
+        : windows ? Path.Combine(dataRoot, "restart-board.bat")
+        : null;
 
     /// <summary>Where a restart stands. Phases: draining, restarting, starting, resuming, failed.</summary>
     public record State(
@@ -66,6 +79,8 @@ public class BoardRestart
     {
         if (Read() is { Phase: not "failed" } current)
             return (false, $"A restart is already under way ({current.Phase}).");
+        if (_launcher is null)
+            return (false, "Restarting the board from here works on Windows and macOS only.");
         if (!File.Exists(_launcher))
             return (false, $"The restart script is missing: {_launcher}.");
 
@@ -105,9 +120,26 @@ public class BoardRestart
     }
 
     /// <summary>
-    /// Through explorer, never as a child: a child of this process is in the board's job, and the
-    /// first thing the script does is stop the board.
+    /// Never as a child that stays one: the first thing the script does is stop the board. On
+    /// Windows a child of this process is in the board's job, so it goes through explorer. On a Mac
+    /// the shell started here backgrounds the script under nohup and exits, which leaves it to
+    /// launchd.
     /// </summary>
-    private static void Launch(string bat) =>
-        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{bat}\"") { UseShellExecute = false })?.Dispose();
+    private static void Launch(string launcher)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"\"{launcher}\"") { UseShellExecute = false })?.Dispose();
+            return;
+        }
+        var psi = new ProcessStartInfo("/bin/sh") { UseShellExecute = false };
+        foreach (var a in new[]
+                 {
+                     "-c", "nohup \"$0\" -NoProfile -ExecutionPolicy Bypass -File \"$1\" >/dev/null 2>&1 &",
+                     PowerShellHost.Exe, launcher,
+                 })
+            psi.ArgumentList.Add(a);
+        using var sh = Process.Start(psi);
+        sh?.WaitForExit(5000);
+    }
 }

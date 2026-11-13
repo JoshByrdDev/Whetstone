@@ -8,8 +8,9 @@ Whetstone runs on Windows. macOS is being brought up: the scripts find and stop 
 on either, and run a project's setup commands, stack commands and merge checks in that machine's
 shell (cmd on Windows, sh on a Mac), so a project worked on a Mac has sh commands in its
 `project.json`. The Claude login is read where macOS keeps it, the login keychain, and renewed
-there (`ClaudeCredentialStore`). What is not there yet on a Mac: starting and restarting the board
-(`Start-Whetstone.bat`, the restart menu), and the Sign in buttons, so a login there is made with
+there (`ClaudeCredentialStore`). The board starts from `Start-Whetstone.command` (double-click it in
+Finder), which keeps the Mac awake while it runs, and the header's restart menu works the same as on
+Windows. What is not there yet on a Mac: the Sign in buttons, so a login there is made with
 `claude auth login` in a terminal. A Mac checkout lives at a path without spaces, because
 `ps` prints a command line unquoted and the heartbeat finds its own workers by theirs.
 
@@ -59,7 +60,8 @@ Long paths: worktrees nest deep. If a checkout fails with "Filename too long", r
 dotnet run --project Whetstone.csproj
 ```
 
-Or double-click `Start-Whetstone.bat`, which also opens the browser. The app listens on
+Or double-click `Start-Whetstone.bat` (`Start-Whetstone.command` on a Mac), which also opens the
+browser. The app listens on
 http://localhost:5338. The database (`data/dashboard.db`) is created and migrated on first start.
 
 Then:

@@ -1,8 +1,9 @@
 # Restart the live board once its heartbeat has drained, then resume the heartbeat if it was running.
 #
-# Started by POST /api/heartbeat/restart-after-drain through explorer.exe (restart-board.bat), so it
-# runs outside the board's kill-on-close job: it has to outlive the board it stops. Never start it
-# from a Claude session for the same reason the board itself is never started from one.
+# Started by POST /api/heartbeat/restart-after-drain outside the board's own process tree - through
+# explorer.exe (restart-board.bat) on Windows, under nohup on a Mac (BoardRestart) - because it has
+# to outlive the board it stops. Never start it from a Claude session for the same reason the board
+# itself is never started from one.
 #
 # The board writes data/board.restart (JSON) before launching this. That file is the whole of the
 # hand-off: this script reads the port and whether to resume from it, writes its phase back into it
@@ -37,6 +38,61 @@ function Set-Phase([string]$phase, [string]$err) {
     if ($err) { $m | Add-Member -NotePropertyName error -NotePropertyValue $err -Force }
     Set-Content -Path $Marker -Value ($m | ConvertTo-Json -Compress) -Encoding UTF8
 }
+
+# The process to stop for the board whose listener is $ListenerPid: the listener, walked up through
+# what launched it - dotnet run, and Start-Whetstone.bat (cmd) or Start-Whetstone.command (zsh, then
+# caffeinate) - so the launch goes with it and its console window closes. $Procs maps a pid to
+# @{ Parent; Name; Command }. Stops at the first parent that is not part of that launch.
+function Select-BoardRoot {
+    param([hashtable]$Procs, [int]$ListenerPid)
+    $top = $ListenerPid
+    while ($Procs.ContainsKey($top)) {
+        $parentId = [int]$Procs[$top].Parent
+        if (-not $Procs.ContainsKey($parentId)) { break }
+        $parent = $Procs[$parentId]
+        $launch = $parent.Name -match '^(dotnet(\.exe)?|cmd\.exe|caffeinate|zsh|sh|bash)$'
+        if ($launch -and "$($parent.Command)" -match 'Whetstone') { $top = $parentId } else { break }
+    }
+    return $top
+}
+
+# The pid listening on the port, or $null.
+function Get-ListenerPid([int]$port) {
+    if ($IsWindows) {
+        $l = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($l) { return [int]$l.OwningProcess }
+        return $null
+    }
+    $found = & lsof -nP "-iTCP:$port" -sTCP:LISTEN -t 2>$null | Select-Object -First 1
+    if ($found) { return [int]$found }
+    return $null
+}
+
+# Every process, as Select-BoardRoot reads them.
+function Get-ProcessTable {
+    $procs = @{}
+    if ($IsWindows) {
+        Get-CimInstance Win32_Process | ForEach-Object {
+            $procs[[int]$_.ProcessId] = @{ Parent = [int]$_.ParentProcessId; Name = $_.Name; Command = $_.CommandLine }
+        }
+        return $procs
+    }
+    foreach ($line in (& ps -axww -o pid=,ppid=,args=)) {
+        if ($line -match '^\s*(\d+)\s+(\d+)\s+(.*)$') {
+            $cmd = $Matches[3]
+            $exe = ($cmd -split '\s+')[0]
+            $procs[[int]$Matches[1]] = @{ Parent = [int]$Matches[2]; Name = (Split-Path $exe -Leaf).TrimStart('-'); Command = $cmd }
+        }
+    }
+    return $procs
+}
+
+# A test dot-sources the functions above and stops here.
+if ($env:WHETSTONE_RESTART_FUNCTIONS_ONLY) { return }
+
+# What starts the board on this machine, the way a person does.
+$Launcher = if ($IsWindows) { Join-Path $RepoRoot 'Start-Whetstone.bat' } else { Join-Path $RepoRoot 'Start-Whetstone.command' }
+$LauncherName = Split-Path $Launcher -Leaf
 
 $m = Read-Marker
 if (-not $m) { Say 'no restart marker: nothing to do'; exit 0 }
@@ -73,37 +129,38 @@ try {
     }
     if (-not (Test-Path $Marker)) { Say 'cancelled: the marker was removed'; exit 0 }
 
-    # 2. Stop the board: the process listening on the port, and the dotnet run / Start-Whetstone.bat
-    #    it was started under, so the console window closes with it.
+    # 2. Stop the board: the process listening on the port, and the dotnet run and launcher it was
+    #    started under, so the console window closes with it.
     Set-Phase 'restarting'
-    $listen = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($listen) {
-        $procs = @{}
-        Get-CimInstance Win32_Process | ForEach-Object { $procs[[int]$_.ProcessId] = $_ }
-        $top = $procs[[int]$listen.OwningProcess]
-        $p = $top
-        while ($p -and $procs.ContainsKey([int]$p.ParentProcessId)) {
-            $parent = $procs[[int]$p.ParentProcessId]
-            if (($parent.Name -eq 'dotnet.exe' -or $parent.Name -eq 'cmd.exe') -and $parent.CommandLine -match 'Whetstone') {
-                $top = $parent; $p = $parent
-            } else { break }
+    $listener = Get-ListenerPid $Port
+    if ($listener) {
+        $procs = Get-ProcessTable
+        $top = Select-BoardRoot -Procs $procs -ListenerPid $listener
+        $name = if ($procs.ContainsKey($top)) { $procs[$top].Name } else { '?' }
+        Say ('stopping {0} (pid {1}) and everything under it' -f $name, $top)
+        if ($IsWindows) {
+            & taskkill.exe /T /F /PID $top | Out-Null
+        } else {
+            try { [System.Diagnostics.Process]::GetProcessById($top).Kill($true) } catch { Say "could not stop pid ${top}: $_" }
         }
-        Say ('stopping {0} (pid {1}) and everything under it' -f $top.Name, $top.ProcessId)
-        & taskkill.exe /T /F /PID $top.ProcessId | Out-Null
         $deadline = (Get-Date).AddSeconds(60)
-        while ((Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) -and (Get-Date) -lt $deadline) {
+        while ((Get-ListenerPid $Port) -and (Get-Date) -lt $deadline) {
             Start-Sleep -Seconds 1
         }
     } else {
         Say "nothing is listening on $Port; starting it"
     }
 
-    # 3. Start it again the way it is always started: Start-Whetstone.bat, through explorer, so no
-    #    process this script belongs to owns it.
+    # 3. Start it again the way it is always started, so no process this script belongs to owns it:
+    #    Start-Whetstone.bat through explorer, or Start-Whetstone.command through open, which hands
+    #    it to Terminal.
     Set-Phase 'starting'
-    $bat = Join-Path $RepoRoot 'Start-Whetstone.bat'
-    Say "starting $bat"
-    Start-Process explorer.exe -ArgumentList ('"' + $bat + '"')
+    Say "starting $Launcher"
+    if ($IsWindows) {
+        Start-Process explorer.exe -ArgumentList ('"' + $Launcher + '"')
+    } else {
+        & open $Launcher
+    }
     # dotnet run builds before it listens, so this allows for a build.
     $deadline = (Get-Date).AddMinutes(10)
     $up = $null
@@ -114,7 +171,7 @@ try {
     }
     if (-not $up) {
         Say 'the board did not come back within 10 minutes'
-        Set-Phase 'failed' 'The board did not come back within 10 minutes. See data/logs/restart-board.log, and start it with Start-Whetstone.bat.'
+        Set-Phase 'failed' "The board did not come back within 10 minutes. See data/logs/restart-board.log, and start it with $LauncherName."
         exit 1
     }
     Say 'the board is back'
