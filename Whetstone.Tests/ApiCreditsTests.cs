@@ -194,7 +194,8 @@ public class ApiCreditsTests
     /// A provider whose "CLI" is a one-line node script printing a closing envelope, so the retry in
     /// <see cref="AgentJsonRunner"/> is exercised against a real exit code and a real stream.
     /// </summary>
-    private sealed class ScriptedProvider(string? credit, string envelope, int exitCode, Func<string, AgentProvider>? _ = null)
+    private sealed class ScriptedProvider(string? credit, string envelope, int exitCode, Func<string, AgentProvider>? _ = null,
+        int stepsFirst = 0)
         : AgentProvider
     {
         public override AgentProviderKind Kind => AgentProviderKind.Claude;
@@ -207,11 +208,14 @@ public class ApiCreditsTests
         {
             Runs++;
             var run = new AgentRun { FileName = "node" };
-            run.Arguments.AddRange(new[] { "-e", $"process.stdin.resume();process.stdin.on('end',()=>{{console.log({JsonSerializer.Serialize(envelope)});process.exit({exitCode});}})" });
+            run.Arguments.AddRange(new[] { "-e", $"process.stdin.resume();process.stdin.on('end',()=>{{for(let i=0;i<{stepsFirst};i++)console.log('step');console.log({JsonSerializer.Serialize(envelope)});process.exit({exitCode});}})" });
             return run;
         }
 
         public override AgentRun BuildFreeformRun(string workDir, string scratchDir) => throw new NotSupportedException();
+
+        // A line of "step" stands for a tool call the run made before it closed.
+        public override AgentStep? ReadProgress(string line) => line == "step" ? new AgentStep("Read", "a file") : null;
 
         public override AgentOutcome ReadAnalysis(AgentRun run, string stdout)
         {
@@ -222,7 +226,7 @@ public class ApiCreditsTests
         }
 
         public ScriptedProvider WithFallback(Func<string, AgentProvider> f) =>
-            new(credit, envelope, exitCode, f) { WhenKeyRefuses = f };
+            new(credit, envelope, exitCode, f, stepsFirst) { WhenKeyRefuses = f };
     }
 
     private sealed class Steps : IRunProgress
@@ -246,6 +250,28 @@ public class ApiCreditsTests
 
         Assert.Null(result.Error);
         Assert.True(result.Outcome!.Structured!.Value.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, plan.Runs);
+        Assert.Contains(steps.Said, s => s.Contains("running on plan usage instead"));
+    }
+
+    // Credits run out mid-run as often as before one: a long analysis reads for minutes and is cut
+    // off by the request that found the balance empty. That is still the key's refusal, not the
+    // run's failure, and blocking the ticket over it is what this test exists to stop.
+    [Fact]
+    public async Task ARunWhoseCreditsRanOutPartwayIsRunAgainOnPlanUsage()
+    {
+        var plan = new ScriptedProvider(null, """{"type":"result","structured_output":{"ok":true}}""", 0, null);
+        var spent = new ScriptedProvider("Default org",
+            """{"type":"result","is_error":true,"result":"Credit balance is too low (session 1234)"}""", 1, null, stepsFirst: 3)
+            .WithFallback(_ => plan);
+        var steps = new Steps();
+
+        var result = await AgentJsonRunner.RunAsync(spent, Path.GetTempPath(), Scratch(), "prompt", "{}",
+            steps, TimeSpan.FromMinutes(1), "analysis", NullLogger.Instance, CancellationToken.None);
+
+        Assert.Null(result.Error);
+        Assert.True(result.Outcome!.Structured!.Value.GetProperty("ok").GetBoolean());
+        Assert.Equal(1, spent.Runs);
         Assert.Equal(1, plan.Runs);
         Assert.Contains(steps.Said, s => s.Contains("running on plan usage instead"));
     }

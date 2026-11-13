@@ -29,7 +29,8 @@ public sealed record ApiCreditsSettings(bool Enabled, IReadOnlyList<string> Role
 /// The credits are the whole budget, never a floor. A linked organization with no purchased credit
 /// and no auto-reload refuses requests once the credit is spent rather than charging anyone, and a
 /// run refused that way - or by a key that does not work - is run again on plan usage, so a spent
-/// key costs a moment, not the run. Keeping that organization free of purchased credit is its
+/// key costs a moment, not the run. A Classroom run refused partway through, when the balance ran
+/// out mid-read, starts again from the top on plan usage too, rather than failing its ticket. Keeping that organization free of purchased credit is its
 /// owner's part; nothing here can buy any.
 /// </para>
 /// </summary>

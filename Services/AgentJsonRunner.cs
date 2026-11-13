@@ -43,11 +43,16 @@ public static class AgentJsonRunner
             if (provider.ApiCreditName is { } credit) progress.Step($"Running on API credits ({credit})");
             var result = await RunOnceAsync(provider, workDir, scratch, prompt, jsonSchema, progress, timeout, what, log, ct);
 
-            // A key that refused the run before it did anything - credits spent, or a key that does
-            // not work - has cost one request and no work, so the run goes again on whatever comes
-            // next: another key, or the plan's usage. A failure after the run got going is the
-            // run's own and is reported as it is.
-            if (result.Outcome is not null || result.Steps > 0 || provider.WhenKeyRefuses is not { } next
+            // A run its key refused - credits spent, or a key that does not work - goes again on
+            // whatever comes next: another key, or the plan's usage. That holds however far the
+            // run had got. Credits run out mid-run as often as before it: a long analysis reads
+            // for minutes and is cut off by the request that found the balance empty, and
+            // reporting that as the run's own failure blocks a ticket over a bill. Every run
+            // through here only reads and answers in a schema, into a scratch folder made new
+            // for each run, so starting it again from the top has nothing to undo - it costs the
+            // reading already done, and that is all. Any other failure would fail on plan usage
+            // the same way, and is reported as it is.
+            if (result.Outcome is not null || provider.WhenKeyRefuses is not { } next
                 || !ClaudeApiCredits.IsRefusedByKey(result.Error))
                 return result;
 

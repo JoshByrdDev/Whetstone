@@ -85,9 +85,11 @@ public abstract class AgentProvider
     public virtual string? ApiCreditName => null;
 
     /// <summary>
-    /// What to run instead when this run's key refused it before it did anything - its credits
-    /// spent, or a key that does not work. Handed the error; null when there is nothing to fall
-    /// back to. Set by <see cref="AgentProviderFactory"/>, which also notes the refusal.
+    /// What to run instead when this run's key refused it - its credits spent, or a key that does
+    /// not work. A schema run (<see cref="AgentJsonRunner"/>) asks this however far it had got,
+    /// since it only reads; the improvement applier, which edits, only when the refusal came
+    /// before it could have. Handed the error; null when there is nothing to fall back to. Set by
+    /// <see cref="AgentProviderFactory"/>, which also notes the refusal.
     /// </summary>
     public Func<string, AgentProvider>? WhenKeyRefuses { get; init; }
 
