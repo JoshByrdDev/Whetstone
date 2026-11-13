@@ -32,6 +32,10 @@ if (OperatingSystem.IsWindows() && Environment.GetEnvironmentVariable("CLAUDECOD
     }
 }
 
+// Off Windows, `dotnet run` hands this app a DOTNET_ROOT_<ARCH> that would point every PowerShell it
+// starts at the wrong .NET, and the heartbeat would die on launch. See HostDotnetRoot.
+HostDotnetRoot.ClearInjected();
+
 var builder = WebApplication.CreateBuilder(args);
 
 // An isolated QA copy - this program started from a worktree to prove a change to itself - refuses
