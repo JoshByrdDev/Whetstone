@@ -604,8 +604,22 @@ function Get-SetupShell {
     # Asked here rather than read from process-table.ps1, which a test lifting this may not load.
     param([string]$Script, [bool]$Windows = (($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows))
     if ($Windows) { return @{ Exe = 'cmd.exe'; Args = "/d /s /c `"$Script`""; Name = 'cmd' } }
-    # An array, which 7 quotes as one argument; a single string would be split again.
-    return @{ Exe = '/bin/sh'; Args = @('-c', $Script); Name = 'sh' }
+    # One string, with the script quoted as one argument. Start-Process joins an array with spaces
+    # and the process launcher splits the line again - by double quotes and backslashes, the same
+    # rules as Windows, on every machine - so an unquoted '( npm ci ) 2>&1' reached sh as '-c' '('
+    # and every setup command failed with a syntax error before it ran.
+    $q = New-Object System.Text.StringBuilder
+    [void]$q.Append('"')
+    $slashes = 0
+    foreach ($ch in $Script.ToCharArray()) {
+        if ($ch -eq '\') { $slashes++; continue }
+        if ($ch -eq '"') { [void]$q.Append('\', 2 * $slashes + 1).Append('"') }
+        else { if ($slashes) { [void]$q.Append('\', $slashes) }; [void]$q.Append($ch) }
+        $slashes = 0
+    }
+    if ($slashes) { [void]$q.Append('\', 2 * $slashes) }
+    [void]$q.Append('"')
+    return @{ Exe = '/bin/sh'; Args = "-c $($q.ToString())"; Name = 'sh' }
 }
 
 # Run one worktree setup command, for at most $TimeoutMinutes. Returns @{ code; timedOut; output }.
@@ -784,7 +798,8 @@ function Wait-OrphanSetup {
     $m = [regex]::Match("$(Get-Content $Marker -Raw -ErrorAction SilentlyContinue)", 'background pid=(\d+)')
     if (-not $m.Success) { return }
     $p = Get-Process -Id ([int]$m.Groups[1].Value) -ErrorAction SilentlyContinue
-    if (-not $p -or $p.ProcessName -notin 'cmd', 'sh') { return }
+    # /bin/sh is bash or dash under another name on most machines, and a Mac names it bash.
+    if (-not $p -or $p.ProcessName -notin 'cmd', 'sh', 'bash', 'dash') { return }
     Write-Log "  A background setup from an earlier run is still going (pid $($p.Id)) - waiting for it before setting up again"
     if (-not $p.WaitForExit([int]($TimeoutMinutes * 60000))) { Stop-ProcessTree -Id $p.Id }
 }
@@ -878,13 +893,9 @@ function Resolve-Worktree {
             $wtPath = Join-Path $WorktreeRoot $(if ($WorktreeName) { $WorktreeName } else { Get-WorktreeDirName "review-$ReviewBranch" })
 
             if (Test-Path $wtPath) {
-                $isKnown = $false
-                foreach ($line in (git -C $RepoDir worktree list --porcelain 2>$null)) {
-                    if ($line -like "worktree *") {
-                        $p = $line.Substring(9).Trim()
-                        if ($p -and ((Resolve-Path -LiteralPath $p -ErrorAction SilentlyContinue).Path -eq (Resolve-Path -LiteralPath $wtPath -ErrorAction SilentlyContinue).Path)) { $isKnown = $true }
-                    }
-                }
+                # By Get-FullPathKey, as every other worktree is recognised: Resolve-Path follows no
+                # link, and git names the worktree by its real path.
+                $isKnown = Test-RegisteredWorktree -RepoDir $RepoDir -Path $wtPath
                 if (-not $isKnown) {
                     return @{ ok = $false; reason = "'$wtPath' already exists but git does not know it as a worktree; move or remove it by hand" }
                 }
@@ -988,7 +999,9 @@ function Resolve-Worktree {
             # Already has a home - including one the user moved or made themselves. Use it where it is.
             $root = Get-FullPathKey $WorktreeRoot
             $here = Get-FullPathKey $existing
-            $ours = [bool]($root -and $here.StartsWith("$root\"))
+            # By this machine's separator: a hard-coded backslash made no worktree on a Mac the fleet's
+            # own, so one a killed run left dirty was refused as a person's on every retry.
+            $ours = [bool]($root -and $here.StartsWith("$root$([IO.Path]::DirectorySeparatorChar)"))
 
             # A rebase or merge an earlier run left stopped: kept under a ref and aborted, so this
             # phase starts on the branch and not on a detached HEAD halfway through rewriting it

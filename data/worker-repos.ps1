@@ -78,7 +78,34 @@ function Test-MultiRepo {
 function Get-FullPathKey {
     param([string]$Path)
     if (-not $Path) { return '' }
-    return [IO.Path]::GetFullPath($Path).TrimEnd('\', '/').ToLowerInvariant()
+    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\', '/')
+    # Asked here rather than of $OnWindows, which a caller that lifts this function may not have.
+    if (-not ($IsWindows -or $PSVersionTable.PSEdition -ne 'Core')) { $full = Resolve-PathLinks $full }
+    return $full.ToLowerInvariant()
+}
+
+# $Path with every link in the part of it that exists resolved, following a link's target through
+# links of its own - git names a worktree by its real path, and on a Mac the temp folder alone
+# (/var, a link to /private/var) makes the path a run was given another spelling of it. Written twice
+# and the two must agree: here, and PathIdentity.Canonical in C#. Never called on Windows, where
+# paths are compared as they always were.
+function Resolve-PathLinks {
+    param([string]$Path, [int]$Depth = 0)
+    $sep = [IO.Path]::DirectorySeparatorChar
+    $current = [IO.Path]::GetPathRoot($Path)
+    if (-not $current) { return $Path }
+    foreach ($part in ($Path.Substring($current.Length) -split [regex]::Escape("$sep") | Where-Object { $_ })) {
+        $next = [IO.Path]::Combine($current, $part)
+        try {
+            $info = [IO.FileInfo]::new($next)
+            if ($Depth -lt 32 -and $info.LinkTarget) {
+                $target = $info.ResolveLinkTarget($true)
+                if ($target) { $next = Resolve-PathLinks -Path $target.FullName.TrimEnd($sep) -Depth ($Depth + 1) }
+            }
+        } catch { }
+        $current = $next
+    }
+    return $current
 }
 
 # Is $Path one of $RepoDir's registered worktrees?

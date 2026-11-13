@@ -58,13 +58,26 @@ function Check {
 
 # The stand-in CLI: swallows the prompt on stdin, optionally warns on stderr the way the real one
 # does about a project's settings file, then prints whatever reply the case asked for.
-$fakeCli = Join-Path $root 'agent.cmd'
-Set-Content -Path $fakeCli -Encoding ascii -Value @'
+# A batch file on Windows; elsewhere the same stand-in as a shell script.
+if ($IsWindows -or $PSVersionTable.PSEdition -ne 'Core') {
+    $fakeCli = Join-Path $root 'agent.cmd'
+    Set-Content -Path $fakeCli -Encoding ascii -Value @'
 @echo off
 if defined FAKE_PROMPT_OUT (more > "%FAKE_PROMPT_OUT%") else (more > nul)
 if "%FAKE_WARN%"=="1" echo Permission allow rule (.claude\settings.json): Write(.cache/**) is not matched by file permission checks 1>&2
 if exist "%FAKE_REPLY%" type "%FAKE_REPLY%"
 '@
+}
+else {
+    $fakeCli = Join-Path $root 'agent'
+    [IO.File]::WriteAllText($fakeCli, @'
+#!/bin/sh
+if [ -n "$FAKE_PROMPT_OUT" ]; then cat > "$FAKE_PROMPT_OUT"; else cat > /dev/null; fi
+if [ "$FAKE_WARN" = "1" ]; then echo 'Permission allow rule (.claude/settings.json): Write(.cache/**) is not matched by file permission checks' 1>&2; fi
+if [ -f "$FAKE_REPLY" ]; then cat "$FAKE_REPLY"; fi
+'@.Replace("`r`n", "`n"))
+    & chmod +x $fakeCli
+}
 
 $ReflectProvider = [pscustomobject]@{
     Key = 'claude'; Exe = $fakeCli; DisplayName = 'stand-in'; ProcessPattern = @('no-such-process*'); SupportsReasoning = $true

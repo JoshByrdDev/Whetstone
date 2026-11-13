@@ -129,7 +129,7 @@ try {
     Add-Commit -Dir $s.hub -File 'other.txt' -Subject 'another ticket lands after it'
 
     $again = New-TicketWorktree -Repo $s -Branch 't-1' -MergeLocally $true
-    Check 're-speculation: same worktree' ([IO.Path]::GetFullPath($again.path)) $wt.path
+    Check 're-speculation: same worktree' (Get-FullPathKey $again.path) (Get-FullPathKey $wt.path)
     Check 're-speculation: branch fast-forwarded to local main' (Get-Sha $wt.path HEAD) (Get-Sha $s.hub main)
 
     Add-Commit -Dir $wt.path -File 'feature.txt' -Subject 'T1: follow-up'
@@ -373,44 +373,55 @@ exit 1
     # Its output was only ever in the log of whichever machine ran it; on a worker host that is
     # another computer, and "exit 1" on the ticket is all anyone saw.
     Write-Host "== a failed setup command carries its output"
+    # A setup command runs in this machine's own shell (Get-SetupShell): cmd on Windows, sh elsewhere.
+    # Each case is the same command in both, and is checked as that machine's shell spells it.
+    function Sh([string]$Cmd, [string]$Sh) { if ($OnWindows) { $Cmd } else { $Sh } }
     $sf = New-Hub 'setup-fail'
     $wt = New-TicketWorktree -Repo $sf -Branch 't-4' -MergeLocally $true
-    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo resolving packages& echo ERR_PNPM_LOCKFILE the lockfile is out of date 1>&2& exit /b 1')
+    $failing = Sh 'echo resolving packages& echo ERR_PNPM_LOCKFILE the lockfile is out of date 1>&2& exit /b 1' 'echo resolving packages; echo ERR_PNPM_LOCKFILE the lockfile is out of date 1>&2; exit 1'
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @($failing)
     $first = ($why -split "`n")[0]
-    Check 'first line: the command and its exit code' $first 'worktree setup command failed (exit 1): echo resolving packages& echo ERR_PNPM_LOCKFILE the lockfile is out of date 1>&2& exit /b 1'
+    Check 'first line: the command and its exit code' $first "worktree setup command failed (exit 1): $failing"
     Check 'its standard output is in the reason' ($why -match 'resolving packages') $true
     Check 'and its error output' ($why -match 'ERR_PNPM_LOCKFILE the lockfile is out of date') $true
     Check 'fenced, so it reads as output' ([regex]::Matches($why, '```').Count) 2
 
-    $quiet = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('exit /b 3')
-    Check 'a command that printed nothing reads as before' $quiet 'worktree setup command failed (exit 3): exit /b 3'
+    $silent = Sh 'exit /b 3' 'exit 3'
+    $quiet = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @($silent)
+    Check 'a command that printed nothing reads as before' $quiet "worktree setup command failed (exit 3): $silent"
     Check 'a setup that passes is still no reason at all' "[$(Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo fine'))]" '[]'
 
     # ---- A setup command cannot hang its run ------------------------------------
     Write-Host "== a setup command has a time limit and no stdin"
-    $marker = 'ping -n 47 127.0.0.1'
+    $marker = Sh 'ping -n 47 127.0.0.1' 'sleep 47'
+    $long = Sh "echo installing& $marker" "echo installing; $marker"
     $started = Get-Date
-    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @("echo installing& $marker") -TimeoutMinutes 0.05
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @($long) -TimeoutMinutes 0.05
     $took = ((Get-Date) - $started).TotalSeconds
-    Check 'a command past its limit is stopped and says so' (($why -split "`n")[0]) "worktree setup command timed out after 0.05 min and was stopped: echo installing& $marker"
+    Check 'a command past its limit is stopped and says so' (($why -split "`n")[0]) "worktree setup command timed out after 0.05 min and was stopped: $long"
     Check '... promptly, not when it would have finished' ($took -lt 25) $true
     Check '... with what it printed before then' ($why -match 'installing') $true
     Start-Sleep -Milliseconds 500
-    $left = @(Get-CimInstance Win32_Process -Filter "Name='PING.EXE' OR Name='ping.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*-n 47 127.0.0.1*' })
+    $left = if ($OnWindows) {
+        @(Get-CimInstance Win32_Process -Filter "Name='PING.EXE' OR Name='ping.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*-n 47 127.0.0.1*' })
+    } else {
+        @(Get-ProcessTable | Where-Object { $_.CommandLine -match '^sleep 47$' })
+    }
     Check '... and the process it started is gone too' $left.Count 0
 
+    $prompt = Sh 'set /p answer=Download pnpm? [Y/n] & if not defined answer exit /b 7' 'printf "Download pnpm? [Y/n] "; read answer; [ -n "$answer" ] || exit 7'
     $started = Get-Date
-    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('set /p answer=Download pnpm? [Y/n] & if not defined answer exit /b 7') -TimeoutMinutes 1
-    Check 'a prompt gets end-of-input and fails at once' (($why -split "`n")[0]) 'worktree setup command failed (exit 7): set /p answer=Download pnpm? [Y/n] & if not defined answer exit /b 7'
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @($prompt) -TimeoutMinutes 1
+    Check 'a prompt gets end-of-input and fails at once' (($why -split "`n")[0]) "worktree setup command failed (exit 7): $prompt"
     Check '... long before the limit' (((Get-Date) - $started).TotalSeconds -lt 15) $true
     Check '... with its question in the reason' ($why -match 'Download pnpm\?') $true
 
-    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo first&& echo second 1>&2&& exit /b 4')
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @((Sh 'echo first&& echo second 1>&2&& exit /b 4' 'echo first && echo second 1>&2 && exit 4'))
     Check "every step of an '&&' command is captured, error output too" (($why -match 'first') -and ($why -match 'second')) $true
     Check '... and the exit code is the last step''s' (($why -split "`n")[0] -match 'exit 4') $true
-    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('echo "a quoted value"& exit /b 2')
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @((Sh 'echo "a quoted value"& exit /b 2' 'echo "a quoted value"; exit 2'))
     Check 'a quoted argument survives the wrapping' ($why -match '"a quoted value"') $true
-    Check 'it runs in the worktree' "[$(Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @('if not exist README.md exit /b 9'))]" '[]'
+    Check 'it runs in the worktree' "[$(Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @((Sh 'if not exist README.md exit /b 9' '[ -f README.md ] || exit 9')))]" '[]'
 
     $many = New-Object System.Collections.Generic.List[string]
     1..40 | ForEach-Object { [void]$many.Add("line $_") }
@@ -435,7 +446,7 @@ exit 1
             -CopyFiles @() -Setup $Setup -ReviewBranch '' -MergeLocally $true -BackgroundSetup:$Background
     }
     $bg = New-Hub 'setup-bg'
-    $res = Resolve-Bg $bg '9' 'speculate' @('ping -n 8 127.0.0.1 >nul', 'echo done> installed.txt') -Background
+    $res = Resolve-Bg $bg '9' 'speculate' @((Sh 'ping -n 8 127.0.0.1 >nul' 'sleep 8'), 'echo done> installed.txt') -Background
     Check 'the worktree is handed back before the install ends' ($res.setupJob -and -not $res.setupJob.process.HasExited) $true
     Check '... with the install to wait for' ([bool]$res.setupJob) $true
     $bgMarker = Get-SetupFailedMarker -Path $res.path
@@ -443,11 +454,11 @@ exit 1
     Check 'waiting for it succeeds' (Wait-BackgroundSetup -Job $res.setupJob) $true
     Check '... every command ran, in order' (Test-Path (Join-Path $res.path 'installed.txt')) $true
     Check '... and the marker is gone' (Test-Path $bgMarker) $false
-    $again = Resolve-Bg $bg '9' 'implement' @('exit /b 5')
+    $again = Resolve-Bg $bg '9' 'implement' @((Sh 'exit /b 5' 'exit 5'))
     Check 'the next phase finds it set up and runs nothing' "$($again.ok)" 'True'
 
     $bf = New-Hub 'setup-bg-fail'
-    $res = Resolve-Bg $bf '10' 'speculate' @('exit /b 6', 'echo never> second.txt') -Background
+    $res = Resolve-Bg $bf '10' 'speculate' @((Sh 'exit /b 6' 'exit 6'), 'echo never> second.txt') -Background
     Check 'a failed background install reports false' (Wait-BackgroundSetup -Job $res.setupJob) $false
     Check '... stops at the failing command' (Test-Path (Join-Path $res.path 'second.txt')) $false
     Check '... and leaves the marker for the next phase' (Test-Path (Get-SetupFailedMarker -Path $res.path)) $true
@@ -455,9 +466,9 @@ exit 1
     Check 'the next phase sets it up again, in the foreground' "$($retry.ok) $(Test-Path (Join-Path $retry.path 'retried.txt'))" 'True True'
 
     $bo = New-Hub 'setup-bg-orphan'
-    $null = Resolve-Bg $bo '11' 'speculate' @('ping -n 5 127.0.0.1 >nul', 'echo first> orphan.txt') -Background
+    $null = Resolve-Bg $bo '11' 'speculate' @((Sh 'ping -n 5 127.0.0.1 >nul' 'sleep 5'), 'echo first> orphan.txt') -Background
     # Its run exits without waiting, and the next phase is claimed at once.
-    $next = Resolve-Bg $bo '11' 'implement' @('if not exist orphan.txt exit /b 8')
+    $next = Resolve-Bg $bo '11' 'implement' @((Sh 'if not exist orphan.txt exit /b 8' '[ -f orphan.txt ] || exit 8'))
     Check 'an install left running is waited for before setting up again' "$($next.ok)" 'True'
 
     $bn = New-Hub 'setup-bg-none'
@@ -632,7 +643,7 @@ exit 1
     $again = Resolve-Worktree -RepoDir $nm.hub -WorktreeRoot $nm.wt -Skill 'implement' -TicketId '7' `
         -RecordedBranch 'jb/PROJ-123-renamed' -BoardBranch 'jb/PROJ-123-renamed' -IssueBranchToken 'PROJ-123' -BaseBranch 'main' -BranchPrefix 'jb/' `
         -CopyFiles @() -Setup @() -ReviewBranch '' -MergeLocally $false
-    Check 'after a rename, the next run attaches to the same worktree' ([IO.Path]::GetFullPath($again.path)) ([IO.Path]::GetFullPath($nwt2.path))
+    Check 'after a rename, the next run attaches to the same worktree' (Get-FullPathKey $again.path) (Get-FullPathKey $nwt2.path)
     Check '... on the new name' (git -C $again.path rev-parse --abbrev-ref HEAD) 'jb/PROJ-123-renamed'
     Check '... and makes nothing new' $again.created $false
 }

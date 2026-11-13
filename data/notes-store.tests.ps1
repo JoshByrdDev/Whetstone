@@ -184,8 +184,16 @@ Check 'sections: removing a line leaves the others where they are' ((@('build-ca
 
 # A merge whose survivor was in Unsorted while the note it absorbed had been placed by a person:
 # the merged note takes the person's place.
-$fake = Join-Path $root 'agent.cmd'
-Set-Content -Path $fake -Encoding ascii -Value "@echo off`r`nmore > nul`r`ntype `"%FAKE_REPLY%`"`r`n"
+# A batch file on Windows; elsewhere the same stand-in as a shell script.
+if ($IsWindows -or $PSVersionTable.PSEdition -ne 'Core') {
+    $fake = Join-Path $root 'agent.cmd'
+    Set-Content -Path $fake -Encoding ascii -Value "@echo off`r`nmore > nul`r`ntype `"%FAKE_REPLY%`"`r`n"
+}
+else {
+    $fake = Join-Path $root 'agent'
+    [IO.File]::WriteAllText($fake, "#!/bin/sh`ncat > /dev/null`ncat `"`$FAKE_REPLY`"`n")
+    & chmod +x $fake
+}
 $cmd = [pscustomobject]@{ Exe = $fake; Args = @() }
 $env:FAKE_REPLY = Join-Path $root 'merge-reply.txt'
 [IO.File]::WriteAllText($env:FAKE_REPLY, "KEEP: machine-a`n---`nname: machine-a`ndescription: `"merged machine-a and release-day`"`nmetadata:`n  last-confirmed: 2026-11-11 12:00`n---`n`nThe machine-a fact and the release-day fact, merged into one statement with every detail of both kept.`n")

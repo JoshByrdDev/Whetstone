@@ -128,8 +128,10 @@ try {
     Check '... and the project-level setup and copy' "$($single[0].setup)|$($single[0].copy)" 'npm ci|.env'
     Check 'the set of one is not several' (Test-MultiRepo $single) $false
 
+    # A root this machine has: Join-Path refuses a drive that does not exist, and a Mac has no C:.
+    $reposRoot = if ($IsWindows -or $PSVersionTable.PSEdition -ne 'Core') { 'C:\Repos\Alpha' } else { '/Repos/Alpha' }
     $several = @(Get-RepoMembers -Project ([pscustomobject]@{
-        projectPath = 'C:\Repos\Alpha'; baseBranch = 'develop'; worktreeSetup = @('ignored')
+        projectPath = $reposRoot; baseBranch = 'develop'; worktreeSetup = @('ignored')
         repos = @(
             [pscustomobject]@{ dir = 'alpha-web'; worktreeSetup = @('pnpm install', ''); path = 'D:\elsewhere\alpha-web' },
             [pscustomobject]@{ dir = 'alpha-api'; baseBranch = 'main' },
@@ -137,7 +139,7 @@ try {
     }) -DefaultBase 'trunk')
     Check 'repos: one member each, in order' (Dirs $several) 'alpha-web,alpha-api,alpha-infra'
     Check "a member's path from the claim wins" $several[0].hub 'D:\elsewhere\alpha-web'
-    Check '... else it is under projectPath' $several[1].hub 'C:\Repos\Alpha\alpha-api'
+    Check '... else it is under projectPath' $several[1].hub ([IO.Path]::Combine($reposRoot, 'alpha-api'))
     Check "a member's base falls back to the project's" $several[0].baseBranch 'develop'
     Check '... and its own wins' $several[1].baseBranch 'main'
     Check 'empty setup entries are dropped' "$($several[0].setup)" 'pnpm install'
@@ -180,11 +182,17 @@ try {
 
     # Each setup waits for the other's to have started. One after the other, the first would wait
     # for a setup that had not begun and give up - so passing proves they ran at the same time.
+    # In this machine's own setup shell: cmd on Windows, sh elsewhere.
+    $onWin = $IsWindows -or $PSVersionTable.PSEdition -ne 'Core'
     $barrier = {
         param([string]$Mine, [string]$Theirs)
-        "echo.> ..\$Mine.started& echo waiting for $Theirs& (for /l %i in (1,1,60) do @(if exist ..\$Theirs.started exit /b 0) & ping -n 2 127.0.0.1 >nul)& if not exist ..\$Theirs.started exit /b 5"
+        if ($onWin) {
+            "echo.> ..\$Mine.started& echo waiting for $Theirs& (for /l %i in (1,1,60) do @(if exist ..\$Theirs.started exit /b 0) & ping -n 2 127.0.0.1 >nul)& if not exist ..\$Theirs.started exit /b 5"
+        } else {
+            'touch ../{0}.started; echo waiting for {1}; i=0; while [ $i -lt 60 ]; do [ -f ../{1}.started ] && exit 0; sleep 1; i=$((i+1)); done; exit 5' -f $Mine, $Theirs
+        }
     }
-    $count = 'echo.>> setup-count.txt'
+    $count = if ($onWin) { 'echo.>> setup-count.txt' } else { 'echo >> setup-count.txt' }
     $members = @(
         (Member 'alpha-web' $web -Setup @((& $barrier 'web' 'api'), $count)),
         (Member 'alpha-api' $api -Base 'develop' -Setup @((& $barrier 'api' 'web'), $count)),
@@ -300,7 +308,7 @@ try {
     if (-not $after.ok) { Write-Host "      $($after.reason)" -ForegroundColor Red }
     Check '... in the moved workspace' $after.path $renamedWs
     Check '... making nothing new' $after.created $false
-    Check '... every repo where it was moved to' "$([IO.Path]::GetFullPath((Find $after 'alpha-web').path))|$([IO.Path]::GetFullPath((Find $after 'alpha-infra').path))" "$(Join-Path $renamedWs 'alpha-web')|$(Join-Path $renamedWs 'alpha-infra')"
+    Check '... every repo where it was moved to' "$(Get-FullPathKey (Find $after 'alpha-web').path)|$(Get-FullPathKey (Find $after 'alpha-infra').path)" "$(Get-FullPathKey (Join-Path $renamedWs 'alpha-web'))|$(Get-FullPathKey (Join-Path $renamedWs 'alpha-infra'))"
 
     # ---- A peer review ------------------------------------------------------------------
     # Somebody else's branch in alpha-api, forked from its own base, as their pull request has it.
@@ -342,6 +350,7 @@ try {
     git -C $theirs push -q origin someone/theirs *> $null
     $rv2 = Open-Workspace -Members $members -Branch '' -Skill 'review-pr' -Review 'someone/theirs' -ReviewRepo 'alpha-api'
     Check 'the next pass: ok' $rv2.ok $true
+    if (-not $rv2.ok) { Write-Host "      $($rv2.reason)" -ForegroundColor Red }
     Check '... at their new commit' (Get-Sha $rApi HEAD) (Get-Sha $theirs HEAD)
     Check '... in the same workspace, set up once' "$($rv2.path)|$((Get-Content (Join-Path $rApi 'setup-count.txt')).Count)" "$($rv.path)|1"
 
@@ -359,8 +368,8 @@ try {
     # ---- Setup that fails -----------------------------------------------------------
     Write-Host "== setup that fails"
     $bad = @(
-        (Member 'alpha-web' $web -Setup @('echo web broke& exit /b 3')),
-        (Member 'alpha-api' $api -Base 'develop' -Setup @('echo api broke& exit /b 4')),
+        (Member 'alpha-web' $web -Setup @($(if ($onWin) { 'echo web broke& exit /b 3' } else { 'echo web broke; exit 3' }))),
+        (Member 'alpha-api' $api -Base 'develop' -Setup @($(if ($onWin) { 'echo api broke& exit /b 4' } else { 'echo api broke; exit 4' }))),
         (Member 'alpha-infra' $infra -ReadOnly))
     $broken = Open-Workspace -Members $bad -Branch 'jb/PROJ-3'
     Check 'both failures block it' $broken.ok $false
@@ -381,7 +390,7 @@ try {
     # which are processes of their own: both have to see it.
     Write-Host "== what setup can see"
     $env:WHETSTONE_PROJECT_DIR = Join-Path $root 'the-project-folder'
-    $seeIt = 'echo %WHETSTONE_PROJECT_DIR%> setup-dir.txt'
+    $seeIt = if ($onWin) { 'echo %WHETSTONE_PROJECT_DIR%> setup-dir.txt' } else { 'echo "$WHETSTONE_PROJECT_DIR" > setup-dir.txt' }
     $seen = Open-Workspace -Members @((Member 'alpha-web' $web -Setup @($seeIt)), (Member 'alpha-api' $api -Base 'develop' -Setup @($seeIt))) -Branch 'jb/PROJ-6'
     Check 'parallel setup jobs see the project folder' ((Get-Content (Join-Path (Find $seen 'alpha-web').path 'setup-dir.txt')).Trim()) $env:WHETSTONE_PROJECT_DIR
     Check '... every one of them' ((Get-Content (Join-Path (Find $seen 'alpha-api').path 'setup-dir.txt')).Trim()) $env:WHETSTONE_PROJECT_DIR

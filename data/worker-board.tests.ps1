@@ -308,7 +308,11 @@ try {
     Add-Commit -Dir $cwt -File 'h.txt' -Subject 'T3: and its tests'
     $sent = Send-BranchToBoard -WorkDir $cwt -RunId 'run33'      # refused: never accepted, never agreed
     $workerTip = Get-Sha $e.clone t-3
-    git -C $bwt cherry-pick --quiet "$(Get-Sha $bwt HEAD)..$($sent.sha)" *> $null
+    # Dated apart from the originals: picked within the same second onto the same parent, a commit is
+    # byte for byte the one it copies, ids and all, and the board host would not be "under new ids".
+    $env:GIT_COMMITTER_DATE = '2001-02-03T04:05:06Z'
+    try { git -C $bwt cherry-pick --quiet "$(Get-Sha $bwt HEAD)..$($sent.sha)" *> $null }
+    finally { Remove-Item Env:GIT_COMMITTER_DATE }
     Check 'setup: the board host has the same work under new ids' `
         "$((Get-Sha $e.board t-3) -ne $workerTip) $((Get-Sha $e.board 't-3^{tree}') -eq (Get-Sha $e.clone 't-3^{tree}'))" 'True True'
     $r = Sync-Branch -Pair $e -Branch 't-3'

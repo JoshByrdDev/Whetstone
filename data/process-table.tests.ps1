@@ -56,8 +56,11 @@ try {
     # A shell that starts a grandchild and waits on it: the kill has to take both.
     $marker = Join-Path ([IO.Path]::GetTempPath()) ("pt-" + [guid]::NewGuid().ToString('N') + '.txt')
     $inner = "Start-Sleep 60"
-    $outer = "`$c = Start-Process -FilePath '$Self' -ArgumentList '-NoProfile','-Command','$inner' -PassThru -WindowStyle Hidden; Set-Content -Path '$marker' -Value `$c.Id; Start-Sleep 60"
-    $p = Start-Process -FilePath $Self -ArgumentList '-NoProfile', '-Command', $outer -PassThru -WindowStyle Hidden
+    # Hidden on Windows; elsewhere there are no windows and Start-Process refuses -WindowStyle.
+    $Hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+    $innerHide = if ($IsWindows) { ' -WindowStyle Hidden' } else { '' }
+    $outer = "`$c = Start-Process -FilePath '$Self' -ArgumentList '-NoProfile','-Command','$inner' -PassThru$innerHide; Set-Content -Path '$marker' -Value `$c.Id; Start-Sleep 60"
+    $p = Start-Process -FilePath $Self -ArgumentList '-NoProfile', '-Command', $outer -PassThru @Hide
     $deadline = (Get-Date).AddSeconds(20)
     while (-not (Test-Path $marker) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
     $child = [int]("$(Get-Content $marker -ErrorAction SilentlyContinue)".Trim())
@@ -77,7 +80,20 @@ try {
     $s = Get-SetupShell -Script '( npm ci ) 2>&1' -Windows $true
     Check 'Windows: cmd, AutoRun skipped' "$($s.Exe) $($s.Args)" 'cmd.exe /d /s /c "( npm ci ) 2>&1"'
     $s = Get-SetupShell -Script '( npm ci ) 2>&1 && ( dotnet restore ) 2>&1' -Windows $false
-    Check 'elsewhere: sh -c, the script one argument' "$($s.Exe)|$($s.Args -join '|')" '/bin/sh|-c|( npm ci ) 2>&1 && ( dotnet restore ) 2>&1'
+    Check 'elsewhere: sh -c, the script quoted as one argument' "$($s.Exe) $($s.Args)" '/bin/sh -c "( npm ci ) 2>&1 && ( dotnet restore ) 2>&1"'
+    if (-not $OnWindows) {
+        # What sh is actually handed, through Start-Process the way a setup is started: the shape
+        # alone passed while every setup command on a Mac failed with a syntax error.
+        $tricky = 'printf "%s|" "two words" "a \"quoted\" one" \\back $HOME > /dev/null; ( echo ran ) 2>&1'
+        $s = Get-SetupShell -Script $tricky -Windows $false
+        $out = Join-Path ([IO.Path]::GetTempPath()) ("sh-" + [guid]::NewGuid().ToString('N') + '.txt')
+        $p = Start-Process -FilePath $s.Exe -ArgumentList $s.Args -RedirectStandardOutput $out -NoNewWindow -PassThru -Wait
+        Check 'elsewhere: sh runs the script it was given' "$($p.ExitCode) $((Get-Content $out -Raw).Trim())" '0 ran'
+        $s = Get-SetupShell -Script 'printf "%s|" "two words" "a \"q\"" ''back\slash\''' -Windows $false
+        $null = Start-Process -FilePath $s.Exe -ArgumentList $s.Args -RedirectStandardOutput $out -NoNewWindow -PassThru -Wait
+        Check '... every quote and backslash as written' ((Get-Content $out -Raw).TrimEnd()) 'two words|a "q"|back\slash\|'
+        Remove-Item $out -ErrorAction SilentlyContinue
+    }
     Check '... named sh, which an orphaned setup is told apart by' $s.Name 'sh'
     Check 'unasked, it is this machine''s' (Get-SetupShell -Script 'x').Name $(if ($OnWindows) { 'cmd' } else { 'sh' })
 }

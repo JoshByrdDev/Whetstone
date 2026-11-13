@@ -427,11 +427,18 @@ $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $
 $mine = 'C:\Whetstone\data\worker.ps1'
 Check 'own script, unquoted' (Test-RunsScript -CommandLine "powershell -ExecutionPolicy Bypass -File $mine -ClaimFile x -Agent 1" -Script $mine) $true
 Check 'own script, quoted' (Test-RunsScript -CommandLine "powershell -ExecutionPolicy Bypass -File `"$mine`" -Agent 1" -Script $mine) $true
-Check 'own script, other case and slashes' (Test-RunsScript -CommandLine 'powershell -File c:/whetstone/DATA/worker.ps1 -Agent 1' -Script $mine) $true
+# Case and either slash are Windows' own; a Mac's command lines are spelled as its paths are.
+if ($IsWindows) { Check 'own script, other case and slashes' (Test-RunsScript -CommandLine 'powershell -File c:/whetstone/DATA/worker.ps1 -Agent 1' -Script $mine) $true }
 Check "another checkout's worker.ps1 is not ours" (Test-RunsScript -CommandLine 'powershell -File C:\Whetstone-worker\data\worker.ps1 -Agent 5 -RunId 812' -Script $mine) $false
 Check 'a file merely ending in the name is not ours' (Test-RunsScript -CommandLine 'powershell -File C:\Whetstone\data\old-worker.ps1' -Script $mine) $false
 Check 'a -Command diagnostic that mentions it is not a run' (Test-RunsScript -CommandLine "powershell -Command Get-CimInstance -Filter x | ? CommandLine -like '*-File*worker.ps1*'" -Script $mine) $false
-Check 'a relative -File counts as ours, as before' (Test-RunsScript -CommandLine 'powershell -File data\worker.ps1 -Agent 1' -Script $mine) $true
+if ($IsWindows) { Check 'a relative -File counts as ours, as before' (Test-RunsScript -CommandLine 'powershell -File data\worker.ps1 -Agent 1' -Script $mine) $true }
+else {
+    $macMine = '/Users/josh/Whetstone/data/worker.ps1'
+    Check 'a Mac: own script' (Test-RunsScript -CommandLine "pwsh -ExecutionPolicy Bypass -File $macMine -Agent 1" -Script $macMine) $true
+    Check 'a Mac: a relative -File counts as ours, as before' (Test-RunsScript -CommandLine 'pwsh -File data/worker.ps1 -Agent 1' -Script $macMine) $true
+    Check "a Mac: another checkout's is not ours" (Test-RunsScript -CommandLine 'pwsh -File /Users/josh/Whetstone-worker/data/worker.ps1' -Script $macMine) $false
+}
 Check 'no -File at all is not a run' (Test-RunsScript -CommandLine 'powershell worker.ps1' -Script $mine) $false
 Check 'no command line is not a run' (Test-RunsScript -CommandLine '' -Script $mine) $false
 Check "the board's own launch of its heartbeat" (Test-RunsScript -CommandLine '"powershell" -ExecutionPolicy Bypass -File "C:\Whetstone\data\heartbeat.ps1"' -Script 'C:\Whetstone\data\heartbeat.ps1') $true
