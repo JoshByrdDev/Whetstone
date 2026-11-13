@@ -202,13 +202,44 @@ function Get-ClaudeCredentialsPath {
     return [IO.Path]::Combine($(if ($env:USERPROFILE) { $env:USERPROFILE } else { $env:HOME }), '.claude', '.credentials.json')
 }
 
+# The keychain item the CLI keeps a login in on macOS, where it does not write .credentials.json:
+# 'Claude Code-credentials', plus '-' and the first 8 hex digits of the SHA-256 of the config folder
+# when CLAUDE_CONFIG_DIR is set. Written twice and the two must agree: here, and
+# ClaudeCredentialStore.KeychainService in C#.
+function Get-ClaudeKeychainService {
+    param([string]$ConfigDir)
+    $secure = [Environment]::GetEnvironmentVariable('CLAUDE_SECURESTORAGE_CONFIG_DIR')
+    if (-not $ConfigDir) { $ConfigDir = $env:CLAUDE_CONFIG_DIR }
+    if ($null -ne $secure) { if ($secure -eq '') { return 'Claude Code-credentials' } ; $hashed = $secure }
+    elseif (-not $ConfigDir) { return 'Claude Code-credentials' }
+    else { $hashed = $ConfigDir }
+    $bytes = [Text.Encoding]::UTF8.GetBytes($hashed.Normalize([Text.NormalizationForm]::FormC))
+    $hex = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+    return "Claude Code-credentials-$($hex.Substring(0, 8))"
+}
+
+# Whether the CLI has signed a login in: its credential file, or on macOS its keychain item. Asks
+# whether the item exists without reading the secret. $script:ClaudeKeychainProbe replaces the
+# keychain question in tests, which must not depend on who is signed in on the machine running them.
+function Test-ClaudeLogin {
+    param([string]$ConfigDir)
+    if (Test-Path -LiteralPath (Get-ClaudeCredentialsPath -ConfigDir $ConfigDir)) { return $true }
+    # Off a Mac the file is the whole answer, and nothing below runs - so Windows is exactly as it was.
+    if (-not $script:ClaudeKeychainProbe -and -not $IsMacOS) { return $false }
+    $service = Get-ClaudeKeychainService -ConfigDir $ConfigDir
+    if ($script:ClaudeKeychainProbe) { return [bool](& $script:ClaudeKeychainProbe $service) }
+    $account = if ($env:USER -match '^[A-Za-z0-9._-]+$') { $env:USER } else { 'claude-code-user' }
+    & /usr/bin/security find-generic-password -a $account -s $service *> $null
+    return $LASTEXITCODE -eq 0
+}
+
 # Who a profile file says its login is, as @{ uuid; email }, or $null. Cached by the file's time:
 # a runner asks on every check-in, and the CLI rewrites the file far less often than that.
 $script:ClaudeIdentityCache = @{}
 function Read-ClaudeIdentity {
     param([string]$Path)
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $null }
-    $stamp = (Get-Item -LiteralPath $Path).LastWriteTimeUtc
+    $stamp = (Get-Item -LiteralPath $Path -Force).LastWriteTimeUtc
     $hit = $script:ClaudeIdentityCache[$Path]
     if ($hit -and $hit.Stamp -eq $stamp) { return $hit.Id }
     $id = $null
@@ -245,7 +276,7 @@ function Get-ClaudeLogins {
     foreach ($e in $entries) {
         if ($seen.ContainsKey($e.name.ToLowerInvariant())) { continue }
         $seen[$e.name.ToLowerInvariant()] = $true
-        if (-not (Test-Path -LiteralPath (Get-ClaudeCredentialsPath -ConfigDir $e.configDir))) { continue }
+        if (-not (Test-ClaudeLogin -ConfigDir $e.configDir)) { continue }
         $id = Read-ClaudeIdentity -Path (Get-ClaudeProfilePath -ConfigDir $e.configDir)
         if (-not $id) { continue }
         $null = $logins.Add([pscustomobject]@{ name = $e.name; configDir = $e.configDir; uuid = $id.uuid; email = $id.email })

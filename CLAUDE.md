@@ -504,6 +504,9 @@ discoverable from the code:
   Accounts are matched by id because each machine's names are its own. Where a login's profile
   lives (`~/.claude.json` for the CLI's own, beside the credentials otherwise) is written twice and
   the two must agree: `ClaudeAccounts.ProfileOf` and `Get-ClaudeProfilePath` in `heartbeat-common.ps1`.
+  So is where its token is: `.credentials.json` on Windows, and on a Mac the keychain item the CLI
+  names after the config folder, falling back to that file - `ClaudeCredentialStore` and
+  `Get-ClaudeKeychainService` / `Test-ClaudeLogin`.
 - **A ticket's files sit at the same path under each machine's data root** (`HostDataMirror`).
   Attachments go to the worker host when a run starts, and QA captures come back as they land. A
   route or tool that hands an agent a path under the data root has to keep to that, or a worker

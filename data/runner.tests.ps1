@@ -364,10 +364,12 @@ exit 3
     # (it reads the config and starts a provider), so those functions are lifted out of it too.
     Write-Host "== Get-ClaudeLogins"
     $common = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot 'heartbeat-common.ps1'), [ref]$null, [ref]$null)
-    foreach ($lifted in 'Get-ClaudeProfilePath', 'Get-ClaudeCredentialsPath', 'Read-ClaudeIdentity', 'Get-ClaudeLogins') {
+    foreach ($lifted in 'Get-ClaudeProfilePath', 'Get-ClaudeCredentialsPath', 'Get-ClaudeKeychainService', 'Test-ClaudeLogin', 'Read-ClaudeIdentity', 'Get-ClaudeLogins') {
         . ([scriptblock]::Create(($common.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $args[0].Name -eq $lifted }, $false) | Select-Object -First 1).Extent.Text))
     }
     $script:ClaudeIdentityCache = @{}
+    # No keychain here, whoever is signed in on the machine running this.
+    $script:ClaudeKeychainProbe = { param($service) $false }
     $home1 = Join-Path $root 'home'
     $second = Join-Path $root 'logins\second'
     $third = Join-Path $root 'logins\third'
@@ -393,6 +395,14 @@ exit 3
         Check 'signed-in logins only, the CLI''s own first' (($logins | ForEach-Object { "$($_.name)=$($_.uuid)" }) -join ',') 'Default=uuid-a,Second=uuid-b'
         Check 'the CLI''s own login has no folder of its own' "$($logins[0].configDir)" ''
         Check 'an email when the profile has one' "$($logins[0].email)" 'a@example.com'
+
+        # On macOS the CLI keeps the login in the keychain and writes no credential file.
+        $keychained = Get-ClaudeKeychainService -ConfigDir $third
+        Check 'the default login''s keychain item has no suffix' (Get-ClaudeKeychainService -ConfigDir '') 'Claude Code-credentials'
+        Check 'a login folder''s item is suffixed by its hash' ($keychained -match '^Claude Code-credentials-[0-9a-f]{8}$') $true
+        $script:ClaudeKeychainProbe = { param($service) $service -eq $keychained }
+        Check 'a login kept in the keychain counts' ((@(Get-ClaudeLogins) | ForEach-Object { $_.name }) -join ',') 'Default,Second,Third'
+        $script:ClaudeKeychainProbe = { param($service) $false }
 
         Write-Host "== Find-LoginAccountId"
         Check 'a pause from a login folder names its account' (Find-LoginAccountId -Logins $logins -ConfigDir "$second\") 'uuid-b'
