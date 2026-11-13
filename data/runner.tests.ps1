@@ -14,9 +14,13 @@ $ErrorActionPreference = 'Continue'
 # The PowerShell running these tests starts the processes they watch, so a run under 7 proves the
 # runner finds and starts 7's processes, and a run under 5.1 proves 5.1's.
 $Self = (Get-Process -Id $PID).Path
+# Hidden on Windows; elsewhere there are no windows and Start-Process refuses -WindowStyle.
+$Hide = if ($IsWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
 # What runner.ps1 gets from heartbeat-common.ps1, which the lifted functions do not load.
 $PsHost = $Self
 . (Join-Path $PSScriptRoot 'process-table.ps1')
+# ...and what runner.ps1 sets at its own top level.
+$HiddenWindow = $Hide
 $runner = Join-Path $PSScriptRoot 'runner.ps1'
 
 function Write-Log { param([string]$Message) }
@@ -80,23 +84,32 @@ try {
 
     # ---- Convert-ClaimForHost --------------------------------------------------
     Write-Host "== Convert-ClaimForHost"
-    $kitDir = 'D:\Whetstone\data\projects\alpha'
-    $c = Convert-ClaimForHost -Claim (New-Claim) -HostName 'bravo-host' -Map @{ path = 'D:\src\alpha\'; worktreeRoot = '' } -ProjectDir $kitDir
+    # This machine's paths are spelled as this machine spells them; the claim's are the board
+    # host's, which may be another kind of machine altogether.
+    $src = [IO.Path]::Combine($root, 'src')
+    $kitDir = [IO.Path]::Combine($root, 'Whetstone', 'data', 'projects', 'alpha')
+    $c = Convert-ClaimForHost -Claim (New-Claim) -HostName 'bravo-host' -Map @{ path = [IO.Path]::Combine($src, 'alpha') + [IO.Path]::DirectorySeparatorChar; worktreeRoot = '' } -ProjectDir $kitDir
     Check 'stamped with the host' $c.host 'bravo-host'
-    Check 'repo is the clone here' $c.project.projectPath 'D:\src\alpha'
-    Check 'worktree root defaults beside the clone, as the board host does' $c.project.worktreeRoot 'D:\src\.worktrees\alpha'
+    Check 'repo is the clone here' $c.project.projectPath ([IO.Path]::Combine($src, 'alpha'))
+    Check 'worktree root defaults beside the clone, as the board host does' $c.project.worktreeRoot ([IO.Path]::Combine($src, '.worktrees', 'alpha'))
     Check 'data dir is the kit' $c.project.dataDir $kitDir
-    Check "skill file is the kit's" $c.project.skillFile 'D:\Whetstone\data\projects\alpha\skills\implement\skill.md'
-    Check "notes are the kit's copy" $c.project.memoryDir 'D:\Whetstone\data\projects\alpha\_notes'
-    Check "notes index is the kit's copy" $c.project.memoryIndex 'D:\Whetstone\data\projects\alpha\_notes\MEMORY.md'
+    Check "skill file is the kit's" $c.project.skillFile ([IO.Path]::Combine($kitDir, 'skills', 'implement', 'skill.md'))
+    Check "notes are the kit's copy" $c.project.memoryDir ([IO.Path]::Combine($kitDir, '_notes'))
+    Check "notes index is the kit's copy" $c.project.memoryIndex ([IO.Path]::Combine($kitDir, '_notes', 'MEMORY.md'))
     Check 'run id kept' $c.runId 812
     Check 'base and delivery kept' "$($c.project.baseBranch) $($c.project.mergeInsteadOfPr)" 'main True'
     Check 'branch kept' $c.ticket.branch 't-12'
     Check "the board host's data root, for the prompt's path rule" $c.boardDataRoot 'C:\board\Whetstone\data'
 
-    $c = Convert-ClaimForHost -Claim (New-Claim -MemoryDir '') -HostName 'bravo-host' -Map @{ path = 'D:\src\alpha'; worktreeRoot = 'E:\wt' } -ProjectDir $kitDir
-    Check 'worktree root from host.json when given' $c.project.worktreeRoot 'E:\wt'
+    $wt = [IO.Path]::Combine($root, 'wt')
+    $c = Convert-ClaimForHost -Claim (New-Claim -MemoryDir '') -HostName 'bravo-host' -Map @{ path = [IO.Path]::Combine($src, 'alpha'); worktreeRoot = $wt } -ProjectDir $kitDir
+    Check 'worktree root from host.json when given' $c.project.worktreeRoot $wt
     Check 'a project with no notes store still has none' "[$($c.project.memoryDir)]" '[]'
+
+    Write-Host "== Get-BoardDataRoot"
+    Check 'a Windows board host, read anywhere' (Get-BoardDataRoot 'C:\board\Whetstone\data\projects\alpha\') 'C:\board\Whetstone\data'
+    Check 'a Mac board host, read anywhere' (Get-BoardDataRoot '/Users/josh/Whetstone/data/projects/alpha') '/Users/josh/Whetstone/data'
+    Check 'none is none' "[$(Get-BoardDataRoot '')]" '[]'
 
     # ---- Install-ProjectKit ----------------------------------------------------
     Write-Host "== Install-ProjectKit"
@@ -122,10 +135,10 @@ try {
 
     # ---- Get-RunReport ---------------------------------------------------------
     Write-Host "== Get-RunReport"
-    $done = Start-Process -FilePath 'cmd' -ArgumentList '/c', 'exit 7' -PassThru -WindowStyle Hidden
+    $done = Start-Process -FilePath $Self -ArgumentList '-NoProfile', '-Command', 'exit 7' -PassThru @Hide
     try { $null = $done.Handle } catch { }
     $done.WaitForExit()
-    $live = Start-Process -FilePath $Self -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 30' -PassThru -WindowStyle Hidden
+    $live = Start-Process -FilePath $Self -ArgumentList '-NoProfile', '-Command', 'Start-Sleep 30' -PassThru @Hide
     try {
         $now = Get-Date
         $runs = @{
@@ -286,8 +299,8 @@ try {
     New-Item -ItemType Directory -Path (Split-Path $elsewhere) -Force | Out-Null
     Set-Content -Path $elsewhere -Value 'Start-Sleep 30' -Encoding ascii
     Check 'no runner running: none found' @(Get-RunnerProcesses).Count 0
-    $p1 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
-    $p2 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $elsewhere) -PassThru -WindowStyle Hidden
+    $p1 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru @Hide
+    $p2 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $elsewhere) -PassThru @Hide
     try {
         Start-Sleep -Milliseconds 800
         $found = @(Get-RunnerProcesses)
@@ -303,8 +316,8 @@ try {
     $otherRunner = Join-Path $otherCheckout 'data\runner.ps1'
     New-Item -ItemType Directory -Path (Split-Path $otherRunner) -Force | Out-Null
     Set-Content -Path $otherRunner -Value 'Start-Sleep 30' -Encoding ascii
-    $p3 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherRunner) -PassThru -WindowStyle Hidden
-    $p4 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru -WindowStyle Hidden
+    $p3 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherRunner) -PassThru @Hide
+    $p4 = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $RunnerScript) -PassThru @Hide
     try {
         Start-Sleep -Milliseconds 800
         $others = @(Find-OtherRunners)
@@ -347,8 +360,8 @@ exit 3
     $otherScript = Join-Path $DataRoot 'something-else.ps1'
     Set-Content -Path $fakeRunner -Value 'Start-Sleep 30' -Encoding ascii
     Set-Content -Path $otherScript -Value 'Start-Sleep 30' -Encoding ascii
-    $sup = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeRunner) -PassThru -WindowStyle Hidden
-    $other = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherScript) -PassThru -WindowStyle Hidden
+    $sup = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $fakeRunner) -PassThru @Hide
+    $other = Start-Process -FilePath $Self -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $otherScript) -PassThru @Hide
     try {
         Start-Sleep -Milliseconds 800
         Check 'a live supervisor running this runner.ps1' (Test-SupervisorAlive -SupervisorPid $sup.Id) $true
@@ -473,7 +486,12 @@ exit 3
     function Get-Global { param([string]$Key) if ($Key -eq 'psHost') { return 'powershell' } return $null }
     $got = Get-PsHost
     Check 'never Windows PowerShell, whatever an old psHost setting says' ($got -notmatch '(?i)(^|[\\/])powershell(\.exe)?$') $true
-    if ($PSVersionTable.PSEdition -eq 'Core') {
+    if (-not $IsWindows -and $PSVersionTable.PSEdition -eq 'Core') {
+        # Off Windows, by name: this very PowerShell's path can be Homebrew's inner binary, which skips
+        # the wrapper that tells it where its .NET is.
+        Check 'run on 7: pwsh by name, off Windows' $got 'pwsh'
+    }
+    elseif ($PSVersionTable.PSEdition -eq 'Core') {
         Check 'run on 7: this very PowerShell' $got $Self
     }
     else {

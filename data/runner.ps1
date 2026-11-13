@@ -44,6 +44,11 @@ $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $DataRoot "heartbeat-common.ps1")
 . (Join-Path $DataRoot "machine-info.ps1")
 
+# How a process this starts is kept out of sight: hidden on Windows, where each would otherwise open
+# a console window, and nothing at all elsewhere, where there are no windows and Start-Process refuses
+# -WindowStyle outright. Splatted as @HiddenWindow.
+$HiddenWindow = if ($OnWindows) { @{ WindowStyle = 'Hidden' } } else { @{} }
+
 $ErrorActionPreference = 'Continue'
 $env:GCM_INTERACTIVE     = 'never'
 $env:GIT_TERMINAL_PROMPT = '0'
@@ -140,6 +145,19 @@ function Read-HostConfig {
 # pointed at this host's own: its clone, its worktree root, the project kit unpacked under this
 # data root. And it is stamped with the host's name, which is the one thing that puts worker.ps1 on
 # its worker host paths (see $onHost there).
+# The board host's data root from a project's data folder there (<root>/projects/<key>): two folders
+# up, by either separator, spelled as the board host spelled it. '' when there is no such folder.
+function Get-BoardDataRoot {
+    param([string]$ProjectDataDir)
+    $d = "$ProjectDataDir".Trim().TrimEnd('\', '/')
+    foreach ($up in 1..2) {
+        $cut = $d.LastIndexOfAny([char[]]@('\', '/'))
+        if ($cut -lt 0) { return '' }
+        $d = $d.Substring(0, $cut)
+    }
+    return $d
+}
+
 function Convert-ClaimForHost {
     param($Claim, [string]$HostName, $Map, [string]$ProjectDir)
 
@@ -153,9 +171,10 @@ function Convert-ClaimForHost {
     $notes = [IO.Path]::Combine($ProjectDir, '_notes')
 
     # The board host's data root, before the paths are rewritten: the prompt tells the worker that
-    # a path the ticket tools give under it is at the same place under this machine's.
-    $boardData = "$($p.dataDir)".Trim()
-    if ($boardData) { $boardData = [IO.Path]::GetDirectoryName([IO.Path]::GetDirectoryName($boardData.TrimEnd('\', '/'))) }
+    # a path the ticket tools give under it is at the same place under this machine's. It is the
+    # board host's path, so it is cut by either separator and kept as that machine spells it: this
+    # machine's own path rules would read a Windows board's path as one name on a Mac.
+    $boardData = Get-BoardDataRoot "$($p.dataDir)"
     $Claim | Add-Member -NotePropertyName boardDataRoot -NotePropertyValue $boardData -Force
 
     $p.projectPath  = $repo
@@ -291,7 +310,7 @@ function Start-Run {
 
     $psArgs = @("-ExecutionPolicy", "Bypass", "-File", $WorkerScript, "-ClaimFile", $claimFile,
                 "-Agent", "$slot", "-TicketId", "$ticket", "-RunId", "$($Order.runId)")
-    try { $proc = Start-Process -FilePath $PsHost -ArgumentList $psArgs -PassThru -WindowStyle Hidden }
+    try { $proc = Start-Process -FilePath $PsHost -ArgumentList $psArgs -PassThru @HiddenWindow }
     catch {
         Write-Log "  Could not launch worker for ticket #${ticket}: $($_.Exception.Message)"
         Send-LeaseRelease -TicketId $ticket -Reason "worker host $($HostCfg.name) could not launch a worker"
@@ -474,6 +493,8 @@ function Get-PwshTaskAction {
 # The scheduled task whose action runs this checkout's runner.ps1, or $null.
 function Find-RunnerTask {
     param([string]$Script = (Join-Path $DataRoot 'runner.ps1'))
+    # Task Scheduler is Windows': elsewhere no task starts the runner, and the cmdlet does not exist.
+    if (-not $OnWindows) { return $null }
     $want = [IO.Path]::GetFullPath($Script)
     foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
         foreach ($a in @($t.Actions)) {
@@ -509,7 +530,7 @@ function Move-RunnerTaskToPwsh {
 function Invoke-RunnerSupervisor {
     param([string[]]$ChildArgs, [int]$PauseSeconds = 2)
     while ($true) {
-        $child = Start-Process -FilePath $PsHost -ArgumentList $ChildArgs -PassThru -WindowStyle Hidden
+        $child = Start-Process -FilePath $PsHost -ArgumentList $ChildArgs -PassThru @HiddenWindow
         try { $null = $child.Handle } catch { }
         $child.WaitForExit()
         $code = $child.ExitCode
@@ -687,7 +708,7 @@ while ($true) {
             Write-Log "No supervisor is waiting to restart this runner - starting a new one on the updated code."
             $restart = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $MyInvocation.MyCommand.Path)
             if ($HostFile) { $restart += @('-HostFile', $HostFile) }
-            Start-Process -FilePath $PsHost -ArgumentList $restart -WindowStyle Hidden | Out-Null
+            Start-Process -FilePath $PsHost -ArgumentList $restart @HiddenWindow | Out-Null
             exit 0
         }
         if ($result.state -eq 'missing') {
@@ -727,7 +748,7 @@ while ($true) {
             if ($HostFile) { $restart += @('-HostFile', $HostFile) }
             $single.ReleaseMutex()
             try {
-                Start-Process -FilePath $PsHost -ArgumentList $restart -WindowStyle Hidden | Out-Null
+                Start-Process -FilePath $PsHost -ArgumentList $restart @HiddenWindow | Out-Null
                 exit 0
             }
             catch {

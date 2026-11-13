@@ -55,8 +55,11 @@ function Get-HostFileArg {
 function Find-OtherRunners {
     $mine = [IO.Path]::GetFullPath($RunnerScript)
     $lines = @()
-    foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
-        foreach ($a in @($t.Actions)) { $lines += "$($a.Execute) $($a.Arguments)" }
+    # Task Scheduler is Windows'; elsewhere only a running runner can be another checkout's.
+    if ($OnWindows) {
+        foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            foreach ($a in @($t.Actions)) { $lines += "$($a.Execute) $($a.Arguments)" }
+        }
     }
     foreach ($p in @(Get-ProcessTable -Shells)) { $lines += "$($p.CommandLine)" }
     $found = @()
