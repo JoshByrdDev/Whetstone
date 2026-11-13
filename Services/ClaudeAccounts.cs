@@ -88,9 +88,11 @@ public static class ClaudeAccounts
             : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".claude");
     }
 
-    /// <summary>Whether the CLI has ever signed in there. Says nothing about whether the login still works.</summary>
-    public static bool HasLogin(ClaudeAccount account) =>
-        File.Exists(Path.Combine(DirOf(account), ".credentials.json"));
+    /// <summary>
+    /// Whether the CLI has ever signed in there. Says nothing about whether the login still works.
+    /// On a Mac that is the keychain as well as the file (<see cref="ClaudeCredentialStore"/>).
+    /// </summary>
+    public static bool HasLogin(ClaudeAccount account) => ClaudeCredentialStore.Exists(account);
 
     /// <summary>
     /// The file the CLI keeps a login's profile in - who it is signed in as. Beside the credentials

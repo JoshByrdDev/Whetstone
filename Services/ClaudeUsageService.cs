@@ -227,12 +227,6 @@ public class ClaudeUsageService
         lock (_gate) _snapshot = UsageSnapshot.Empty;
     }
 
-    /// <summary>
-    /// Where Claude Code keeps the active account's OAuth token on Windows and Linux (macOS uses the
-    /// keychain).
-    /// </summary>
-    private string CredentialsPath => Path.Combine(ClaudeAccounts.DirOf(Account), ".credentials.json");
-
     /// <summary>Points a <c>claude</c> we start ourselves at the active account, as the agent runs are.</summary>
     private static void RunAs(ProcessStartInfo psi, ClaudeAccount account)
     {
@@ -676,8 +670,8 @@ public class ClaudeUsageService
                 return (new Credentials(ours, null, null, null), null);
         }
 
-        var path = Path.Combine(ClaudeAccounts.DirOf(account), ".credentials.json");
-        if (!File.Exists(path))
+        var found = ClaudeCredentialStore.Read(account);
+        if (found is null)
             // A second account has no token to paste: the fix is to sign the CLI in to its folder.
             return (null, account.ConfigDir is null
                 ? NoLogin
@@ -685,7 +679,7 @@ public class ClaudeUsageService
 
         try
         {
-            var root = JsonNode.Parse(File.ReadAllText(path))?["claudeAiOauth"];
+            var root = JsonNode.Parse(found.Text)?["claudeAiOauth"];
             var token = root?["accessToken"]?.GetValue<string>();
             if (string.IsNullOrWhiteSpace(token))
                 return (null, "Claude Code login found but it has no access token.");
@@ -713,7 +707,7 @@ public class ClaudeUsageService
         }
         catch (Exception)
         {
-            return (null, "Claude Code's credential file could not be read.");
+            return (null, $"Claude Code's login in {found.Where} could not be read.");
         }
     }
 
@@ -858,11 +852,19 @@ public class ClaudeUsageService
     /// </summary>
     private Credentials Persist(Credentials renewed, string spent)
     {
-        var path = CredentialsPath;
+        // Read again rather than reusing what the grant was made from: the point is to see whether
+        // the CLI moved while our request was out. Written back to the same place it is read from -
+        // the keychain on a Mac, the file elsewhere (ClaudeCredentialStore).
+        var found = ClaudeCredentialStore.Read(Account);
         try
         {
-            var merged = MergeCredentials(File.ReadAllText(path), renewed.AccessToken,
-                renewed.RefreshToken, renewed.ExpiresAt, spent);
+            if (found is null)
+                throw new FileNotFoundException("Claude Code's login is no longer where it was read from.");
+
+            // The keychain item is the CLI's own compact JSON, and its size decides how it can be
+            // written; the file is read by people too.
+            var merged = MergeCredentials(found.Text, renewed.AccessToken,
+                renewed.RefreshToken, renewed.ExpiresAt, spent, indented: found.KeychainService is null);
 
             if (merged is null)
             {
@@ -870,13 +872,14 @@ public class ClaudeUsageService
                 return error is null && disk is not null && !IsSpent(disk.ExpiresAt) ? disk : renewed;
             }
 
-            WriteAtomically(path, merged);
+            ClaudeCredentialStore.Write(found, merged);
         }
         catch (Exception ex)
         {
-            // The token is good even if the file is not; this poll succeeds and the next one renews
+            // The token is good even if the store is not; this poll succeeds and the next one renews
             // again. Worth a line in the log because it means every poll is now buying a new token.
-            _log.LogWarning(ex, "Renewed Claude Code's token but could not write it back to {Path}", path);
+            _log.LogWarning(ex, "Renewed Claude Code's token but could not write it back to {Where}",
+                found?.Where ?? "its store");
         }
 
         return renewed;
@@ -894,7 +897,8 @@ public class ClaudeUsageService
     /// </para>
     /// </summary>
     public static string? MergeCredentials(
-        string fileText, string accessToken, string? refreshToken, DateTimeOffset? expiresAt, string spent)
+        string fileText, string accessToken, string? refreshToken, DateTimeOffset? expiresAt, string spent,
+        bool indented = true)
     {
         var root = JsonNode.Parse(fileText);
         var oauth = root?["claudeAiOauth"];
@@ -906,20 +910,7 @@ public class ClaudeUsageService
         if (expiresAt is not null)
             oauth["expiresAt"] = expiresAt.Value.ToUnixTimeMilliseconds();
 
-        return root!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
-    }
-
-    /// <summary>
-    /// Replaces the file in one step. A half-written credential file is a logout for the CLI as well
-    /// as for us, and this one is read by a process we do not control at a moment we cannot predict.
-    /// </summary>
-    private static void WriteAtomically(string path, string contents)
-    {
-        var temp = path + ".whetstone.tmp";
-        File.WriteAllText(temp, contents);
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(temp, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        File.Move(temp, path, overwrite: true);
+        return root!.ToJsonString(new JsonSerializerOptions { WriteIndented = indented });
     }
 
     /// <summary>
