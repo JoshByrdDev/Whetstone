@@ -372,6 +372,9 @@ public class MachineLimitsTests : IDisposable
         Assert.Null(MachineLimitsService.PlaceOfComment(
             "Blocked: Workspace setup failed (implement): worktree setup command timed out after 20 min and was stopped: pnpm install"));
         Assert.Null(MachineLimitsService.PlaceOfComment("Heartbeat could not prepare a git worktree for this ticket. It failed (exit 1)."));
+        // A setup that went quiet for its stall limit is the same warning sign as one that ran out of time.
+        Assert.Equal("bravo-host", MachineLimitsService.PlaceOfComment(
+            "Heartbeat could not prepare a git worktree for this ticket on worker host `bravo-host`. Ticket blocked.\n\nworktree setup command printed nothing for 10 min and was stopped: pnpm install"));
     }
 
     // ---- Run speed: model time against machine time ----

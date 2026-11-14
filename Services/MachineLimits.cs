@@ -456,6 +456,16 @@ public class MachineLimitsService
     public const string TimeoutText = "setup command timed out";
 
     /// <summary>
+    /// What it writes when a setup command went quiet for its stall limit instead. The same warning
+    /// sign - setup could not finish on that machine - so it counts as a timeout here. Matched
+    /// apart rather than folded into one wording, because the comments already written stay as
+    /// they are.
+    /// </summary>
+    public const string StallText = "setup command printed nothing for";
+
+    private static bool IsTimeout(string body) => body.Contains(TimeoutText) || body.Contains(StallText);
+
+    /// <summary>
     /// The one comment per timeout that says where it happened. A timeout also leaves a
     /// "Blocked: Workspace setup failed" comment, which names no machine - counting that one too
     /// gave every worker host's timeouts to the board host as well.
@@ -472,7 +482,7 @@ public class MachineLimitsService
 
     /// <summary>The machine a setup timeout happened on, or null for a comment that does not say.</summary>
     public static string? PlaceOfComment(string body) =>
-        !body.StartsWith(PrepareText, StringComparison.Ordinal) || !body.Contains(TimeoutText) ? null
+        !body.StartsWith(PrepareText, StringComparison.Ordinal) || !IsTimeout(body) ? null
         : HostInComment.Match(body) is { Success: true } m ? m.Groups[1].Value : CapacityPlaces.Board;
 
     public async Task<object> ReadAsync(DateTime now, CancellationToken ct = default)
@@ -492,7 +502,8 @@ public class MachineLimitsService
         var capacity = await _db.CapacitySamples.AsNoTracking().Where(s => s.At >= now - MachineLimits.CeilingFor)
             .Select(s => new { s.Place, s.At, s.Busy }).ToListAsync(ct);
         var timeoutRows = await _db.Comments.AsNoTracking()
-            .Where(x => x.CreatedAt >= now - MachineLimits.CeilingFor && x.Body.StartsWith(PrepareText) && x.Body.Contains(TimeoutText))
+            .Where(x => x.CreatedAt >= now - MachineLimits.CeilingFor && x.Body.StartsWith(PrepareText)
+                && (x.Body.Contains(TimeoutText) || x.Body.Contains(StallText)))
             .Select(x => new { x.CreatedAt, x.Body }).ToListAsync(ct);
         var runs = (await _db.CycleRuns.AsNoTracking()
                 .Where(r => r.StartedAt >= since && r.DurationSeconds > 60 && r.NumTurns > 5 && r.ApiDurationSeconds != null)
