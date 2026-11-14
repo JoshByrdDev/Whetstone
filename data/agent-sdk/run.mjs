@@ -24,7 +24,9 @@ function parseArgs(argv) {
     const a = argv[i];
     const next = () => argv[++i];
     switch (a) {
-      case '-p': case '--print': case '--verbose': break;
+      // --strict-mcp-config: this session already sees no MCP server (an empty config folder, no
+      // login), so there is nothing to make strict - accepted so both doors take the same argv.
+      case '-p': case '--print': case '--verbose': case '--strict-mcp-config': break;
       case '--model': opts.model = next(); break;
       case '--effort': opts.effort = next(); break;
       case '--tools': opts.tools = next().split(',').map(s => s.trim()).filter(Boolean); break;

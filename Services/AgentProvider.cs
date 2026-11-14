@@ -332,20 +332,38 @@ public sealed class ClaudeAgentProvider : AgentProvider
     /// <summary>
     /// The process a run starts as: the CLI on an account's login, or the Agent SDK runner on a key.
     /// The key goes in the environment and never in the arguments, where a process listing shows it.
+    /// <para>
+    /// Every run starts with <c>--strict-mcp-config</c> and no <c>--mcp-config</c>: no MCP server
+    /// at all. Without it the CLI brings along every server the login can see - the user's own
+    /// settings and every claude.ai connector on the account - and a run that names its built-in
+    /// tools (<c>--tools</c>, as the analysis does) has no ToolSearch to defer them behind, so each
+    /// one's whole definition is sent inline on every turn. On an account with a few connectors that
+    /// was over 200k tokens before the run read a line: it compacted back to the same size on every
+    /// turn, the CLI gave up with "Autocompact is thrashing", and the refinement gate blocked the
+    /// ticket. A worker gets the same isolation from <c>providers.ps1</c>; it lives here, in the one
+    /// place every run is made, so a new kind of run cannot be the one that forgets it.
+    /// </para>
     /// </summary>
     private AgentRun NewRun()
     {
         if (_credit is null)
         {
             var cli = new AgentRun { FileName = "claude" };
+            cli.Arguments.Add(NoMcpServers);
             if (_configDir != null) cli.Environment["CLAUDE_CONFIG_DIR"] = _configDir;
             return cli;
         }
         var sdk = new AgentRun { FileName = "node" };
         sdk.Arguments.Add(_sdkRunner!);
+        // Accepted and already true there: the runner's session has an empty config folder of its
+        // own and no login, so it can see no server either way. Passed so both doors take one argv.
+        sdk.Arguments.Add(NoMcpServers);
         sdk.Environment["ANTHROPIC_API_KEY"] = _credit.Key;
         return sdk;
     }
+
+    /// <summary>The flag that gives a run no MCP server it was not handed - and it is handed none.</summary>
+    public const string NoMcpServers = "--strict-mcp-config";
 
     private void AddEffort(AgentRun run)
     {

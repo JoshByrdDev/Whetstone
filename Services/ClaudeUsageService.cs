@@ -444,6 +444,9 @@ public class ClaudeUsageService
                      "-p", "ok",
                      "--model", "haiku",
                      "--tools", "",
+                     // "No tools" means no MCP tools too: without this the account's connectors
+                     // ride along inline on a call whose whole job is a token refresh.
+                     ClaudeAgentProvider.NoMcpServers,
                      "--no-session-persistence",
                  })
             psi.ArgumentList.Add(arg);

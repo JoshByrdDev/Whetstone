@@ -42,7 +42,7 @@ public class AgentProviderTests
 
         Assert.Equal("claude", run.FileName);
         Assert.Equal(
-            new[] { "-p", "--model", "claude-opus-5-5", "--output-format", "stream-json", "--verbose",
+            new[] { "--strict-mcp-config", "-p", "--model", "claude-opus-5-5", "--output-format", "stream-json", "--verbose",
                     "--json-schema", """{"type":"object"}""",
                     "--tools", "Read,Grep,Glob,Bash", "--permission-mode", "bypassPermissions" },
             run.Arguments);
@@ -53,13 +53,37 @@ public class AgentProviderTests
         Assert.Null(run.ResultPath);
     }
 
+    /// <summary>
+    /// No board-made Claude run sees an MCP server: not the user's own, not a claude.ai connector.
+    /// The analysis names its tools with <c>--tools</c>, which leaves it no ToolSearch to defer
+    /// connectors behind, so an account's connectors went inline on every turn - over 200k tokens
+    /// before the run read a line - and the CLI died with "Autocompact is thrashing". Both doors
+    /// (the CLI on a login and the SDK runner on a key) are held to it.
+    /// </summary>
+    [Fact]
+    public void EveryClaudeRunStartsWithNoMcpServers()
+    {
+        var runs = new[]
+        {
+            new ClaudeAgentProvider().BuildAnalysisRun("C:/repo", "{}", Scratch()),
+            new ClaudeAgentProvider().BuildFreeformRun("C:/repo", Scratch()),
+            new ClaudeAgentProvider(configDir: "/tmp/acct").BuildAnalysisRun("C:/repo", "{}", Scratch()),
+        };
+        foreach (var run in runs)
+        {
+            Assert.Contains("--strict-mcp-config", run.Arguments);
+            // Strict with nothing handed in is "no servers"; a --mcp-config here would be a leak back in.
+            Assert.DoesNotContain("--mcp-config", run.Arguments);
+        }
+    }
+
     [Fact]
     public void ClaudeFreeformRunKeepsItsExactArgv()
     {
         var run = new ClaudeAgentProvider().BuildFreeformRun("C:/repo", Scratch());
 
         Assert.Equal("claude", run.FileName);
-        Assert.Equal(new[] { "-p", "--model", "claude-opus-5-5", "--permission-mode", "bypassPermissions" }, run.Arguments);
+        Assert.Equal(new[] { "--strict-mcp-config", "-p", "--model", "claude-opus-5-5", "--permission-mode", "bypassPermissions" }, run.Arguments);
         Assert.Empty(run.Environment);
     }
 

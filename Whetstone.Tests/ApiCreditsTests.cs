@@ -81,7 +81,7 @@ public class ApiCreditsTests
         Assert.Equal(Path.Combine(f.Root, "agent-sdk", "run.mjs"), run.Arguments[0]);
         // The CLI's own flags follow, unchanged, because the runner reads them the same way.
         Assert.Equal(
-            new[] { "-p", "--model", "claude-opus-5-5", "--effort", "medium", "--output-format", "stream-json", "--verbose",
+            new[] { "--strict-mcp-config", "-p", "--model", "claude-opus-5-5", "--effort", "medium", "--output-format", "stream-json", "--verbose",
                     "--json-schema", """{"type":"object"}""",
                     "--tools", "Read,Grep,Glob,Bash", "--permission-mode", "bypassPermissions" },
             run.Arguments.Skip(1));
