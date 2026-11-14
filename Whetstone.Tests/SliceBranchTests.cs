@@ -375,7 +375,7 @@ public class SliceBranchTests : IDisposable
         Assert.Contains("resolver settled fix.txt", sync.Why);
         Assert.Equal(sliceTip, Lines("rev-list", "--parents", "-n", "1", Slice).Single().Split(' ')[1]);
         Assert.Equal(Lines("show", "main:fix.txt"), Lines("show", $"{Slice}:fix.txt"));
-        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("whetstone-slice-sync"));
+        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("merge-check-resolve-"));
     }
 
     // ---- a catch-up git calls clean still has to build ---------------------------------------
@@ -446,7 +446,32 @@ public class SliceBranchTests : IDisposable
         Assert.Equal("check-failed", sync.Answer);
         Assert.Contains("resolver settled", sync.Why);
         Assert.Equal(sliceTip, Rev(Slice));
-        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("whetstone-slice-sync"));
+        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("merge-check-resolve-"));
+    }
+
+    [Fact]
+    public async Task The_resolver_runs_in_a_tree_the_projects_setup_has_made_ready()
+    {
+        await LayOutAsync();
+        OnBranch(Slice, "fix.txt", "S2: the slice wrote the base's file too");
+        // A setup that leaves a mark, as an install leaves node_modules; the resolver settles only where it finds one.
+        WriteProject(Path.Combine(_root, "data"), "echo", $$"""
+            { "projectPath": {{Json(_hub)}}, "baseBranch": "main", "mergeInsteadOfPr": true,
+              "worktreeSetup": ["git rev-parse HEAD > ready.txt"] }
+            """);
+        File.WriteAllText(Path.Combine(_root, "data", "projects", "echo", "rebase-resolve.ps1"), """
+            $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+            if (-not (Test-Path ready.txt)) { [Console]::Error.WriteLine('no setup here'); exit 1 }
+            foreach ($f in $in.conflicted) { git checkout --ours -- $f; git add -- $f }
+            exit 0
+            """);
+        var svc = new TicketGitService(new ProjectRegistry(new DashboardPaths(Path.Combine(_root, "data"))),
+            new GitWorktreeService(NullLogger<GitWorktreeService>.Instance), NullLogger<TicketGitService>.Instance, new DbBases(_options));
+
+        var sync = await svc.SyncSliceAsync("echo", Slice, dryRun: false);
+        Assert.Equal("merged", sync.Answer);
+        Assert.DoesNotContain("ready.txt", Lines("ls-tree", "-r", "--name-only", Slice));
+        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("merge-check-resolve-"));
     }
 
     // ---- the Classroom and analysis read a slice ticket's own change -----------------------------

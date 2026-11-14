@@ -107,7 +107,7 @@ public partial class TicketGitService
         {
             if (RebaseResolverOf(projectKey) is not { } script)
                 return new("conflict", waiting, made.Conflicted, "nothing was changed: the merge conflicts, and the project has no resolver");
-            var settled = await ResolveSliceSyncAsync(cfg, repo, script, slice, sliceTip, baseBranch, baseTip, message, made.Conflicted, ct, gate);
+            var settled = await ResolveSliceSyncAsync(projectKey, cfg, repo, script, slice, sliceTip, baseBranch, baseTip, message, made.Conflicted, ct, gate);
             if (settled.Held is { } heldWhy)
                 return new("check-failed", waiting, settled.Conflicted, $"nothing was changed: the project's resolver settled the conflicts, but {heldWhy}");
             if (settled.Sha is null)
@@ -277,16 +277,18 @@ public partial class TicketGitService
     /// <summary>
     /// The conflicted base-into-slice merge, replayed in a throwaway detached tree on the base with
     /// the slice merged into it, handed to the project's resolver, and committed - with the slice
-    /// first - only when it leaves nothing unmerged. The tree is removed however it ends.
+    /// first - only when it leaves nothing unmerged. The tree is made ready as a worker's is (the
+    /// project's copied files and its setup), because a resolver works with the project's own tools:
+    /// a bare checkout has no dependencies, and a resolver that regenerates migrations then declines
+    /// every time. It is removed however it ends.
     /// </summary>
-    private async Task<SliceMerge> ResolveSliceSyncAsync(ProjectConfig cfg, string repo, string script, string slice, string sliceTip,
+    private async Task<SliceMerge> ResolveSliceSyncAsync(string projectKey, ProjectConfig cfg, string repo, string script, string slice, string sliceTip,
         string baseBranch, string baseTip, string message, IReadOnlyList<string> conflicted, CancellationToken ct, MoveGate? gate = null)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "whetstone-slice-sync-" + Guid.NewGuid().ToString("N")[..8]);
+        var work = await CheckTreeAtAsync(projectKey, "resolve-" + slice, baseTip, ct);
+        if (work.Dir is not { } dir) return new(null, conflicted, $"could not make a tree to resolve the merge in: {work.Error}");
         try
         {
-            var add = await GitAsync(repo, ct, TimeSpan.FromMinutes(2), "worktree", "add", "--detach", dir, baseTip);
-            if (!add.Ok) return new(null, conflicted, Explain(add, "could not make a tree to resolve the merge in"));
             await GitAsync(dir, ct, TimeSpan.FromMinutes(2), "-c", "core.editor=true", "merge", "--no-ff", "--no-commit", sliceTip);
             var stopped = await ConflictedPathsAsync(dir, ct);
             if (stopped.Count == 0) stopped = conflicted.ToList();
@@ -302,8 +304,7 @@ public partial class TicketGitService
         }
         finally
         {
-            await GitAsync(repo, CancellationToken.None, "worktree", "remove", "--force", dir);
-            try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+            await work.Release();
         }
     }
 
