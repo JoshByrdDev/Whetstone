@@ -75,11 +75,20 @@ $OffHoursEnd             = "06:30"
 $WorkerTimeoutMinutes    = 120
 # A run whose agent says nothing on its stream for this long is ended - see Start-AgentWatchdog. 0 = off.
 $WorkerStallMinutes      = 30
-# Longest one worktree setup command (an install, a restore) may run before its process tree is
-# killed and the ticket blocked with its output. The watchdogs above only start with the agent, so
-# without this a hung install - a package manager waiting at a prompt nobody will answer - held its
-# berth for ever. Global config: worktreeSetupTimeoutMinutes.
-$WorktreeSetupTimeoutMinutes = 20
+# A worktree setup command (an install, a restore) is stopped, process tree and all, and the ticket
+# blocked with its output, on whichever comes first: this long with nothing new printed, or this
+# long in all. The watchdogs above only start with the agent, so without them a hung install - a
+# package manager waiting at a prompt nobody will answer - held its berth for ever.
+#
+# Silence is the sign of a hang; time alone is not. The limit was once 20 minutes in all, and on a
+# slow Windows worker host a fresh worktree's pnpm install was still adding packages, a few a
+# second, when it was stopped - seven tickets blocked in a night, each of which went through on a
+# retry only because the first attempt had linked most of node_modules. A package manager prints
+# as it goes, so an install that is working never trips the stall limit; the ceiling is for one
+# that keeps printing and never ends. Global config: worktreeSetupStallMinutes (0 = off) and
+# worktreeSetupTimeoutMinutes.
+$WorktreeSetupStallMinutes   = 10
+$WorktreeSetupTimeoutMinutes = 60
 $BaseBranch              = "main"
 $BranchPrefix            = ""
 $HeartbeatWorkers        = 3
@@ -133,6 +142,7 @@ if (Get-Global 'offHoursEnd')     { $OffHoursEnd     = Get-Global 'offHoursEnd' 
 if ($null -ne (Get-Global 'heartbeatWorkerTimeoutMinutes')) { $WorkerTimeoutMinutes = [int](Get-Global 'heartbeatWorkerTimeoutMinutes') }
 if ($null -ne (Get-Global 'heartbeatWorkerStallMinutes'))   { $WorkerStallMinutes   = [int](Get-Global 'heartbeatWorkerStallMinutes') }
 if ($null -ne (Get-Global 'worktreeSetupTimeoutMinutes'))   { $WorktreeSetupTimeoutMinutes = [double](Get-Global 'worktreeSetupTimeoutMinutes') }
+if ($null -ne (Get-Global 'worktreeSetupStallMinutes'))     { $WorktreeSetupStallMinutes = [double](Get-Global 'worktreeSetupStallMinutes') }
 if (Get-Global 'baseBranch') { $BaseBranch = Get-Global 'baseBranch' }
 $configuredPrefix = Get-Global 'branchPrefix'; if ($null -ne $configuredPrefix) { $BranchPrefix = $configuredPrefix }
 if ($null -ne (Get-Global 'heartbeatWorkers')) {

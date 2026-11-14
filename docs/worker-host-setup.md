@@ -263,6 +263,22 @@ Optional. Leave it out and QA stays on the board host.
     own folder, `data/cache/<key>` under its Whetstone checkout. Nothing to set up: the folder is
     made the first time a run needs it, and it is never sent back to the board host.
 
+## When installs are slow
+
+A worktree's setup is stopped when it prints nothing for `worktreeSetupStallMinutes` (10), or
+when it has run `worktreeSetupTimeoutMinutes` (60) in all - both global config, read on each
+machine from its own `data/config.json`. An install that is still printing progress is not
+hung, only slow, and on a Windows worker host slow almost always means one of two things:
+
+- **Defender is scanning every file the package manager links.** Exclude the worktree root and
+  the package store (`pnpm store path`, `npm config get cache`) from real-time protection.
+- **The store is on another drive from the worktrees.** A package manager can only hard-link
+  within one volume; across two it copies every file of every package. Keep the clone, its
+  worktree root and the store on the same drive.
+
+Check: time a fresh install on that machine (`git worktree add`, then the project's
+`worktreeSetup` in it) against the board host's. Minutes rather than seconds is the machine.
+
 ## Day to day
 
 - **Stop taking new work:** switch the host **Off** on the Heartbeat page, or all of them with

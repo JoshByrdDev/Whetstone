@@ -558,7 +558,8 @@ function Get-GitUsrBin {
 # Returns $null on success, or a reason string.
 function Initialize-Worktree {
     param([string]$Path, [string]$RepoDir, [string[]]$CopyFiles, [string[]]$Setup,
-          [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 }))
+          [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 60 }),
+          [double]$StallMinutes = $(if ($null -ne $WorktreeSetupStallMinutes) { $WorktreeSetupStallMinutes } else { 10 }))
 
     foreach ($rel in $CopyFiles) {
         if (-not $rel) { continue }
@@ -581,7 +582,11 @@ function Initialize-Worktree {
             Write-Log "    setup: $cmd"
             # Kept as well as logged: on a worker host the log is on another machine, and "exit 1" on
             # the ticket says nothing a person can act on. The tail goes into the block reason.
-            $run = Invoke-SetupCommand -Command $cmd -WorkDir $Path -TimeoutMinutes $TimeoutMinutes
+            $run = Invoke-SetupCommand -Command $cmd -WorkDir $Path -TimeoutMinutes $TimeoutMinutes -StallMinutes $StallMinutes
+            if ($run.stalled) {
+                if ($failedMarker) { Set-Content -Path $failedMarker -Value $cmd -Encoding ascii }
+                return "worktree setup command printed nothing for $StallMinutes min and was stopped: $cmd" + (Format-OutputTail -Lines $run.output)
+            }
             if ($run.timedOut) {
                 if ($failedMarker) { Set-Content -Path $failedMarker -Value $cmd -Encoding ascii }
                 return "worktree setup command timed out after $TimeoutMinutes min and was stopped: $cmd" + (Format-OutputTail -Lines $run.output)
@@ -622,7 +627,9 @@ function Get-SetupShell {
     return @{ Exe = '/bin/sh'; Args = "-c $($q.ToString())"; Name = 'sh' }
 }
 
-# Run one worktree setup command, for at most $TimeoutMinutes. Returns @{ code; timedOut; output }.
+# Run one worktree setup command, for at most $TimeoutMinutes in all and $StallMinutes without a new
+# line of output (0 = no stall limit). Returns @{ code; timedOut; stalled; output } - stalled is the
+# silent kind of timeout, and timedOut is true for both.
 #
 # Its own process, not a pipeline in this one, for two reasons. A command still running at the limit
 # has to be stopped, children and all - an install is a cmd running a package manager running node -
@@ -631,7 +638,7 @@ function Get-SetupShell {
 # its question in the output, rather than waiting for an answer nobody on this machine will give.
 # Output goes to a file and is logged as it arrives, so a long install still shows progress.
 function Invoke-SetupCommand {
-    param([string]$Command, [string]$WorkDir, [double]$TimeoutMinutes)
+    param([string]$Command, [string]$WorkDir, [double]$TimeoutMinutes, [double]$StallMinutes = 0)
     $base = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-setup-" + [guid]::NewGuid().ToString('N'))
     $outFile = "$base.out"
     $inFile = "$base.in"
@@ -645,19 +652,25 @@ function Invoke-SetupCommand {
             -RedirectStandardOutput $outFile -RedirectStandardInput $inFile -NoNewWindow -PassThru
         try { $null = $p.Handle } catch { }
         $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+        $lastOutput = Get-Date
         $timedOut = $false
+        $stalled = $false
         while ($true) {
             $done = $p.WaitForExit(1000)
             if (-not $reader -and (Test-Path $outFile)) {
                 $reader = New-Object IO.StreamReader((New-Object IO.FileStream($outFile, 'Open', 'Read', 'ReadWrite')))
             }
             if ($reader) {
-                while ($null -ne ($line = $reader.ReadLine())) { Write-Log "      $line"; [void]$output.Add($line) }
+                while ($null -ne ($line = $reader.ReadLine())) { Write-Log "      $line"; [void]$output.Add($line); $lastOutput = Get-Date }
             }
             if ($done) { break }
-            if ((Get-Date) -ge $deadline) {
+            $now = Get-Date
+            $silent = $StallMinutes -gt 0 -and ($now - $lastOutput).TotalMinutes -ge $StallMinutes
+            if ($silent -or $now -ge $deadline) {
                 $timedOut = $true
-                Write-Log "      (still running after $TimeoutMinutes min - stopping it and everything it started)"
+                $stalled = $silent
+                $what = if ($silent) { "nothing printed for $StallMinutes min" } else { "still running after $TimeoutMinutes min" }
+                Write-Log "      ($what - stopping it and everything it started)"
                 Stop-ProcessTree -Id $p.Id
                 $null = $p.WaitForExit(15000)
                 if ($reader) { while ($null -ne ($line = $reader.ReadLine())) { [void]$output.Add($line) } }
@@ -665,7 +678,7 @@ function Invoke-SetupCommand {
             }
         }
         $code = if ($timedOut) { $null } else { $p.ExitCode }
-        return @{ code = $code; timedOut = $timedOut; output = $output }
+        return @{ code = $code; timedOut = $timedOut; stalled = $stalled; output = $output }
     }
     finally {
         if ($reader) { $reader.Dispose() }
@@ -757,12 +770,27 @@ function Start-BackgroundSetup {
 # setup again in the foreground - and blocks the ticket with the output if it fails there too, which
 # is where a failure that is not a fluke gets its proper report. Returns $true when it succeeded.
 function Wait-BackgroundSetup {
-    param($Job, [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 }))
+    param($Job, [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 60 }),
+          [double]$StallMinutes = $(if ($null -ne $WorktreeSetupStallMinutes) { $WorktreeSetupStallMinutes } else { 10 }))
     if (-not $Job -or -not $Job.process) { return $true }
     $p = $Job.process
-    $left = $Job.started.AddMinutes($TimeoutMinutes) - (Get-Date)
+    $deadline = $Job.started.AddMinutes($TimeoutMinutes)
     $waited = Get-Date
-    $done = $p.WaitForExit([int][math]::Max(0, $left.TotalMilliseconds))
+    # The same two limits as a foreground setup, the silence measured by the output file growing.
+    # Its clock starts at the wait, not at the install: an install the agent ran beside may well
+    # have finished printing long ago and be on its last link, and it gets the stall limit from now.
+    $outFile = "$($Job.base).out"
+    $lastSize = -1
+    $lastGrowth = Get-Date
+    $done = $false
+    while ($true) {
+        $left = $deadline - (Get-Date)
+        if ($left.TotalMilliseconds -le 0) { break }
+        if ($p.WaitForExit([int][math]::Min(2000, $left.TotalMilliseconds))) { $done = $true; break }
+        $size = try { (Get-Item $outFile -ErrorAction Stop).Length } catch { 0 }
+        if ($size -ne $lastSize) { $lastSize = $size; $lastGrowth = Get-Date }
+        elseif ($StallMinutes -gt 0 -and ((Get-Date) - $lastGrowth).TotalMinutes -ge $StallMinutes) { break }
+    }
     $waitSec = [math]::Round(((Get-Date) - $waited).TotalSeconds)
     $tookSec = [math]::Round(((Get-Date) - $Job.started).TotalSeconds)
     try {
@@ -770,7 +798,7 @@ function Wait-BackgroundSetup {
             Stop-ProcessTree -Id $p.Id
             $null = $p.WaitForExit(15000)
             Set-Content -Path $Job.marker -Value ($Job.commands -join ' && ') -Encoding ascii
-            Write-Log "  Background setup still running after $TimeoutMinutes min - stopped it; the next phase sets the worktree up again."
+            Write-Log "  Background setup still running ($([math]::Round(((Get-Date) - $Job.started).TotalMinutes)) min in, or silent for $StallMinutes) - stopped it; the next phase sets the worktree up again."
             return $false
         }
         if ($p.ExitCode -eq 0) {
@@ -793,7 +821,7 @@ function Wait-BackgroundSetup {
 # Wait for that install to end before setting up again, or two package managers would be writing
 # the same node_modules at once. A pid reused by something else is told apart by its name.
 function Wait-OrphanSetup {
-    param([string]$Marker, [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 }))
+    param([string]$Marker, [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 60 }))
     if (-not $Marker -or -not (Test-Path $Marker)) { return }
     $m = [regex]::Match("$(Get-Content $Marker -Raw -ErrorAction SilentlyContinue)", 'background pid=(\d+)')
     if (-not $m.Success) { return }

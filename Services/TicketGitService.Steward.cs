@@ -539,8 +539,11 @@ public partial class TicketGitService
             catch (Exception ex) { _log.LogWarning(ex, "Could not copy {File} into the check tree {Dir}", rel, dir); }
         }
 
+        // The same ceiling, and the same default, as a worker's setup ($WorktreeSetupTimeoutMinutes
+        // in heartbeat-common.ps1). A worker also stops an install that goes quiet; this one runs on
+        // the board host, which has never been the slow machine, so the ceiling alone stands here.
         var minutes = _registry.GetGlobalConfig().TryGetValue("worktreeSetupTimeoutMinutes", out var m)
-            && m.ValueKind == System.Text.Json.JsonValueKind.Number && m.TryGetDouble(out var mm) && mm > 0 ? mm : 20;
+            && m.ValueKind == System.Text.Json.JsonValueKind.Number && m.TryGetDouble(out var mm) && mm > 0 ? mm : 60;
         foreach (var cmd in cfg.WorktreeSetup.Where(c => !string.IsNullOrWhiteSpace(c)))
         {
             var run = await RunCheckAsync(dir, cmd, TimeSpan.FromMinutes(minutes), ct: ct);

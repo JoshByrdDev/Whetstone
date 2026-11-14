@@ -409,6 +409,18 @@ exit 1
     }
     Check '... and the process it started is gone too' $left.Count 0
 
+    # Silence is what stops an install; a slow one that keeps printing runs on to the ceiling.
+    Write-Host "== a setup command that goes quiet is stopped; one that keeps printing is not"
+    $quiet = Sh "echo installing& ping -n 47 127.0.0.1 >nul" "echo installing; sleep 47"
+    $started = Get-Date
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @($quiet) -TimeoutMinutes 5 -StallMinutes 0.05
+    Check 'a command that prints nothing for the stall limit is stopped and says so' (($why -split "`n")[0]) "worktree setup command printed nothing for 0.05 min and was stopped: $quiet"
+    Check '... long before its ceiling' (((Get-Date) - $started).TotalSeconds -lt 25) $true
+    Check '... with what it printed before it went quiet' ($why -match 'installing') $true
+    $chatty = Sh 'for /l %i in (1,1,6) do @(echo step %i& ping -n 2 127.0.0.1 >nul)' 'for i in 1 2 3 4 5 6; do echo step $i; sleep 1; done'
+    $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @($chatty) -TimeoutMinutes 5 -StallMinutes 0.05
+    Check 'a command that keeps printing outlasts the stall limit and finishes' "[$why]" '[]'
+
     $prompt = Sh 'set /p answer=Download pnpm? [Y/n] & if not defined answer exit /b 7' 'printf "Download pnpm? [Y/n] "; read answer; [ -n "$answer" ] || exit 7'
     $started = Get-Date
     $why = Initialize-Worktree -Path $wt.path -RepoDir $sf.hub -CopyFiles @() -Setup @($prompt) -TimeoutMinutes 1

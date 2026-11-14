@@ -273,7 +273,7 @@ function Resolve-Workspace {
         [object[]]$Members, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
         [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BranchPrefix, [string]$BoardBranch,
         [string]$ReviewBranch, [string]$ReviewRepo, [bool]$MergeLocally, [bool]$OnBase,
-        [double]$SetupTimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 20 })
+        [double]$SetupTimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 60 })
     )
 
     $ErrorActionPreference = 'Continue'
@@ -391,7 +391,7 @@ function Resolve-Workspace {
 function Resolve-ReviewWorkspace {
     param(
         [object[]]$Members, [string]$WorktreeRoot, [string]$ReviewBranch, [string]$ReviewRepo,
-        [double]$SetupTimeoutMinutes = 20
+        [double]$SetupTimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 60 })
     )
 
     $all = @($Members)
