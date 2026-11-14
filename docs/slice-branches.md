@@ -139,6 +139,13 @@ spells out the project's base directly instead of asking is a bug this change wi
   from it. A merge that stops on a conflict is handed to the project's `rebase-resolve.ps1` first,
   as a rebase is today, and otherwise asks the owner. A stacked slice takes its parent's branch,
   and the base reaches it through the parent.
+  A merge git calls clean - or one the resolver settled - can still break the slice: a stacked
+  slice renamed a function while its parent went on adding callers, and nothing conflicted. So a
+  project can name `steward.syncChecks`, short checks (a typecheck, not the test suite, because they
+  run at the start of a steward run whenever a slice is behind). The merge is committed and checked
+  in a tree of the board's own before the branch moves, and a failure moves nothing and answers
+  `check-failed`, which the steward puts to the owner with what failed. Without them the branch
+  moves on a clean merge, as it always has.
 - **Worker hosts** mirror every open slice branch, not one base (`worker-hosts-plan.md`, "mirrors
   the board host's refs"). The rest of a worker host is unchanged, because it already takes its base
   from what it is told.

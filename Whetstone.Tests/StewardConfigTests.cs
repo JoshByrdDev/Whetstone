@@ -100,7 +100,8 @@ public class StewardConfigTests : IDisposable
               { "run": "npm run check" },
               { "name": "database tests", "run": "npm run test:db", "whenChanged": ["packages/db/"],
                 "machineFault": "database is not running", "timeoutMinutes": 20 }
-            ]
+            ],
+            "syncChecks": [ { "name": "typecheck", "run": "npm run typecheck", "timeoutMinutes": 10 } ]
           }
         }
         """).Steward;
@@ -119,6 +120,7 @@ public class StewardConfigTests : IDisposable
         Assert.Equal(15, s.MergeChecks[0].TimeoutMinutes);
         Assert.Equal(new[] { "packages/db/" }, s.MergeChecks[1].WhenChanged);
         Assert.Equal("database is not running", s.MergeChecks[1].MachineFault);
+        Assert.Equal(("typecheck", "npm run typecheck", 10), (s.SyncChecks.Single().Name, s.SyncChecks[0].Run, s.SyncChecks[0].TimeoutMinutes));
     }
 
     [Fact]

@@ -541,7 +541,22 @@ public partial class TicketGitService
         if (string.IsNullOrWhiteSpace(root)) return new(null, None, $"{cfg.DisplayName} has no worktree root.");
         var tip = await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", $"refs/heads/{branch}^{{commit}}");
         if (!tip.Ok) return new(null, None, $"There is no branch '{branch}' in {repo}.");
-        var sha = tip.Stdout.Trim();
+        return await CheckTreeAtAsync(projectKey, branch, tip.Stdout.Trim(), ct);
+    }
+
+    /// <summary>
+    /// The same tree at a commit no branch points at yet - a slice's catch-up merge, checked before
+    /// its branch is moved to it. <paramref name="label"/> names the tree's folder, so one left by a
+    /// run that never gave it back is the one the next check of that branch clears.
+    /// </summary>
+    public async Task<CheckTree> CheckTreeAtAsync(string projectKey, string label, string sha, CancellationToken ct = default)
+    {
+        static Task None() => Task.CompletedTask;
+        var (cfg, repo, _) = HubOf(projectKey);
+        if (!IsGitRepo(repo)) return new(null, None, $"There is no git repo at '{repo}'.");
+        var root = cfg.ResolvedWorktreeRoot;
+        if (string.IsNullOrWhiteSpace(root)) return new(null, None, $"{cfg.DisplayName} has no worktree root.");
+        var branch = label;
 
         var dir = Path.Combine(root, "merge-check-" + Regex.Replace(branch, @"[^A-Za-z0-9._-]", "-"));
         // One left by a run that never got to give it back.

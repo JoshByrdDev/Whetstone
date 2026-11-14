@@ -378,6 +378,77 @@ public class SliceBranchTests : IDisposable
         Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("whetstone-slice-sync"));
     }
 
+    // ---- a catch-up git calls clean still has to build ---------------------------------------
+
+    /// <summary>
+    /// A project on the same hub whose slice catch-ups must pass <paramref name="checks"/> (its
+    /// <c>steward.syncChecks</c>): here, that <c>ok.txt</c> is in the merged tree, which is
+    /// what a typecheck is to a real one - something the merge can break without a conflict.
+    /// </summary>
+    private TicketGitService Checked(string checks)
+    {
+        WriteProject(Path.Combine(_root, "data"), "delta", $$"""
+            { "projectPath": {{Json(_hub)}}, "baseBranch": "main", "mergeInsteadOfPr": true,
+              "steward": { "syncChecks": {{checks}} } }
+            """);
+        return new TicketGitService(new ProjectRegistry(new DashboardPaths(Path.Combine(_root, "data"))),
+            new GitWorktreeService(NullLogger<GitWorktreeService>.Instance), NullLogger<TicketGitService>.Instance, new DbBases(_options));
+    }
+
+    private const string NeedsOk = """[ { "name": "builds", "run": "git ls-files --error-unmatch ok.txt" } ]""";
+
+    [Fact]
+    public async Task A_clean_catch_up_that_fails_the_sync_checks_moves_nothing_and_says_what_failed()
+    {
+        await LayOutAsync();
+        var sliceTip = Rev(Slice);
+        var sync = await Checked(NeedsOk).SyncSliceAsync("delta", Slice, dryRun: false);
+        Assert.Equal("check-failed", sync.Answer);
+        Assert.Contains("'builds' fails on the merge", sync.Why);
+        Assert.Contains("ok.txt", sync.Why);
+        Assert.Equal(sliceTip, Rev(Slice));
+        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("merge-check-sync-"));
+    }
+
+    [Fact]
+    public async Task A_catch_up_that_passes_the_sync_checks_is_merged_as_before()
+    {
+        await LayOutAsync();
+        OnBranch(Slice, "ok.txt", "S2: the slice builds");
+        var sliceTip = Rev(Slice);
+        var sync = await Checked(NeedsOk).SyncSliceAsync("delta", Slice, dryRun: false);
+        Assert.Equal("merged", sync.Answer);
+        Assert.Equal(new[] { sliceTip, Rev("main") }, Lines("rev-list", "--parents", "-n", "1", Slice).Single().Split(' ').Skip(1));
+    }
+
+    [Fact]
+    public async Task A_sync_check_whose_paths_the_catch_up_does_not_reach_is_not_run()
+    {
+        await LayOutAsync();
+        var sync = await Checked("""[ { "name": "builds", "run": "git ls-files --error-unmatch ok.txt", "whenChanged": ["packages/"] } ]""")
+            .SyncSliceAsync("delta", Slice, dryRun: false);
+        Assert.Equal("merged", sync.Answer);
+    }
+
+    [Fact]
+    public async Task A_catch_up_the_resolver_settles_still_has_to_pass_the_sync_checks()
+    {
+        await LayOutAsync();
+        OnBranch(Slice, "fix.txt", "S2: the slice wrote the base's file too");
+        var sliceTip = Rev(Slice);
+        var svc = Checked(NeedsOk);
+        File.WriteAllText(Path.Combine(_root, "data", "projects", "delta", "rebase-resolve.ps1"), """
+            $in = [Console]::In.ReadToEnd() | ConvertFrom-Json
+            foreach ($f in $in.conflicted) { git checkout --ours -- $f; git add -- $f }
+            exit 0
+            """);
+        var sync = await svc.SyncSliceAsync("delta", Slice, dryRun: false);
+        Assert.Equal("check-failed", sync.Answer);
+        Assert.Contains("resolver settled", sync.Why);
+        Assert.Equal(sliceTip, Rev(Slice));
+        Assert.DoesNotContain(Lines("worktree", "list"), l => l.Contains("whetstone-slice-sync"));
+    }
+
     // ---- the Classroom and analysis read a slice ticket's own change -----------------------------
 
     [Fact]

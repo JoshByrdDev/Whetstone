@@ -237,9 +237,14 @@ public partial class StewardService
                 slices.Add(new
                 {
                     branch = slice, from = open.From, answer = r.Answer, commits = r.Commits, files = r.Files.Count == 0 ? null : r.Files, why = r.Why,
-                    ask = r.Answer == "conflict"
-                        ? $"Ask the owner: {slice} cannot take {open.From ?? "the base"}'s latest without a conflict in {string.Join(", ", r.Files)}, and only a person can settle it."
-                        : null,
+                    ask = r.Answer switch
+                    {
+                        "conflict" => $"Ask the owner: {slice} cannot take {open.From ?? "the base"}'s latest without a conflict in {string.Join(", ", r.Files)}, and only a person can settle it.",
+                        // Clean to git, broken to the checks: the owner's too, and not "bookkeeping" -
+                        // say what failed, from `why`, rather than guessing from the files.
+                        "check-failed" => $"Ask the owner: {slice} merges {open.From ?? "the base"}'s latest cleanly, but the merge fails the project's sync checks, so the branch was not moved. Quote what failed from `why`; only a person can settle it.",
+                        _ => null,
+                    },
                 });
         }
 

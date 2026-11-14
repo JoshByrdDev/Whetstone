@@ -113,6 +113,17 @@ public class StewardConfig
     public StewardCheck[] MergeChecks { get; init; } = Array.Empty<StewardCheck>();
 
     /// <summary>
+    /// What an open slice's catch-up merge must pass before its branch moves (docs/slice-branches.md,
+    /// "Keeping up with the base"): the merge of the base, or of its parent, worked out, committed and
+    /// checked in a tree of the board's own, and the branch moved only on a pass. A merge git calls
+    /// clean can still break the slice - its tickets calling what the base renamed - and with nothing
+    /// built, every ticket after is forked from the break. Short on purpose (a typecheck, not the
+    /// test suite): it runs at the start of a steward run, every time a slice is behind. Empty: the
+    /// branch moves on a clean merge, as before. A failure moves nothing and is the owner's.
+    /// </summary>
+    public StewardCheck[] SyncChecks { get; init; } = Array.Empty<StewardCheck>();
+
+    /// <summary>
     /// Run a merge's checks all at once rather than one after another, the first failure stopping
     /// the rest. Off unless a project says so: two checks that build into the same output folder
     /// (a build and a test of the same solution) break each other when run together, and only the
@@ -176,7 +187,8 @@ public class StewardConfig
             Conventions = Str(s, "conventions").Replace('\\', '/').Trim('/'),
             Plan = PlanFrom(Str(s, "slices").Replace('\\', '/').Trim('/'), format),
             NeverMerge = StrArray(s, "neverMerge"),
-            MergeChecks = Checks(s),
+            MergeChecks = Checks(s, "mergeChecks"),
+            SyncChecks = Checks(s, "syncChecks"),
             ParallelChecks = s.TryGetProperty("parallelChecks", out var par) && par.ValueKind == JsonValueKind.True,
             SlicesInFlight = Int(s, "slicesInFlight", d.SlicesInFlight, 1, 50),
         };
@@ -197,9 +209,9 @@ public class StewardConfig
         };
     }
 
-    private static StewardCheck[] Checks(JsonElement s)
+    private static StewardCheck[] Checks(JsonElement s, string key)
     {
-        if (!s.TryGetProperty("mergeChecks", out var list) || list.ValueKind != JsonValueKind.Array)
+        if (!s.TryGetProperty(key, out var list) || list.ValueKind != JsonValueKind.Array)
             return Array.Empty<StewardCheck>();
         var checks = new List<StewardCheck>();
         foreach (var c in list.EnumerateArray())

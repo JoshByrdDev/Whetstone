@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Whetstone.Services;
 
 /// <summary>
@@ -98,18 +100,22 @@ public partial class TicketGitService
             return new("refused", waiting, none, $"'{slice}' is checked out in {holder}, so it cannot be moved without a checkout.");
 
         var message = $"Merge {baseBranch} into {slice}";
-        var made = await CommitMergeAsync(repo, slice, sliceTip, $"refs/heads/{baseBranch}", message, ct);
+        var gate = SyncGate(projectKey, cfg, repo, slice, sliceTip);
+        var made = await CommitMergeAsync(repo, slice, sliceTip, $"refs/heads/{baseBranch}", message, ct, gate);
         var resolved = Array.Empty<string>() as IReadOnlyList<string>;
         if (made.Conflicted.Count > 0)
         {
             if (RebaseResolverOf(projectKey) is not { } script)
                 return new("conflict", waiting, made.Conflicted, "nothing was changed: the merge conflicts, and the project has no resolver");
-            var settled = await ResolveSliceSyncAsync(cfg, repo, script, slice, sliceTip, baseBranch, baseTip, message, made.Conflicted, ct);
+            var settled = await ResolveSliceSyncAsync(cfg, repo, script, slice, sliceTip, baseBranch, baseTip, message, made.Conflicted, ct, gate);
+            if (settled.Held is { } heldWhy)
+                return new("check-failed", waiting, settled.Conflicted, $"nothing was changed: the project's resolver settled the conflicts, but {heldWhy}");
             if (settled.Sha is null)
                 return new("conflict", waiting, made.Conflicted, $"nothing was changed: {settled.Error}");
             made = settled;
             resolved = made.Conflicted;
         }
+        if (made.Held is { } why) return new("check-failed", waiting, none, $"nothing was changed: {why}");
         if (made.Sha is null) return new("refused", waiting, none, made.Error ?? $"could not merge {baseBranch} into {slice}");
 
         var files = (await GitAsync(repo, ct, "diff", "--name-only", sliceTip, made.Sha)).Stdout
@@ -181,7 +187,58 @@ public partial class TicketGitService
         return (parentTip, null);
     }
 
-    private record SliceMerge(string? Sha, IReadOnlyList<string> Conflicted, string? Error, RunResult? Said = null);
+    private record SliceMerge(string? Sha, IReadOnlyList<string> Conflicted, string? Error, RunResult? Said = null, string? Held = null);
+
+    /// <summary>
+    /// What a merge commit must pass before a branch is moved to it: the reason it may not, or null.
+    /// The commit exists by then (<c>commit-tree</c>) and nothing points at it.
+    /// </summary>
+    private delegate Task<string?> MoveGate(string sha, CancellationToken ct);
+
+    /// <summary>
+    /// The project's <see cref="StewardConfig.SyncChecks"/> as a gate on a slice's catch-up merge, or
+    /// null when it has none (or none that what the merge changes reaches). Each runs in a tree of the
+    /// board's own at the merged commit, made ready as a worker's is; the first failure holds the merge,
+    /// with what it printed. A check that never got as far as checking anything holds it too - nothing is
+    /// proved either way - and says it is the machine's.
+    /// </summary>
+    private MoveGate? SyncGate(string projectKey, ProjectConfig cfg, string repo, string slice, string sliceTip)
+    {
+        var checks = cfg.Steward.SyncChecks;
+        if (checks.Length == 0) return null;
+        return async (sha, ct) =>
+        {
+            var changed = (await GitAsync(repo, ct, "diff", "--name-only", sliceTip, sha)).Stdout
+                .Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).ToList();
+            var due = checks.Where(c => c.WhenChanged.Length == 0 || changed.Any(f => c.WhenChanged.Any(w =>
+                f.StartsWith(w.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase)))).ToList();
+            if (due.Count == 0) return null;
+            var tree = await CheckTreeAtAsync(projectKey, "sync-" + slice, sha, ct);
+            if (tree.Dir is null) return $"a tree at the merge could not be made to check it in, so nothing is proved: {tree.Error}";
+            try
+            {
+                // What the merge brought, for a check that narrows itself to it: the slice as it was.
+                var env = new Dictionary<string, string> { [StewardService.BaseRefVariable] = sliceTip };
+                foreach (var c in due)
+                {
+                    var run = await RunCheckAsync(tree.Dir, c.Run, TimeSpan.FromMinutes(c.TimeoutMinutes), env, ct);
+                    if (run.Ok) continue;
+                    var failing = run.Failures is { Count: > 0 } f ? $" Failing: {string.Join("; ", f.Take(10))}." : "";
+                    var tail = string.Join('\n', run.Output.Replace("\r", "").Split('\n').TakeLast(20)).Trim();
+                    if (c.MachineFault.Length > 0 && Regex.IsMatch(run.Output, c.MachineFault, RegexOptions.IgnoreCase))
+                        return $"'{c.Name}' did not get as far as checking the merge, so nothing is proved either way; that is the machine's to fix.\n{tail}";
+                    return (run.TimedOut ? $"'{c.Name}' did not finish in {c.TimeoutMinutes} minutes on the merge."
+                                         : $"'{c.Name}' fails on the merge, which git called clean: the base changed something the slice relies on.")
+                           + failing + "\n" + tail;
+                }
+                return null;
+            }
+            finally
+            {
+                await tree.Release();
+            }
+        };
+    }
 
     /// <summary>
     /// Merge <paramref name="from"/> into <paramref name="into"/> (read at <paramref name="intoTip"/>)
@@ -189,7 +246,7 @@ public partial class TicketGitService
     /// still at <paramref name="intoTip"/>. The conflicted files, when it would conflict.
     /// </summary>
     private async Task<SliceMerge> CommitMergeAsync(string repo, string into, string intoTip, string from, string message,
-        CancellationToken ct)
+        CancellationToken ct, MoveGate? gate = null)
     {
         var tree = await GitAsync(repo, ct, TimeSpan.FromMinutes(2), "merge-tree", "--write-tree", "--name-only", intoTip, from);
         var lines = tree.Stdout.Replace("\r", "").Split('\n');
@@ -199,15 +256,17 @@ public partial class TicketGitService
             return new(null, Array.Empty<string>(), Explain(tree, "could not work out the merge"), tree);
         var fromSha = await TipOfRevAsync(repo, from, ct);
         if (fromSha is null) return new(null, Array.Empty<string>(), $"could not read {from}");
-        return await CommitAndMoveAsync(repo, into, intoTip, treeId, fromSha, message, ct);
+        return await CommitAndMoveAsync(repo, into, intoTip, treeId, fromSha, message, ct, gate);
     }
 
     private async Task<SliceMerge> CommitAndMoveAsync(string repo, string into, string intoTip, string treeId, string otherParent,
-        string message, CancellationToken ct)
+        string message, CancellationToken ct, MoveGate? gate = null)
     {
         var commit = await GitAsync(repo, ct, "commit-tree", treeId, "-p", intoTip, "-p", otherParent, "-m", message);
         if (!commit.Ok || commit.Stdout.Trim() is not { Length: > 0 } sha)
             return new(null, Array.Empty<string>(), Explain(commit, "could not write the merge commit"), commit);
+        if (gate is not null && await gate(sha, ct) is { } held)
+            return new(null, Array.Empty<string>(), held, commit, held);
         var move = await GitAsync(repo, ct, "update-ref", "-m", message, $"refs/heads/{into}", sha, intoTip);
         if (!move.Ok)
             return new(null, Array.Empty<string>(),
@@ -221,7 +280,7 @@ public partial class TicketGitService
     /// first - only when it leaves nothing unmerged. The tree is removed however it ends.
     /// </summary>
     private async Task<SliceMerge> ResolveSliceSyncAsync(ProjectConfig cfg, string repo, string script, string slice, string sliceTip,
-        string baseBranch, string baseTip, string message, IReadOnlyList<string> conflicted, CancellationToken ct)
+        string baseBranch, string baseTip, string message, IReadOnlyList<string> conflicted, CancellationToken ct, MoveGate? gate = null)
     {
         var dir = Path.Combine(Path.GetTempPath(), "whetstone-slice-sync-" + Guid.NewGuid().ToString("N")[..8]);
         try
@@ -238,7 +297,7 @@ public partial class TicketGitService
             var tree = await GitAsync(dir, ct, "write-tree");
             if (!tree.Ok || tree.Stdout.Trim() is not { Length: > 0 } treeId)
                 return new(null, conflicted, Explain(tree, "could not write the resolved tree"));
-            var made = await CommitAndMoveAsync(repo, slice, sliceTip, treeId, baseTip, message, ct);
+            var made = await CommitAndMoveAsync(repo, slice, sliceTip, treeId, baseTip, message, ct, gate);
             return made with { Conflicted = stopped };
         }
         finally
