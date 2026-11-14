@@ -346,6 +346,15 @@ public static class TicketEndpoints
                     return Results.Ok(new { claimed = (object?)null });
                 }
             }
+            // This computer switched off, or stopping after its current runs, takes nothing new -
+            // checked here as well as by the orchestrator, so a claim already on its way when the
+            // stop was pressed is not handed out. "Nothing to claim", never an error: the
+            // orchestrator would hold its interval for a failed call.
+            else if (!WorkerHostSettings.ReadBoard(global).Dispatchable)
+            {
+                capacity.RecordClaim(null, false, new ClaimTrace { NothingHere = true });
+                return Results.Ok(new { claimed = (object?)null });
+            }
 
             // A project whose code is not where a worktree can be made of it is passed over, not
             // blocked: the fault is its config, and the Setup check names it (RepoLayout).

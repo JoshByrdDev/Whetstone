@@ -4,7 +4,7 @@ import { DISPLAY, MONO, BODY, CAPS, chamfer } from './orbit';
 import { label, ago } from './stewardParts';
 import { track } from '../theme';
 import type { WorkerHost } from '../hooks/useWorkerHosts';
-import { useMachines, hardwareLine, type Machine } from '../hooks/useMachines';
+import { useMachines, hardwareLine, BOARD_PLACE, type Machine } from '../hooks/useMachines';
 import { SlotSuggestionNote } from './SlotSuggestionNote';
 import { ConfirmHostOffModal } from './ConfirmHostOffModal';
 
@@ -22,6 +22,12 @@ import { ConfirmHostOffModal } from './ConfirmHostOffModal';
  * current runs" is the same with a finish line - the computer stays On, says what it is still
  * finishing, and the board switches it Off once nothing is out (the per-computer twin of the
  * heartbeat's stop after cycle).
+ *
+ * This computer has the same card, first in the grid: its workers On or Off, stopped after their
+ * current runs, and its berths and QA at once (heartbeatWorkers and qaLeases, which used to live in
+ * Settings and needed a restart). It is drawn even with the worker hosts hidden, because it is this
+ * machine's own control. None of it touches the heartbeat itself or the steward's berth - the
+ * heartbeat's own Stop After Cycle is for all of that.
  */
 
 interface Settings {
@@ -34,7 +40,24 @@ interface Settings {
   seen: { name: string; lastSeen: string; commit?: string | null }[];
   projects: { key: string; displayName: string }[];
   skills: string[];
+  /** This computer's own place. Absent from an older server, which had no card for it. */
+  board?: BoardPlace;
 }
+
+/** This computer's card, from /api/hosts/settings: its place, and what its berths are running. */
+interface BoardPlace {
+  enabled: boolean;
+  stopPending: boolean;
+  slots: number;
+  qaLeases: number;
+  maxSlots: number;
+  maxQaLeases: number;
+  /** How many of its berths are running now: what a pending stop waits for. */
+  out: number;
+  runs: { slot: number; ticketId?: string | null; project?: string | null; phase?: string | null }[];
+}
+
+type BoardEdit = Partial<{ enabled: boolean; slots: number; qaLeases: number }>;
 
 type HostEdit = Partial<{ enabled: boolean; slots: number; qaLeases: number; skills: string[]; projects: string[] }>;
 
@@ -119,10 +142,28 @@ export function WorkerHostsPanel() {
   const edit = (name: string, e: HostEdit) => act(`/api/hosts/settings/hosts/${encodeURIComponent(name)}`, 'PUT', e);
   const add = (name: string) => edit(name, {});
 
-  // Hidden by Settings: nothing drawn, and nothing about the hosts themselves changes.
-  if (!s || s.shown === false) return null;
+  if (!s) return null;
+  // Hidden by Settings: only this computer's own card is drawn, and nothing about the hosts changes.
+  const hostsShown = s.shown !== false;
+  if (!hostsShown && !s.board) return null;
 
   const empty = s.hosts.length === 0 && s.seen.length === 0;
+  const boardCard = s.board && (
+    <BoardCard b={s.board} busy={busy}
+      machine={machines?.machines.find(m => m.place === BOARD_PLACE)}
+      onEdit={e => act('/api/hosts/settings/board', 'PUT', e)}
+      onStop={pending => act(`/api/hosts/settings/board/${pending ? 'stop-after-runs' : 'cancel-stop'}`, 'POST')} />
+  );
+
+  if (!hostsShown) {
+    return (
+      <div>
+        <SectionRule title="This computer" colour="var(--w-queue)" meta="the workers on this board's own machine" />
+        {error && <p className="text-xs mb-2" style={{ color: 'rgb(var(--w-blocked-rgb))' }}>{error}</p>}
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">{boardCard}</div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -148,7 +189,7 @@ export function WorkerHostsPanel() {
       {error && <p className="text-xs mb-2" style={{ color: 'rgb(var(--w-blocked-rgb))' }}>{error}</p>}
 
       {empty && (
-        <p style={{ font: `400 11px ${BODY}`, color: DIM }}>
+        <p className="mb-3" style={{ font: `400 11px ${BODY}`, color: DIM }}>
           No other computers yet. A computer shows up here once its runner checks in, and then it can be
           added with one click. Setting one up: docs/worker-host-setup.md.
         </p>
@@ -159,6 +200,7 @@ export function WorkerHostsPanel() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        {boardCard}
         {s.hosts.map(h => (
           <HostCard key={h.name} h={h} s={s} busy={busy} onEdit={e => edit(h.name, e)}
             onStop={pending => act(`/api/hosts/settings/hosts/${encodeURIComponent(h.name)}/${pending ? 'stop-after-runs' : 'cancel-stop'}`, 'POST')}
@@ -236,7 +278,7 @@ function DispatchPanel({ s, busy, onSave }: {
         <ol className="mt-2 space-y-1">
           {order.map((name, i) => {
             const h = s.hosts.find(x => x.name === name);
-            const st = h ? stateOf(h) : { text: 'this board\'s own workers', colour: MUTED };
+            const st = h ? stateOf(h) : s.board ? boardStateOf(s.board) : { text: 'this board\'s own workers', colour: MUTED };
             return (
               <li key={name} className="flex items-center gap-3 min-w-0 border border-hair px-2 py-1" style={{ clipPath: chamfer(7) }}>
                 <span style={{ font: `700 13px ${MONO}`, color: DIM, minWidth: 18, textAlign: 'right' }}>{i + 1}</span>
@@ -404,6 +446,114 @@ function HostCard({ h, s, busy, onEdit, onStop, onRemove, machine }: {
           Remove
         </GhostButton>
       </div>
+    </Panel>
+  );
+}
+
+/** What this computer's card says about it, in the same words and colours as a host's. */
+function boardStateOf(b: BoardPlace): { text: string; colour: string } {
+  if (!b.enabled) return { text: 'switched off', colour: DIM };
+  if (b.stopPending) return { text: b.out > 0 ? `stopping · ${b.out} finishing` : 'stopping', colour: 'rgb(var(--w-active-rgb))' };
+  return { text: b.out > 0 ? `working · ${b.out}` : 'ready', colour: 'rgb(var(--w-done-rgb))' };
+}
+
+/**
+ * This computer: the board host's own workers, with the controls a worker host's card has. Berths
+ * are slots 1..N here whatever N is, so changing the count renumbers nothing, and lowering it below
+ * what is running only stops refilling. No phases or projects: what this machine claims is the
+ * heartbeat's own Work on filter, which narrows every computer.
+ */
+function BoardCard({ b, busy, onEdit, onStop, machine }: {
+  b: BoardPlace;
+  busy: boolean;
+  machine?: Machine;
+  onEdit: (e: BoardEdit) => void;
+  /** Start (true) or cancel (false) its "stop after current runs". */
+  onStop: (pending: boolean) => void;
+}) {
+  const st = boardStateOf(b);
+  const [confirmOff, setConfirmOff] = useState(false);
+  const flip = () => {
+    if (b.enabled && !b.stopPending && b.out > 0) setConfirmOff(true);
+    else onEdit({ enabled: b.stopPending ? true : !b.enabled });
+  };
+  const runs = b.runs.map(r => ({ slot: r.slot, ticketId: Number(r.ticketId) || 0, runId: r.slot, project: r.project, exited: false }));
+
+  return (
+    <Panel tone={b.enabled ? st.colour : undefined}>
+      <div className="flex items-center gap-3 flex-wrap">
+        <span style={{ font: `700 14px ${DISPLAY}`, letterSpacing: track(0.12), color: BRIGHT, textTransform: CAPS }}>This computer</span>
+        <span style={{ font: `600 10px ${DISPLAY}`, letterSpacing: track(0.2), color: st.colour, textTransform: CAPS }}>{st.text}</span>
+        <span className="flex-1" />
+        {b.enabled && !b.stopPending && (
+          <GhostButton tone="hold" disabled={busy} onClick={() => onStop(true)}
+            title="Take no new work on this computer. Its runs finish here, then it switches off. The heartbeat, the steward and the worker hosts carry on.">
+            Stop after current runs
+          </GhostButton>
+        )}
+        <Chip on={b.enabled && !b.stopPending} disabled={busy} onClick={flip}
+          title={b.stopPending ? 'Cancel the pending stop and keep this computer on.'
+            : b.enabled ? 'Switch this computer\'s workers off: no new work here; runs already going finish. The heartbeat keeps running.'
+            : 'Switch this computer\'s workers on.'}>
+          {b.enabled ? 'On' : 'Off'}
+        </Chip>
+      </div>
+
+      {b.stopPending && (
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <span className="flex items-center gap-1.5 min-w-0" style={{ font: `400 11px ${BODY}`, color: 'rgb(var(--w-active-rgb))' }}>
+            <span className="inline-block h-2 w-2 rounded-full animate-pulse flex-none" style={{ background: 'rgb(var(--w-active-rgb))' }} />
+            {b.out > 0 ? `Stopping - ${b.out} run${b.out === 1 ? '' : 's'} finishing, then off` : 'Stopping - nothing running, switching off'}
+          </span>
+          <span className="flex-1" />
+          <GhostButton tone="hold" disabled={busy} onClick={() => onStop(false)}
+            title="Keep this computer on and let it take work again.">
+            Cancel pending stop
+          </GhostButton>
+        </div>
+      )}
+
+      {confirmOff && (
+        <ConfirmHostOffModal name="this computer" runs={runs} local
+          onOff={() => onEdit({ enabled: false })}
+          onStopAfter={() => onStop(true)}
+          onClose={() => setConfirmOff(false)} />
+      )}
+
+      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5" style={{ font: `400 10.5px ${BODY}`, color: MUTED }}>
+        <span>berths {b.slots === 1 ? 1 : `1–${b.slots}`}</span>
+        <span>the steward runs beside these, in its own berth</span>
+      </div>
+
+      {machine?.inventory && (
+        <div className="mt-0.5 min-w-0 break-words" style={{ font: `400 10.5px ${BODY}`, color: DIM }}>
+          {hardwareLine(machine.inventory)}
+        </div>
+      )}
+
+      {b.runs.length > 0 && (
+        <div className="mt-1" style={{ font: `400 10.5px ${BODY}`, color: BRIGHT }}>
+          Working {b.runs.map(r => `#${r.ticketId ?? '?'}${r.project ? ` (${r.project})` : ''}`).join(', ')}
+        </div>
+      )}
+
+      <div className="mt-3 grid gap-2" style={{ gridTemplateColumns: 'minmax(0,auto) minmax(0,1fr)', alignItems: 'center' }}>
+        <span style={label()}>Berths</span>
+        <Stepper value={b.slots} min={1} max={b.maxSlots} busy={busy} onChange={v => onEdit({ slots: v })}
+          hint="How many workers this computer runs at once. Applies on the heartbeat's next pass; lowering it stops nothing that is running." />
+        {machine && <><span /><SlotSuggestionNote s={machine.workers} current={b.slots} busy={busy} onUse={n => onEdit({ slots: Math.min(n, b.maxSlots) })} /></>}
+
+        <span style={label()}>QA at once</span>
+        <Stepper value={b.qaLeases} min={1} max={b.maxQaLeases} busy={busy} onChange={v => onEdit({ qaLeases: v })}
+          hint="Copies of one project's stack this computer may run together. Above one, only for a project whose config sets parallelStacks." />
+        {machine && <><span /><SlotSuggestionNote s={machine.qa} current={b.qaLeases} busy={busy} onUse={n => onEdit({ qaLeases: Math.min(n, b.maxQaLeases) })} /></>}
+      </div>
+      {b.qaLeases > b.slots && (
+        <p className="mt-2" style={{ font: `400 10.5px ${BODY}`, color: DIM }}>
+          Only {b.slots} worker{b.slots === 1 ? '' : 's'} run{b.slots === 1 ? 's' : ''} here at once, so no more than {b.slots} of
+          the {b.qaLeases} QA copies can be in use together.
+        </p>
+      )}
     </Panel>
   );
 }

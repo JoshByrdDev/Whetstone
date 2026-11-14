@@ -79,7 +79,7 @@ public static class CapacityReasons
 
 /// <summary>What the sampler knows about one place at one minute.</summary>
 /// <param name="Place"><c>@board</c> or a worker host's name.</param>
-/// <param name="HostState">Null for the board; otherwise why the host cannot take work, or null if it can.</param>
+/// <param name="HostState">Why the place cannot take work - a host's state, or this computer switched off or stopping - or null if it can.</param>
 /// <param name="LastClaim">The last claim made for this place, or null if none since the API started.</param>
 public record PlaceInput(
     string Place, int Slots, int Busy,
@@ -202,7 +202,7 @@ public class CapacitySnapshot
         var paused = AnyProviderPaused();
         var list = new List<PlaceInput>
         {
-            new(CapacityPlaces.Board, BoardSlots(), _events.BoardBusyCount, running, state, sleep, paused, null,
+            new(CapacityPlaces.Board, BoardSlots(), _events.BoardBusyCount, running, state, sleep, paused, BoardState(),
                 _monitor.LastClaim(CapacityPlaces.Board)),
         };
         foreach (var h in _hosts.Snapshot())
@@ -217,6 +217,13 @@ public class CapacitySnapshot
                 _monitor.LastClaim(h.Name)));
         }
         return list;
+    }
+
+    /// <summary>This computer switched off, or stopping after its current runs, from its card: the same reason as a host's.</summary>
+    private string? BoardState()
+    {
+        try { return WorkerHostSettings.ReadBoard(_registry.GetGlobalConfig()).Dispatchable ? null : CapacityReasons.HostOff; }
+        catch { return null; }   // a malformed config must not stop the meter
     }
 
     private int BoardSlots()

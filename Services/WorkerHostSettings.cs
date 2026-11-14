@@ -129,6 +129,103 @@ public static class WorkerHostSettings
         return true;
     }
 
+    // ---- This computer: the board host's own place ----
+    //
+    // The same three things a worker host has - On/Off, a stop after current runs, berths and QA at
+    // once - for the workers in slots 1..MaxWorkers here. Off takes this machine out of dispatch and
+    // kills nothing; the orchestrator keeps running, worker hosts keep working, and the steward's berth
+    // is not one of these and is untouched. Berths and QA at once are the existing heartbeatWorkers and
+    // qaLeases, so nothing that already reads them changes; the orchestrator reads the berths every
+    // pass through /api/hosts/dispatch rather than once at its start.
+
+    /// <summary>The board host's own place: <c>{ enabled, stopPending, stopSince }</c>. Absent means on.</summary>
+    public const string BoardKey = "boardHost";
+
+    /// <summary>
+    /// How long after a stop is pressed the board waits before it may call this machine drained. A
+    /// claim made just before the press reaches the board's slot count only when its worker reports in,
+    /// and switching Off in that gap would say "off" over a run that is starting.
+    /// </summary>
+    public static readonly TimeSpan BoardStopGrace = TimeSpan.FromSeconds(60);
+
+    /// <summary>This computer's place as the orchestrator and the page read it.</summary>
+    public record BoardPlace(bool Enabled, bool StopPending, int Slots, int QaLeases)
+    {
+        /// <summary>Whether the orchestrator may give this machine new work.</summary>
+        public bool Dispatchable => Enabled && !StopPending;
+    }
+
+    /// <summary>A change to it, as the page sends one. A null field is left as it is.</summary>
+    public record BoardEdit(bool? Enabled, int? Slots, int? QaLeases);
+
+    public static BoardPlace ReadBoard(IReadOnlyDictionary<string, JsonElement> global)
+    {
+        bool enabled = true, stopping = false;
+        if (global.TryGetValue(BoardKey, out var b) && b.ValueKind == JsonValueKind.Object)
+        {
+            if (b.TryGetProperty("enabled", out var e) && e.ValueKind == JsonValueKind.False) enabled = false;
+            stopping = enabled && b.TryGetProperty(StopPendingKey, out var s) && s.ValueKind == JsonValueKind.True;
+        }
+        var slots = global.TryGetValue("heartbeatWorkers", out var w) && w.ValueKind == JsonValueKind.Number
+            ? Math.Clamp((int)w.GetDouble(), 1, HeartbeatManager.MaxWorkers) : HeartbeatManager.DefaultWorkers;
+        return new BoardPlace(enabled, stopping, slots, ResourceLeaseService.QaLeases(global));
+    }
+
+    /// <summary>Change this computer's place. On or Off ends a pending stop, as it does for a worker host.</summary>
+    public static void SetBoard(JsonObject config, BoardEdit edit)
+    {
+        if (edit.Enabled is { } on)
+        {
+            var b = BoardEntry(config);
+            b["enabled"] = on;
+            b.Remove(StopPendingKey);
+            b.Remove("stopSince");
+        }
+        if (edit.Slots is { } slots) config["heartbeatWorkers"] = Math.Clamp(slots, 1, HeartbeatManager.MaxWorkers);
+        if (edit.QaLeases is { } qa) config["qaLeases"] = Math.Clamp(qa, 1, ResourceLeaseService.MaxQaLeases);
+    }
+
+    /// <summary>Start or cancel this computer's stop after current runs. Returns why it was refused, or null.</summary>
+    public static string? SetBoardStop(JsonObject config, bool pending, DateTime now)
+    {
+        var b = BoardEntry(config);
+        if (pending)
+        {
+            if (b["enabled"] is JsonValue v && v.TryGetValue<bool>(out var on) && !on)
+                return "This computer is already off.";
+            b[StopPendingKey] = true;
+            b["stopSince"] = now.ToUniversalTime().ToString("o");
+        }
+        else { b.Remove(StopPendingKey); b.Remove("stopSince"); }
+        return null;
+    }
+
+    /// <summary>
+    /// The end of this computer's pending stop: Off, once none of its berths is running and the grace
+    /// since the press is over. False, and no change, when there is nothing to finish yet.
+    /// </summary>
+    public static bool FinishBoardStop(JsonObject config, int busy, DateTime now)
+    {
+        if (busy > 0 || config[BoardKey] is not JsonObject b) return false;
+        if (b[StopPendingKey] is not JsonValue v || !v.TryGetValue<bool>(out var pending) || !pending) return false;
+        if (b["stopSince"] is JsonValue s && s.TryGetValue<string>(out var since)
+            && DateTime.TryParse(since, null, System.Globalization.DateTimeStyles.RoundtripKind, out var t)
+            && now.ToUniversalTime() - t.ToUniversalTime() < BoardStopGrace)
+            return false;
+        b["enabled"] = false;
+        b.Remove(StopPendingKey);
+        b.Remove("stopSince");
+        return true;
+    }
+
+    private static JsonObject BoardEntry(JsonObject config)
+    {
+        if (config[BoardKey] is JsonObject o) return o;
+        var made = new JsonObject();
+        config[BoardKey] = made;
+        return made;
+    }
+
     private static JsonObject? Entry(JsonObject config, string name) =>
         Hosts(config).OfType<JsonObject>()
             .FirstOrDefault(h => string.Equals(h["name"]?.GetValue<string>(), name.Trim(), StringComparison.OrdinalIgnoreCase));

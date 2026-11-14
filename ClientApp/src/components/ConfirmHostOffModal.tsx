@@ -17,9 +17,11 @@ import type { WorkerHostRun } from '../hooks/useWorkerHosts';
  *
  * Rendered only while open, as `useVeil` needs.
  */
-export function ConfirmHostOffModal({ name, runs, onOff, onStopAfter, onClose }: {
+export function ConfirmHostOffModal({ name, runs, local = false, onOff, onStopAfter, onClose }: {
   name: string;
   runs: WorkerHostRun[];
+  /** This computer's own workers, which have no branch to hand back - they finish where they are. */
+  local?: boolean;
   onOff: () => void;
   onStopAfter: () => void;
   onClose: () => void;
@@ -34,6 +36,8 @@ export function ConfirmHostOffModal({ name, runs, onOff, onStopAfter, onClose }:
 
   const then = (act: () => void) => leave(() => { onClose(); act(); });
   const n = runs.length;
+  // A sentence starts with it, and "this computer" is not a host name that is already capitalised.
+  const Name = name.charAt(0).toUpperCase() + name.slice(1);
   const them = n === 1 ? 'it' : 'them';
 
   return createPortal(
@@ -52,13 +56,13 @@ export function ConfirmHostOffModal({ name, runs, onOff, onStopAfter, onClose }:
         </div>
         <div className="px-5 py-4 space-y-3 text-[13px] text-gray-300">
           <p>
-            {name} has {n} run{n === 1 ? '' : 's'} out. Switching it off stops the board giving it new work. It does
-            not stop or kill what it is running: {n === 1 ? 'that run carries' : 'those runs carry'} on, finish, and
-            hand {n === 1 ? 'its branch' : 'their branches'} back as usual.
+            {Name} has {n} run{n === 1 ? '' : 's'} out. Switching it off stops the board giving it new work. It does
+            not stop or kill what it is running: {n === 1 ? 'that run carries' : 'those runs carry'} on and finish
+            {local ? ' as usual' : <>, and hand {n === 1 ? 'its branch' : 'their branches'} back as usual</>}.
           </p>
           <ul className="max-h-40 overflow-auto rounded border border-hairsoft">
             {runs.map(r => (
-              <li key={r.runId} className="flex items-baseline gap-2 px-2 py-1 text-[11px] border-b border-hairsoft last:border-0">
+              <li key={`${r.slot}-${r.runId}`} className="flex items-baseline gap-2 px-2 py-1 text-[11px] border-b border-hairsoft last:border-0">
                 <span className="font-mono text-gray-600 flex-none">#{r.slot}</span>
                 <span className="font-mono text-amber-400 flex-none">{r.ticketId}</span>
                 <span className="text-gray-400 min-w-0 truncate">{r.project ?? ''}</span>

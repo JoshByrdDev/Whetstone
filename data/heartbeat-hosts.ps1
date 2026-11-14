@@ -156,7 +156,7 @@ $script:Dispatch = $null
 function Get-Dispatch {
     try {
         $r = Invoke-RestMethod -Uri "$DashboardUrl/api/hosts/dispatch" -Method Get -TimeoutSec 10
-        $d = [pscustomobject]@{ mode = "$($r.mode)"; order = @($r.order | ForEach-Object { "$_" }) }
+        $d = [pscustomobject]@{ mode = "$($r.mode)"; order = @($r.order | ForEach-Object { "$_" }); board = $r.board }
         $was = if ($script:Dispatch) { "$($script:Dispatch.mode) $($script:Dispatch.order -join ',')" } else { $null }
         $now = "$($d.mode) $($d.order -join ',')"
         if ($was -ne $now) { Write-Log "  Dispatch: $($d.mode), in the order $($d.order -join ', ')." }
@@ -169,8 +169,35 @@ function Get-Dispatch {
         try { $status = [int]$_.Exception.Response.StatusCode } catch { }
         if ($status -ne 404) { Write-Log "  Could not read the dispatch order: $($_.Exception.Message)" }
     }
-    if ($script:Dispatch) { return $script:Dispatch }
-    return [pscustomobject]@{ mode = 'fill'; order = @() }
+    if ($script:Dispatch) { Use-BoardPlace $script:Dispatch.board; return $script:Dispatch }
+    return [pscustomobject]@{ mode = 'fill'; order = @(); board = $null }
+}
+
+# This computer's own place, from the same answer: whether it may be given new work (its card's
+# On/Off and stop after current runs), and how many berths it has. Read every pass, so a change to
+# either applies without a restart; the berth count only ever stops refilling above it, it kills
+# nothing. Slots 1..$MaxHeartbeatWorkers are this machine's whatever the count, so changing it
+# renumbers no one. An app from before the card sends no board: on, with the berths from config.
+$script:BoardOpen = $true
+
+function Use-BoardPlace {
+    param($Board)
+    if ($null -eq $Board) { $script:BoardOpen = $true; return }
+    $open = [bool]$Board.enabled -and -not [bool]$Board.stopPending
+    if ($open -ne $script:BoardOpen) {
+        if ($open) { Write-Log "  This computer is on: its berths take work again." }
+        elseif ([bool]$Board.stopPending) { Write-Log "  This computer is stopping after its current runs: no new work here." }
+        else { Write-Log "  This computer is switched off: no new work here; worker hosts carry on." }
+        $script:BoardOpen = $open
+    }
+    $n = 0
+    if ([int]::TryParse("$($Board.slots)", [ref]$n) -and $n -ge 1) {
+        $n = [math]::Min($n, $MaxHeartbeatWorkers)
+        if ($n -ne $script:HeartbeatWorkers) {
+            Write-Log "  This computer's berths: $($script:HeartbeatWorkers) -> $n."
+            $script:HeartbeatWorkers = $n
+        }
+    }
 }
 
 # Every place in the order, as the API's own rule has it: a name it does not know is dropped, and
@@ -254,7 +281,7 @@ function Start-Fill {
     foreach ($name in $order) {
         $rank++
         if ($name -eq $BoardPlace) {
-            if ($LocalOpen) { $places += [pscustomobject]@{ Name = $name; Rank = $rank; HostView = $null } }
+            if ($LocalOpen -and $script:BoardOpen) { $places += [pscustomobject]@{ Name = $name; Rank = $rank; HostView = $null } }
             continue
         }
         $h = @($hosts | Where-Object { "$($_.name)" -eq $name })[0]

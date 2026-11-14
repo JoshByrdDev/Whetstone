@@ -154,10 +154,15 @@ function Reset-Board {
     $script:DispatchView = [pscustomobject]@{ mode = 'fill'; order = @() }
     $script:DispatchDown = $false
     $script:Dispatch = $null
+    $script:BoardOpen = $true
+    $script:HeartbeatWorkers = 2
 }
 
-function Set-Dispatch { param([string]$Mode, [string[]]$Order = @())
-    $script:DispatchView = [pscustomobject]@{ mode = $Mode; order = @($Order) }
+function Set-Dispatch { param([string]$Mode, [string[]]$Order = @(), $Board = $null)
+    $script:DispatchView = [pscustomobject]@{ mode = $Mode; order = @($Order); board = $Board }
+}
+function New-BoardPlace { param([bool]$Enabled = $true, [bool]$StopPending = $false, [int]$Slots = 2)
+    [pscustomobject]@{ enabled = $Enabled; stopPending = $StopPending; slots = $Slots; qaLeases = 1 }
 }
 
 # A remote agent as Start-RemoteAgent books one, ordered $Ago seconds ago.
@@ -309,6 +314,55 @@ $null = Get-WorkerHosts
 $null = Start-Fill -LocalOpen $false
 Check 'this machine at its usage limit is left out, whatever its place' ($script:Placed -join ' ') 'bravo-host:11 bravo-host:12'
 Check '... and never asked' (@($script:ClaimHosts | Where-Object { $_ -eq '@board' }).Count) 0
+
+Write-Host "== This computer's own place"
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+Set-Dispatch -Mode 'fill' -Order @('@board', 'bravo-host') -Board (New-BoardPlace -Enabled $false)
+New-Tickets 3
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'this computer switched off is given nothing; the host still fills' ($script:Placed -join ' ') 'bravo-host:11 bravo-host:12'
+Check '... and never asked' (@($script:ClaimHosts | Where-Object { $_ -eq '@board' }).Count) 0
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+Set-Dispatch -Mode 'fill' -Order @('@board', 'bravo-host') -Board (New-BoardPlace -StopPending $true)
+$script:Agents[1] = @{ Process = 'local'; TicketId = '7' }
+New-Tickets 3
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'stopping after current runs: nothing new here, the run out is left alone' ($script:Placed -join ' ') 'bravo-host:11 bravo-host:12'
+Check '... and its run is still on the books' $script:Agents[1].TicketId '7'
+
+Reset-Board
+Set-Dispatch -Mode 'fill' -Order @('@board') -Board (New-BoardPlace -Slots 3)
+New-Tickets 4
+$null = Start-Fill
+Check 'berths raised on the card fill on the next pass, no restart' ($script:Placed -join ' ') '@board:11 @board:12 @board:13'
+Check '... and the count is the one the card says' $script:HeartbeatWorkers 3
+
+Reset-Board
+Set-Dispatch -Mode 'fill' -Order @('@board') -Board (New-BoardPlace -Slots 1)
+$script:Agents[1] = @{ Process = 'local'; TicketId = '7' }
+$script:Agents[2] = @{ Process = 'local'; TicketId = '8' }
+New-Tickets 2
+$null = Start-Fill
+Check 'berths lowered below what is running: nothing new, and nothing killed' "$($script:Placed.Count) $($script:Agents.Count)" '0 2'
+
+Reset-Board
+Set-Dispatch -Mode 'fill' -Order @('@board') -Board (New-BoardPlace -Enabled $false)
+$null = Start-Fill
+Set-Dispatch -Mode 'fill' -Order @('@board') -Board (New-BoardPlace)
+New-Tickets 1
+$null = Start-Fill
+Check 'switched back on, it takes work on the next pass' ($script:Placed -join ' ') '@board:11'
+
+Reset-Board
+Set-Dispatch -Mode 'fill' -Order @('@board')
+New-Tickets 1
+$null = Start-Fill
+Check 'an app that sends no board: on, with the berths from config' "$($script:Placed -join ' ') $($script:HeartbeatWorkers)" '@board:11 2'
 
 Reset-Board
 $script:Hosts = @((New-HostView -Name 'r1' -FirstSlot 5 -Dispatchable $false), (New-HostView -Name 'r2' -FirstSlot 7 -Slots 1))

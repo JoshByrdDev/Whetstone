@@ -578,9 +578,11 @@ function Add-OrphanAgents {
     $keep = @()
 
     foreach ($o in $orphans) {
-        # Prefer the berth it was launched into; it is free anyway, unless the worker count was
-        # lowered since. Nothing has launched yet, so this only ever falls through on that edge.
-        $slot = if ($o.Slot -ge 1 -and $o.Slot -le $HeartbeatWorkers -and -not $Agents.ContainsKey($o.Slot)) {
+        # The berth it was launched into: any of this machine's, not only those under today's
+        # count, which This computer's card may have lowered while it ran - adopting it above the
+        # count only means that berth is not refilled once it ends. Nothing has launched yet, so
+        # it is free unless two survivors claim one slot.
+        $slot = if ($o.Slot -ge 1 -and $o.Slot -le $MaxHeartbeatWorkers -and -not $Agents.ContainsKey($o.Slot)) {
             $o.Slot
         } else {
             Get-FreeSlot

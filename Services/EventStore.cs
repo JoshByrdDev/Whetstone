@@ -275,6 +275,18 @@ public class EventStore
         }
     }
 
+    /// <summary>What this machine's worker berths are running now, by slot - the same ones <see cref="BoardBusyCount"/> counts.</summary>
+    public IReadOnlyList<BoardRun> BoardRuns()
+    {
+        lock (_agentLock)
+            return _agents.Where(kv => kv.Value.Status == "running"
+                    && kv.Key >= 1 && kv.Key <= HeartbeatManager.MaxWorkers
+                    && kv.Value.Phase != EventPhases.Steward)
+                .OrderBy(kv => kv.Key)
+                .Select(kv => new BoardRun(kv.Key, kv.Value.TicketId, kv.Value.Project, kv.Value.Phase))
+                .ToList();
+    }
+
     /// <summary>
     /// The phase each running worker in the slots <paramref name="slot"/> accepts is on, counted:
     /// what a machine's berths were doing at one minute, for its load sample. The steward is not a
@@ -396,3 +408,6 @@ public class EventStore
         };
     }
 }
+
+/// <summary>One of this machine's worker berths that is running: what This computer's card lists.</summary>
+public record BoardRun(int Slot, string? TicketId, string? Project, string? Phase);

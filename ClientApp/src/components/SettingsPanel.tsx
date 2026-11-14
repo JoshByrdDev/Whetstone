@@ -11,8 +11,6 @@ import { SmartSwitchField } from './SmartSwitchField';
 import type { SmartSwitchSetting } from './SmartSwitchField';
 import { ApiCreditsField, API_CREDITS_OFF } from './ApiCreditsField';
 import type { ApiCreditsSetting } from './ApiCreditsField';
-import { SlotSuggestionNote } from './SlotSuggestionNote';
-import { useMachines, BOARD_PLACE } from '../hooks/useMachines';
 
 // ---------- Shared field primitives -----------------------------------------
 
@@ -439,7 +437,6 @@ function withDefaults(d: GlobalConfig): GlobalConfig {
 
 function GlobalSettings() {
   const [cfg, setCfg] = useState<GlobalConfig | null>(null);
-  const board = useMachines()?.machines.find(m => m.place === BOARD_PLACE);
   // What the server last held, as JSON. Unsaved means "different from this", not "touched": a
   // field changed and changed back leaves nothing to save.
   const [saved, setSaved] = useState<string | null>(null);
@@ -501,12 +498,6 @@ function GlobalSettings() {
     if (cfg.heartbeatMaxAttempts < 1) errors.heartbeatMaxAttempts = 'Must be ≥ 1';
     if (cfg.heartbeatWorkerTimeoutMinutes < 1) errors.heartbeatWorkerTimeoutMinutes = 'Must be ≥ 1';
     if (cfg.heartbeatWorkerStallMinutes < 0) errors.heartbeatWorkerStallMinutes = 'Must be ≥ 0';
-    const maxAgents = cfg.maxHeartbeatWorkers || 10;
-    if (!Number.isInteger(cfg.heartbeatWorkers) || cfg.heartbeatWorkers < 1 || cfg.heartbeatWorkers > maxAgents)
-      errors.heartbeatWorkers = `A whole number from 1 to ${maxAgents}`;
-    const maxQa = cfg.maxQaLeases || 10;
-    if (!Number.isInteger(cfg.qaLeases) || cfg.qaLeases < 1 || cfg.qaLeases > maxQa)
-      errors.qaLeases = `A whole number from 1 to ${maxQa}`;
     if (cfg.claudeSmartSwitch?.chain.some(r => !(r.weekly >= 1 && r.weekly <= 100) || !(r.session >= 1 && r.session <= 100)))
       errors.claudeSmartSwitch = 'Each limit is a percent from 1 to 100';
     const creditKeys = cfg.claudeApiCredits?.keys ?? [];
@@ -585,7 +576,10 @@ function GlobalSettings() {
     setSaving(true); setMsg(null);
     try {
       const res = await fetch('/api/config', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cfg),
+        // Not the two counts: the This computer card on the Heartbeat tab writes those, and sending
+        // what this page loaded would put back an older value over one changed there since.
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify((({ heartbeatWorkers: _w, qaLeases: _q, ...rest }) => rest)(cfg)),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Save failed');
       setMsg({ type: 'success', text: 'Saved. Restart the server to apply.' });
@@ -776,35 +770,12 @@ function GlobalSettings() {
 
       <FieldGroup title="Agents">
         <p className="text-xs text-gray-500 -mt-2 mb-3">
-          How much runs at once on this machine. Both are ceilings, not targets: a slot is filled only when
-          there is work for it, so a quiet board still runs one agent.
+          How much runs at once on this machine - {cfg.heartbeatWorkers} agent{cfg.heartbeatWorkers === 1 ? '' : 's'},
+          {' '}{cfg.qaLeases} QA cop{cfg.qaLeases === 1 ? 'y' : 'ies'} of a stack - is set on the Heartbeat tab, on
+          the <span className="text-gray-300">This computer</span> card, beside any worker hosts. It applies on the
+          heartbeat's next pass, with no restart, and the card also switches this machine's workers off or stops
+          them after their current runs.
         </p>
-        <div className="grid grid-cols-2 max-sm:grid-cols-1 gap-4">
-          <Field
-            label="Concurrent Agents"
-            description={`1 to ${cfg.maxHeartbeatWorkers || 10}. Tickets worked at once. Applies when the heartbeat next starts.`}
-            type="number"
-            value={Number.isNaN(cfg.heartbeatWorkers) ? '' : cfg.heartbeatWorkers}
-            // Kept as typed, blank included, so the field can be cleared and retyped; the check
-            // below holds the save until it is a whole number in range.
-            onChange={v => update({ heartbeatWorkers: v === '' ? NaN : Number(v) })}
-            error={errors.heartbeatWorkers}
-          />
-          <Field
-            label="QA Leases"
-            description={`1 to ${cfg.maxQaLeases || 10}. QA or peer-review runs that may share one project's stack at once.`}
-            type="number"
-            value={Number.isNaN(cfg.qaLeases) ? '' : cfg.qaLeases}
-            onChange={v => update({ qaLeases: v === '' ? NaN : Number(v) })}
-            error={errors.qaLeases}
-          />
-        </div>
-        {board && (
-          <div className="grid grid-cols-2 max-sm:grid-cols-1 gap-4 -mt-1">
-            <SlotSuggestionNote s={board.workers} current={cfg.heartbeatWorkers} onUse={n => update({ heartbeatWorkers: Math.min(n, cfg.maxHeartbeatWorkers || 10) })} />
-            <SlotSuggestionNote s={board.qa} current={cfg.qaLeases} onUse={n => update({ qaLeases: Math.min(n, cfg.maxQaLeases || 10) })} />
-          </div>
-        )}
         <CheckField
           label="Automatic slot limits"
           description={
@@ -815,22 +786,6 @@ function GlobalSettings() {
           onChange={v => update({ machineLimits: { ...(cfg.machineLimits ?? {}), auto: v } })}
           disabled={cfg.machineLimits === undefined}
         />
-        {/* The caveats the two descriptions would otherwise each carry, said once under both. */}
-        <div className="space-y-1 text-[11px] text-gray-600">
-          <p>
-            Every agent is a full CLI session, and agents on the same provider share its rate limits. QA leases above 1
-            apply only to a project whose config sets <code className="text-gray-500">parallelStacks</code>; any other
-            gets one.
-          </p>
-          {/* Only when both numbers are valid, so it never argues with an error under either field. */}
-          {!errors.heartbeatWorkers && !errors.qaLeases && cfg.qaLeases > cfg.heartbeatWorkers && (
-            <p className="text-xs text-gray-500">
-              ⓘ Only {cfg.heartbeatWorkers} agent{cfg.heartbeatWorkers === 1 ? '' : 's'} run{cfg.heartbeatWorkers === 1 ? 's' : ''} at
-              once on this machine, so no more than {cfg.heartbeatWorkers} of the {cfg.qaLeases} QA leases can ever be in use
-              together.
-            </p>
-          )}
-        </div>
       </FieldGroup>
 
       <FieldGroup title="Worker Hosts">

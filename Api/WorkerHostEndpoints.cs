@@ -94,10 +94,43 @@ public static class WorkerHostEndpoints
 
         // Where work goes first, read by the orchestrator on every pass - not from config at its own
         // start, because restarting it to apply a change would kill every worker it has out.
-        app.MapGet("/api/hosts/dispatch", (ProjectRegistry registry) =>
+        // It also carries this computer's own place (on, stopping, its berths), read the same way and
+        // for the same reason - and, being read every pass, is where this machine's own pending stop
+        // is finished once its berths are empty.
+        app.MapGet("/api/hosts/dispatch", (ProjectRegistry registry, DashboardPaths paths, EventStore events) =>
         {
+            FinishBoardStop(paths, events);
             var global = registry.GetGlobalConfig();
-            return Results.Ok(WorkerHostSettings.ReadDispatch(global, WorkerHostConfig.Read(global)));
+            var d = WorkerHostSettings.ReadDispatch(global, WorkerHostConfig.Read(global));
+            return Results.Ok(new { mode = d.Mode, order = d.Order, board = WorkerHostSettings.ReadBoard(global) });
+        });
+
+        // ---- This computer's own place ----
+        //
+        // On/Off, berths and QA at once for the board host's own workers, and its stop after current
+        // runs - the twin of a worker host's, applied on the orchestrator's next pass. None of it
+        // touches the heartbeat itself or the steward's berth: the header's stop is for all of that.
+        // A change that can only add room wakes an idle heartbeat, which may have backed off for an
+        // hour while this computer was off; one that is not running is simply not woken.
+        app.MapPut("/api/hosts/settings/board", (WorkerHostSettings.BoardEdit req, DashboardPaths paths, HeartbeatManager hb) =>
+        {
+            lock (StopGate)
+            {
+                var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+                var before = ConfigEndpoints.Snapshot(config);
+                WorkerHostSettings.SetBoard(config, req);
+                ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            }
+            if (req.Enabled == true || req.Slots is not null) hb.Wake();
+            return Results.Ok(new { saved = true });
+        });
+        app.MapPost("/api/hosts/settings/board/stop-after-runs", (DashboardPaths paths, EventStore events) =>
+            SetBoardStop(true, paths, events));
+        app.MapPost("/api/hosts/settings/board/cancel-stop", (DashboardPaths paths, EventStore events, HeartbeatManager hb) =>
+        {
+            var r = SetBoardStop(false, paths, events);
+            hb.Wake();
+            return r;
         });
 
         app.MapPut("/api/hosts/settings/dispatch", (WorkerHostSettings.DispatchEdit req, DashboardPaths paths, ProjectRegistry registry) =>
@@ -114,9 +147,10 @@ public static class WorkerHostEndpoints
         //
         // Everything it draws in one read: the switch, every configured host with its live state,
         // machines that checked in before being added, and what a host may be given.
-        app.MapGet("/api/hosts/settings", (WorkerHostService hosts, ProjectRegistry registry, BoardCommit commit, DashboardPaths paths) =>
+        app.MapGet("/api/hosts/settings", (WorkerHostService hosts, ProjectRegistry registry, BoardCommit commit, DashboardPaths paths, EventStore events) =>
         {
             FinishDrainedStops(paths, hosts);
+            FinishBoardStop(paths, events);
             return Results.Ok(new
             {
                 enabled = hosts.RemoteOn,
@@ -128,6 +162,8 @@ public static class WorkerHostEndpoints
                 seen = hosts.Seen(),
                 projects = registry.Projects.Select(k => new { key = k, displayName = registry.GetProjectConfig(k).DisplayName }),
                 skills = WorkerHostSettings.HostableSkills,
+                // This computer's own card: its place, and what its berths are doing now.
+                board = BoardView(registry, events),
             });
         });
 
@@ -296,6 +332,49 @@ public static class WorkerHostEndpoints
             var zip = ProjectKit.Build(paths.ProjectDir(key), cfg.ResolvedMemoryDir);
             return Results.File(zip, "application/zip", $"{key}-kit.zip");
         });
+    }
+
+    /// <summary>
+    /// Switch this computer Off once its pending stop has drained: none of slots 1..MaxWorkers running
+    /// (<see cref="EventStore.BoardBusyCount"/>) and the grace since the press over. True when it did.
+    /// </summary>
+    public static bool FinishBoardStop(DashboardPaths paths, EventStore events, DateTime? now = null)
+    {
+        lock (StopGate)
+        {
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            if (!WorkerHostSettings.FinishBoardStop(config, events.BoardBusyCount, now ?? DateTime.UtcNow)) return false;
+            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            return true;
+        }
+    }
+
+    /// <summary>This computer's card, as the Heartbeat page draws it.</summary>
+    private static object BoardView(ProjectRegistry registry, EventStore events)
+    {
+        var place = WorkerHostSettings.ReadBoard(registry.GetGlobalConfig());
+        return new
+        {
+            place.Enabled, place.StopPending, place.Slots, place.QaLeases,
+            maxSlots = HeartbeatManager.MaxWorkers,
+            maxQaLeases = ResourceLeaseService.MaxQaLeases,
+            @out = events.BoardBusyCount,
+            runs = events.BoardRuns(),
+        };
+    }
+
+    private static IResult SetBoardStop(bool pending, DashboardPaths paths, EventStore events)
+    {
+        string? why;
+        lock (StopGate)
+        {
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            why = WorkerHostSettings.SetBoardStop(config, pending, DateTime.UtcNow);
+            if (why is null) ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+        }
+        return why is null ? Results.Ok(new { stopPending = pending }) : Results.BadRequest(new { error = why });
     }
 
     private static IResult SetStop(string name, bool pending, DashboardPaths paths, WorkerHostService hosts)
