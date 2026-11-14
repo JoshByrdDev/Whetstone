@@ -62,9 +62,35 @@ public static class WorkerHostEndpoints
         if (inventory is not null) await MachineInventoryStore.RecordAsync(db, host, inventory, now, ct);
     }
 
+    private static readonly object StopGate = new();
+
+    /// <summary>
+    /// Switch Off every host whose "stop after current runs" has drained (<see cref="WorkerHostService.DrainedStops"/>).
+    /// Worked out here on the board, from what the runners report, whenever something reads or hears
+    /// from the hosts - a check-in, the orchestrator's pass, the page - so neither the orchestrator nor
+    /// a runner has to know a pending stop exists. Returns the hosts it switched off.
+    /// </summary>
+    public static IReadOnlyList<string> FinishDrainedStops(DashboardPaths paths, WorkerHostService hosts)
+    {
+        var drained = hosts.DrainedStops();
+        if (drained.Count == 0) return drained;
+        lock (StopGate)
+        {
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            var done = drained.Where(n => WorkerHostSettings.FinishStop(config, n)).ToList();
+            if (done.Count > 0) ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            return done;
+        }
+    }
+
     public static void MapWorkerHostEndpoints(this WebApplication app)
     {
-        app.MapGet("/api/hosts", (WorkerHostService hosts) => Results.Ok(hosts.Snapshot()));
+        app.MapGet("/api/hosts", (WorkerHostService hosts, DashboardPaths paths) =>
+        {
+            FinishDrainedStops(paths, hosts);
+            return Results.Ok(hosts.Snapshot());
+        });
 
         // Where work goes first, read by the orchestrator on every pass - not from config at its own
         // start, because restarting it to apply a change would kill every worker it has out.
@@ -88,8 +114,10 @@ public static class WorkerHostEndpoints
         //
         // Everything it draws in one read: the switch, every configured host with its live state,
         // machines that checked in before being added, and what a host may be given.
-        app.MapGet("/api/hosts/settings", (WorkerHostService hosts, ProjectRegistry registry, BoardCommit commit) =>
-            Results.Ok(new
+        app.MapGet("/api/hosts/settings", (WorkerHostService hosts, ProjectRegistry registry, BoardCommit commit, DashboardPaths paths) =>
+        {
+            FinishDrainedStops(paths, hosts);
+            return Results.Ok(new
             {
                 enabled = hosts.RemoteOn,
                 // Whether to draw the section at all - a Settings choice, display only.
@@ -100,7 +128,8 @@ public static class WorkerHostEndpoints
                 seen = hosts.Seen(),
                 projects = registry.Projects.Select(k => new { key = k, displayName = registry.GetProjectConfig(k).DisplayName }),
                 skills = WorkerHostSettings.HostableSkills,
-            }));
+            });
+        });
 
         app.MapPut("/api/hosts/settings", (HostSwitchRequest req, DashboardPaths paths) =>
         {
@@ -119,13 +148,25 @@ public static class WorkerHostEndpoints
                 && WorkerHostSettings.RenumberingProblem(hosts.Snapshot(), name, removing: false) is { } busy)
                 return Results.Conflict(new { error = busy });
 
-            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
-            var before = ConfigEndpoints.Snapshot(config);
-            if (WorkerHostSettings.Upsert(config, name, req, registry.Projects.ToList()) is { } why)
-                return Results.BadRequest(new { error = why });
-            ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            // Under the stop gate, so a board switching a drained host Off cannot write over this edit.
+            lock (StopGate)
+            {
+                var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+                var before = ConfigEndpoints.Snapshot(config);
+                if (WorkerHostSettings.Upsert(config, name, req, registry.Projects.ToList()) is { } why)
+                    return Results.BadRequest(new { error = why });
+                ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+            }
             return Results.Ok(new { saved = true });
         });
+
+        // A host's own pending stop: it takes nothing new, its runs finish and hand back, and then the
+        // board switches it Off - the per-host twin of the heartbeat's stop-after-cycle / cancel-stop.
+        // Pressing On or Off also ends it (see WorkerHostSettings.Upsert).
+        app.MapPost("/api/hosts/settings/hosts/{name}/stop-after-runs", (string name, DashboardPaths paths, WorkerHostService hosts) =>
+            SetStop(name, true, paths, hosts));
+        app.MapPost("/api/hosts/settings/hosts/{name}/cancel-stop", (string name, DashboardPaths paths, WorkerHostService hosts) =>
+            SetStop(name, false, paths, hosts));
 
         app.MapDelete("/api/hosts/settings/hosts/{name}", (string name, DashboardPaths paths, WorkerHostService hosts) =>
         {
@@ -143,7 +184,7 @@ public static class WorkerHostEndpoints
         // without handing anything back, because their tickets may already be running elsewhere.
         app.MapPost("/api/hosts/{name}/checkin", async (string name, HostCheckinRequest req,
             WorkerHostService hosts, ResourceLeaseService leases, BoardCommit commit, MachineLoadBook book,
-            IServiceScopeFactory scopes, CancellationToken ct) =>
+            IServiceScopeFactory scopes, DashboardPaths paths, CancellationToken ct) =>
         {
             var runs = req.Runs ?? Array.Empty<HostRun>();
             // Only for a machine the config names, so a stray runner leaves no history behind.
@@ -159,6 +200,7 @@ public static class WorkerHostEndpoints
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
             var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot,
                 req.ClaudeLogins, req.UsageLimits, req.PsVersion, req.WindowsPowerShell ?? false);
+            FinishDrainedStops(paths, hosts);
             return CheckinResult(name, orders, revoked, commit.Get());
         });
 
@@ -255,4 +297,21 @@ public static class WorkerHostEndpoints
             return Results.File(zip, "application/zip", $"{key}-kit.zip");
         });
     }
+
+    private static IResult SetStop(string name, bool pending, DashboardPaths paths, WorkerHostService hosts)
+    {
+        string? why;
+        lock (StopGate)
+        {
+            var config = ConfigEndpoints.LoadObject(paths.GlobalConfigPath);
+            var before = ConfigEndpoints.Snapshot(config);
+            why = WorkerHostSettings.SetStopPending(config, name, pending);
+            if (why is null) ConfigEndpoints.SaveObject(paths.GlobalConfigPath, config, before);
+        }
+        if (why is not null) return hosts.Find(name) is null ? Results.NotFound(new { error = why }) : Results.BadRequest(new { error = why });
+        // A host with nothing out goes Off at once rather than on the next read.
+        var off = pending && FinishDrainedStops(paths, hosts).Contains(name, StringComparer.OrdinalIgnoreCase);
+        return Results.Ok(new { stopPending = pending && !off, enabled = !off });
+    }
+
 }

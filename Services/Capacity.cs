@@ -207,7 +207,7 @@ public class CapacitySnapshot
         };
         foreach (var h in _hosts.Snapshot())
         {
-            var hostState = !h.RemoteOn || !h.Enabled ? CapacityReasons.HostOff
+            var hostState = !h.RemoteOn || !h.Enabled || h.StopPending ? CapacityReasons.HostOff
                 : !h.Online ? CapacityReasons.HostOffline
                 : h.UsageLimitUntil is not null ? CapacityReasons.UsageLimit
                 : !h.ClaudeOpen ? CapacityReasons.AccountFull

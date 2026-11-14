@@ -18,7 +18,13 @@ namespace Whetstone.Services;
 /// resource like <c>alpha:app-stack@bravo-host</c>. Applies only to a project that declares
 /// <c>parallelStacks</c>; any other gets one, whatever this says. Phase 2.
 /// </param>
-public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Skills, string[] Projects, int FirstSlot, int QaLeases = 1)
+/// <param name="StopPending">
+/// Its owner pressed "stop after current runs": it takes nothing new, and the board switches it Off
+/// (<c>enabled: false</c>) once nothing is out there - see <see cref="WorkerHostService.DrainedStops"/>.
+/// In the config rather than in memory, so a board restart mid-drain does not put it back to work.
+/// </param>
+public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Skills, string[] Projects, int FirstSlot, int QaLeases = 1,
+    bool StopPending = false)
 {
     /// <summary>How far apart two worker hosts' first berths are: one per ten, so slot 23 reads as host 2, berth 3.</summary>
     public const int HostBlock = 10;
@@ -66,9 +72,11 @@ public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Sk
             var skills = Strings(e, "skills");
             var projects = Strings(e, "projects");
             var qa = e.TryGetProperty("qaLeases", out var q) && q.ValueKind == JsonValueKind.Number ? q.GetInt32() : 1;
+            // Only an On host can be stopping; one already Off has nothing left to wait for.
+            var stopping = enabled && e.TryGetProperty(WorkerHostSettings.StopPendingKey, out var sp) && sp.ValueKind == JsonValueKind.True;
 
             result.Add(new WorkerHostConfig(name, enabled, slots, skills.Length > 0 ? skills : DefaultSkills, projects, next,
-                Math.Clamp(qa, 1, MaxSlots)));
+                Math.Clamp(qa, 1, MaxSlots), stopping));
             next += HostBlock;
         }
         return result;
@@ -136,13 +144,14 @@ public record WorkerHostView(
     IReadOnlyList<HostRun> Runs, int PendingOrders, DateTime? UsageLimitUntil,
     int QaLeases = 1, bool RemoteOn = true,
     HostAccountChoice? Claude = null, IReadOnlyList<HostClaudeLogin>? ClaudeLogins = null,
-    string? PsVersion = null, bool WindowsPowerShell = false)
+    string? PsVersion = null, bool WindowsPowerShell = false,
+    bool StopPending = false, int Out = 0)
 {
     /// <summary>
-    /// Whether the orchestrator may give it new work: remote work switched on, this host switched on,
-    /// answering, and on this board's commit.
+    /// Whether the orchestrator may give it new work: remote work switched on, this host switched on
+    /// and not stopping after its current runs, answering, and on this board's commit.
     /// </summary>
-    public bool Dispatchable => RemoteOn && Enabled && Online && CommitMatches && UsageLimitUntil is null;
+    public bool Dispatchable => RemoteOn && Enabled && !StopPending && Online && CommitMatches && UsageLimitUntil is null;
 
     /// <summary>
     /// Whether it may be given a Claude phase. False is narrower than not dispatchable: a phase
@@ -181,6 +190,8 @@ public class WorkerHostService
         public string? DataRoot;
         public string? PsVersion;
         public bool WindowsPowerShell;
+        /// <summary>Start orders a check-in has carried away whose run the runner has not reported yet, by run id.</summary>
+        public Dictionary<int, DateTime> Handed = new();
         public TaskCompletionSource Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
@@ -282,6 +293,8 @@ public class WorkerHostService
             if (!string.IsNullOrWhiteSpace(dataRoot)) s.DataRoot = dataRoot.Trim();
             s.PsVersion = string.IsNullOrWhiteSpace(psVersion) ? null : psVersion.Trim();
             s.WindowsPowerShell = windowsPowerShell;
+            foreach (var r in s.Runs) s.Handed.Remove(r.RunId);
+            foreach (var id in s.Handed.Where(kv => _now() - kv.Value > HandedGrace).Select(kv => kv.Key).ToList()) s.Handed.Remove(id);
             if (s.Orders.Count > 0 || wait <= TimeSpan.Zero) return Drain(s);
             if (s.Signal.Task.IsCompleted) s.Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
             signal = s.Signal.Task;
@@ -294,11 +307,42 @@ public class WorkerHostService
         lock (_lock) return Drain(StateOf(name));
     }
 
-    private static IReadOnlyList<HostOrder> Drain(State s)
+    private IReadOnlyList<HostOrder> Drain(State s)
     {
         var list = s.Orders.ToList();
         s.Orders.Clear();
+        foreach (var o in list.Where(o => o.Kind == "start")) s.Handed[o.RunId] = _now();
         return list;
+    }
+
+    /// <summary>
+    /// How long a start order a runner has taken counts as out before its run is reported - the
+    /// orchestrator's own grace for one (<c>$RemoteStartGraceSeconds</c> in heartbeat-hosts.ps1).
+    /// </summary>
+    public static readonly TimeSpan HandedGrace = TimeSpan.FromSeconds(120);
+
+    /// <summary>
+    /// What a host has out: runs it reported still going, start orders waiting for it, and start
+    /// orders it has taken but not yet reported as a run. The last two matter to a pending stop - a
+    /// start ordered just before the press is work out, even though no run says so yet.
+    /// </summary>
+    private static int OutOf(State? s) =>
+        s is null ? 0 : s.Runs.Count(r => !r.Exited) + s.Orders.Count(o => o.Kind == "start") + s.Handed.Count;
+
+    /// <summary>
+    /// The hosts whose "stop after current runs" has run its course: stopping, heard from since this
+    /// board started and still answering, with nothing out. The board switches each of these Off.
+    /// A host that is offline waits - what it last said may be stale, and it says again when it is back.
+    /// </summary>
+    public IReadOnlyList<string> DrainedStops()
+    {
+        var now = _now();
+        var result = new List<string>();
+        lock (_lock)
+            foreach (var h in _config().Where(h => h.StopPending))
+                if (_hosts.TryGetValue(h.Name, out var s) && s.LastCheckin is { } t && now - t < OfflineAfter && OutOf(s) == 0)
+                    result.Add(h.Name);
+        return result;
     }
 
     /// <summary>Which Claude account a host's next run spends, from what it last reported.</summary>
@@ -397,7 +441,7 @@ public class WorkerHostService
                 result.Add(new WorkerHostView(h.Name, h.Enabled, h.Slots, h.FirstSlot, h.Skills, h.Projects,
                     online, s?.LastCheckin, s?.Commit, matches,
                     s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.QaLeases, remoteOn,
-                    claude, logins, s?.PsVersion, s?.WindowsPowerShell ?? false));
+                    claude, logins, s?.PsVersion, s?.WindowsPowerShell ?? false, h.StopPending, OutOf(s)));
             }
         }
         return result;

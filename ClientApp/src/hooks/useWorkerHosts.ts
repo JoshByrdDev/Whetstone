@@ -33,6 +33,10 @@ export interface WorkerHost {
   psVersion?: string | null;
   /** Its runner, or the supervisor that started it, is on Windows PowerShell 5.1: it moves itself to 7 once idle. */
   windowsPowerShell?: boolean;
+  /** "Stop after current runs" is pending: no new work, and the board switches it Off once `out` is 0. */
+  stopPending?: boolean;
+  /** What it has out: runs still going plus start orders not yet reported as runs. */
+  out?: number;
 }
 
 /**
@@ -49,6 +53,7 @@ export interface WorkerHostClaude {
 /** What a host's berths say when it is not taking work, or null when it is. */
 export function hostHold(h: WorkerHost): string | null {
   if (!h.enabled) return 'switched off';
+  if (h.stopPending) return 'stopping after current runs';
   if (!h.online) return 'offline';
   if (!h.commitMatches) return 'on another commit';
   if (h.usageLimitUntil) return 'at its usage limit';

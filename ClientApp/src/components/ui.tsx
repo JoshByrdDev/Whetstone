@@ -153,13 +153,15 @@ export function PrimaryButton({ onClick, disabled, title, children }: {
 /** Everything that is not the primary action: glass, hairline, lifts a pixel under the pointer. */
 export function GhostButton({ onClick, disabled, title, tone = 'plain', children }: {
   onClick: () => void; disabled?: boolean; title?: string;
-  /** `danger` for destructive moves, `go` for a confirming one. Colour only — the shape never changes. */
-  tone?: 'plain' | 'danger' | 'go';
+  /** `danger` for destructive moves, `go` for a confirming one, `hold` for a stop that waits for work
+   *  to finish (the active tier's amber, as the heartbeat's pending stop). Colour only — the shape never changes. */
+  tone?: 'plain' | 'danger' | 'go' | 'hold';
   children: ReactNode;
 }) {
   // The channels, not the colour: this button mixes six different alphas out of one hue, and an
   // alpha cannot be appended to a `var()` that has already resolved to a whole colour.
-  const c = tone === 'danger' ? 'var(--w-blocked-rgb)' : tone === 'go' ? 'var(--w-done-rgb)' : 'var(--w-line-rgb)';
+  const c = tone === 'danger' ? 'var(--w-blocked-rgb)' : tone === 'go' ? 'var(--w-done-rgb)'
+    : tone === 'hold' ? 'var(--w-active-rgb)' : 'var(--w-line-rgb)';
   return (
     <button
       onClick={onClick}

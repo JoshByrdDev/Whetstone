@@ -6,6 +6,7 @@ import { track } from '../theme';
 import type { WorkerHost } from '../hooks/useWorkerHosts';
 import { useMachines, hardwareLine, type Machine } from '../hooks/useMachines';
 import { SlotSuggestionNote } from './SlotSuggestionNote';
+import { ConfirmHostOffModal } from './ConfirmHostOffModal';
 
 /**
  * The board's worker hosts: other computers that run workers for it and hand their branches back
@@ -16,6 +17,11 @@ import { SlotSuggestionNote } from './SlotSuggestionNote';
  *
  * Every change saves as it is made and applies on the orchestrator's next pass; nothing restarts.
  * A computer starts switched off with no projects, so nothing reaches it until its owner says so.
+ *
+ * Off takes a computer out of dispatch and kills nothing: its runs finish and hand back. "Stop after
+ * current runs" is the same with a finish line - the computer stays On, says what it is still
+ * finishing, and the board switches it Off once nothing is out (the per-computer twin of the
+ * heartbeat's stop after cycle).
  */
 
 interface Settings {
@@ -74,6 +80,7 @@ function stateOf(h: Settings['hosts'][number]): { text: string; colour: string }
   const live = h.runs.filter(r => !r.exited).length;
   if (!h.remoteOn) return { text: 'remote work off', colour: DIM };
   if (!h.enabled) return { text: 'switched off', colour: DIM };
+  if (h.stopPending) return { text: live > 0 ? `stopping · ${live} finishing` : 'stopping', colour: 'rgb(var(--w-active-rgb))' };
   if (!h.online) return { text: h.lastCheckin ? 'offline' : 'never checked in', colour: 'rgb(var(--w-blocked-rgb))' };
   if (!h.commitMatches) return { text: 'on another commit', colour: 'rgb(var(--w-gate-rgb))' };
   if (h.usageLimitUntil) return { text: 'at its usage limit', colour: 'rgb(var(--w-gate-rgb))' };
@@ -154,6 +161,7 @@ export function WorkerHostsPanel() {
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         {s.hosts.map(h => (
           <HostCard key={h.name} h={h} s={s} busy={busy} onEdit={e => edit(h.name, e)}
+            onStop={pending => act(`/api/hosts/settings/hosts/${encodeURIComponent(h.name)}/${pending ? 'stop-after-runs' : 'cancel-stop'}`, 'POST')}
             machine={machines?.machines.find(m => m.place.toLowerCase() === h.name.toLowerCase())}
             onRemove={() => act(`/api/hosts/settings/hosts/${encodeURIComponent(h.name)}`, 'DELETE')} />
         ))}
@@ -250,17 +258,27 @@ function DispatchPanel({ s, busy, onSave }: {
   );
 }
 
-function HostCard({ h, s, busy, onEdit, onRemove, machine }: {
+function HostCard({ h, s, busy, onEdit, onStop, onRemove, machine }: {
   h: Settings['hosts'][number];
   s: Settings;
   /** Its hardware and suggested counts (docs/machine-limits-plan.md), once it has reported. */
   machine?: Machine;
   busy: boolean;
   onEdit: (e: HostEdit) => void;
+  /** Start (true) or cancel (false) its "stop after current runs". */
+  onStop: (pending: boolean) => void;
   onRemove: () => void;
 }) {
   const st = stateOf(h);
   const live = h.runs.filter(r => !r.exited);
+  const [confirmOff, setConfirmOff] = useState(false);
+  // What a pending stop is waiting for: the API's count, which also holds starts not yet reported.
+  const out = h.out ?? live.length;
+  // On cancels a pending stop too (the API clears it on any On/Off). Off with runs out asks first.
+  const flip = () => {
+    if (h.enabled && !h.stopPending && live.length > 0) setConfirmOff(true);
+    else onEdit({ enabled: h.stopPending ? true : !h.enabled });
+  };
   const toggle = (list: string[], item: string) => (list.includes(item) ? list.filter(x => x !== item) : [...list, item]);
   const lastBerth = h.firstSlot + h.slots - 1;
 
@@ -270,11 +288,41 @@ function HostCard({ h, s, busy, onEdit, onRemove, machine }: {
         <span style={{ font: `700 14px ${DISPLAY}`, letterSpacing: track(0.12), color: BRIGHT, textTransform: CAPS }}>{h.name}</span>
         <span style={{ font: `600 10px ${DISPLAY}`, letterSpacing: track(0.2), color: st.colour, textTransform: CAPS }}>{st.text}</span>
         <span className="flex-1" />
-        <Chip on={h.enabled} disabled={busy} onClick={() => onEdit({ enabled: !h.enabled })}
-          title={h.enabled ? 'Switch this computer off: no new work; runs already out finish.' : 'Switch this computer on.'}>
+        {h.enabled && !h.stopPending && (
+          <GhostButton tone="hold" disabled={busy} onClick={() => onStop(true)}
+            title="Take no new work here. The runs it has out finish and hand back, then the board switches it off.">
+            Stop after current runs
+          </GhostButton>
+        )}
+        <Chip on={h.enabled && !h.stopPending} disabled={busy} onClick={flip}
+          title={h.stopPending ? 'Cancel the pending stop and keep this computer on.'
+            : h.enabled ? 'Switch this computer off: no new work; runs already out finish.' : 'Switch this computer on.'}>
           {h.enabled ? 'On' : 'Off'}
         </Chip>
       </div>
+
+      {h.stopPending && (
+        <div className="mt-2 flex items-center gap-2 flex-wrap">
+          <span className="flex items-center gap-1.5 min-w-0" style={{ font: `400 11px ${BODY}`, color: 'rgb(var(--w-active-rgb))' }}>
+            <span className="inline-block h-2 w-2 rounded-full animate-pulse flex-none" style={{ background: 'rgb(var(--w-active-rgb))' }} />
+            {out > 0
+              ? `Stopping - ${out} run${out === 1 ? '' : 's'} finishing, then off`
+              : h.online ? 'Stopping - nothing out, switching off' : 'Stopping - switches off once it checks in with nothing out'}
+          </span>
+          <span className="flex-1" />
+          <GhostButton tone="hold" disabled={busy} onClick={() => onStop(false)}
+            title="Keep this computer on and let it take work again.">
+            Cancel pending stop
+          </GhostButton>
+        </div>
+      )}
+
+      {confirmOff && (
+        <ConfirmHostOffModal name={h.name} runs={live}
+          onOff={() => onEdit({ enabled: false })}
+          onStopAfter={() => onStop(true)}
+          onClose={() => setConfirmOff(false)} />
+      )}
 
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5" style={{ font: `400 10.5px ${BODY}`, color: MUTED }}>
         <span>checked in {ago(h.lastCheckin)}</span>

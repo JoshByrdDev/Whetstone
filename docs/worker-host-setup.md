@@ -266,7 +266,11 @@ Optional. Leave it out and QA stays on the board host.
 ## Day to day
 
 - **Stop taking new work:** switch the host **Off** on the Heartbeat page, or all of them with
-  *Remote work*. Runs already out finish.
+  *Remote work*. Off kills nothing: runs already out finish and hand their branches back. With
+  runs out, the panel asks first.
+- **Take a host out once it is free:** *Stop after current runs* on its panel. It takes nothing new,
+  stays On while it shows how many runs are still finishing, and the board switches it Off by itself
+  once nothing is out. *Cancel pending stop*, or pressing On, keeps it working.
 - **Stop the runner:** create `C:\Whetstone\data\runner.stop`. It takes nothing new and exits once
   its runs are done.
 - **Stop everything now:** the dashboard's hard Stop. It also orders every worker host run killed.

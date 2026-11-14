@@ -15,6 +15,9 @@ public static class WorkerHostSettings
     public const string EnabledKey = "workerHostsEnabled";
     public const string HostsKey = "workerHosts";
 
+    /// <summary>A host's "stop after current runs": see <see cref="WorkerHostConfig.StopPending"/>.</summary>
+    public const string StopPendingKey = "stopPending";
+
     /// <summary>Where work goes first: host names and <see cref="Board"/>, highest priority first.</summary>
     public const string OrderKey = "dispatchOrder";
 
@@ -73,7 +76,9 @@ public static class WorkerHostSettings
             hosts.Add(entry);
         }
 
-        if (edit.Enabled is { } on) entry["enabled"] = on;
+        // Either way the owner has said what they want now, so a stop that was pending is over:
+        // On cancels it, and Off is where it was going.
+        if (edit.Enabled is { } on) { entry["enabled"] = on; entry.Remove(StopPendingKey); }
         if (edit.Slots is { } slots) entry["slots"] = Math.Clamp(slots, 1, WorkerHostConfig.MaxSlots);
         if (edit.QaLeases is { } qa) entry["qaLeases"] = Math.Clamp(qa, 1, WorkerHostConfig.MaxSlots);
         if (edit.Skills is { } skills)
@@ -91,6 +96,42 @@ public static class WorkerHostSettings
         }
         return null;
     }
+
+    /// <summary>
+    /// Start or cancel a host's "stop after current runs". Starting one on a host that is already Off is
+    /// refused - there is nothing to wait for. Returns why, or null.
+    /// </summary>
+    public static string? SetStopPending(JsonObject config, string name, bool pending)
+    {
+        var entry = Entry(config, name);
+        if (entry is null) return $"No worker host '{name.Trim()}'.";
+        if (pending)
+        {
+            if (entry["enabled"] is JsonValue v && v.TryGetValue<bool>(out var on) && !on)
+                return $"{entry["name"]} is already off.";
+            entry[StopPendingKey] = true;
+        }
+        else entry.Remove(StopPendingKey);
+        return null;
+    }
+
+    /// <summary>
+    /// The end of a pending stop: the host switched Off, as the On/Off control would. False, and no
+    /// change, when the stop is no longer pending - cancelled between the board seeing the host drained
+    /// and this write.
+    /// </summary>
+    public static bool FinishStop(JsonObject config, string name)
+    {
+        var entry = Entry(config, name);
+        if (entry?[StopPendingKey] is not JsonValue v || !v.TryGetValue<bool>(out var pending) || !pending) return false;
+        entry["enabled"] = false;
+        entry.Remove(StopPendingKey);
+        return true;
+    }
+
+    private static JsonObject? Entry(JsonObject config, string name) =>
+        Hosts(config).OfType<JsonObject>()
+            .FirstOrDefault(h => string.Equals(h["name"]?.GetValue<string>(), name.Trim(), StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Take a host out of the config. False when there was none by that name.</summary>
     public static bool Remove(JsonObject config, string name)
