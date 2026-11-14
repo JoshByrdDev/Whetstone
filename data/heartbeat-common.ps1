@@ -85,9 +85,11 @@ $WorkerStallMinutes      = 30
 # second, when it was stopped - seven tickets blocked in a night, each of which went through on a
 # retry only because the first attempt had linked most of node_modules. A package manager prints
 # as it goes, so an install that is working never trips the stall limit; the ceiling is for one
-# that keeps printing and never ends. Global config: worktreeSetupStallMinutes (0 = off) and
-# worktreeSetupTimeoutMinutes.
-$WorktreeSetupStallMinutes   = 10
+# that keeps printing and never ends. Ten minutes of silence was too short for the same host with
+# little memory left: pnpm prints nothing between "resolution step is skipped" and its first
+# package while the machine swaps, and four tickets blocked there in twenty minutes. Global config:
+# worktreeSetupStallMinutes (0 = off) and worktreeSetupTimeoutMinutes.
+$WorktreeSetupStallMinutes   = 20
 $WorktreeSetupTimeoutMinutes = 60
 $BaseBranch              = "main"
 $BranchPrefix            = ""

@@ -559,7 +559,7 @@ function Get-GitUsrBin {
 function Initialize-Worktree {
     param([string]$Path, [string]$RepoDir, [string[]]$CopyFiles, [string[]]$Setup,
           [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 60 }),
-          [double]$StallMinutes = $(if ($null -ne $WorktreeSetupStallMinutes) { $WorktreeSetupStallMinutes } else { 10 }))
+          [double]$StallMinutes = $(if ($null -ne $WorktreeSetupStallMinutes) { $WorktreeSetupStallMinutes } else { 20 }))
 
     foreach ($rel in $CopyFiles) {
         if (-not $rel) { continue }
@@ -771,7 +771,7 @@ function Start-BackgroundSetup {
 # is where a failure that is not a fluke gets its proper report. Returns $true when it succeeded.
 function Wait-BackgroundSetup {
     param($Job, [double]$TimeoutMinutes = $(if ($WorktreeSetupTimeoutMinutes) { $WorktreeSetupTimeoutMinutes } else { 60 }),
-          [double]$StallMinutes = $(if ($null -ne $WorktreeSetupStallMinutes) { $WorktreeSetupStallMinutes } else { 10 }))
+          [double]$StallMinutes = $(if ($null -ne $WorktreeSetupStallMinutes) { $WorktreeSetupStallMinutes } else { 20 }))
     if (-not $Job -or -not $Job.process) { return $true }
     $p = $Job.process
     $deadline = $Job.started.AddMinutes($TimeoutMinutes)
