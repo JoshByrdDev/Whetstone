@@ -337,6 +337,25 @@ public partial class TicketGitService
         return !read.Agreed && !read.Draft && !read.Idea ? marked : null;
     }
 
+    /// <summary>
+    /// An agreed spec's text with a <c>Built on: slice N</c> line set just above its status line, in
+    /// the same blockquote when the status is quoted - or null when there is no agreed status line,
+    /// or the result would not read as agreed and built on <paramref name="parent"/> alone.
+    /// </summary>
+    public static string? MarkBuiltOn(StewardPlan plan, string text, int parent)
+    {
+        const RegexOptions o = RegexOptions.IgnoreCase | RegexOptions.Multiline;
+        var m = Regex.Match(text, plan.Agreed, o);
+        if (!m.Success) return null;
+        var lineStart = m.Index == 0 ? 0 : text.LastIndexOf('\n', m.Index - 1) + 1;
+        var nl = text.Contains("\r\n") ? "\r\n" : "\n";
+        var quoted = text[lineStart..m.Index].TrimStart().StartsWith('>');
+        var line = quoted ? $"> **Built on: slice {parent}.**{nl}>{nl}" : $"**Built on: slice {parent}.**{nl}{nl}";
+        var marked = text[..lineStart] + line + text[lineStart..];
+        return ReadUnit(plan, 0, "", marked).Agreed && SliceBranches.ParentsNamed(marked).SequenceEqual(new[] { parent })
+            ? marked : null;
+    }
+
     /// <summary>A unit's own name: its spec's first heading, or its file name when it has none.</summary>
     public static string UnitTitle(PlanUnit unit)
     {

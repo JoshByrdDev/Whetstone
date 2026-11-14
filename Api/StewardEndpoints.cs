@@ -13,6 +13,7 @@ public record StewardEntryMark(bool? Handled, string? Release);
 public record StewardUnitReleased(bool? Released, int[]? Promote = null);
 /// <summary>What becomes of the slices built on an abandoned one: "recut" from the base, or "abandon" them too.</summary>
 public record StewardUnitAbandoned(string? Children = null);
+public record StewardUnitBuiltOn(int Parent);
 public record StewardReverse(string? Because);
 public record StewardPlaced(string? Where);
 public record StewardDecide(IReadOnlyList<UnitDecisionChoice>? Decisions, bool? Agree, string? Answering);
@@ -243,6 +244,14 @@ public static class StewardEndpoints
         {
             var r = await steward.OwnerAbandonsUnitAsync(project ?? "", unit, body.Children, ct);
             return r.Answer == "abandoned" ? Results.Ok(r) : Results.BadRequest(r);
+        });
+
+        // Build an agreed slice on another open one, before anything is built in it. No tool behind it.
+        app.MapPost("/api/steward/plan/units/{unit:int}/built-on", async (int unit, string? project, StewardUnitBuiltOn body,
+            StewardService steward, CancellationToken ct) =>
+        {
+            var r = await steward.OwnerBuildsUnitOnAsync(project ?? "", unit, body.Parent, ct);
+            return r.Answer == "built-on" ? Results.Ok(r) : Results.BadRequest(r);
         });
 
         // The register of decisions: every decision with its status. Everything that changes it is the owner's, with no tool behind it.

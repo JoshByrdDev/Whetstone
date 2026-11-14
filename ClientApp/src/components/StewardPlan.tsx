@@ -11,7 +11,7 @@ import {
 } from './stewardSlice';
 import type { Standing } from './stewardSlice';
 import { useNarrow } from '../hooks/useNarrow';
-import { abandonStewardUnit, agreeStewardUnit, setStewardUnitReleased } from '../api/steward';
+import { abandonStewardUnit, agreeStewardUnit, buildStewardUnitOn, setStewardUnitReleased } from '../api/steward';
 import type {
   StewardMode, StewardPlanOutcome, StewardPlanUnitView, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus, UnitStage,
 } from '../api/steward';
@@ -117,6 +117,8 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
             {unit && (
               <UnitView
                 key={unit.unit} project={project} unit={unit}
+                parents={units.filter(p => p.unit !== unit.unit && p.sliceBranch && p.builtOn == null
+                  && p.stage !== 'released' && p.stage !== 'abandoned').map(p => p.unit)}
                 status={unit.unit === current ? status : null} onChanged={onChanged} onNotes={onNotes}
                 waiting={waiting} register={register} mode={mode} onNow={onNow} onDecisions={onDecisions}
               />
@@ -239,8 +241,8 @@ function Steps({ stage }: { stage: UnitStage }) {
 
 type Show = 'outcomes' | 'spec' | 'report';
 
-function UnitView({ project, unit, status, onChanged, onNotes, waiting, register, mode, onNow, onDecisions }: {
-  project: string; unit: StewardPlanUnitView; status: StewardStatus | null;
+function UnitView({ project, unit, parents, status, onChanged, onNotes, waiting, register, mode, onNow, onDecisions }: {
+  project: string; unit: StewardPlanUnitView; parents: number[]; status: StewardStatus | null;
   onChanged: () => Promise<void>; onNotes: (unit: number) => void;
   waiting: StewardQuestion[]; register: StewardRegister | null; mode?: StewardMode;
   onNow: () => void; onDecisions: () => void;
@@ -304,6 +306,11 @@ function UnitView({ project, unit, status, onChanged, onNotes, waiting, register
           <div style={{ marginTop: 10, font: `400 12px ${BODY}`, color: 'var(--w-t400)' }}>
             Built on slice {unit.builtOn}: its branch keeps up with slice {unit.builtOn}'s, and it is released after it.
           </div>
+        )}
+        {unit.sliceBranch && unit.builtOn == null && !(unit.builtOnIt?.length) && parents.length > 0
+          && unit.stage !== 'released' && unit.stage !== 'abandoned'
+          && unit.progress.done + unit.progress.inProgress === 0 && (
+          <BuildOn project={project} unit={unit} parents={parents} onChanged={onChanged} />
         )}
         {unit.sliceBranch && unit.stage !== 'released' && (
           <Abandon project={project} unit={unit} onChanged={onChanged} />
@@ -590,6 +597,52 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
       {seeNotes}
     </div>
   ) : null;
+}
+
+/**
+ * Building an agreed slice on another open one, after agreeing it and before anything is built in
+ * it: the board moves its branch onto the other's and writes the Built on line into its header.
+ */
+function BuildOn({ project, unit, parents, onChanged }: {
+  project: string; unit: StewardPlanUnitView; parents: number[]; onChanged: () => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [on, setOn] = useState<number | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+  const go = async (parent: number) => {
+    setBusy(true); setFailed(null);
+    try {
+      await buildStewardUnitOn(project, unit.unit, parent);
+      setOpen(false); setOn(null);
+      await onChanged();
+    } catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+    finally { setBusy(false); }
+  };
+  return (
+    <div style={{ marginTop: 10 }}>
+      <div className="flex items-center gap-2 flex-wrap">
+        {!open && <GhostButton onClick={() => setOpen(true)} title="Build this slice on another open slice's work">Build on another slice</GhostButton>}
+        {open && on == null && (
+          <>
+            <span className="min-w-0" style={{ font: `400 12px ${BODY}`, color: 'var(--w-t300)' }}>Build it on</span>
+            {parents.map(p => <Chip key={p} on={false} onClick={() => setOn(p)}>Slice {p}</Chip>)}
+            <GhostButton onClick={() => setOpen(false)}>Leave it on the base</GhostButton>
+          </>
+        )}
+        {open && on != null && (
+          <>
+            <span className="min-w-0" style={{ font: `400 12px ${BODY}`, color: 'var(--w-t300)' }}>
+              {unit.sliceBranch} moves onto slice {on}'s branch and keeps up with it, its header says so, and it is released after slice {on}.
+            </span>
+            <GhostButton tone="go" disabled={busy} onClick={() => go(on)}>{busy ? 'Moving' : `Yes, build on slice ${on}`}</GhostButton>
+            <GhostButton disabled={busy} onClick={() => setOn(null)}>Back</GhostButton>
+          </>
+        )}
+      </div>
+      {failed && <div style={{ font: `400 11.5px ${BODY}`, color: TIER.blocked.c, marginTop: 6 }}>{failed}</div>}
+    </div>
+  );
 }
 
 /**

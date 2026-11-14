@@ -423,6 +423,66 @@ public partial class StewardServiceTests
         Assert.Empty(_git.Committed);
     }
 
+    [Fact]
+    public async Task An_agreed_slice_with_nothing_built_is_moved_onto_another_and_remembers_it()
+    {
+        _git.Second = AgreedSecond;
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second");
+
+        var reply = await In(s => s.OwnerBuildsUnitOnAsync("alpha", 2, 1));
+        Assert.Equal("built-on", reply.Answer);
+        Assert.Equal(new[] { ("slice/02-second", "slice/01-first") }, _git.MovedOnto);
+        Assert.Equal(1, (await Row(2)).ParentUnit);
+        var (file, text) = _git.Committed.Single();
+        Assert.Equal("docs/units/02-second.md", file);
+        Assert.Equal(new[] { 1 }, SliceBranches.ParentsNamed(text));
+        Assert.StartsWith("> **Built on: slice 1.**\n>\n> **Status: agreed", text);
+
+        // Once is enough; a second parent is refused.
+        Assert.Equal("already-built-on", (await In(s => s.OwnerBuildsUnitOnAsync("alpha", 2, 1))).Answer);
+    }
+
+    [Fact]
+    public async Task A_slice_with_a_ticket_open_or_a_child_of_its_own_is_not_moved_onto_another()
+    {
+        _git.Second = AgreedSecond;
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second");
+        await Built(2, "A1", phase: Whetstone.Models.TicketPhase.NeedsImplementation);
+        Assert.Equal("tickets-open", (await In(s => s.OwnerBuildsUnitOnAsync("alpha", 2, 1))).Answer);
+
+        await OpenSlice(3, "slice/03-third", parent: 1);
+        Assert.Equal("chain", (await In(s => s.OwnerBuildsUnitOnAsync("alpha", 1, 2))).Answer);
+        Assert.Equal("chain", (await In(s => s.OwnerBuildsUnitOnAsync("alpha", 2, 3))).Answer);
+        Assert.Empty(_git.MovedOnto);
+        Assert.Empty(_git.Committed);
+    }
+
+    [Fact]
+    public async Task A_branch_that_will_not_move_leaves_the_spec_and_the_record_alone()
+    {
+        _git.Second = AgreedSecond;
+        await OpenSlice(1, "slice/01-first");
+        await OpenSlice(2, "slice/02-second");
+        _git.MoveRefusals["slice/02-second"] = "slice/02-second has 1 commit of its own";
+        Assert.Equal("cannot-move", (await In(s => s.OwnerBuildsUnitOnAsync("alpha", 2, 1))).Answer);
+        Assert.Empty(_git.Committed);
+        Assert.Null((await Row(2)).ParentUnit);
+    }
+
+    [Fact]
+    public void A_built_on_line_goes_above_the_status_in_the_same_blockquote()
+    {
+        var p = new StewardPlan("docs/units", StewardPlan.DefaultUnitFile, StewardPlan.DefaultAgreed,
+            StewardPlan.DefaultDraft, StewardPlan.DefaultOutcome);
+        Assert.Equal("# One\n\n> **Built on: slice 15.**\n>\n> **Status: agreed 2026-01-01.** Kept.\n",
+            TicketGitService.MarkBuiltOn(p, "# One\n\n> **Status: agreed 2026-01-01.** Kept.\n", 15));
+        Assert.Equal("**Built on: slice 3.**\r\n\r\n**Status: agreed 2026-01-01.**\r\n",
+            TicketGitService.MarkBuiltOn(p, "**Status: agreed 2026-01-01.**\r\n", 3));
+        Assert.Null(TicketGitService.MarkBuiltOn(p, "> **Status: draft.**\n", 3));
+    }
+
     [Theory]
     [InlineData("# Cards\n\n> **Built on:** slice 11\n", new[] { 11 })]
     [InlineData("Built on: slices 3 and 7\n", new[] { 3, 7 })]

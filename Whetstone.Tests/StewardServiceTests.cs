@@ -2253,6 +2253,17 @@ public partial class StewardServiceTests : IDisposable
             return Task.FromResult<(string?, string?)>((Head, null));
         }
 
+        /// <summary>Slices moved onto a parent; a slice in <see cref="MoveRefusals"/> refuses instead.</summary>
+        public List<(string Slice, string Parent)> MovedOnto = new();
+        public Dictionary<string, string> MoveRefusals = new();
+
+        public Task<(string? Sha, string? Refusal)> MoveSliceOntoAsync(string projectKey, string slice, string parent, CancellationToken ct = default)
+        {
+            if (MoveRefusals.TryGetValue(slice, out var no)) return Task.FromResult<(string?, string?)>((null, no));
+            MovedOnto.Add((slice, parent));
+            return Task.FromResult<(string?, string?)>((Head, null));
+        }
+
         public Task<(string? Sha, string? Refusal)> CutSliceBranchAsync(string projectKey, string branch, string? from = null, CancellationToken ct = default)
         {
             if (CutRefusal is not null) return Task.FromResult<(string?, string?)>((null, CutRefusal));

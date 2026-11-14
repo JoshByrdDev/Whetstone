@@ -318,6 +318,15 @@ export const abandonStewardUnit = (project: string, unit: number, children?: 're
     throw new Error(body?.why ?? body?.error ?? `${res.status} ${res.statusText}`);
   });
 
+/**
+ * Build an agreed slice on another open one, before anything is built in it: its branch moves onto
+ * the other's and its header gets the Built on line. No tool behind it.
+ */
+export const buildStewardUnitOn = (project: string, unit: number, parent: number) =>
+  fetch(`/api/steward/plan/units/${unit}/built-on?${q(project)}`, {
+    method: 'POST', headers: jsonHeaders, body: JSON.stringify({ parent }),
+  }).then(json<{ answer: 'built-on' }>);
+
 /** A flag on a ticket's change that is the owner's to decide. */
 export interface StewardOwnerFlag {
   flag: string;

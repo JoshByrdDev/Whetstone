@@ -180,6 +180,84 @@ public partial class StewardService
     }
 
     /// <summary>
+    /// The owner builds an open slice on another after agreeing it, from the Steward page - a REST
+    /// route with no tool behind it. A parent is otherwise only read when a slice is agreed, so an
+    /// owner who decides afterwards that a slice needs another's work had no way to say so: a
+    /// <c>Built on</c> line added to the spec by hand was read by the steward and by nothing that
+    /// moves a branch, and the slice went on keeping up with the base it was cut from.
+    /// <para>
+    /// The same rules as agreeing (section 3): one parent, open, itself on the base, and one level.
+    /// Only a slice with nothing of its own - no open ticket, no work on its branch - can move,
+    /// because every ticket it has was forked from the base. Its branch is moved onto the parent's
+    /// tip, its header is given the line, and the board remembers the parent from then on.
+    /// </para>
+    /// </summary>
+    public async Task<StewardReply> OwnerBuildsUnitOnAsync(string projectKey, int unit, int parentUnit, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null) return Refuse("no-project", $"There is no enabled project '{projectKey}'.");
+        if (!cfg.SliceBranchesOn) return Refuse("no-slice-branches", $"{cfg.DisplayName} does not have slice branches, so a slice there is not built on another.");
+        if (parentUnit == unit) return Refuse("bad-request", $"Slice {unit} cannot be built on itself.");
+        var plan = await _git.PlanAsync(projectKey, ct);
+        var u = plan.FirstOrDefault(x => x.Number == unit);
+        var rows = await _db.StewardUnits.Where(x => x.ProjectKey == projectKey).ToListAsync(ct);
+        var row = rows.FirstOrDefault(r => r.Unit == unit);
+        if (u is null || !u.Agreed || row is null || string.IsNullOrWhiteSpace(row.Branch))
+            return Refuse("unit-not-open", $"Slice {unit} is not agreed with a branch of its own. Name its parent in its header before agreeing it.");
+        if (row.ReleasedAt is not null || row.AbandonedAt is not null)
+            return Refuse("unit-not-open", $"Slice {unit} was {(row.ReleasedAt is not null ? "released" : "abandoned")}.");
+        if (row.ParentUnit == parentUnit) return Refuse("already-built-on", $"Slice {unit} is already built on slice {parentUnit}.");
+        if (row.ParentUnit is { } other) return Refuse("two-parents", $"Slice {unit} is already built on slice {other}. A slice is built on one other at most.");
+        var named = SliceBranches.ParentsNamed(u.Text).Where(n => n != unit && n != parentUnit).ToList();
+        if (named.Count > 0)
+            return Refuse("two-parents", $"{u.File} already names slice {string.Join(" and ", named)} on its Built on line. Take that out first.");
+        var kids = rows.Where(r => r.ParentUnit == unit && r.ReleasedAt is null && r.AbandonedAt is null).Select(r => r.Unit).Order().ToList();
+        if (kids.Count > 0)
+            return Refuse("chain", $"Slice{(kids.Count == 1 ? "" : "s")} {string.Join(" and ", kids)} {(kids.Count == 1 ? "is" : "are")} built on slice {unit}. One level only.");
+        var (parent, noParent) = ParentOf(cfg, unit, $"Built on: slice {parentUnit}", rows);
+        if (noParent is not null) return noParent;
+        if (parent is null) return Refuse("parent-not-open", $"Slice {parentUnit} was released, so it is in the base already.");
+        if (await RunOpenAsync(projectKey)) return Refuse("run-open", "A steward run is in progress. Try again once it has ended.");
+        var open = (await _tickets.ListAsync(projectKey, null))
+            .Where(t => t.PlanUnit == unit && t.Phase != TicketPhase.Done).Select(t => t.Id).ToList();
+        if (open.Count > 0)
+            return Refuse("tickets-open",
+                $"Slice {unit} has {open.Count} ticket{(open.Count == 1 ? "" : "s")} open ({string.Join(", ", open.Take(8).Select(i => $"#{i}"))}), forked from the base. " +
+                "A slice moves onto another only before anything is built in it.", new { tickets = open });
+
+        // The spec's line is worked out before the branch moves, so a spec the board cannot rewrite
+        // moves nothing.
+        string? text = null;
+        if (!SliceBranches.ParentsNamed(u.Text).Contains(parentUnit))
+        {
+            text = TicketGitService.MarkBuiltOn(cfg.Steward.Plan, u.Text, parentUnit);
+            if (text is null)
+                return Refuse("not-by-rule", $"The status line of {u.File} is not written the way the board can find. Add \"Built on: slice {parentUnit}\" to its header by hand, commit that, and try again.");
+        }
+        var (at, noMove) = await _git.MoveSliceOntoAsync(projectKey, row.Branch!, parent.Branch!, ct);
+        if (noMove is not null) return Refuse("cannot-move", noMove);
+        string? sha = null;
+        if (text is not null)
+        {
+            var (made, _, noCommit) = await _git.CommitFileAsync(projectKey, u.File, text, $"Slice {unit}, built on slice {parentUnit} by its owner", ct);
+            if (noCommit is not null)
+            {
+                // Nothing of its own was on it, so putting it back on the base loses nothing.
+                var (_, noBack) = await _git.RecutSliceAsync(projectKey, row.Branch!, parent.Branch!, ct);
+                return Refuse("refused", noBack is null
+                    ? $"{u.File} was not committed, so {row.Branch} was put back on the base: {noCommit}"
+                    : $"{u.File} was not committed ({noCommit}), and {row.Branch} could not be put back on the base: {noBack}");
+            }
+            sha = made;
+        }
+        row.ParentUnit = parentUnit;
+        await StewardDue.MarkAsync(_db, projectKey, $"the owner built slice {unit} on slice {parentUnit}");
+        await _db.SaveChangesAsync(ct);
+        _heartbeat?.Wake();
+        return new StewardReply("built-on", null, new { unit, builtOn = parentUnit, branch = row.Branch, at, spec = sha });
+    }
+
+    /// <summary>
     /// After <paramref name="released"/> is merged into the base, every open slice built on it takes
     /// the base - which now holds the parent - and becomes an ordinary slice (section 3). A merge
     /// that conflicts leaves the child for the next run to put to the owner, as any slice behind

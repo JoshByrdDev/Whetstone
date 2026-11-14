@@ -180,6 +180,12 @@ need each other are the delicate part. A slice that needs another's work can be 
   not built yet waits on that parent's ticket, through the waiting-on-another link tickets already
   have. The steward files the child's tickets for what can be built on what the parent already has,
   and holds the rest. That is the half of the work the child can do without the parent.
+- **A parent can be chosen after agreeing**, from the Steward page (*Build on another slice*,
+  `POST /api/steward/plan/units/{unit}/built-on`, no tool behind it), on the same rules, and only
+  while the slice has nothing of its own - no open ticket, nothing on its branch the base lacks -
+  because every ticket it has was forked from the base. The board moves its branch onto the
+  parent's tip, writes the `Built on` line above its status and remembers the parent. A line added
+  to an agreed spec by hand is read by the steward and by nothing that moves a branch.
 - **It is released after its parent**, never before (the release refusal above).
 - **When the parent is released**, the child's branch merges the base, which now holds the parent,
   and its parent line is cleared. From then on it is an ordinary slice.

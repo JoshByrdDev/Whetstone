@@ -535,6 +535,28 @@ public class SliceBranchTests : IDisposable
         Assert.Equal(tip, Rev(Child));
     }
 
+    [Fact]
+    public async Task A_slice_kept_up_with_the_base_and_nothing_more_moves_onto_another_and_one_with_work_does_not()
+    {
+        await LayOutAsync();
+        await _svc.CutSliceBranchAsync("alpha", Child);
+        // The merges that kept it up with the base are not work of its own.
+        Commit(_hub, "fix2.txt", "M: another fix on the base");
+        Assert.Equal("merged", (await _svc.SyncSliceAsync("alpha", Child, dryRun: false)).Answer);
+        var (at, no) = await _svc.MoveSliceOntoAsync("alpha", Child, Slice);
+        Assert.Null(no);
+        Assert.Equal(Rev(Slice), at);
+        Assert.Equal(Rev(Slice), Rev(Child));
+
+        Git(_hub, "branch", "-f", Child, "main");
+        OnBranch(Child, "deck.txt", "C: the child's own work");
+        var tip = Rev(Child);
+        (at, no) = await _svc.MoveSliceOntoAsync("alpha", Child, Slice);
+        Assert.Null(at);
+        Assert.Contains("1 commit of its own", no);
+        Assert.Equal(tip, Rev(Child));
+    }
+
     // ---- plumbing ----------------------------------------------------------------------------
 
     private async Task SeedAsync()

@@ -148,6 +148,39 @@ public partial class TicketGitService
         return (baseTip, null);
     }
 
+    /// <summary>
+    /// Move <paramref name="slice"/>, agreed and cut from the base, onto <paramref name="parent"/>'s
+    /// tip, because its owner has since chosen to build it on that slice (docs/slice-branches.md,
+    /// section 3). Only a slice with nothing of its own - no commit the base lacks other than the
+    /// merges that kept it up with the base, and no difference those merges left - can move without
+    /// losing work. The branch moves only from the commit it was read at, and never while a tree has
+    /// it checked out.
+    /// </summary>
+    public async Task<(string? Sha, string? Refusal)> MoveSliceOntoAsync(string projectKey, string slice, string parent,
+        CancellationToken ct = default)
+    {
+        var (_, repo, baseBranch) = HubOf(projectKey);
+        if (!IsGitRepo(repo)) return (null, $"There is no git repo at '{repo}'.");
+        var tip = await TipAsync(repo, slice, ct);
+        if (tip is null) return (null, $"The slice's branch '{slice}' does not exist in {repo}.");
+        var parentTip = await TipAsync(repo, parent, ct);
+        if (parentTip is null) return (null, $"'{parent}' does not exist in {repo}.");
+        if (await TipAsync(repo, baseBranch, ct) is null) return (null, $"The base branch '{baseBranch}' is not a local branch in {repo}.");
+        var count = await GitAsync(repo, ct, "rev-list", "--count", "--no-merges", $"refs/heads/{baseBranch}..refs/heads/{slice}");
+        int.TryParse(count.Stdout.Trim(), out var own);
+        var diff = await GitAsync(repo, ct, "diff", "--quiet", $"refs/heads/{baseBranch}...refs/heads/{slice}");
+        if (!count.Ok || own > 0 || diff.ExitCode != 0)
+            return (null, own > 0
+                ? $"{slice} has {own} commit{(own == 1 ? "" : "s")} of its own, so it cannot be moved onto {parent} without them. Rebuild it by hand."
+                : $"{slice} differs from {baseBranch}, so it cannot be moved onto {parent} without losing that. Rebuild it by hand.");
+        if (CheckedOutElsewhere(repo, slice) is { } holder)
+            return (null, $"'{slice}' is checked out in {holder}. Switch that tree off it first.");
+        var move = await GitAsync(repo, ct, "update-ref", "-m", $"build {slice} on {parent}", $"refs/heads/{slice}", parentTip, tip);
+        if (!move.Ok) return (null, Explain(move, $"'{slice}' moved while it was being moved onto {parent}; nothing was changed"));
+        _log.LogInformation("Moved {Slice} onto {Parent} at {Sha} in {Repo} (was {Was})", slice, parent, Short(parentTip), repo, Short(tip));
+        return (parentTip, null);
+    }
+
     private record SliceMerge(string? Sha, IReadOnlyList<string> Conflicted, string? Error, RunResult? Said = null);
 
     /// <summary>

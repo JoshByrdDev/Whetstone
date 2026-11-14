@@ -36,6 +36,12 @@ public interface IStewardGit
     /// </summary>
     Task<(string? Sha, string? Refusal)> RecutSliceAsync(string projectKey, string slice, string parent, CancellationToken ct = default);
     /// <summary>
+    /// Move an agreed slice that has nothing of its own yet onto <paramref name="parent"/>'s tip,
+    /// because its owner has since chosen to build it on that slice; refused when it has work the
+    /// base does not.
+    /// </summary>
+    Task<(string? Sha, string? Refusal)> MoveSliceOntoAsync(string projectKey, string slice, string parent, CancellationToken ct = default);
+    /// <summary>
     /// Bring an open slice's branch up to the base with a merge, never a rebase; with
     /// <paramref name="dryRun"/>, only how far behind it is (docs/slice-branches.md, section 2).
     /// </summary>
