@@ -21,6 +21,10 @@
 # Run from a worktree, never from the main checkout: the build would land beside the files
 # the live instance runs from.
 #
+# Runs on Windows and macOS. What differs between them - the temp folder, who listens on a port,
+# a process's command line, starting a child that outlives this script, killing a process tree -
+# is in the helpers below, and nothing else in the script asks which one it is on.
+#
 # ASCII ONLY - PS 5.1 parses this as cp1252.
 # ============================================================
 
@@ -41,6 +45,56 @@ function Fail([string]$Why) {
     exit 1
 }
 
+# ---- Platform helpers -------------------------------------------------------
+
+# $IsWindows does not exist on 5.1, which only ever runs on Windows.
+$onWindows = ($PSVersionTable.PSEdition -ne 'Core') -or $IsWindows
+
+# The PIDs listening on a TCP port. Empty when nothing is.
+function Get-ListenerPids([int]$Port) {
+    if ($onWindows) {
+        return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
+            ForEach-Object { [int]$_.OwningProcess } | Select-Object -Unique)
+    }
+    if (Get-Command lsof -ErrorAction SilentlyContinue) {
+        return @(& lsof -nP "-iTCP:$Port" -sTCP:LISTEN -t 2>$null | ForEach-Object { [int]$_ } | Select-Object -Unique)
+    }
+    return @()
+}
+
+function Test-PortInUse([int]$Port) {
+    if (@(Get-ListenerPids $Port).Count -gt 0) { return $true }
+    if ($onWindows) { return $false }
+    # Without lsof (or for a listener lsof cannot see), a bind on the loopback answers it.
+    $l = New-Object Net.Sockets.TcpListener([Net.IPAddress]::Loopback, $Port)
+    try { $l.Start(); return $false } catch { return $true } finally { try { $l.Stop() } catch { } }
+}
+
+# A process's full command line, or '' when it is gone.
+function Get-CommandLine([int]$ProcessId) {
+    if ($onWindows) {
+        $w = Get-CimInstance Win32_Process -Filter "ProcessId=$ProcessId" -ErrorAction SilentlyContinue
+        return "$($w.CommandLine)"
+    }
+    return "$(& ps -o command= -p $ProcessId 2>$null)".Trim()
+}
+
+# A process and everything under it, forcefully - taskkill /T /F, or its equivalent.
+function Stop-Tree([int]$ProcessId) {
+    if ($onWindows) { & taskkill.exe /PID $ProcessId /T /F 2>&1 | Out-Null; return }
+    $all = New-Object Collections.Generic.List[int]
+    $todo = New-Object Collections.Generic.Queue[int]
+    $todo.Enqueue($ProcessId)
+    while ($todo.Count -gt 0) {
+        $id = $todo.Dequeue()
+        if ($all.Contains($id)) { continue }
+        $all.Add($id)
+        foreach ($c in @(& pgrep -P $id 2>$null)) { if ("$c" -match '^\d+$') { $todo.Enqueue([int]$c) } }
+    }
+    # Children first, so none is orphaned to launchd between two kills.
+    for ($i = $all.Count - 1; $i -ge 0; $i--) { & kill -9 $all[$i] 2>$null }
+}
+
 if ($Port -in 5338, 5173 -or $VitePort -in 5338, 5173) {
     Fail "5338 and 5173 are the live instance and its dev server. Pick other ports."
 }
@@ -58,7 +112,7 @@ if ([IO.Path]::GetFullPath($gitDir).TrimEnd('\', '/') -ieq [IO.Path]::GetFullPat
 # ---- Where the copy keeps its data -----------------------------------------
 
 if (-not $DataRoot) {
-    $DataRoot = Join-Path (Join-Path $env:TEMP 'whetstone-qa') (Split-Path $repo -Leaf)
+    $DataRoot = Join-Path (Join-Path ([IO.Path]::GetTempPath()) 'whetstone-qa') (Split-Path $repo -Leaf)
 }
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 for ($d = [IO.DirectoryInfo]$DataRoot; $d; $d = $d.Parent) {
@@ -67,6 +121,8 @@ for ($d = [IO.DirectoryInfo]$DataRoot; $d; $d = $d.Parent) {
     }
 }
 $stateFile = Join-Path $DataRoot 'qa-copy.json'
+$binRoot   = [IO.Path]::GetFullPath((Join-Path (Join-Path $repo 'bin') 'Release'))
+$exe       = Join-Path (Join-Path $binRoot 'net9.0') $(if ($onWindows) { 'Whetstone.exe' } else { 'Whetstone' })
 $marker    = Join-Path $DataRoot '.whetstone-qa-copy'
 
 # ---- Stopping ---------------------------------------------------------------
@@ -77,18 +133,16 @@ $marker    = Join-Path $DataRoot '.whetstone-qa-copy'
 function Stop-Copy {
     if (-not (Test-Path $stateFile)) { return }
     $s = Get-Content $stateFile -Raw | ConvertFrom-Json
-    $bin = [IO.Path]::GetFullPath((Join-Path $repo 'bin\Release'))
     if ($s.apiPid) {
         $p = Get-Process -Id $s.apiPid -ErrorAction SilentlyContinue
-        if ($p -and $p.Path -and ([IO.Path]::GetFullPath($p.Path)).StartsWith($bin, [StringComparison]::OrdinalIgnoreCase)) {
-            & taskkill.exe /PID $s.apiPid /T /F 2>&1 | Out-Null
+        if ($p -and $p.Path -and ([IO.Path]::GetFullPath($p.Path)).StartsWith($binRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            Stop-Tree $s.apiPid
             Write-Host "qa-copy: stopped the API (PID $($s.apiPid))"
         }
     }
     if ($s.vitePid) {
-        $v = Get-CimInstance Win32_Process -Filter "ProcessId=$($s.vitePid)" -ErrorAction SilentlyContinue
-        if ($v -and "$($v.CommandLine)" -match 'npm(\.cmd)?"?\s+run\s+dev') {
-            & taskkill.exe /PID $s.vitePid /T /F 2>&1 | Out-Null
+        if ((Get-CommandLine $s.vitePid) -match 'npm(\.cmd)?"?\s+run\s+dev') {
+            Stop-Tree $s.vitePid
             Write-Host "qa-copy: stopped the dev server (PID $($s.vitePid))"
         }
     }
@@ -99,7 +153,7 @@ if ($Stop) { Stop-Copy; exit 0 }
 Stop-Copy
 
 foreach ($p in @($Port) + $(if ($NoVite) { @() } else { @($VitePort) })) {
-    if (Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue) {
+    if (Test-PortInUse $p) {
         Fail "port $p is already in use. Stop whatever holds it, or pass another port."
     }
 }
@@ -111,7 +165,6 @@ if (-not $NoBuild) {
     & dotnet build (Join-Path $repo 'Whetstone.csproj') -c Release --nologo -v q | Out-Host
     if ($LASTEXITCODE -ne 0) { Fail "the build failed." }
 }
-$exe = Join-Path $repo 'bin\Release\net9.0\Whetstone.exe'
 if (-not (Test-Path $exe)) { Fail "no build at $exe. Run without -NoBuild." }
 
 # ---- A fresh, throwaway data root ------------------------------------------
@@ -154,7 +207,7 @@ Write-Json (Join-Path $DataRoot 'config.json') ([ordered]@{
 # Two placeholder projects, each with a repo of its own inside the data root - so every git
 # command the copy runs on a project's behalf lands in a folder that is deleted next start.
 foreach ($key in 'alpha', 'bravo') {
-    $r = Join-Path $DataRoot "repos\$key"
+    $r = Join-Path (Join-Path $DataRoot 'repos') $key
     New-Item -ItemType Directory -Path $r -Force | Out-Null
     & git -C $r init -q -b main
     & git -C $r config user.name 'QA copy'
@@ -163,7 +216,7 @@ foreach ($key in 'alpha', 'bravo') {
     & git -C $r -c core.autocrlf=false add -A
     & git -C $r commit -q -m "A placeholder repository"
 
-    $pd = Join-Path $DataRoot "projects\$key"
+    $pd = Join-Path (Join-Path $DataRoot 'projects') $key
     New-Item -ItemType Directory -Path $pd -Force | Out-Null
     Copy-Item (Join-Path $DataRoot 'skill-templates') (Join-Path $pd 'skills') -Recurse
     Write-Json (Join-Path $pd 'project.defaults.json') ([ordered]@{
@@ -173,7 +226,7 @@ foreach ($key in 'alpha', 'bravo') {
     })
     Write-Json (Join-Path $pd 'project.json') ([ordered]@{
         projectPath  = $r
-        worktreeRoot = (Join-Path $DataRoot "worktrees\$key")
+        worktreeRoot = (Join-Path (Join-Path $DataRoot 'worktrees') $key)
         tracker      = @{ kind = 'none' }
     })
 }
@@ -184,10 +237,10 @@ foreach ($key in 'alpha', 'bravo') {
 # merge locally, and a project of several refuses that. The copy refuses every push anyway. Branch
 # qa/two-repos has a commit in two of the repos, so a ticket pointed at it shows the PR dialog a
 # change across several; qa/their-change is on charlie-api's origin alone, for a peer review.
-$charlie = Join-Path $DataRoot 'repos\charlie'
+$charlie = Join-Path (Join-Path $DataRoot 'repos') 'charlie'
 foreach ($name in 'charlie-web', 'charlie-api', 'charlie-infra') {
     $r = Join-Path $charlie $name
-    $origin = Join-Path $DataRoot "origins\$name.git"
+    $origin = Join-Path (Join-Path $DataRoot 'origins') "$name.git"
     New-Item -ItemType Directory -Path $r -Force | Out-Null
     & git init -q --bare -b main $origin
     & git -C $r init -q -b main
@@ -216,7 +269,7 @@ foreach ($name in 'charlie-web', 'charlie-api', 'charlie-infra') {
         & git -C $r branch -q -D qa/their-change
     }
 }
-$pd = Join-Path $DataRoot 'projects\charlie'
+$pd = Join-Path (Join-Path $DataRoot 'projects') 'charlie'
 New-Item -ItemType Directory -Path $pd -Force | Out-Null
 Copy-Item (Join-Path $DataRoot 'skill-templates') (Join-Path $pd 'skills') -Recurse
 Write-Json (Join-Path $pd 'project.defaults.json') ([ordered]@{
@@ -228,7 +281,7 @@ Write-Json (Join-Path $pd 'project.defaults.json') ([ordered]@{
 })
 Write-Json (Join-Path $pd 'project.json') ([ordered]@{
     projectPath  = $charlie
-    worktreeRoot = (Join-Path $DataRoot 'worktrees\charlie')
+    worktreeRoot = (Join-Path (Join-Path $DataRoot 'worktrees') 'charlie')
     tracker      = @{ kind = 'none' }
 })
 
@@ -237,19 +290,45 @@ Write-Json (Join-Path $pd 'project.json') ([ordered]@{
 $logs = Join-Path $DataRoot 'logs'
 New-Item -ItemType Directory -Path $logs -Force | Out-Null
 
-# Each process is started through cmd.exe with a hidden window - a shell execute, which hands the
-# child none of this process's handles. Started directly with its output redirected, the copy
-# inherited whatever pipe this script's caller was reading, and the caller - an agent's shell
-# call - waited on it until it timed out, though the copy was long up. cmd does the redirection.
+# Each process is started so that it holds none of this script's stdio. Started directly with its
+# output redirected, the copy inherited whatever pipe this script's caller was reading, and the
+# caller - an agent's shell call - waited on it until it timed out, though the copy was long up.
+# On Windows that is cmd.exe with a hidden window - a shell execute, which hands the child none of
+# this process's handles - and cmd does the redirection. Elsewhere it is /bin/sh, which points all
+# three of stdin, stdout and stderr away from the caller and then execs nohup, so the PID returned
+# is the program itself and it survives the terminal that started it.
 #
 # Start-Process on 5.1 has no -Environment, so the child inherits these from here.
 $env:WHETSTONE_QA_ISOLATION = '1'
 $env:DASHBOARD_DATA_ROOT    = $DataRoot
 $env:ASPNETCORE_URLS        = "http://localhost:$Port"
-function Start-Detached([string]$CommandLine, [string]$WorkDir) {
-    Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$CommandLine`"" -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
+# Off Windows the apphost finds its runtime through DOTNET_ROOT, and a pwsh installed with its own
+# runtime sets that to its own - a newer major than the build targets, so the copy will not start.
+# Point the child at the net9 runtime of the dotnet on PATH, the one that just built it.
+if (-not $onWindows) {
+    $rt = @(& dotnet --list-runtimes 2>$null | ForEach-Object {
+        if ($_ -match '^Microsoft\.NETCore\.App 9\.\S+ \[(.+)\]$') { $Matches[1] }
+    }) | Select-Object -Last 1
+    if ($rt) { $env:DOTNET_ROOT = Split-Path (Split-Path $rt -Parent) -Parent }
 }
-$api = Start-Detached "`"$exe`" > `"$(Join-Path $logs 'api.out.log')`" 2> `"$(Join-Path $logs 'api.err.log')`"" $repo
+function Start-Detached([string]$Program, [string[]]$Arguments, [string]$OutLog, [string]$ErrLog, [string]$WorkDir) {
+    if ($onWindows) {
+        # A path is quoted for cmd, a bare command name is left as it is.
+        $first = if ($Program -match '[\\/\s]') { "`"$Program`"" } else { $Program }
+        $line = (@($first) + $Arguments) -join ' '
+        $line = "$line > `"$OutLog`" 2> `"$ErrLog`""
+        return Start-Process -FilePath 'cmd.exe' -ArgumentList "/c `"$line`"" -WorkingDirectory $WorkDir -WindowStyle Hidden -PassThru
+    }
+    $q = { param($s) "'" + ($s -replace "'", "'\''") + "'" }
+    $words = (@($Program) + $Arguments | ForEach-Object { & $q $_ }) -join ' '
+    $si = New-Object Diagnostics.ProcessStartInfo('/bin/sh')
+    $si.ArgumentList.Add('-c')
+    $si.ArgumentList.Add("exec nohup $words > $(& $q $OutLog) 2> $(& $q $ErrLog) < /dev/null")
+    $si.WorkingDirectory = $WorkDir
+    $si.UseShellExecute = $false
+    return [Diagnostics.Process]::Start($si)
+}
+$api = Start-Detached $exe @() (Join-Path $logs 'api.out.log') (Join-Path $logs 'api.err.log') $repo
 
 $state = [ordered]@{
     apiPid    = $null
@@ -273,15 +352,15 @@ for ($i = 0; $i -lt 60 -and -not $api.HasExited; $i++) {
     catch { }
 }
 # The API's own PID is whatever now listens on the port, and it has to be this checkout's build.
-$apiProc = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue |
-    ForEach-Object { Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue }) | Select-Object -First 1
-if ($apiProc -and "$($apiProc.Path)" -like (Join-Path $repo 'bin\Release\*')) {
+$apiProc = @(Get-ListenerPids $Port |
+    ForEach-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) | Select-Object -First 1
+if ($apiProc -and $apiProc.Path -and ([IO.Path]::GetFullPath($apiProc.Path)).StartsWith($binRoot, [StringComparison]::OrdinalIgnoreCase)) {
     $state.apiPid = $apiProc.Id
     Write-Json $stateFile $state
 }
 else { $isolated = $false }
 if (-not $isolated) {
-    if (-not $api.HasExited) { & taskkill.exe /PID $api.Id /T /F 2>&1 | Out-Null }
+    if (-not $api.HasExited) { Stop-Tree $api.Id }
     Stop-Copy
     $why = if (Test-Path (Join-Path $logs 'api.err.log')) { (Get-Content (Join-Path $logs 'api.err.log') -Raw) } else { '' }
     Fail "the copy did not come up isolated on $Port. $why"
@@ -295,15 +374,15 @@ if (-not $NoVite) {
     else {
         $env:WHETSTONE_API_PORT  = "$Port"
         $env:WHETSTONE_VITE_PORT = "$VitePort"
-        $vite = Start-Detached "npm run dev > `"$(Join-Path $logs 'vite.out.log')`" 2> `"$(Join-Path $logs 'vite.err.log')`"" $client
+        $vite = Start-Detached 'npm' @('run', 'dev') (Join-Path $logs 'vite.out.log') (Join-Path $logs 'vite.err.log') $client
         $state.vitePid = $vite.Id
         Write-Json $stateFile $state
         $up = $false
         for ($i = 0; $i -lt 30 -and -not $vite.HasExited; $i++) {
             Start-Sleep -Seconds 1
-            if (Get-NetTCPConnection -LocalPort $VitePort -State Listen -ErrorAction SilentlyContinue) { $up = $true; break }
+            if (@(Get-ListenerPids $VitePort).Count -gt 0) { $up = $true; break }
         }
-        if (-not $up) { Write-Host "qa-copy: the dev server did not come up on $VitePort - see $logs\vite.err.log" -ForegroundColor Yellow }
+        if (-not $up) { Write-Host "qa-copy: the dev server did not come up on $VitePort - see $(Join-Path $logs 'vite.err.log')" -ForegroundColor Yellow }
     }
 }
 
