@@ -179,6 +179,29 @@ public static class UnitDecisions
         return string.Join(nl, lines);
     }
 
+    private static readonly Regex NumberRef = new(@"(?<![\w#&])#(\d+)\b");
+
+    /// <summary>
+    /// The spec with some of its open decisions given new numbers - for a number the register took
+    /// after the spec gave it. Every "#n" the map names is rewritten, in the decision's own bullet
+    /// and wherever else the spec points at it, in one pass so that two numbers can swap; what is
+    /// under "Decided" is left as written, since what is decided already has its number for good.
+    /// </summary>
+    public static string Renumber(string text, IReadOnlyDictionary<int, int> map)
+    {
+        if (map.Count == 0) return text;
+        var (lines, nl) = Lines(text);
+        var inDecided = false;
+        for (var i = 0; i < lines.Count; i++)
+        {
+            if (SectionEnd.IsMatch(lines[i])) inDecided = DecidedHeading.IsMatch(lines[i]);
+            if (inDecided) continue;
+            lines[i] = NumberRef.Replace(lines[i], m =>
+                map.TryGetValue(int.Parse(m.Groups[1].Value), out var to) ? $"#{to}" : m.Value);
+        }
+        return string.Join(nl, lines);
+    }
+
     private static string Said(IEnumerable<UnitDecisionOption> options) =>
         string.Join("; and ", options.Select(o => $"({o.Letter}) {o.Text}"));
 

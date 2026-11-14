@@ -2537,6 +2537,16 @@ public partial class StewardService
         }
 
         var text = u.Text;
+        // A settled decision keeps the number its spec gave it, so an open one whose number has been
+        // taken since - by the register, or by another slice's spec - is given the next free one
+        // here, in the same commit, and the owner's answers follow it. Asking the owner to renumber
+        // it by hand was a refusal they could do nothing about from the page that raised it.
+        var renumbered = await RenumberTakenAsync(projectKey, u, plan, ct);
+        if (renumbered.Count > 0)
+        {
+            text = UnitDecisions.Renumber(text, renumbered);
+            choices = choices.Select(c => renumbered.TryGetValue(c.Number, out var to) ? c with { Number = to } : c).ToList();
+        }
         IReadOnlyList<string> said = Array.Empty<string>();
         IReadOnlyList<(int Number, string Title, string Rule)> each = Array.Empty<(int, string, string)>();
         if (choices.Count > 0)
@@ -2544,11 +2554,6 @@ public partial class StewardService
             var (settled, s, e, refusal) = UnitDecisions.SettleEach(text, choices, DateTime.Now);
             if (settled is null) return Refuse("bad-request", refusal!);
             (text, said, each) = (settled, s, e);
-            // A settled decision keeps the number its spec gave it, so that number must be free.
-            var numbers = each.Select(x => x.Number).ToList();
-            if (await _db.StewardDecisions.Where(d => d.ProjectKey == projectKey && numbers.Contains(d.Number))
-                    .Select(d => (int?)d.Number).FirstOrDefaultAsync(ct) is { } taken)
-                return Refuse("number-taken", $"#{taken} is already a decision in the register, so the spec's #{taken} cannot keep its number. Renumber it in {u.File} from steward_decisions' next number, and commit that.");
         }
         StewardUnit? parent = null;
         if (agree)
@@ -2572,13 +2577,19 @@ public partial class StewardService
         }
 
         var n = said.Count;
+        var moved = renumbered.Count == 0 ? null
+            : string.Join(", ", renumbered.OrderBy(r => r.Key).Select(r => $"#{r.Key} is now #{r.Value}"));
         var message = agree
             ? n == 0 ? $"Slice {unit}, agreed by its owner" : $"Slice {unit}, agreed by its owner with {n} decision{(n == 1 ? "" : "s")}"
             : $"Slice {unit}: {n} decision{(n == 1 ? "" : "s")}, made by its owner";
+        if (moved is not null)
+            message += $"\n\nRenumbered, because the register had already given those numbers: {moved}.";
         var (sha, _, no) = await _git.CommitFileAsync(projectKey, u.File, text, message, ct);
         if (no is not null) return Refuse("refused", no);
 
-        var summary = $"Slice {unit}: {(n == 0 ? "agreed" : $"{(agree ? "agreed, and " : "")}decided {string.Join("; ", said)}")}. Written into {u.File} at {sha}.";
+        var summary = $"Slice {unit}: {(n == 0 ? "agreed" : $"{(agree ? "agreed, and " : "")}decided {string.Join("; ", said)}")}"
+            + (moved is null ? "" : $" ({moved}: the old numbers were taken)")
+            + $". Written into {u.File} at {sha}.";
         string? sliceBranch = null, sliceRefusal = null;
         if (agree)
         {
@@ -2622,8 +2633,30 @@ public partial class StewardService
         {
             file = u.File, commit = sha, decided = said,
             open = UnitDecisions.Open(text).Select(d => d.Number),
+            renumbered = renumbered.OrderBy(r => r.Key).Select(r => new { from = r.Key, to = r.Value }),
             sliceBranch, sliceBranchRefused = sliceRefusal, builtOn = parent?.Unit,
         });
+    }
+
+    /// <summary>
+    /// The open decisions of a slice's spec whose numbers are no longer its to keep, each with the
+    /// number it takes instead: held by the register, or given by another slice's spec. The new
+    /// numbers run on from the next free one, which already counts this spec's own.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<int, int>> RenumberTakenAsync(string projectKey, PlanUnit u,
+        IReadOnlyList<PlanUnit> plan, CancellationToken ct)
+    {
+        var open = UnitDecisions.Open(u.Text).Select(d => d.Number).Distinct().ToList();
+        if (open.Count == 0) return new Dictionary<int, int>();
+        var held = (await _db.StewardDecisions.Where(d => d.ProjectKey == projectKey && open.Contains(d.Number))
+            .Select(d => d.Number).ToListAsync(ct)).ToHashSet();
+        foreach (var other in plan.Where(x => x.Number != u.Number))
+            held.UnionWith(UnitDecisions.Open(other.Text).Select(d => d.Number)
+                .Concat(DecisionText.Decided(other.Text).Where(d => d.Number is not null).Select(d => d.Number!.Value)));
+        var taken = open.Where(held.Contains).OrderBy(x => x).ToList();
+        if (taken.Count == 0) return new Dictionary<int, int>();
+        var next = await NextNumberAsync(projectKey, ct);
+        return taken.Select((from, i) => (from, to: next + i)).ToDictionary(x => x.from, x => x.to);
     }
 
     /// <summary>

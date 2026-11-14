@@ -390,7 +390,9 @@ went its own way:
 - **Numbers a spec has given are held.** The next number is after the highest in the register *and*
   every number a spec of the plan being worked uses, open or decided, because an open decision
   keeps its spec's number when it is settled. `steward_draft_unit` refuses a draft whose open
-  decisions reuse a number, and `steward_decisions` says the `next` one.
+  decisions reuse a number, and `steward_decisions` says the `next` one. A number the register takes after a spec gave it (a hand-written spec, an import) is not
+  the owner's to fix: agreeing or deciding on the slice gives each such open decision the next free
+  number in the same commit, rewrites its mentions outside "Decided", and the owner's answers follow it.
 - **Hard rule 3 keeps the plan's plain statements for now.** The section 2 wording makes the plan
   document decide nothing, which is only safe once its rules have moved into the register (pieces 4
   and 9). Until then the rule names the register and agreed specs first, still counts a plain

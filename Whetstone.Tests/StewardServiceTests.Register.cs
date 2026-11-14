@@ -53,6 +53,37 @@ public partial class StewardServiceTests
     }
 
     [Fact]
+    public async Task A_spec_number_the_register_took_since_is_renumbered_when_the_owner_agrees()
+    {
+        // The register holds #1..#5; the spec still leaves #4, #5 and #6 open under those numbers.
+        for (var i = 1; i <= 5; i++)
+            await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision($"Rule {i}.", Convention: true)));
+        _git.Second = WithDecisions.Replace("Each is open until the owner answers.", "Each is open until the owner answers; #4 comes first.");
+
+        // The owner answers #4 as the page showed it, and it is recorded under its new number.
+        var r = await In(s => s.OwnerDecidesAsync("alpha", 2, new[] { new UnitDecisionChoice(4, "a") }, true, null));
+        Assert.Equal("agreed", r.Answer);
+        var content = _git.Committed.Single(c => c.Path == "docs/units/02-second.md").Content;
+        Assert.Contains("- **(#7) How long an invite lasts.** Decided by the owner", content);
+        Assert.Contains("#7 comes first", content);
+        Assert.Equal(new[] { 8, 6 }, UnitDecisions.Open(content).Select(d => d.Number));
+        var seven = Register().Single(d => d.Number == 7);
+        Assert.Equal("How long an invite lasts", seven.Title);
+        Assert.Equal("Rule 4.", Register().Single(d => d.Number == 4).Rule);
+        Assert.Contains("\"from\":4,\"to\":7", Json(r));
+    }
+
+    [Fact]
+    public void Renumbering_rewrites_every_mention_but_what_is_already_decided()
+    {
+        var text = "## To decide\n\n- **(#4) A.** See #5. **Pick: x**\n- **(#5) B.** After #4. **Pick: y**\n\n## Decided\n\n- **(#4) Old.** Kept.\n";
+        var swapped = UnitDecisions.Renumber(text, new Dictionary<int, int> { [4] = 5, [5] = 4 });
+        Assert.Contains("- **(#5) A.** See #4.", swapped);
+        Assert.Contains("- **(#4) B.** After #5.", swapped);
+        Assert.Contains("- **(#4) Old.** Kept.", swapped);
+    }
+
+    [Fact]
     public async Task A_replaced_decision_is_history_and_comes_back_only_when_asked_for_with_what_replaced_it()
     {
         await In(s => s.OwnerRecordsDecisionAsync("alpha", new StewardNewDecision("Everyone in the team sees the same schedule.", Convention: true)));
