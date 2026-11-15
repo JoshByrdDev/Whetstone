@@ -32,10 +32,10 @@ Most projects are one repo, and this section does not apply to them. When your p
 
 - **A persona.** Who the person is, in a sentence or two: where they are, what they want, what they already know. Specific enough to play: "a parent in a town forty minutes away who wants something to do with the dog most weekends this month", not "a user".
 - **Three to five jobs**, each written as what the person came to get done - "plan this weekend", "follow a place so I hear about new things", "come back a week later and see what changed". **Never a feature to look at** ("check the filters page"): the pilot found that a direction written as a job finds more than one written as a feature, and the same holds one level down.
-- **Who they are signed in as**, in the product's own words for its roles - signed out, an ordinary member, a business owner, an admin.
+- **Who they are signed in as**: one of the project's roles, **word for word** as `get_discovery` lists them in `project.roles`. Coverage by kind of user is counted by that word, so a paraphrase ("an admin user" for `admin`) counts as nobody. When the project lists no roles, the product's own word for the role - signed out, an ordinary member, a business owner, an admin. When the direction needs a role the list does not have, take the nearest one and say so in your hand-off comment, so the owner can add it.
 - **Where to start**: showcase cases by id, when the project lists them (its copy of this skill says where). A case is a starting point, not a script.
 - **Widths**: a desk (`1440x900`) and a phone (`390x844`) unless the direction says otherwise. Most products are used on a phone more than anyone remembers.
-- **Areas**, when your prompt lists the project's: the ones these jobs will reach.
+- **Areas**, when `get_discovery` lists the project's (`project.areas`): the ones these jobs will reach, by those names.
 - **Notes**: anything the scout needs to start - a case that only makes sense signed in, a job that needs a second visit. Never what the product is supposed to do.
 
 ## The rules this phase is built around
@@ -47,7 +47,7 @@ Most projects are one repo, and this section does not apply to them. When your p
 ## Ticket state - use the `tickets` MCP tools
 
 - `get_ticket` for the direction (its `description`) and any master notes or owner's notes, which bind you.
-- `get_discovery` for a route an earlier pass wrote, when the owner sent the discovery back to be charted again - read why in the ticket's comments, and change what they asked for.
+- `get_discovery` for the project's roles and areas (`project`), and for a route an earlier pass wrote, when the owner sent the discovery back to be charted again - read why in the ticket's comments, and change what they asked for.
 - `set_discovery_route` to write the route. Calling it again replaces it.
 
 ---
