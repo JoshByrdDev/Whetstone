@@ -321,5 +321,13 @@ Check: time a fresh install on that machine (`git worktree add`, then the projec
 - **If the worker host goes off:** after 10 minutes without a check-in its runs are given up on,
   and their tickets go back to the queue. When it comes back, the runner kills anything it was
   still holding without handing it back.
+- **Disk space.** The runner removes the worktree of a ticket that has been Done for
+  `worktreeRetentionDays` (2), checked hourly with the board, keeping its branch - and never one a
+  run there holds, one with uncommitted files or a stopped rebase, or anything outside the worktree
+  root. Its log says what it reaped (`Reaped worktree alpha/...`) and what it kept though the board
+  said it may go, and why. Should the drive still fall below `workerDiskFloorGb` (10 GB), the board
+  gives the host nothing new and its panel says *low on disk*, with the drive and what is free; it
+  takes work again on its next report once there is room. Free space by hand then: a worktree a
+  person left with changes in it is the usual one.
 - **A hand-back that failed** blocks its ticket with the reason. The work is committed on the worker
   host, and nowhere else, until the next run there hands it back. Fix the cause and unblock.

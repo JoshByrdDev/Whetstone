@@ -145,13 +145,16 @@ public record WorkerHostView(
     int QaLeases = 1, bool RemoteOn = true,
     HostAccountChoice? Claude = null, IReadOnlyList<HostClaudeLogin>? ClaudeLogins = null,
     string? PsVersion = null, bool WindowsPowerShell = false,
-    bool StopPending = false, int Out = 0)
+    bool StopPending = false, int Out = 0,
+    IReadOnlyList<HostDisk>? Disks = null, string? DiskLow = null)
 {
     /// <summary>
     /// Whether the orchestrator may give it new work: remote work switched on, this host switched on
-    /// and not stopping after its current runs, answering, and on this board's commit.
+    /// and not stopping after its current runs, answering, on this board's commit, and with room on
+    /// its worktree drives (<see cref="DiskFloor"/>).
     /// </summary>
-    public bool Dispatchable => RemoteOn && Enabled && !StopPending && Online && CommitMatches && UsageLimitUntil is null;
+    public bool Dispatchable => RemoteOn && Enabled && !StopPending && Online && CommitMatches && UsageLimitUntil is null
+        && DiskLow is null;
 
     /// <summary>
     /// Whether it may be given a Claude phase. False is narrower than not dispatchable: a phase
@@ -190,6 +193,8 @@ public class WorkerHostService
         public string? DataRoot;
         public string? PsVersion;
         public bool WindowsPowerShell;
+        /// <summary>Free space on the drives holding its worktree roots, as its last check-in said. Null: never said.</summary>
+        public List<HostDisk>? Disks;
         /// <summary>Start orders a check-in has carried away whose run the runner has not reported yet, by run id.</summary>
         public Dictionary<int, DateTime> Handed = new();
         public TaskCompletionSource Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -203,6 +208,7 @@ public class WorkerHostService
     private readonly Func<bool> _remoteOn;
     private readonly Func<IReadOnlyList<HostClaudeLogin>, HostAccountChoice>? _chooseAccount;
     private readonly Func<string, DateTimeOffset, bool>? _accountLimit;
+    private readonly Func<double> _diskFloorGb;
 
     /// <summary>
     /// Machines that checked in under a name the config does not have: a runner set up and started
@@ -214,17 +220,21 @@ public class WorkerHostService
     public WorkerHostService(ProjectRegistry registry, BoardCommit commit, ClaudeAccountSwitcher accounts)
         : this(() => WorkerHostConfig.Read(registry.GetGlobalConfig()), commit.Get, () => DateTime.UtcNow,
                () => WorkerHostConfig.RemoteEnabled(registry.GetGlobalConfig()),
-               accounts.ChooseForHost, accounts.NoteHostLimit) { }
+               accounts.ChooseForHost, accounts.NoteHostLimit,
+               () => DiskFloor.FloorGb(registry.GetGlobalConfig())) { }
 
     /// <param name="chooseAccount">Which Claude account a host with these logins spends - see <see cref="ClaudeAccountSwitcher.ChooseForHost"/>. Null: hosts choose their own.</param>
     /// <param name="accountLimit">Told of a Claude account a host's run found full; true when it is one of the board's accounts.</param>
+    /// <param name="diskFloorGb">The low-disk floor, <see cref="DiskFloor.FloorGb"/>. Null: the default.</param>
     public WorkerHostService(Func<IReadOnlyList<WorkerHostConfig>> config, Func<string?> boardCommit, Func<DateTime> now,
         Func<bool>? remoteOn = null,
         Func<IReadOnlyList<HostClaudeLogin>, HostAccountChoice>? chooseAccount = null,
-        Func<string, DateTimeOffset, bool>? accountLimit = null)
+        Func<string, DateTimeOffset, bool>? accountLimit = null,
+        Func<double>? diskFloorGb = null)
     {
         (_config, _boardCommit, _now, _remoteOn) = (config, boardCommit, now, remoteOn ?? (() => true));
         (_chooseAccount, _accountLimit) = (chooseAccount, accountLimit);
+        _diskFloorGb = diskFloorGb ?? (() => DiskFloor.DefaultGb);
     }
 
     /// <summary>Whether remote work is switched on at all.</summary>
@@ -262,7 +272,7 @@ public class WorkerHostService
         string name, string? commit, IReadOnlyList<HostRun> runs, DateTime? usageLimitUntil, TimeSpan wait,
         CancellationToken ct = default, string? dataRoot = null,
         IReadOnlyList<HostClaudeLogin>? logins = null, IReadOnlyList<HostUsageLimit>? limits = null,
-        string? psVersion = null, bool windowsPowerShell = false)
+        string? psVersion = null, bool windowsPowerShell = false, IReadOnlyList<HostDisk>? disks = null)
     {
         if (Find(name) is null)
         {
@@ -293,6 +303,8 @@ public class WorkerHostService
             if (!string.IsNullOrWhiteSpace(dataRoot)) s.DataRoot = dataRoot.Trim();
             s.PsVersion = string.IsNullOrWhiteSpace(psVersion) ? null : psVersion.Trim();
             s.WindowsPowerShell = windowsPowerShell;
+            // Kept when a check-in says nothing: a runner measures its drives on a slower clock than it checks in.
+            if (disks is not null) s.Disks = disks.Where(d => !string.IsNullOrWhiteSpace(d.Root)).ToList();
             foreach (var r in s.Runs) s.Handed.Remove(r.RunId);
             foreach (var id in s.Handed.Where(kv => _now() - kv.Value > HandedGrace).Select(kv => kv.Key).ToList()) s.Handed.Remove(id);
             if (s.Orders.Count > 0 || wait <= TimeSpan.Zero) return Drain(s);
@@ -427,6 +439,8 @@ public class WorkerHostService
         var board = _boardCommit();
         var now = _now();
         var remoteOn = _remoteOn();
+        double floor;
+        try { floor = _diskFloorGb(); } catch { floor = DiskFloor.DefaultGb; }
         var result = new List<WorkerHostView>();
         lock (_lock)
         {
@@ -441,7 +455,8 @@ public class WorkerHostService
                 result.Add(new WorkerHostView(h.Name, h.Enabled, h.Slots, h.FirstSlot, h.Skills, h.Projects,
                     online, s?.LastCheckin, s?.Commit, matches,
                     s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.QaLeases, remoteOn,
-                    claude, logins, s?.PsVersion, s?.WindowsPowerShell ?? false, h.StopPending, OutOf(s)));
+                    claude, logins, s?.PsVersion, s?.WindowsPowerShell ?? false, h.StopPending, OutOf(s),
+                    s?.Disks?.ToList(), DiskFloor.Low(s?.Disks, floor)));
             }
         }
         return result;

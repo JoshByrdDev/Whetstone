@@ -527,8 +527,9 @@ function Update-MergedBranch {
 # Turn a branch name into a directory name. Branch names carry characters a path cannot ('jb/X'),
 # and nesting them as real subdirectories would bury one ticket's worktree inside another's when
 # prefixes collide. Flattening keeps every worktree a single, greppable folder under the root.
-# Written twice, and the two must agree: BranchNaming.WorktreeDirName is where the board's branch
-# rename (RenameTicketBranchAsync) moves a ticket's worktree or workspace, so the next run finds it here.
+# Written three times, and they must agree: BranchNaming.WorktreeDirName is where the board's branch
+# rename (RenameTicketBranchAsync) moves a ticket's worktree or workspace, so the next run finds it here,
+# and runner.ps1's copy is how a worker host's runner knows which worktree a live run holds.
 function Get-WorktreeDirName {
     param([string]$Branch)
     $name = $Branch -replace '[\\/:*?"<>|]', '-'
@@ -722,6 +723,15 @@ function Format-OutputTail {
         if ($l.Length -gt $Width) { $l.Substring(0, $Width) + ' ...' } else { $l }
     })
     return "`n`nLast lines of its output:`n$fence`n" + ($tail -join "`n") + "`n$fence"
+}
+
+# What git said when `git worktree add` failed, as the tail of a reason: its last few lines, after
+# Format-OutputTail. A full disk then reads as git's "No space left on device" on the ticket.
+function Format-GitAddFailure {
+    param([object[]]$Lines)
+    $list = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($l in @($Lines)) { if ($null -ne $l) { $list.Add("$l") } }
+    return (Format-OutputTail -Lines $list -Count 5)
 }
 
 # Where a worktree records that its setup did not finish. It lives in the worktree's own git dir
@@ -1104,10 +1114,12 @@ function Resolve-Worktree {
                 return @{ ok = $false; reason = "branch '$branchName' is checked out in '$RepoDir'; git allows a branch in one worktree only - switch that checkout to another branch first" }
             }
             $startRef = if ($exists -eq "local") { $branchName } else { "origin/$branchName" }
-            if ($exists -eq "local") { git -C $RepoDir worktree add $wtPath $branchName *> $null }
-            else                     { git -C $RepoDir worktree add -b $branchName $wtPath $startRef *> $null }
+            # git's own words are kept for the reason: a full disk, a path too long, a lock left by a
+            # killed run - each reads as itself, rather than as an unexplained failure.
+            $addOut = if ($exists -eq "local") { @(git -C $RepoDir worktree add $wtPath $branchName 2>&1 | ForEach-Object { "$_" }) }
+                      else                     { @(git -C $RepoDir worktree add -b $branchName $wtPath $startRef 2>&1 | ForEach-Object { "$_" }) }
             if ($LASTEXITCODE -ne 0) {
-                return @{ ok = $false; reason = "could not create a worktree for existing branch '$branchName' at '$wtPath'" }
+                return @{ ok = $false; reason = "could not create a worktree for existing branch '$branchName' at '$wtPath'$(Format-GitAddFailure $addOut)" }
             }
         }
         elseif ($Skill -eq 'speculate' -or $MayCreate) {
@@ -1120,9 +1132,9 @@ function Resolve-Worktree {
             # --no-track matters: forking from origin/<base> otherwise makes git set the new branch's
             # upstream to origin/<base>, which is a lie - this branch has no counterpart on origin,
             # and anything asking "is this branch published?" gets the wrong answer.
-            git -C $RepoDir worktree add -b $branchName --no-track $wtPath $startRef *> $null
+            $addOut = @(git -C $RepoDir worktree add -b $branchName --no-track $wtPath $startRef 2>&1 | ForEach-Object { "$_" })
             if ($LASTEXITCODE -ne 0) {
-                return @{ ok = $false; reason = "could not create branch '$branchName' off '$startRef' at '$wtPath'" }
+                return @{ ok = $false; reason = "could not create branch '$branchName' off '$startRef' at '$wtPath'$(Format-GitAddFailure $addOut)" }
             }
         }
         else {

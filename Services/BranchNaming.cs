@@ -34,9 +34,11 @@ public static class BranchNaming
 
     /// <summary>
     /// The folder under the worktree root a branch's worktree - or, on a project of several repos,
-    /// its workspace - is made in: <c>jb/PROJ-1</c> is <c>jb-PROJ-1</c>. Written twice, and the two
-    /// must agree: <c>Get-WorktreeDirName</c> in <c>data/worker.ps1</c> makes the folder, and this
-    /// is what a rename moves it to, so the next run finds it where it looks.
+    /// its workspace - is made in: <c>jb/PROJ-1</c> is <c>jb-PROJ-1</c>. Written three times, and they
+    /// must agree: <c>Get-WorktreeDirName</c> in <c>data/worker.ps1</c> makes the folder, this is what
+    /// a rename moves it to, so the next run finds it where it looks, and what a worker host's review
+    /// worktree is matched by (<see cref="HostWorktrees"/>); <c>data/runner.ps1</c>'s copy is how its
+    /// runner tells which worktree a live run holds.
     /// </summary>
     public static string WorktreeDirName(string branch)
     {

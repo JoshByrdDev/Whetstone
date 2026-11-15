@@ -107,6 +107,38 @@ are kept between runs, which keeps `node_modules` and friends warm. The board ho
 `WorktreeReaper` never sees them. The runner reaps a worker host worktree once its ticket is Done
 or its branch is gone from the board host.
 
+*As built* (it was promised here and not built until a worker host filled its disk: each worktree
+held its own package install, and every run after the disk filled failed at `git worktree add`).
+Hourly, and again at once while a pass ran out of time, the runner lists each project's worktrees
+straight under its worktree root, as git lists them, and asks `POST /api/hosts/<name>/worktrees`
+which may go. It names each by its folder and what it holds - a branch, or for a detached checkout
+its kind and ticket - never by its path. The board answers from its tickets (`HostWorktrees`), on
+the board's own reaper's rule:
+
+| What the worktree is | It may go when |
+|---|---|
+| a ticket's branch | every ticket naming the branch has been Done for `worktreeRetentionDays`, or none names it any more (deleted, renamed on the board) |
+| `review-<branch>`, detached | every review of that branch has been Done for the retention: one open review keeps it, since the next pass reuses it rather than installing again |
+| `walkthrough-ticket-<id>` (a walk-through or a discovery), detached | its ticket is Done for the retention, gone, or has not moved for the retention - it is the base, checked out, and holds no work |
+
+A retention of 0 keeps everything there as here. The runner then removes only those, with `git
+worktree remove` (never forced, so the branch and anything committed stay), under the hub lock the
+workers take, and only after its own checks, which the board cannot make: no live run's claim names
+it, nothing uncommitted or untracked, no stopped rebase or merge, and nothing git wrote there in the
+last hour. A locked worktree, one outside the root or deeper in it, and a folder git does not know
+are never touched. What it reaped, and what it kept though the board said it may go, is in the
+runner log. A pass stops starting removals after 45 seconds, so a host clearing a backlog keeps
+checking in. A project of several repos never runs on a worker host, so there are no workspaces
+there to reap.
+
+**The low-disk guard.** Every few minutes the check-in carries the free space on the drives holding
+the host's worktree roots (`disks`). Below `workerDiskFloorGb` (global config, 10 by default, 0 off)
+the host is not dispatchable, and `GET /api/hosts` and the Heartbeat page say so (`diskLow`), the
+way an offline or out-of-commit host is shown. The board host's own berths get the same check,
+from its projects' worktree roots, through `/api/hosts/dispatch` (`board.diskLow`). And a
+`git worktree add` that fails now carries the last lines git printed, so a full disk reads as
+"No space left on device" on the blocked ticket.
+
 **Handing back.** At the end of the run, after `Save-WorkerLeftovers`, the hand-off rebase and the
 squash net (all of which run against the mirrored base and are unchanged):
 
@@ -331,8 +363,8 @@ each step.
 Minimal in phase 1. *As built:*
 
 - the dock in the board's header draws, after the board host's own berths, each switched-on worker
-  host's name and its berths. A host that is not taking work (off, offline, on another commit, at
-  its usage limit) rests its berths stopped and says why. Polled from `/api/hosts` every 15 seconds.
+  host's name and its berths. A host that is not taking work (off, offline, on another commit, low
+  on disk, at its usage limit) rests its berths stopped and says why. Polled from `/api/hosts` every 15 seconds.
 - a ticket a worker host is running shows its agent like any other, by slot number. Naming the host
   on the ticket row is left for phase 2.
 - `workerHosts` is edited in `config.json`. A Settings page for it is phase 2.

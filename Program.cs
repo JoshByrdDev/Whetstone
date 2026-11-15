@@ -76,6 +76,7 @@ builder.Services.AddSingleton<SkillDriftService>();
 // Machines that run workers for this board (docs/worker-hosts-plan.md). In memory; see the class.
 builder.Services.AddSingleton<BoardCommit>();
 builder.Services.AddSingleton<WorkerHostService>();
+builder.Services.AddSingleton<BoardDisk>();
 builder.Services.AddSingleton<EventStore>();
 builder.Services.AddSingleton<CapacityMonitor>();
 builder.Services.AddSingleton<CapacitySnapshot>();

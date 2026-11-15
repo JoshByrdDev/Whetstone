@@ -449,6 +449,21 @@ exit 1
     Check 'a very long line is cut' ($tail -match ('x' * 300 + ' \.\.\.')) $true
     Check 'no output, no block' (Format-OutputTail -Lines (New-Object System.Collections.Generic.List[string])) ''
 
+    # ---- git worktree add failing says what git said ---------------------------
+    # A worker host whose disk filled blocked every ticket on "could not create branch" and nothing
+    # more. The worktree root is a file here, so git cannot make the folder - and says so.
+    Write-Host "== git worktree add failures carry git's own words"
+    $fa = New-Hub 'add-fails'
+    Set-Content -LiteralPath $fa.wt -Value 'not a folder' -Encoding ascii
+    $new = New-TicketWorktree -Repo $fa -Branch 'tk-new' -MergeLocally $true
+    Check 'a new branch that cannot get a worktree is refused' "$($new.ok)" 'False'
+    Check '... with the headline as before' ($new.reason -like "could not create branch 'tk-new' off 'main'*") $true
+    Check "... and git's output after it" ($new.reason -match 'Last lines of its output' -and $new.reason -match '(?i)fatal|could not|not a directory') $true
+    git -C $fa.hub branch tk-old *> $null
+    $old = New-TicketWorktree -Repo $fa -Branch 'tk-old' -MergeLocally $true -Skill 'implement'
+    Check 'an existing branch that cannot get a worktree is refused' "$($old.ok)" 'False'
+    Check "... with git's output too" ($old.reason -like "could not create a worktree for existing branch 'tk-old'*" -and $old.reason -match 'Last lines of its output') $true
+
     # ---- Speculate installs beside its agent -------------------------------------
     Write-Host "== speculate's setup runs in the background"
     function Resolve-Bg {

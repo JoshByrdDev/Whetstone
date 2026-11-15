@@ -80,6 +80,7 @@ public sealed class QaIsolation
         // Worker hosts are other machines. Reading /api/hosts stays open - the copy has none, and the
         // fleet view asks for it - but nothing that dispatches to one, or that one would call, does.
         R("POST", @"^/api/hosts/[^/]+/(checkin|orders)/?$", "dispatching runs to a worker host"),
+        R("POST", @"^/api/hosts/[^/]+/worktrees/?$", "telling a worker host which worktrees to remove"),
         R("POST", @"^/api/tickets/\d+/branch/accept/?$", "taking a branch from a worker host"),
         R("GET", @"^/api/hosts/project-kit/[^/]+/?$", "serving a project to a worker host"),
         R("GET", @"^/api/hosts/ticket-data/\d+/?$", "serving a ticket's files to a worker host"),

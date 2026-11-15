@@ -37,6 +37,24 @@ export interface WorkerHost {
   stopPending?: boolean;
   /** What it has out: runs still going plus start orders not yet reported as runs. */
   out?: number;
+  /** Free space on the drives holding its worktree roots, as its runner last reported. */
+  disks?: HostDisk[] | null;
+  /** Set when one of them is under the board's floor (workerDiskFloorGb): it is given nothing new, and this says why. */
+  diskLow?: string | null;
+}
+
+/** One drive or volume and its free space, as a runner or this computer reads it. */
+export interface HostDisk {
+  root: string;
+  freeBytes: number;
+  totalBytes?: number | null;
+}
+
+/** "42 GB free on C:\", for each drive, or '' when none was reported. */
+export function diskLine(disks?: HostDisk[] | null): string {
+  if (!disks || disks.length === 0) return '';
+  const gb = (b: number) => (b / 1024 ** 3).toFixed(b < 10 * 1024 ** 3 ? 1 : 0);
+  return disks.map(d => `${gb(d.freeBytes)} GB free on ${d.root}`).join(' · ');
 }
 
 /**
@@ -56,6 +74,7 @@ export function hostHold(h: WorkerHost): string | null {
   if (h.stopPending) return 'stopping after current runs';
   if (!h.online) return 'offline';
   if (!h.commitMatches) return 'on another commit';
+  if (h.diskLow) return 'low on disk';
   if (h.usageLimitUntil) return 'at its usage limit';
   if (h.claudeOpen === false) return 'no Claude account under its limits';
   return null;

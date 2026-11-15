@@ -62,6 +62,8 @@ public static class CapacityReasons
     public const string HostOff = "host-off";
     public const string HostOffline = "host-offline";
     public const string HostBehind = "host-behind";
+    /// <summary>A machine whose worktree drive is under the low-disk floor (<see cref="DiskFloor"/>).</summary>
+    public const string DiskLow = "disk-low";
     public const string NothingReady = "nothing-ready";
     public const string Dependency = "dependency";
     public const string Resource = "resource";
@@ -190,10 +192,11 @@ public class CapacitySnapshot
     private readonly ProjectRegistry _registry;
     private readonly DashboardPaths _paths;
     private readonly CapacityMonitor _monitor;
+    private readonly BoardDisk? _disk;
 
     public CapacitySnapshot(EventStore events, HeartbeatManager heartbeat, WorkerHostService hosts,
-        ProjectRegistry registry, DashboardPaths paths, CapacityMonitor monitor)
-        => (_events, _heartbeat, _hosts, _registry, _paths, _monitor) = (events, heartbeat, hosts, registry, paths, monitor);
+        ProjectRegistry registry, DashboardPaths paths, CapacityMonitor monitor, BoardDisk? disk = null)
+        => (_events, _heartbeat, _hosts, _registry, _paths, _monitor, _disk) = (events, heartbeat, hosts, registry, paths, monitor, disk);
 
     public IReadOnlyList<PlaceInput> Read()
     {
@@ -212,6 +215,7 @@ public class CapacitySnapshot
                 : h.UsageLimitUntil is not null ? CapacityReasons.UsageLimit
                 : !h.ClaudeOpen ? CapacityReasons.AccountFull
                 : !h.CommitMatches ? CapacityReasons.HostBehind
+                : h.DiskLow is not null ? CapacityReasons.DiskLow
                 : null;
             list.Add(new(h.Name, h.Slots, h.Runs.Count(r => !r.Exited), running, state, sleep, paused, hostState,
                 _monitor.LastClaim(h.Name)));
@@ -222,7 +226,11 @@ public class CapacitySnapshot
     /// <summary>This computer switched off, or stopping after its current runs, from its card: the same reason as a host's.</summary>
     private string? BoardState()
     {
-        try { return WorkerHostSettings.ReadBoard(_registry.GetGlobalConfig()).Dispatchable ? null : CapacityReasons.HostOff; }
+        try
+        {
+            if (!WorkerHostSettings.ReadBoard(_registry.GetGlobalConfig()).Dispatchable) return CapacityReasons.HostOff;
+            return _disk?.Low() is not null ? CapacityReasons.DiskLow : null;
+        }
         catch { return null; }   // a malformed config must not stop the meter
     }
 

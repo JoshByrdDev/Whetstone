@@ -161,8 +161,8 @@ function Reset-Board {
 function Set-Dispatch { param([string]$Mode, [string[]]$Order = @(), $Board = $null)
     $script:DispatchView = [pscustomobject]@{ mode = $Mode; order = @($Order); board = $Board }
 }
-function New-BoardPlace { param([bool]$Enabled = $true, [bool]$StopPending = $false, [int]$Slots = 2)
-    [pscustomobject]@{ enabled = $Enabled; stopPending = $StopPending; slots = $Slots; qaLeases = 1 }
+function New-BoardPlace { param([bool]$Enabled = $true, [bool]$StopPending = $false, [int]$Slots = 2, [string]$DiskLow = $null)
+    [pscustomobject]@{ enabled = $Enabled; stopPending = $StopPending; slots = $Slots; qaLeases = 1; diskLow = $DiskLow }
 }
 
 # A remote agent as Start-RemoteAgent books one, ordered $Ago seconds ago.
@@ -357,6 +357,23 @@ Set-Dispatch -Mode 'fill' -Order @('@board') -Board (New-BoardPlace)
 New-Tickets 1
 $null = Start-Fill
 Check 'switched back on, it takes work on the next pass' ($script:Placed -join ' ') '@board:11'
+
+Reset-Board
+$script:Hosts = @(New-HostView -Slots 2)
+Set-Dispatch -Mode 'fill' -Order @('@board', 'bravo-host') -Board (New-BoardPlace -DiskLow 'only 3 GB free on C:\, under the 10 GB floor')
+New-Tickets 3
+$null = Get-WorkerHosts
+$null = Start-Fill
+Check 'this computer under the disk floor is given nothing; the host still fills' ($script:Placed -join ' ') 'bravo-host:11 bravo-host:12'
+Check '... and never asked' (@($script:ClaimHosts | Where-Object { $_ -eq '@board' }).Count) 0
+
+Reset-Board
+Set-Dispatch -Mode 'fill' -Order @('@board') -Board (New-BoardPlace -DiskLow 'only 3 GB free')
+$null = Start-Fill
+Set-Dispatch -Mode 'fill' -Order @('@board') -Board (New-BoardPlace)
+New-Tickets 1
+$null = Start-Fill
+Check 'room again: it takes work on the next pass' ($script:Placed -join ' ') '@board:11'
 
 Reset-Board
 Set-Dispatch -Mode 'fill' -Order @('@board')

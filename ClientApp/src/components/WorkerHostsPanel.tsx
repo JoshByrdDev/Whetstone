@@ -3,7 +3,8 @@ import { Chip, GhostButton, Panel, SectionRule, DIM, MUTED, BRIGHT } from './ui'
 import { DISPLAY, MONO, BODY, CAPS, chamfer } from './orbit';
 import { label, ago } from './stewardParts';
 import { track } from '../theme';
-import type { WorkerHost } from '../hooks/useWorkerHosts';
+import type { WorkerHost, HostDisk } from '../hooks/useWorkerHosts';
+import { diskLine } from '../hooks/useWorkerHosts';
 import { useMachines, hardwareLine, BOARD_PLACE, type Machine } from '../hooks/useMachines';
 import { SlotSuggestionNote } from './SlotSuggestionNote';
 import { ConfirmHostOffModal } from './ConfirmHostOffModal';
@@ -52,6 +53,10 @@ interface BoardPlace {
   qaLeases: number;
   maxSlots: number;
   maxQaLeases: number;
+  /** Free space on the drives holding its projects' worktree roots. Absent from an older server. */
+  disks?: HostDisk[];
+  /** Set when one is under the floor (workerDiskFloorGb): the heartbeat gives this computer nothing new. */
+  diskLow?: string | null;
   /** How many of its berths are running now: what a pending stop waits for. */
   out: number;
   runs: { slot: number; ticketId?: string | null; project?: string | null; phase?: string | null }[];
@@ -106,6 +111,7 @@ function stateOf(h: Settings['hosts'][number]): { text: string; colour: string }
   if (h.stopPending) return { text: live > 0 ? `stopping · ${live} finishing` : 'stopping', colour: 'rgb(var(--w-active-rgb))' };
   if (!h.online) return { text: h.lastCheckin ? 'offline' : 'never checked in', colour: 'rgb(var(--w-blocked-rgb))' };
   if (!h.commitMatches) return { text: 'on another commit', colour: 'rgb(var(--w-gate-rgb))' };
+  if (h.diskLow) return { text: 'low on disk', colour: 'rgb(var(--w-blocked-rgb))' };
   if (h.usageLimitUntil) return { text: 'at its usage limit', colour: 'rgb(var(--w-gate-rgb))' };
   if (h.claudeOpen === false && live === 0) return { text: 'Claude accounts full', colour: 'rgb(var(--w-gate-rgb))' };
   return { text: live > 0 ? `working · ${live}` : 'ready', colour: 'rgb(var(--w-done-rgb))' };
@@ -373,6 +379,7 @@ function HostCard({ h, s, busy, onEdit, onStop, onRemove, machine }: {
           {!h.commitMatches && h.commit && <> · the board is on <span style={{ fontFamily: MONO }}>{short(s.boardCommit)}</span> - pull on that computer</>}
         </span>
         <span>berths {h.slots === 1 ? h.firstSlot : `${h.firstSlot}–${lastBerth}`}</span>
+        {diskLine(h.disks) && <span>{diskLine(h.disks)}</span>}
         {h.windowsPowerShell && (
           <span style={{ color: 'rgb(var(--w-gate-rgb))' }}
             title="Its scheduled task was set up before the fleet left Windows PowerShell 5.1. The runner points the task at PowerShell 7 and restarts on it as soon as nothing is running there; if this stays, double-click Update-Runner.bat on that computer.">
@@ -381,6 +388,12 @@ function HostCard({ h, s, busy, onEdit, onStop, onRemove, machine }: {
         )}
         {h.usageLimitUntil && <span>paused until {new Date(h.usageLimitUntil).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
       </div>
+
+      {h.diskLow && h.enabled && h.remoteOn && (
+        <p className="mt-1 min-w-0 break-words" style={{ font: `400 11px ${BODY}`, color: 'rgb(var(--w-blocked-rgb))' }}>
+          No new work there: {h.diskLow}. Its runner removes the worktrees of tickets Done for a while; free more by hand if that is not enough.
+        </p>
+      )}
 
       {machine?.inventory && (
         <div className="mt-0.5 min-w-0 break-words" style={{ font: `400 10.5px ${BODY}`, color: DIM }}>
@@ -454,6 +467,7 @@ function HostCard({ h, s, busy, onEdit, onStop, onRemove, machine }: {
 function boardStateOf(b: BoardPlace): { text: string; colour: string } {
   if (!b.enabled) return { text: 'switched off', colour: DIM };
   if (b.stopPending) return { text: b.out > 0 ? `stopping · ${b.out} finishing` : 'stopping', colour: 'rgb(var(--w-active-rgb))' };
+  if (b.diskLow) return { text: 'low on disk', colour: 'rgb(var(--w-blocked-rgb))' };
   return { text: b.out > 0 ? `working · ${b.out}` : 'ready', colour: 'rgb(var(--w-done-rgb))' };
 }
 
@@ -522,8 +536,15 @@ function BoardCard({ b, busy, onEdit, onStop, machine }: {
 
       <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5" style={{ font: `400 10.5px ${BODY}`, color: MUTED }}>
         <span>berths {b.slots === 1 ? 1 : `1–${b.slots}`}</span>
+        {diskLine(b.disks) && <span>{diskLine(b.disks)}</span>}
         <span>the steward runs beside these, in its own berth</span>
       </div>
+
+      {b.enabled && !b.stopPending && b.diskLow && (
+        <p className="mt-1 min-w-0 break-words" style={{ font: `400 11px ${BODY}`, color: 'rgb(var(--w-blocked-rgb))' }}>
+          No new work here: {b.diskLow}. Runs already going finish; worker hosts carry on. Free some space and it takes work again on the heartbeat's next pass.
+        </p>
+      )}
 
       {machine?.inventory && (
         <div className="mt-0.5 min-w-0 break-words" style={{ font: `400 10.5px ${BODY}`, color: DIM }}>

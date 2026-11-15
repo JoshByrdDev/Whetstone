@@ -15,10 +15,15 @@ namespace Whetstone.Api;
 /// <param name="PsVersion">The PowerShell the runner is on.</param>
 /// <param name="WindowsPowerShell">Whether it, or the supervisor that started it, is Windows PowerShell 5.1 - a
 /// task set up before the fleet left 5.1. The runner moves itself to 7 once idle; until then the Heartbeat page says so.</param>
+/// <param name="Disks">Free space on the drives holding its worktree roots: below <see cref="DiskFloor"/> it is given nothing new.
+/// Sent every few minutes, not on every check-in; absent keeps what it last said.</param>
 public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null,
     HostClaudeLogin[]? ClaudeLogins = null, HostUsageLimit[]? UsageLimits = null,
     MachineInventoryReport? Inventory = null, MachineLoadReport? Load = null,
-    string? PsVersion = null, bool? WindowsPowerShell = null);
+    string? PsVersion = null, bool? WindowsPowerShell = null, HostDisk[]? Disks = null);
+
+/// <summary>A runner asking which of one project's worktrees on its machine may go. See <see cref="HostWorktrees"/>.</summary>
+public record HostWorktreesRequest(string Project, HostWorktreeItem[]? Worktrees);
 
 /// <summary>The switch for all remote work, as the Heartbeat page sets it.</summary>
 public record HostSwitchRequest(bool Enabled);
@@ -97,12 +102,21 @@ public static class WorkerHostEndpoints
         // It also carries this computer's own place (on, stopping, its berths), read the same way and
         // for the same reason - and, being read every pass, is where this machine's own pending stop
         // is finished once its berths are empty.
-        app.MapGet("/api/hosts/dispatch", (ProjectRegistry registry, DashboardPaths paths, EventStore events) =>
+        app.MapGet("/api/hosts/dispatch", (ProjectRegistry registry, DashboardPaths paths, EventStore events, BoardDisk disk) =>
         {
             FinishBoardStop(paths, events);
             var global = registry.GetGlobalConfig();
             var d = WorkerHostSettings.ReadDispatch(global, WorkerHostConfig.Read(global));
-            return Results.Ok(new { mode = d.Mode, order = d.Order, board = WorkerHostSettings.ReadBoard(global) });
+            var place = WorkerHostSettings.ReadBoard(global);
+            // The low-disk guard for this machine's own berths: the orchestrator reads diskLow beside
+            // enabled and stopPending (Use-BoardPlace), and takes nothing new here while it is set.
+            var diskLow = disk.Low();
+            return Results.Ok(new
+            {
+                mode = d.Mode, order = d.Order,
+                board = new { place.Enabled, place.StopPending, place.Slots, place.QaLeases,
+                    dispatchable = place.Dispatchable && diskLow is null, diskLow },
+            });
         });
 
         // ---- This computer's own place ----
@@ -147,7 +161,8 @@ public static class WorkerHostEndpoints
         //
         // Everything it draws in one read: the switch, every configured host with its live state,
         // machines that checked in before being added, and what a host may be given.
-        app.MapGet("/api/hosts/settings", (WorkerHostService hosts, ProjectRegistry registry, BoardCommit commit, DashboardPaths paths, EventStore events) =>
+        app.MapGet("/api/hosts/settings", (WorkerHostService hosts, ProjectRegistry registry, BoardCommit commit, DashboardPaths paths, EventStore events,
+            BoardDisk disk) =>
         {
             FinishDrainedStops(paths, hosts);
             FinishBoardStop(paths, events);
@@ -163,7 +178,7 @@ public static class WorkerHostEndpoints
                 projects = registry.Projects.Select(k => new { key = k, displayName = registry.GetProjectConfig(k).DisplayName }),
                 skills = WorkerHostSettings.HostableSkills,
                 // This computer's own card: its place, and what its berths are doing now.
-                board = BoardView(registry, events),
+                board = BoardView(registry, events, disk),
             });
         });
 
@@ -235,9 +250,30 @@ public static class WorkerHostEndpoints
 
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
             var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot,
-                req.ClaudeLogins, req.UsageLimits, req.PsVersion, req.WindowsPowerShell ?? false);
+                req.ClaudeLogins, req.UsageLimits, req.PsVersion, req.WindowsPowerShell ?? false, req.Disks);
             FinishDrainedStops(paths, hosts);
             return CheckinResult(name, orders, revoked, commit.Get());
+        });
+
+        // Which of a project's worktrees on a worker host may be removed. The runner names each by its
+        // folder and what it holds, never by its path, and removes only what this says it may - after
+        // its own checks, which only it can make (data/runner.ps1, Remove-HostWorktrees). It changes
+        // nothing here: the answer is read from the tickets.
+        app.MapPost("/api/hosts/{name}/worktrees", async (string name, HostWorktreesRequest req,
+            WorkerHostService hosts, ProjectRegistry registry, IServiceScopeFactory scopes, CancellationToken ct) =>
+        {
+            if (hosts.Find(name) is null) return Results.NotFound(new { error = $"'{name}' is not a worker host." });
+            if (string.IsNullOrWhiteSpace(req.Project) || !registry.AllProjects.Contains(req.Project, StringComparer.OrdinalIgnoreCase))
+                return Results.NotFound(new { error = $"No project '{req.Project}'." });
+            var items = (req.Worktrees ?? Array.Empty<HostWorktreeItem>())
+                .Where(i => i is not null && !string.IsNullOrWhiteSpace(i.Name) && i.Name.IndexOfAny(new[] { '/', '\\' }) < 0 && i.Name is not ("." or ".."))
+                .ToList();
+            var days = WorktreeReaper.RetentionDays(registry.GetGlobalConfig());
+            using var scope = scopes.CreateScope();
+            var verdicts = await HostWorktrees.DecideAsync(scope.ServiceProvider.GetRequiredService<Persistence.DashboardDbContext>(),
+                registry.AllProjects.First(p => p.Equals(req.Project, StringComparison.OrdinalIgnoreCase)),
+                items, TimeSpan.FromDays(Math.Max(0, days)), DateTime.UtcNow, ct);
+            return Results.Ok(new { retentionDays = days, verdicts });
         });
 
         app.MapPost("/api/hosts/{name}/orders", (string name, HostOrderRequest req, WorkerHostService hosts) =>
@@ -351,12 +387,13 @@ public static class WorkerHostEndpoints
     }
 
     /// <summary>This computer's card, as the Heartbeat page draws it.</summary>
-    private static object BoardView(ProjectRegistry registry, EventStore events)
+    private static object BoardView(ProjectRegistry registry, EventStore events, BoardDisk disk)
     {
         var place = WorkerHostSettings.ReadBoard(registry.GetGlobalConfig());
         return new
         {
             place.Enabled, place.StopPending, place.Slots, place.QaLeases,
+            disks = disk.Disks(), diskLow = disk.Low(),
             maxSlots = HeartbeatManager.MaxWorkers,
             maxQaLeases = ResourceLeaseService.MaxQaLeases,
             @out = events.BoardBusyCount,

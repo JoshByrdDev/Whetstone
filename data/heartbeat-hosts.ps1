@@ -178,17 +178,24 @@ function Get-Dispatch {
 # either applies without a restart; the berth count only ever stops refilling above it, it kills
 # nothing. Slots 1..$MaxHeartbeatWorkers are this machine's whatever the count, so changing it
 # renumbers no one. An app from before the card sends no board: on, with the berths from config.
+# A worktree drive under the low-disk floor (diskLow, DiskFloor in the API) closes it too: a run
+# started on a full disk fails at `git worktree add` and blocks its ticket, and the next pass would
+# do the same to the next ticket. Worker hosts carry on; this machine opens again once there is room.
 $script:BoardOpen = $true
+$script:BoardDiskLow = ''
 
 function Use-BoardPlace {
     param($Board)
-    if ($null -eq $Board) { $script:BoardOpen = $true; return }
-    $open = [bool]$Board.enabled -and -not [bool]$Board.stopPending
-    if ($open -ne $script:BoardOpen) {
+    if ($null -eq $Board) { $script:BoardOpen = $true; $script:BoardDiskLow = ''; return }
+    $diskLow = "$($Board.diskLow)".Trim()
+    $open = [bool]$Board.enabled -and -not [bool]$Board.stopPending -and -not $diskLow
+    if ($open -ne $script:BoardOpen -or $diskLow -ne $script:BoardDiskLow) {
         if ($open) { Write-Log "  This computer is on: its berths take work again." }
         elseif ([bool]$Board.stopPending) { Write-Log "  This computer is stopping after its current runs: no new work here." }
-        else { Write-Log "  This computer is switched off: no new work here; worker hosts carry on." }
+        elseif (-not [bool]$Board.enabled) { Write-Log "  This computer is switched off: no new work here; worker hosts carry on." }
+        else { Write-Log "  This computer is low on disk ($diskLow): no new work here until there is room; worker hosts carry on." }
         $script:BoardOpen = $open
+        $script:BoardDiskLow = $diskLow
     }
     $n = 0
     if ([int]::TryParse("$($Board.slots)", [ref]$n) -and $n -ge 1) {

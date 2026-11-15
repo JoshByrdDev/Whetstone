@@ -43,6 +43,9 @@ param(
 $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $DataRoot "heartbeat-common.ps1")
 . (Join-Path $DataRoot "machine-info.ps1")
+# For reaping this host's worktrees: Get-StoppedGitOperation and Get-GitDirPath, Get-FullPathKey.
+. (Join-Path $DataRoot "worker-board.ps1")
+. (Join-Path $DataRoot "worker-repos.ps1")
 
 # How a process this starts is kept out of sight: hidden on Windows, where each would otherwise open
 # a console window, and nothing at all elsewhere, where there are no windows and Start-Process refuses
@@ -166,7 +169,7 @@ function Convert-ClaimForHost {
     $p = $Claim.project
     $key = "$($p.key)"
     $repo = $Map.path.TrimEnd('\', '/')
-    $root = if ($Map.worktreeRoot) { $Map.worktreeRoot } else { [IO.Path]::Combine([IO.Path]::GetDirectoryName($repo), '.worktrees', $key) }
+    $root = Get-HostWorktreeRoot -Key $key -Map $Map
     $skillsDir = [IO.Path]::Combine($ProjectDir, 'skills')
     $notes = [IO.Path]::Combine($ProjectDir, '_notes')
 
@@ -482,6 +485,188 @@ function Remove-HostTicketCopies {
     return $removed
 }
 
+# ---- Worktrees here, and the disk they are on ----
+#
+# A worker host's worktree paths never reach the board (CLAUDE.md, "Worker hosts"), so the board's
+# own reaper (Services/WorktreeReaper.cs) can never remove one here - and for as long as nothing
+# else did, every ticket this host ever ran kept its worktree, package install and all, until the
+# disk filled and every run after it failed at `git worktree add`. The runner reaps them itself:
+# it lists what it has, asks the board which may go (by branch and ticket, never by path - the
+# board answers from its tickets, HostWorktrees.cs), and removes only those, after checks of its
+# own that only this machine can make. The branch always stays, as on the board host.
+#
+# A project of several repos never runs on a worker host (worker.ps1 stops such a run before it
+# makes anything), so what is here is always one clone's worktrees, straight under its root.
+
+# A project's worktree root on this machine: host.json's, or the one Convert-ClaimForHost derives.
+function Get-HostWorktreeRoot {
+    param([string]$Key, $Map)
+    $repo = "$($Map.path)".TrimEnd('\', '/')
+    if ("$($Map.worktreeRoot)") { return "$($Map.worktreeRoot)" }
+    return [IO.Path]::Combine([IO.Path]::GetDirectoryName($repo), '.worktrees', $Key)
+}
+
+# Free space on the drives these folders are on, each drive once, as the check-in reports it:
+# @(@{ root; freeBytes; totalBytes }). A folder is placed on the mount whose root is the longest
+# prefix of it, so it need not exist yet. Written twice and the two must agree: DiskFloor.Measure.
+function Get-HostDisks {
+    param([string[]]$Folders)
+    $drives = @(try { [IO.DriveInfo]::GetDrives() } catch { @() }) | Where-Object { try { $_.IsReady } catch { $false } }
+    $cmp = if ($IsLinux) { [StringComparison]::Ordinal } else { [StringComparison]::OrdinalIgnoreCase }
+    $sep = [IO.Path]::DirectorySeparatorChar
+    $seen = @{}
+    $out = @()
+    foreach ($f in @($Folders)) {
+        if (-not "$f".Trim()) { continue }
+        try { $full = [IO.Path]::GetFullPath("$f") } catch { continue }
+        $best = $null
+        foreach ($d in @($drives)) {
+            $r = $d.RootDirectory.FullName
+            $rs = if ($r.EndsWith("$sep")) { $r } else { "$r$sep" }
+            if ($full.Equals($r.TrimEnd($sep), $cmp) -or $full.StartsWith($rs, $cmp)) {
+                if (-not $best -or $r.Length -gt $best.RootDirectory.FullName.Length) { $best = $d }
+            }
+        }
+        if (-not $best) { continue }
+        $root = $best.RootDirectory.FullName
+        if ($seen.ContainsKey($root)) { continue }
+        try { $out += @{ root = $root; freeBytes = [long]$best.AvailableFreeSpace; totalBytes = [long]$best.TotalSize }; $seen[$root] = $true } catch { }
+    }
+    return $out
+}
+
+# The worktrees of $Repo straight under $Root, as git lists them: @(@{ name; path; kind; branch;
+# ticketId }). kind is what the board is asked about them by (HostWorktreeItem): 'branch' for a
+# ticket's own branch, 'review' for a detached review-<branch>, 'base' for a detached
+# walkthrough-ticket-<id> (a slice's walk-through or a discovery). Left out, so never asked about
+# and never removed: the clone itself, anything outside the root or deeper in it, a locked
+# worktree, one whose folder is gone (git worktree prune is the workers' business), and a detached
+# one of any other name - which includes one stopped mid-rebase, whose branch is still its own.
+function Get-HostWorktrees {
+    param([string]$Repo, [string]$Root)
+    $rootKey = Get-FullPathKey $Root
+    if (-not $rootKey) { return }
+    $sep = [IO.Path]::DirectorySeparatorChar
+    $list = @()
+    $cur = $null
+    $flush = {
+        if (-not $cur -or $cur.locked) { return }
+        $key = Get-FullPathKey $cur.path
+        if (-not $key.StartsWith("$rootKey$sep")) { return }
+        $name = Split-Path -Leaf $cur.path
+        if ($key -ne "$rootKey$sep$($name.ToLowerInvariant())") { return }
+        if (-not (Test-Path -LiteralPath $cur.path)) { return }
+        if ($cur.branch) { $list += @{ name = $name; path = $cur.path; kind = 'branch'; branch = $cur.branch; ticketId = $null }; return }
+        if ($name -match '^walkthrough-ticket-(\d+)$') { $list += @{ name = $name; path = $cur.path; kind = 'base'; branch = $null; ticketId = [int]$Matches[1] }; return }
+        if ($name -like 'review-*') { $list += @{ name = $name; path = $cur.path; kind = 'review'; branch = $null; ticketId = $null } }
+    }
+    foreach ($line in @(git -C $Repo worktree list --porcelain 2>$null)) {
+        if ($line -like 'worktree *') { . $flush; $cur = @{ path = $line.Substring(9).Trim(); branch = $null; locked = $false } }
+        elseif ($cur -and $line -like 'branch refs/heads/*') { $cur.branch = $line.Substring(18).Trim() }
+        elseif ($cur -and ($line -eq 'locked' -or $line -like 'locked *')) { $cur.locked = $true }
+    }
+    . $flush
+    return $list
+}
+
+# A branch's folder name, as worker.ps1's Get-WorktreeDirName makes it (and BranchNaming.WorktreeDirName
+# on the board): written three times now, and the three must agree.
+function Get-WorktreeDirName {
+    param([string]$Branch)
+    $name = $Branch -replace '[\\/:*?"<>|]', '-'
+    $name = $name -replace '\s+', '-'
+    return $name.Trim('-', '.')
+}
+
+# The folder names and branches the runs live here hold, read from their claims: a worktree one of
+# them names is never asked about. Whatever the claim could resolve to is held - the branch it
+# records, the one the board named for it, the walk-through's checkout and the review's - so a run
+# that has made its worktree but not yet told the board its branch is covered too.
+function Get-HeldWorktreeNames {
+    param([object[]]$Claims)
+    $held = @{}
+    foreach ($c in @($Claims)) {
+        if (-not $c) { continue }
+        foreach ($b in @("$($c.ticket.branch)", "$($c.branchName)")) {
+            if ($b.Trim()) { $held["b:$($b.Trim())"] = $true; $held["n:$(Get-WorktreeDirName $b.Trim())"] = $true }
+        }
+        if ("$($c.ticket.id)") { $held["n:walkthrough-ticket-$($c.ticket.id)"] = $true }
+        $rv = "$($c.ticket.review.sourceBranch)".Trim()
+        if ($rv) { $held["n:$(Get-WorktreeDirName "review-$rv")"] = $true }
+    }
+    return $held
+}
+
+# Why one worktree the board said may go must stay after all, or $null. Only this machine can tell:
+#   anything uncommitted or untracked - work no commit holds (git worktree remove would refuse too)
+#   a stopped rebase, merge, cherry-pick or revert - the next run of its ticket keeps what it had got to
+#   anything git wrote there in the last $QuietMinutes (HEAD, its reflog, the folder itself) - a run
+#     this runner does not know about yet, such as one adopted from a runner that is still exiting
+function Get-WorktreeKeepReason {
+    param([string]$Path, [int]$QuietMinutes = 60, [datetime]$Now = (Get-Date))
+    $op = Get-StoppedGitOperation -Dir $Path
+    if ($op) { return "a git $($op.kind) is stopped in it" }
+    $status = @(git -C $Path status --porcelain 2>$null)
+    if ($LASTEXITCODE -ne 0) { return "git could not read its status" }
+    if (@($status | Where-Object { "$_".Trim() }).Count -gt 0) { return "it has uncommitted or untracked files" }
+    $stamps = @((Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue))
+    foreach ($n in 'HEAD', 'logs/HEAD') {
+        $p = Get-GitDirPath -Dir $Path -Name $n
+        if ($p -and (Test-Path -LiteralPath $p)) { $stamps += Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+    }
+    $newest = @($stamps | Where-Object { $_ } | Sort-Object LastWriteTime -Descending)[0]
+    if ($newest -and ($Now - $newest.LastWriteTime).TotalMinutes -lt $QuietMinutes) { return "git wrote to it in the last $QuietMinutes min" }
+    return $null
+}
+
+# One pass over every project this host serves: list its worktrees, ask the board (-Ask, a
+# scriptblock taking the project key and the items, returning the board's verdicts), and remove what
+# it says may go and nothing here says must stay - with `git worktree remove`, never forced, under
+# the same hub lock the workers take, one at a time so a worker waiting for the hub waits for one.
+# Stops starting removals after $BudgetSeconds, so a first pass over a full disk does not keep the
+# runner from checking in for longer than the board allows; the next pass carries on.
+# Returns @{ removed = @('key/name: why'); kept = @('key/name: why'); more = $bool; failed = @() }.
+function Remove-HostWorktrees {
+    param([hashtable]$Projects, [scriptblock]$Ask, [hashtable]$Held = @{}, [int]$QuietMinutes = 60,
+          [int]$BudgetSeconds = 45, [datetime]$Now = (Get-Date))
+    $ErrorActionPreference = 'Continue'
+    $result = @{ removed = @(); kept = @(); failed = @(); more = $false }
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    foreach ($key in @($Projects.Keys | Sort-Object)) {
+        $map = $Projects[$key]
+        $repo = "$($map.path)".TrimEnd('\', '/')
+        if (-not (Test-Path -LiteralPath (Join-Path $repo '.git'))) { continue }
+        $root = Get-HostWorktreeRoot -Key $key -Map $map
+        if (-not (Test-Path -LiteralPath $root)) { continue }
+        $wts = @(Get-HostWorktrees -Repo $repo -Root $root | Where-Object {
+            -not $Held["n:$($_.name)"] -and -not ($_.branch -and $Held["b:$($_.branch)"])
+        })
+        if ($wts.Count -eq 0) { continue }
+        $items = @($wts | ForEach-Object { @{ name = $_.name; kind = $_.kind; branch = $_.branch; ticketId = $_.ticketId } })
+        $verdicts = $null
+        try { $verdicts = @(& $Ask $key $items) }
+        catch { $result.failed += "${key}: could not ask the board: $($_.Exception.Message)"; continue }
+        foreach ($v in @($verdicts)) {
+            if (-not $v -or -not $v.reap) { continue }
+            $wt = @($wts | Where-Object { $_.name -eq "$($v.name)" })[0]
+            if (-not $wt) { continue }
+            if ($clock.Elapsed.TotalSeconds -ge $BudgetSeconds) { $result.more = $true; break }
+            $out = Invoke-WithMutex -Name "hub-$repo" -TimeoutMs 120000 -Body {
+                $why = Get-WorktreeKeepReason -Path $wt.path -QuietMinutes $QuietMinutes -Now $Now
+                if ($why) { return @{ ok = $false; kept = $why } }
+                $lines = @(git -C $repo worktree remove $wt.path 2>&1 | ForEach-Object { "$_" })
+                if ($LASTEXITCODE -ne 0) { return @{ ok = $false; error = (@($lines | Where-Object { $_.Trim() } | Select-Object -Last 3) -join ' / ') } }
+                return @{ ok = $true }
+            }
+            if ($out.ok) { $result.removed += "$key/$($wt.name): $($v.why)" }
+            elseif ($out.kept) { $result.kept += "$key/$($wt.name): $($out.kept)" }
+            else { $result.failed += "$key/$($wt.name): git worktree remove failed: $($out.error)" }
+        }
+        if ($result.more) { break }
+    }
+    return $result
+}
+
 # Keep the newest $Keep runner-backup branches; a rewrite now and then should not leave a pile.
 function Remove-OldBackups {
     param([string]$Repo, [int]$Keep = 10)
@@ -620,6 +805,16 @@ $machineLoadAt = $null
 # A ticket's copies here are removed once no run holds it - see Remove-HostTicketCopies.
 $CopiesSweepMinutes = 60
 $copiesSweptAt = $null
+# This host's worktrees are reaped hourly, on the board's say - see Remove-HostWorktrees. A pass that
+# ran out of time comes round again on the next loop instead of in an hour.
+$WorktreeSweepMinutes = 60
+$worktreesSweptAt = $null
+$worktreesMore = $false
+# Free space on the drives holding the worktree roots goes with a check-in every few minutes; the
+# board gives a host under its floor nothing new (DiskFloor). Measured again after a reap.
+$DiskMeasureMinutes = 5
+$disksAt = $null
+$worktreeRoots = @($HostCfg.projects.Keys | ForEach-Object { Get-HostWorktreeRoot -Key $_ -Map $HostCfg.projects[$_] })
 while ($true) {
     # Finished runs are reported for a while and then forgotten; the orchestrator reads an absent
     # run as finished too, so dropping one never strands a slot.
@@ -645,6 +840,34 @@ while ($true) {
         catch { Write-Log "Could not remove old ticket copies: $($_.Exception.Message)" }
     }
 
+    # Not on -Once, which is a probe of a new host.json, not a pass.
+    if (-not $Once -and ($worktreesMore -or -not $worktreesSweptAt -or ((Get-Date) - $worktreesSweptAt).TotalMinutes -ge $WorktreeSweepMinutes)) {
+        $worktreesSweptAt = Get-Date
+        $worktreesMore = $false
+        try {
+            $claims = @(foreach ($slot in @($Runs.Keys)) {
+                if ($Runs[$slot].ExitedAt) { continue }
+                $f = Join-Path $RunDir "claim-$slot.json"
+                if (Test-Path -LiteralPath $f) { try { Get-Content -LiteralPath $f -Raw | ConvertFrom-Json } catch { } }
+            })
+            $hostName = $HostCfg.name
+            $ask = {
+                param($Key, $Items)
+                $b = @{ project = $Key; worktrees = @($Items) } | ConvertTo-Json -Depth 5 -Compress
+                $r = Invoke-RestMethod -Uri "$DashboardUrl/api/hosts/$hostName/worktrees" -Method Post `
+                    -ContentType $JsonContentType -Body (ConvertTo-JsonBody $b) -TimeoutSec 60
+                return @($r.verdicts)
+            }
+            $reaped = Remove-HostWorktrees -Projects $HostCfg.projects -Ask $ask -Held (Get-HeldWorktreeNames -Claims $claims)
+            foreach ($line in @($reaped.removed)) { Write-Log "Reaped worktree $line (the branch is kept)." }
+            foreach ($line in @($reaped.kept)) { Write-Log "Kept worktree $line, though the board says it may go." }
+            foreach ($line in @($reaped.failed)) { Write-Log "Could not reap worktree $line" }
+            if (@($reaped.removed).Count -gt 0) { $disksAt = $null }
+            $worktreesMore = [bool]$reaped.more
+        }
+        catch { Write-Log "Could not reap this host's worktrees: $($_.Exception.Message)" }
+    }
+
     $live = @($Runs.Values | Where-Object { -not $_.ExitedAt }).Count
     if ((Test-Path $RunnerStopFile) -and $live -eq 0) {
         Write-Log "Stop file present and nothing running - runner exiting."
@@ -666,7 +889,12 @@ while ($true) {
     if (-not $machineLoadAt -or ((Get-Date) - $machineLoadAt).TotalSeconds -ge 55) {
         try { $load = Get-MachineLoad -DataRoot $DataRoot; $machineLoadAt = Get-Date } catch { }
     }
+    $disks = $null
+    if (-not $disksAt -or ((Get-Date) - $disksAt).TotalMinutes -ge $DiskMeasureMinutes) {
+        try { $disks = @(Get-HostDisks -Folders $worktreeRoots); $disksAt = Get-Date } catch { }
+    }
     $body = @{
+        disks = $disks
         commit = $commit
         runs = (Get-RunReport -Runs $Runs)
         claudeLogins = @($script:ClaudeLogins | ForEach-Object { @{ uuid = $_.uuid; email = $_.email; name = $_.name } })

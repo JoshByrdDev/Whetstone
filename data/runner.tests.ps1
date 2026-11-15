@@ -24,6 +24,10 @@ $HiddenWindow = $Hide
 $runner = Join-Path $PSScriptRoot 'runner.ps1'
 
 function Write-Log { param([string]$Message) }
+# What reaping this host's worktrees takes from the scripts runner.ps1 dot-sources.
+. (Join-Path $PSScriptRoot 'worker-board.ps1')
+. (Join-Path $PSScriptRoot 'worker-repos.ps1')
+function Invoke-WithMutex { param([string]$Name, [scriptblock]$Body, [int]$TimeoutMs) return & $Body }
 
 $tree = [System.Management.Automation.Language.Parser]::ParseFile($runner, [ref]$null, [ref]$null)
 foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
@@ -528,6 +532,104 @@ exit 3
     Check 'copies: one written to in the last hour is kept' (Test-Path (Join-Path $hd 'qa-captures/14/shot.png')) $true
     Check 'copies: a folder not named by a ticket is not this sweep''s' (Test-Path (Join-Path $hd 'qa-captures/notes/readme.txt')) $true
     Check 'copies: no data folders, nothing to do' (@(Remove-HostTicketCopies -DataRoot (Join-Path $root 'no-such-data')).Count) 0
+
+    # ---- This host's worktrees ------------------------------------------------------
+    Write-Host "== Get-HostWorktreeRoot / Get-HostDisks"
+    Check 'root: host.json names one' (Get-HostWorktreeRoot -Key 'beta' -Map @{ path = 'D:\src\beta'; worktreeRoot = 'E:\wt\beta' }) 'E:\wt\beta'
+    $derived = Get-HostWorktreeRoot -Key 'alpha' -Map @{ path = (Join-Path $root 'src/alpha'); worktreeRoot = '' }
+    Check 'root: otherwise .worktrees/<key> beside the clone' $derived ([IO.Path]::Combine($root, 'src', '.worktrees', 'alpha'))
+    $disks = @(Get-HostDisks -Folders @($root, (Join-Path $root 'not-made-yet/deeper'), ''))
+    Check 'disks: two folders on one drive are one drive' $disks.Count 1
+    Check 'disks: ... with its free space' ($disks[0].freeBytes -gt 0 -and $disks[0].totalBytes -ge $disks[0].freeBytes) $true
+    Check 'disks: ... named by its root, not the folder' ($root.StartsWith($disks[0].root.TrimEnd([IO.Path]::DirectorySeparatorChar)) -and $disks[0].root -ne $root) $true
+
+    Write-Host "== Get-HeldWorktreeNames"
+    $claimHeld = Get-HeldWorktreeNames -Claims @(
+        [pscustomobject]@{ ticket = [pscustomobject]@{ id = 7; branch = ''; review = $null }; branchName = 'jb/PROJ-7' },
+        [pscustomobject]@{ ticket = [pscustomobject]@{ id = 8; branch = 'tk-8'; review = [pscustomobject]@{ sourceBranch = 'feature/x' } }; branchName = '' })
+    Check 'held: the branch the board named, before the ticket records it' ($claimHeld['b:jb/PROJ-7'] -and $claimHeld['n:jb-PROJ-7']) $true
+    Check 'held: the recorded branch' $claimHeld['b:tk-8'] $true
+    Check 'held: the walk-through checkout of a run' $claimHeld['n:walkthrough-ticket-7'] $true
+    Check 'held: the review worktree of a run' $claimHeld['n:review-feature-x'] $true
+
+    Write-Host "== Remove-HostWorktrees"
+    $hub = Join-Path $root 'reap/alpha'
+    New-Item -ItemType Directory -Path $hub -Force | Out-Null
+    git -C $hub init -b main *> $null
+    git -C $hub config user.email 'test@example.com'
+    git -C $hub config user.name 'Test'
+    git -C $hub config commit.gpgsign false
+    Set-Content -LiteralPath (Join-Path $hub '.gitignore') -Value 'node_modules/' -Encoding ascii
+    Set-Content -LiteralPath (Join-Path $hub 'a.txt') -Value 'one' -Encoding ascii
+    git -C $hub add -A *> $null
+    git -C $hub commit -m init *> $null
+    $wtRoot = Join-Path $root 'reap/.worktrees/alpha'
+    function Add-Wt { param([string]$Name, [string]$Branch, [string]$Under = $wtRoot)
+        $p = Join-Path $Under $Name
+        if ($Branch) { git -C $hub worktree add -b $Branch $p main *> $null } else { git -C $hub worktree add --detach $p main *> $null }
+        return $p }
+    $done    = Add-Wt 'tk-done' 'tk-done'
+    New-Item -ItemType Directory -Path (Join-Path $done 'node_modules/pkg') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $done 'node_modules/pkg/index.js') -Value 'x' -Encoding ascii
+    $open    = Add-Wt 'tk-open' 'tk-open'
+    $dirty   = Add-Wt 'tk-dirty' 'tk-dirty'
+    Set-Content -LiteralPath (Join-Path $dirty 'new.txt') -Value 'work' -Encoding ascii
+    $held    = Add-Wt 'jb-PROJ-7' 'jb/PROJ-7'
+    $walk    = Add-Wt 'walkthrough-ticket-5' ''
+    $review  = Add-Wt 'review-feature-x' ''
+    $odd     = Add-Wt 'something-detached' ''
+    $locked  = Add-Wt 'tk-locked' 'tk-locked'
+    git -C $hub worktree lock $locked *> $null
+    $outside = Add-Wt 'tk-outside' 'tk-outside' (Join-Path $root 'reap/elsewhere')
+    $merging = Add-Wt 'tk-merging' 'tk-merging'
+    Set-Content -LiteralPath (Join-Path $merging 'a.txt') -Value 'theirs' -Encoding ascii
+    git -C $merging commit -am theirs *> $null
+    Set-Content -LiteralPath (Join-Path $hub 'a.txt') -Value 'ours' -Encoding ascii
+    git -C $hub commit -am ours *> $null
+    git -C $merging merge main *> $null
+    git -C $merging checkout --theirs -- a.txt *> $null
+    git -C $merging add a.txt *> $null
+    New-Item -ItemType Directory -Path (Join-Path $wtRoot 'not-a-worktree') -Force | Out-Null
+
+    $listed = @(Get-HostWorktrees -Repo $hub -Root $wtRoot)
+    Check 'list: every worktree straight under the root that the board can place, and nothing else' (@($listed | ForEach-Object { $_.name } | Sort-Object) -join ',') 'jb-PROJ-7,review-feature-x,tk-dirty,tk-done,tk-merging,tk-open,walkthrough-ticket-5'
+    Check 'list: a branch worktree is asked about by its branch' (@($listed | Where-Object { $_.name -eq 'jb-PROJ-7' })[0].branch) 'jb/PROJ-7'
+    Check 'list: a walk-through by its ticket' (@($listed | Where-Object { $_.name -eq 'walkthrough-ticket-5' })[0].ticketId) 5
+    Check 'list: a review by its name' (@($listed | Where-Object { $_.name -eq 'review-feature-x' })[0].kind) 'review'
+
+    $script:asked = @()
+    $askAll = { param($Key, $Items)
+        $script:asked += @($Items | ForEach-Object { "$Key/$($_.name)" })
+        return @($Items | ForEach-Object { [pscustomobject]@{ name = $_.name; reap = ($_.name -ne 'tk-open'); why = 'Done long ago' } }) }
+    $projects = @{ alpha = @{ path = $hub; worktreeRoot = $wtRoot } }
+    $r = Remove-HostWorktrees -Projects $projects -Ask $askAll -Held @{ 'b:jb/PROJ-7' = $true; 'n:jb-PROJ-7' = $true } -QuietMinutes 0
+    Check 'reap: a worktree a live run holds is never asked about' (@($script:asked | Where-Object { $_ -like '*PROJ-7' }).Count) 0
+    Check 'reap: what the board says may go and nothing here keeps goes' (@($r.removed | ForEach-Object { ($_ -split ':')[0] } | Sort-Object) -join ',') 'alpha/review-feature-x,alpha/tk-done,alpha/walkthrough-ticket-5'
+    Check 'reap: ... off the disk, ignored packages and all' (Test-Path $done) $false
+    Check 'reap: ... and the branch is kept' ([bool](git -C $hub branch --list tk-done)) $true
+    Check 'reap: ... and git no longer lists it' (Test-RegisteredWorktree -RepoDir $hub -Path $done) $false
+    Check 'reap: the board saying keep is kept' (Test-Path $open) $true
+    Check 'reap: uncommitted work is kept, and says why' (@($r.kept | Where-Object { $_ -like 'alpha/tk-dirty:*uncommitted*' }).Count) 1
+    Check 'reap: a stopped merge is kept, and says why' (@($r.kept | Where-Object { $_ -like 'alpha/tk-merging:*merge is stopped*' }).Count) 1
+    Check 'reap: the held one is still there' (Test-Path $held) $true
+    Check 'reap: a locked worktree is not touched' (Test-Path $locked) $true
+    Check 'reap: one outside the root is not touched' (Test-Path $outside) $true
+    Check 'reap: a detached one it cannot place is not touched' (Test-Path $odd) $true
+    Check 'reap: a folder git does not know is not touched' (Test-Path (Join-Path $wtRoot 'not-a-worktree')) $true
+    Check 'reap: nothing failed' @($r.failed).Count 0
+
+    # Freshly written: a run this runner does not know about yet may be in it.
+    $fresh = Add-Wt 'tk-fresh' 'tk-fresh'
+    $r2 = Remove-HostWorktrees -Projects $projects -Ask $askAll -QuietMinutes 60
+    Check 'reap: one git wrote to in the last hour is kept' ((Test-Path $fresh) -and @($r2.kept | Where-Object { $_ -like 'alpha/tk-fresh:*last 60 min*' }).Count -eq 1) $true
+
+    $r3 = Remove-HostWorktrees -Projects $projects -Ask $askAll -QuietMinutes 0 -BudgetSeconds 0
+    Check 'reap: out of time, it stops and says there is more' "$($r3.more) $(@($r3.removed).Count) $(Test-Path $fresh)" 'True 0 True'
+
+    $r4 = Remove-HostWorktrees -Projects $projects -Ask { param($Key, $Items) throw 'board unreachable' } -QuietMinutes 0
+    Check 'reap: a board it cannot ask removes nothing, and says so' "$(@($r4.removed).Count) $(@($r4.failed | Where-Object { $_ -like '*board unreachable*' }).Count) $(Test-Path $fresh)" '0 1 True'
+    $r5 = Remove-HostWorktrees -Projects @{ ghost = @{ path = (Join-Path $root 'no-clone'); worktreeRoot = '' } } -Ask $askAll -QuietMinutes 0
+    Check 'reap: a project with no clone here is skipped' "$(@($r5.removed).Count) $(@($r5.failed).Count)" '0 0'
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.

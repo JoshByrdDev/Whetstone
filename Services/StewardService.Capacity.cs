@@ -13,6 +13,7 @@ public partial class StewardService
     {
         CapacityReasons.Stopped, CapacityReasons.OffHours, CapacityReasons.HostOff, CapacityReasons.HostOffline,
         CapacityReasons.UsageLimit, CapacityReasons.AccountFull, CapacityReasons.HostBehind,
+        CapacityReasons.DiskLow,
     };
 
     /// <summary>
