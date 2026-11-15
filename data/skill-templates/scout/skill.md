@@ -37,6 +37,14 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **Judge it at the scale it is for, never at the scale of this data.** The showcase data is made up, and how many of anything it holds is an accident of whoever wrote it. Real data only grows. Ask what this screen is like with ten or a hundred times as much on it: a list that needs paging or search, a view that only makes sense once there is a lot (a calendar, a map, filters), a page that gets slow or unreadable. "Fine because there is little of it" is itself an observation.
 - **Be ambitious.** There is no cap here and no "safe bets only". A product designer who used this for a real purpose would notice what is missing, what is awkward, what a person in this position expects from products like this and does not find - and would say so even when the fix is big. Log the bold idea beside the small fix; the sift decides what reaches the owner.
 
+## Recording - the owner watches what you saw
+
+- **Start recording before the first job**: `browser_start_video` with no filename. It lands in your run folder, named for the moment it began, and the board finds it there. One recording for the whole run - do not stop and start it between jobs.
+- **A chapter at each job, and at each step worth jumping to**: call `browser_video_chapter` (the card in the video) and `mark_chapter` (where the board places the chapter) **together, in the same message**, with the same title and the job's index. Chapters are where a proposal's clip is cut, so mark one whenever you begin something a person watching would want to find.
+- **The screenshot is the moment.** An observation is placed in the video by when its screenshot was taken, so take it as you see the thing, then log.
+- **`browser_stop_video` before you hand off**, after the last observation. A recording that is not stopped is not saved.
+- If `browser_start_video` is not there or fails - this machine's recorder is not installed - carry on without it: the screenshots are the evidence. Say so in your hand-off comment.
+
 ## Logging - as you go, never at the end
 
 - **`log_observation` for every one, the moment you notice it.** An observation you are holding in your head is lost if the run is cut short.
@@ -55,7 +63,8 @@ You have no shell and no editor. `browser_run_code_unsafe` is refused. The produ
 
 # Hand off
 
-1. **`add_comment`** with **what you did**: the path you took through the product, job by job, in a few lines, so the owner can follow it, and anything you could not get to.
-2. **`set_phase` to `NeedsSifting`.** It is the only hand-off, and it is right however much or little you found.
+1. **`browser_stop_video`**, if you are recording.
+2. **`add_comment`** with **what you did**: the path you took through the product, job by job, in a few lines, so the owner can follow it, and anything you could not get to.
+3. **`set_phase` to `NeedsSifting`.** It is the only hand-off, and it is right however much or little you found.
 
 `Blocked` is for a route you could not walk at all - the site would not load, sign-in failed - never for a product that disappointed you, which is the finding.

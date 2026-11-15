@@ -28,8 +28,6 @@ Most projects are one repo, and this section does not apply to them. When your p
 
 **On a discovery, only half of the section above holds.** Read inside a repo and name the repo when you name a file; nothing about committing applies, because this track changes nothing in any repo.
 
-**On a discovery, only half of the section above holds.** Read inside a repo and name the repo when you name a file; nothing about committing applies, because this track changes nothing in any repo.
-
 ## Read first
 
 - **`get_discovery`.** Its `recheck` block names this round, how many rounds get the owner's verdict, and the **goals**: each approved proposal that was filed as a ticket - its title, why, body and work items, the ticket it became, and what any earlier recheck found. A goal an earlier recheck found met is not on the list.
@@ -43,6 +41,13 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **At the scale the feature is for, never at the scale of this data**, as the scout was told. A goal that works for the seed's three items and not for a real person's thirty is not met.
 - **At a person's pace.** Type with `slowly: true` in `browser_type` when what you type is what a person would type.
 - **Notice what else changed.** The approved work moved things around. What it broke, crowded or made newly possible is part of the recheck.
+
+## Recording - as the scout records
+
+- **`browser_start_video` with no filename before the first goal**, one recording for the whole run; **`browser_stop_video` before you hand off**.
+- **A chapter at each goal and each job**: `browser_video_chapter` and `mark_chapter` **together, in the same message**, with the same title. The owner judges a goal by its clip, and chapters are where clips are cut.
+- **The screenshot is the moment**: an observation is placed in the video by when its screenshot was taken.
+- If recording will not start, carry on without it and say so in your hand-off comment.
 
 ## Record - as you go, never at the end
 
@@ -66,8 +71,9 @@ You have no shell and no editor. `browser_run_code_unsafe` is refused. The produ
 
 # Hand off
 
-1. **`add_comment`** with what you did, goal by goal - met, not met, could not tell, in a line each - and what you proposed.
-2. **`set_phase`**:
+1. **`browser_stop_video`**, if you are recording.
+2. **`add_comment`** with what you did, goal by goal - met, not met, could not tell, in a line each - and what you proposed.
+3. **`set_phase`**:
    - **`NeedsVerdict`** when this pass proposed anything and `recheck.handOff` says this round still gets the owner's verdict.
    - **`NeedsReview`** when this pass proposed nothing - every goal met, or nothing worth the owner's time - **or** when the rounds are spent (`recheck.handOff` says so): then what you proposed waits at the sign-off, where the owner still sees it.
 
