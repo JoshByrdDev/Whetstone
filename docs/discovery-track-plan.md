@@ -234,6 +234,59 @@ after a slice is released is a later idea, not this plan.
   `docs/setup.md` and in `Services/SetupCheck.cs`, and a missing ffmpeg means shots only, said
   out loud - the same shape as the narrator's "not set up".
 
+## What is measured
+
+Discovery is worth running only while it saves the owner more than it costs them, and every
+change to it (a prompt, a model, the cap, the taste file) is a bet on that. So the track records,
+from its first run, what the marts in `analytics/` need to say whether a change helped - the same
+way they already answer it for Delivery's phases. What it costs comes free: Discovery's working
+phases are cycle runs like any other, and every aggregate mart is already cut by `track_scope`.
+What is new is whether the work was any good.
+
+**The question each number answers, and the fix it points at:**
+
+| Measure | What it says | When it is bad, look at |
+|---|---|---|
+| **Approval rate** - proposals approved / shown, per discovery | Is Sift showing things worth showing | Every row below |
+| **Approved per dollar** and **per owner-minute** | The headline: is it worth running | Cost per phase; Verdict time |
+| **Rejections by reason** | *Which* thing is wrong: generic -> the prompts and the taste file; already decided -> what Sift is given to check against; wrong -> Sift's checking; not now -> nothing (timing, not quality) | The reason's own fix |
+| **New to me** - share of approved proposals the owner had not already thought of | Whether it adds anything beyond what the owner would find walking through it themselves. The value Scout exists for | Scout's prompt: boldness, scale, the direction |
+| **Edited before approval** - how much a draft changed between Sift and filing | Whether drafts are ready, or the owner rewrites them | Sift's writing |
+| **Restored from dropped** - dropped lines the owner promoted to a proposal | Sift cutting too much | The cap; Sift's ranking |
+| **Sift yield** - observations in, proposals out | How much Scout notices, and how hard Sift cuts | Both prompts, read together |
+| **Coverage per run** - pages, areas, roles and widths reached; how far it wandered from the route | Whether Scout explores or only follows the route | Chart's jobs; Scout's prompt |
+| **Repeats** - proposals matching an earlier one, in this discovery or another | Sift's de-duplication; an area worn out (a signal for Recon) | Sift's lookup of past proposals |
+| **Landed** - approved goals Recheck found met, the first time | Whether proposals were clear enough to build right | Proposal drafts; the Delivery tickets they became |
+| **Recheck yield** - its fix-ups and new proposals approved | Whether the extra drive is paying for itself | Whether Recheck should run every time |
+| **Found by discovery** - bugs it filed that were confirmed, and bugs later traced to an area it had scouted without seeing them | What it catches, and what it walks past | Scout's prompt; the showcase's cases |
+| **Time to verdict** - NeedsVerdict to Complete, and active minutes on the page | The owner's cost | Clips and drafts; how many proposals are shown |
+
+Every measure is cut by what can be changed: model, effort, provider, each phase's skill version,
+the taste file's version, the direction, the area, and the A/B arm - so an experiment can put two
+Scout prompts or two models side by side with approval rate as its guardrail, the way
+`mart_experiment_arms` already does for Delivery.
+
+**What the track records for that**, as append-only events and links rather than prose:
+
+- **Every verdict**, as an event: the proposal, approve / reject / snooze, the reason, whether it
+  was edited and how much (the draft is kept beside what was filed), the owner's one-tap
+  **new to me**, and when. Never overwritten: a changed mind is a second event.
+- **Lineage**: each proposal names the observations it came from and the Sift or Recheck run
+  that wrote it; each observation names its run and video time; each filed ticket names its
+  proposal.
+- **The dropped list as rows**, each with its reason, and a **restore** on the Verdict page that
+  is recorded as an event.
+- **Versions**: each run records its phase's skill version and the taste file's version (both are
+  git history in the project folder, read the way `stg_git__skill_versions` already reads skills).
+- **Recheck outcomes per approved goal**: met, not met, or could not tell.
+- **Bug lineage**: a Bug proposal's ticket carries `IsBug` and its discovery, so the existing
+  bug-tracing marts count discovery as a finder beside QA and the owner.
+
+The marts themselves come after the core loop has run long enough to have rows: a
+`mart_discovery_funnel` (observations -> proposals -> verdicts -> tickets -> landed), a
+`mart_discovery_rejections`, a version trend for the scout, sift and recheck skills and the taste
+file, and a Discovery section on the Metrics page. That is build step 5.
+
 ## What is kept, and for how long
 
 A full recording is the evidence for one verdict, not an archive. A run is five to ten minutes of
@@ -268,6 +321,8 @@ later:
 3. **Video.** Recording, chapters, clips on proposals, ffmpeg in setup, and the retention above -
    the video and its pruning ship together.
 4. **Taste.** The taste file and its fold, once there are verdicts to fold.
+5. **Measuring.** The Discovery marts and their Metrics section, once step 1 has produced a few
+   weeks of verdicts. What they read is recorded from step 1 on ("What is measured").
 
 Board host only at first; a worker host can run Scout once its stack leases and the data-root
 mirror cover the video.
