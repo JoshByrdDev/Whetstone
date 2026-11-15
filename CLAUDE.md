@@ -27,6 +27,11 @@ things that are *not* discoverable from the code in front of you.
   a pending stop, then `data/restart-board.ps1` - launched through explorer for the same reason -
   waits for the drain, restarts the board through the .bat and starts the heartbeat again. The two
   hand off through `data/board.restart` (`BoardRestart`); its log is `data/logs/restart-board.log`.
+  An interactive session may run *Stop, restart Whetstone, resume* itself whenever a change it
+  merged needs the board restarted to take effect - it drains, kills nothing, and resumes the
+  heartbeat. Ask the owner first only when there is a real reason to: a run you know should not be
+  cut short by the pause, or a restart that would land something not yet meant to go live. A worker
+  is never this session: the fleet's rule for the board it runs on stands.
   On a Mac the launcher is `Start-Whetstone.command` (`open` it, or double-click it in Finder, which
   hands it to Terminal), and the restart script is started under `nohup` rather than explorer.
 - Editing `ClientApp/tailwind.config.js` needs a Vite restart; a reload silently serves the old CSS.
