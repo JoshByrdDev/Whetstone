@@ -67,6 +67,7 @@ select
     case a.kind when 'taste' then tm.label else sm.label end                  as label,
     case a.kind when 'taste' then tm.version_at else sm.version_at end        as version_at,
     a.closed >= {{ var('discovery_min_verdicts') }}                           as enough_verdicts,
+    {{ var('discovery_min_verdicts') }}                                         as min_verdicts,
     case when a.closed >= {{ var('discovery_min_verdicts') }} then a.approved / a.closed::double end as approval_rate,
     case when a.closed >= {{ var('discovery_min_verdicts') }} then a.rejected_taste / a.closed::double end as taste_rejection_rate,
     case when a.closed >= {{ var('discovery_min_verdicts') }} then a.new_to_me / nullif(a.approved, 0)::double end as new_to_me_share,

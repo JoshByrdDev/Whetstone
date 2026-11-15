@@ -27,6 +27,18 @@ public sealed class AnalyticsService
         "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
         "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
         "mart_qa_rulings", "mart_escapes", "mart_rebase_returns",
+        // The Discovery track's measures (docs/discovery-track-plan.md, "What is measured").
+        "fct_discovery_proposals", "mart_discovery_funnel", "mart_discovery_rejections", "mart_discovery_versions",
+    ];
+
+    /// <summary>
+    /// What the Discovery section can split by, as macros/discovery.sql names the cuts. Allowlisted
+    /// like <see cref="RunFilters"/>, though it only ever reaches the SQL as a parameter.
+    /// </summary>
+    public static readonly IReadOnlyList<string> DiscoveryDimensions =
+    [
+        "week", "model", "effort", "provider", "skill_version", "scout_model", "scout_skill_version",
+        "chart_skill_version", "taste_version", "experiment_arm", "direction", "area",
     ];
 
     /// <summary>Marts older than this are refreshed when someone opens the page.</summary>
@@ -378,6 +390,32 @@ public sealed class AnalyticsService
             e["arms"] = arms.Where(a => Equals(Convert.ToInt64(a["experimentId"]), Convert.ToInt64(e["experimentId"]))).ToList();
         return list;
     }
+
+    /// <summary>
+    /// The Discovery section in one read: the funnel as a whole and split by one cut, rejections by
+    /// reason (as a whole and by that cut), and every version of the discovery skills and the taste
+    /// file in order. Always the Discovery track, whichever track the rest of the page is on: these
+    /// marts hold no other. An unknown cut falls back to the week.
+    /// </summary>
+    public DiscoveryRead Discovery(int? days, string? project, string? by)
+    {
+        var scope = Scope.Of(days, project, "Discovery");
+        var dim = by is not null && DiscoveryDimensions.Contains(by) ? by : "week";
+        var all = new Dictionary<string, string?> { ["dimension"] = "all" };
+        var cut = new Dictionary<string, string?> { ["dimension"] = dim };
+        return new DiscoveryRead(
+            scope, dim,
+            Mart("mart_discovery_funnel", scope, all).FirstOrDefault(),
+            Mart("mart_discovery_funnel", scope, cut, dim == "week" ? "dim_value" : "closed DESC NULLS LAST, discoveries DESC, dim_value"),
+            Mart("mart_discovery_rejections", scope, all, "rejections DESC, reason"),
+            Mart("mart_discovery_rejections", scope, cut, "dim_value, rejections DESC, reason"),
+            Mart("mart_discovery_versions", scope, orderBy: "kind, version_seq"));
+    }
+
+    public record DiscoveryRead(
+        Scope Scope, string By, Dictionary<string, object?>? Summary, List<Dictionary<string, object?>> Split,
+        List<Dictionary<string, object?>> Rejections, List<Dictionary<string, object?>> RejectionsSplit,
+        List<Dictionary<string, object?>> Versions);
 
     private static bool IsIdentifier(string s) => s.Length > 0 && s.All(c => char.IsAsciiLetterOrDigit(c) || c == '_');
 

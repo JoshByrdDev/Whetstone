@@ -152,6 +152,7 @@ joined as (
 select
     j.*,
     coalesce(j.closed, 0) >= {{ var('discovery_min_verdicts') }}                     as enough_verdicts,
+    {{ var('discovery_min_verdicts') }}                                         as min_verdicts,
     {%- set gate = "coalesce(j.closed, 0) >= " ~ var('discovery_min_verdicts') %}
     case when {{ gate }} then j.approved / nullif(j.closed, 0) end                 as approval_rate,
     case when {{ gate }} then j.rejected / nullif(j.closed, 0) end                 as rejection_rate,

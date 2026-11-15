@@ -39,6 +39,7 @@ select
     any_value(t.rejected)                                          as rejected,
     any_value(t.closed)                                            as closed,
     any_value(t.closed) >= {{ var('discovery_min_verdicts') }}     as enough_verdicts,
+    {{ var('discovery_min_verdicts') }}                                         as min_verdicts,
     count(*) / any_value(t.rejected)::double                       as share_of_rejections,
     count(*) / any_value(t.closed)::double                         as share_of_closed,
     -- Generic and wrong teach the taste file; already decided means the register is missing a
