@@ -455,7 +455,7 @@ public static class TicketEndpoints
                     // the default the project's prefix and branchNameStyle give. The worker takes it as
                     // it is (Get-TicketBranchName), so the name the form showed is the name made.
                     // Empty for a review ticket, which owns no branch.
-                    branchName = result.Ticket.Track == TicketTrack.Review ? "" : await namer.ForTicketAsync(result.Ticket),
+                    branchName = result.Ticket.Track is TicketTrack.Review or TicketTrack.Discovery ? "" : await namer.ForTicketAsync(result.Ticket),
                     blockNote,
                     ownerNotes,
                     project = new
@@ -506,6 +506,16 @@ public static class TicketEndpoints
                         memoryIndex = cfg.ResolvedMemoryIndex,
                         // What the maintenance pass after reflection holds the index to.
                         notesIndexBudgetBytes = cfg.NotesIndexBudgetBytes,
+                        // How a discovery's scout stands the product up and where it answers
+                        // (DiscoveryConfig); null on any other track, which never reads it.
+                        discovery = result.Ticket.Track != TicketTrack.Discovery ? null : new
+                        {
+                            siteUrl = cfg.Discovery.SiteUrl,
+                            prepare = cfg.Discovery.Prepare,
+                            teardown = cfg.Discovery.Teardown,
+                            maxProposals = cfg.Discovery.MaxProposals,
+                            areas = cfg.Discovery.Areas.Select(a => new { name = a.Name, pages = a.Pages, code = a.Code }).ToArray(),
+                        },
                     },
                 },
             });
@@ -938,6 +948,17 @@ public static class TicketEndpoints
                 // whose own title stays the source of truth.
                 if (issueKey is null && string.IsNullOrWhiteSpace(title))
                     title = $"Review: {reviewTarget.SourceBranch}";
+            }
+
+            // A discovery's description is its direction, and it owns no code: no branch, no base.
+            if (track == TicketTrack.Discovery)
+            {
+                if (string.IsNullOrWhiteSpace(req.Description))
+                    return Results.BadRequest(new { error = "A discovery needs a direction: who to be and what they came to do, written as a job." });
+                if (!string.IsNullOrWhiteSpace(req.BaseBranch) || !string.IsNullOrWhiteSpace(req.Branch))
+                    return Results.BadRequest(new { error = "A discovery owns no branch: it uses the product as the project's base has it." });
+                if (!registry.GetProjectConfig(projectKey).Discovery.CanScout)
+                    return Results.BadRequest(new { error = "This project has no discovery.siteUrl in its project.defaults.json, so a scout would have no product to use." });
             }
 
             // Title required only for standalone tickets; a linked one pulls it from the tracker.

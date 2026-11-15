@@ -131,6 +131,7 @@ builder.Services.AddDbContext<DashboardDbContext>((sp, options) =>
     options.UseSqlite($"Data Source={dbPath}");
 });
 builder.Services.AddScoped<TicketService>();
+builder.Services.AddScoped<DiscoveryService>();
 // A project's steward: what it may do and every limit on it. Its git is the ticket git service,
 // reached through an interface so the rules can be tested without a repository.
 builder.Services.AddSingleton<IStewardGit>(sp => sp.GetRequiredService<TicketGitService>());
@@ -247,6 +248,7 @@ builder.Services.AddMcpServer()
         return Task.CompletedTask;
     })
     .WithTools<TicketTools>()
+    .WithTools<DiscoveryTools>()
     .WithTools<StewardTools>();
 
 // Add SignalR
@@ -370,6 +372,7 @@ app.MapHub<HeartbeatHub>("/hub/heartbeat");
 
 // Local ticketing API (tickets, work items, QA items, comments, transitions).
 app.MapTicketEndpoints();
+app.MapDiscoveryEndpoints();
 app.MapEscapeEndpoints();
 
 // The Classroom: on-demand teaching analyses of a ticket. Read-only over the pipeline.

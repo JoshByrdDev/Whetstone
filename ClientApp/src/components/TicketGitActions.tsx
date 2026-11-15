@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { usePop, useHeld } from '../hooks/usePop';
 import { checkoutTicket, getTicketRepos } from '../api/git';
 import type { CheckoutResult, RepoTouch } from '../api/git';
-import type { ProjectRepo } from '../types/tickets';
+import type { ProjectRepo, Track } from '../types/tickets';
 import { PrModal } from './PrModal';
 import { MultiRepoPrModal } from './MultiRepoPrModal';
 import { CheckinModal } from './CheckinModal';
@@ -35,7 +35,7 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
    * Checkout stays. Putting your own clone on their branch to read it is the thing a reviewer
    * actually wants, and it writes to nothing but your own working directory.
    */
-  track?: 'Delivery' | 'Review';
+  track?: Track;
   /**
    * "tfvc" means the hub is also a TFVC workspace, and that changes both buttons. Checkout goes: it
    * would put the hub itself on the ticket's branch, and TFVC would see the whole branch as pending
@@ -125,7 +125,7 @@ export function TicketGitActions({ ticketId, branch, size = 'card', track = 'Del
           <BranchIcon size={icon} spin={busy} />
         </button>
       )}
-      {track !== 'Review' && (
+      {track === 'Delivery' && (
         <button
           onClick={e => { e.stopPropagation(); setPrOpen(true); }}
           title={tfvc ? `Check ${branch} in to TFVC` : merge ? `Merge ${branch} into its base` : `Raise a pull request for ${branch}`}

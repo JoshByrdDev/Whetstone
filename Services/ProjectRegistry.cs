@@ -165,6 +165,8 @@ public class ProjectConfig
         {
             ["qa-test"] = new[] { "app-stack" },
             ["review-pr"] = new[] { "app-stack" },
+            // A scout drives the product on the same stack and ports as QA.
+            ["scout"] = new[] { "app-stack" },
         };
 
     /// <summary>
@@ -406,6 +408,9 @@ public class ProjectConfig
     /// See <see cref="StewardConfig"/>.
     /// </summary>
     public StewardConfig Steward { get; init; } = new();
+
+    /// <summary>How a scout stands this project's product up and what it calls its areas (docs/discovery-track-plan.md).</summary>
+    public DiscoveryConfig Discovery { get; init; } = new();
 
     /// <summary>
     /// The mode as written in the project's config (<c>stewardMode</c>). What the steward may
@@ -716,6 +721,7 @@ public class ProjectRegistry
             Stack = GetStack(cfg),
             PrototypeCapture = PrototypeCaptureConfig.From(cfg),
             Steward = StewardConfig.From(cfg),
+            Discovery = DiscoveryConfig.From(cfg),
             StewardModeSetting = StewardConfig.ParseMode(
                 cfg.TryGetValue("stewardMode", out var sm) && sm.ValueKind == JsonValueKind.String ? sm.GetString() : null),
         };

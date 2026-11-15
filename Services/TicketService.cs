@@ -612,7 +612,43 @@ public class TicketService
         var qaResolved = await _db.QaItems.CountAsync(q => q.TicketId == t.Id && q.Status != QaStatus.Todo);
 
         var raw = $"w{workDone}/{workTotal}|q{qaResolved}/{qaTotal}|{t.Branch}|{t.ImplementationSummary}|{t.LearningBrief}";
+        // A discovery's progress is what its runs have written: a route, observations, proposals.
+        if (t.Track == TicketTrack.Discovery)
+            raw += $"|r{await _db.DiscoveryRoutes.CountAsync(r => r.TicketId == t.Id)}"
+                 + $"|o{await _db.DiscoveryObservations.CountAsync(o => o.TicketId == t.Id)}"
+                 + $"|p{await _db.DiscoveryProposals.CountAsync(p => p.TicketId == t.Id)}";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)))[..16];
+    }
+
+    /// <summary>
+    /// Why a Discovery working phase may not hand off yet, or null. Each phase owes something
+    /// written on THIS pass - after the ticket last went backwards - so a re-scout cannot hand off
+    /// on the observations of the scout before it.
+    /// </summary>
+    private async Task<string?> DiscoveryUnmetAsync(Ticket t, TicketPhase to)
+    {
+        var req = HandoffRequirements.For(t.Phase, to, t);
+        if (req is null) return null;
+        var since = await LastBackwardAtAsync(t.Id) ?? DateTime.MinValue;
+        switch (t.Phase, to)
+        {
+            case (TicketPhase.Charting, TicketPhase.NeedsScouting):
+                var route = await _db.DiscoveryRoutes.AsNoTracking().FirstOrDefaultAsync(r => r.TicketId == t.Id);
+                if (route is null || route.Jobs.Count == 0 || route.WrittenAt < since)
+                    return $"This discovery has no route written on this pass. {req.HowToSatisfy}";
+                return null;
+            case (TicketPhase.Scouting, TicketPhase.NeedsSifting):
+                if (!await _db.DiscoveryObservations.AnyAsync(o => o.TicketId == t.Id && o.CreatedAt >= since))
+                    return $"No observation has been logged on this pass. {req.HowToSatisfy}";
+                return null;
+            case (TicketPhase.Sifting, TicketPhase.NeedsVerdict):
+                if (!await _db.DiscoveryProposals.AnyAsync(p => p.TicketId == t.Id && p.CreatedAt >= since
+                        && (p.Status == ProposalStatus.Proposed || p.Status == ProposalStatus.Dropped)))
+                    return $"This pass has written no proposal and dropped nothing. {req.HowToSatisfy}";
+                return null;
+            default:
+                return null;
+        }
     }
 
     // ---- Ticket lifecycle ----
@@ -994,6 +1030,10 @@ public class TicketService
                 throw new HandoffRequirementException(unmet, t.Phase, to, PhaseMachine.NextPhasesFor(t),
                     // An item refinement expired is not something more work here can clear: only QA can.
                     unmet == HandoffRequirements.ExpiredQaRequirement(t, t.Phase, to)?.HowToSatisfy ? TicketPhase.NeedsQa : null);
+
+            // The Discovery track's artefacts live in tables of their own, so they are counted here.
+            if (t.Track == TicketTrack.Discovery && await DiscoveryUnmetAsync(t, to) is { } discoveryUnmet)
+                throw new HandoffRequirementException(discoveryUnmet, t.Phase, to, PhaseMachine.NextPhasesFor(t));
 
             // Work the owner sent back from review is the pipeline's own miss, and the run that fixes
             // it is the one that knows what it was. Its forward hand-off waits until it has said so.

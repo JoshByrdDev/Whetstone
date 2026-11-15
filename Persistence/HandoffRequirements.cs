@@ -220,6 +220,30 @@ public static class HandoffRequirements
           + "NOT send the ticket back or block it because you found defects: staging them and handing "
           + "off IS the successful outcome of this phase."),
 
+        // ---- The Discovery track's hand-offs ------------------------------------
+        // Checked in TicketService.DiscoveryUnmetAsync, which can count the discovery's own rows;
+        // declared here so the nextPhases guide publishes them.
+        (TicketPhase.Charting, TicketPhase.NeedsScouting) => new Requirement(
+            "REQUIRES a route written on this pass (set_discovery_route): who the person is and the "
+          + "jobs they came to do.",
+            "Call set_discovery_route with the persona, 3-5 jobs written as what the person came to get "
+          + "done, the showcase cases to start from and the widths to use, then set_phase again."),
+
+        (TicketPhase.Scouting, TicketPhase.NeedsSifting) => new Requirement(
+            "REQUIRES at least one observation logged on this pass (log_observation), each with its "
+          + "screenshot, and the pages visited logged (log_visit).",
+            "Walk the route's jobs in the browser and call log_observation for every wall, judgement, "
+          + "idea, rough edge and bug as you meet it - uncapped; the cutting is the next phase's - and "
+          + "log_visit for each page you spent time on. Then set_phase again. A route you could not "
+          + "walk at all (the site would not load, sign-in failed) is a block, not a hand-off."),
+
+        (TicketPhase.Sifting, TicketPhase.NeedsVerdict) => new Requirement(
+            "REQUIRES this pass to have taken every observation to an outcome: kept in a proposal "
+          + "(propose) or dropped with a reason (drop_idea).",
+            "Read get_discovery, check each observation against what is already known, then call "
+          + "propose for each survivor (at most the project's cap, best first) and drop_idea for "
+          + "everything else, one line of reason each. Then set_phase again."),
+
         (TicketPhase.Refining, TicketPhase.NeedsReview) => new Requirement(
             "REQUIRES a learning brief written on this pass. "
           + "The human signing this off did not write any of it - the brief is the only part of the "

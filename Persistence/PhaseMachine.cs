@@ -14,7 +14,7 @@ public static class PhaseMachine
         // Two edges out of the backlog, one per track (see IsOnTrack): the filter in NextPhases /
         // CanTransition leaves exactly one of them visible to any given ticket, so this table can
         // hold every edge in the system without a Delivery ticket ever being offered a Review move.
-        [TicketPhase.Backlog]             = new[] { TicketPhase.NeedsSpeculation, TicketPhase.NeedsPeerReview },
+        [TicketPhase.Backlog]             = new[] { TicketPhase.NeedsSpeculation, TicketPhase.NeedsPeerReview, TicketPhase.NeedsCharting },
         [TicketPhase.NeedsSpeculation]    = new[] { TicketPhase.Speculating },
         [TicketPhase.Speculating]         = new[] { TicketPhase.NeedsApproval },
         // Approve → implement, or send back for another speculation pass.
@@ -45,12 +45,26 @@ public static class PhaseMachine
         [TicketPhase.NeedsPeerReview]     = new[] { TicketPhase.PeerReviewing },
         [TicketPhase.PeerReviewing]       = new[] { TicketPhase.NeedsReview },
 
+        // ---- The Discovery track (docs/discovery-track-plan.md) ------------------
+        // Chart -> Scout -> Sift -> the owner's verdict. Like the Review track, a scout that found
+        // a great deal has succeeded, so each working phase hands off forward; the only backward
+        // edges are Sift asking for another scouting pass (what it was given cannot be judged) and
+        // the owner sending a discovery back from the verdict. Leaving the verdict forward is the
+        // owner's Complete (DiscoveryService.CompleteAsync), never a worker's hand-off.
+        [TicketPhase.NeedsCharting]       = new[] { TicketPhase.Charting },
+        [TicketPhase.Charting]            = new[] { TicketPhase.NeedsScouting },
+        [TicketPhase.NeedsScouting]       = new[] { TicketPhase.Scouting },
+        [TicketPhase.Scouting]            = new[] { TicketPhase.NeedsSifting },
+        [TicketPhase.NeedsSifting]        = new[] { TicketPhase.Sifting },
+        [TicketPhase.Sifting]             = new[] { TicketPhase.NeedsVerdict, TicketPhase.NeedsScouting },
+        [TicketPhase.NeedsVerdict]        = new[] { TicketPhase.NeedsReview, TicketPhase.NeedsSifting, TicketPhase.NeedsScouting, TicketPhase.NeedsCharting },
+
         // Review approve → done; changes requested → back to implementation, or back to speculation
         // when what was asked for is new scope rather than a correction (see
         // TicketService.RequestChangesAsync); or another refinement pass when the code is right and
         // only its write-up/validation is not. On the Review track the same gate instead loops back
         // for a re-review once the author has pushed.
-        [TicketPhase.NeedsReview]         = new[] { TicketPhase.Done, TicketPhase.NeedsImplementation, TicketPhase.NeedsSpeculation, TicketPhase.NeedsRefinement, TicketPhase.NeedsPeerReview },
+        [TicketPhase.NeedsReview]         = new[] { TicketPhase.Done, TicketPhase.NeedsImplementation, TicketPhase.NeedsSpeculation, TicketPhase.NeedsRefinement, TicketPhase.NeedsPeerReview, TicketPhase.NeedsScouting },
         // Reopen a finished ticket.
         [TicketPhase.Done]                = new[] { TicketPhase.NeedsImplementation },
         [TicketPhase.Blocked]             = Array.Empty<TicketPhase>(),
@@ -70,8 +84,20 @@ public static class PhaseMachine
         TicketPhase.PeerReviewing,
     };
 
+    /// <summary>Phases only a <see cref="TicketTrack.Discovery"/> ticket ever occupies.</summary>
+    private static readonly HashSet<TicketPhase> DiscoveryPhases = new()
+    {
+        TicketPhase.NeedsCharting,
+        TicketPhase.Charting,
+        TicketPhase.NeedsScouting,
+        TicketPhase.Scouting,
+        TicketPhase.NeedsSifting,
+        TicketPhase.Sifting,
+        TicketPhase.NeedsVerdict,
+    };
+
     /// <summary>
-    /// Phases both tracks pass through. These are the parking spots — nothing claims them, no skill
+    /// Phases every track passes through. These are the parking spots — nothing claims them, no skill
     /// runs on them, no lease is taken — which is exactly why they are safe to share. The working
     /// phases are split per track instead, because a phase that dispatches an agent has to answer
     /// which skill, which rank, and what its hand-off owes, and those differ.
@@ -88,13 +114,19 @@ public static class PhaseMachine
     public static bool IsOnTrack(TicketPhase phase, TicketTrack track)
     {
         if (SharedPhases.Contains(phase)) return true;
-        return track == TicketTrack.Review ? ReviewPhases.Contains(phase) : !ReviewPhases.Contains(phase);
+        return track switch
+        {
+            TicketTrack.Review => ReviewPhases.Contains(phase),
+            TicketTrack.Discovery => DiscoveryPhases.Contains(phase),
+            _ => !ReviewPhases.Contains(phase) && !DiscoveryPhases.Contains(phase),
+        };
     }
 
     /// <summary>The track a phase belongs to, for the phases that belong to exactly one.</summary>
     public static TicketTrack? TrackOf(TicketPhase phase) =>
         SharedPhases.Contains(phase) ? null
         : ReviewPhases.Contains(phase) ? TicketTrack.Review
+        : DiscoveryPhases.Contains(phase) ? TicketTrack.Discovery
         : TicketTrack.Delivery;
 
     /// <summary>
@@ -132,6 +164,16 @@ public static class PhaseMachine
             [(TicketPhase.NeedsReview, TicketPhase.NeedsSpeculation)] = "BACKWARD: the reviewer asked for something new enough that it needs planning before it is built - new scope, or a decision still open - so it goes back through speculation and its approval gate. Not a move an automated worker makes.",
             [(TicketPhase.NeedsReview, TicketPhase.NeedsRefinement)] = "BACKWARD: the reviewer wants another refinement pass - the code itself is fine, but the ticket is not tidy enough to sign off (documentation, notes, or validation left undone). Cheaper than a full implementation cycle; refinement routes it onward from there.",
             [(TicketPhase.Done, TicketPhase.NeedsImplementation)] = "Reopen a finished ticket.",
+            [(TicketPhase.Backlog, TicketPhase.NeedsCharting)] = "Pull the ticket out of the backlog and queue its direction to be charted into a route.",
+            [(TicketPhase.Charting, TicketPhase.NeedsScouting)] = "FORWARD, AND THE ONLY HAND-OFF: the route is written (set_discovery_route) - hand it to the scout.",
+            [(TicketPhase.Scouting, TicketPhase.NeedsSifting)] = "FORWARD, AND THE SUCCESS PATH: the route is walked and every observation is logged - hand them to a fresh agent to sift. The right hand-off however much or little you saw; what you saw IS the deliverable, and cutting it down is the next phase's job, not yours.",
+            [(TicketPhase.Sifting, TicketPhase.NeedsVerdict)] = "FORWARD, AND THE SUCCESS PATH: the proposals and the dropped list are written - hand them to the owner for a verdict. A sift that kept nothing and said why has succeeded too.",
+            [(TicketPhase.Sifting, TicketPhase.NeedsScouting)] = "BACKWARD: what Scout logged cannot be judged - no observations, shots that do not show what they claim, a route left unwalked. Say what is missing in a comment first. Not for observations you merely disagree with: dropping those, with a reason, is the job.",
+            [(TicketPhase.NeedsVerdict, TicketPhase.NeedsReview)] = "The owner's Complete: approved proposals are filed and the discovery waits for the owner's sign-off. Made from the Verdict panel, never by a worker.",
+            [(TicketPhase.NeedsVerdict, TicketPhase.NeedsSifting)] = "BACKWARD: the owner wants the observations sifted again.",
+            [(TicketPhase.NeedsVerdict, TicketPhase.NeedsScouting)] = "BACKWARD: the owner wants the route scouted again.",
+            [(TicketPhase.NeedsVerdict, TicketPhase.NeedsCharting)] = "BACKWARD: the owner wants the direction charted again.",
+            [(TicketPhase.NeedsReview, TicketPhase.NeedsScouting)] = "BACKWARD: the owner wants the product scouted again on the same route. Not a move an automated worker makes.",
         };
 
     /// <summary>How the <paramref name="from"/> → <paramref name="to"/> move is meant to be used, if it is described.</summary>
@@ -198,6 +240,10 @@ public static class PhaseMachine
         TicketPhase.NeedsQa,
         TicketPhase.NeedsRefinement,
         TicketPhase.NeedsPeerReview,
+        TicketPhase.NeedsCharting,
+        TicketPhase.NeedsScouting,
+        TicketPhase.NeedsSifting,
+        TicketPhase.NeedsVerdict,
         TicketPhase.NeedsReview,
     };
 
@@ -224,6 +270,9 @@ public static class PhaseMachine
         TicketPhase.QaTesting => TicketPhase.NeedsQa,
         TicketPhase.Refining => TicketPhase.NeedsRefinement,
         TicketPhase.PeerReviewing => TicketPhase.NeedsPeerReview,
+        TicketPhase.Charting => TicketPhase.NeedsCharting,
+        TicketPhase.Scouting => TicketPhase.NeedsScouting,
+        TicketPhase.Sifting => TicketPhase.NeedsSifting,
         not null when UnblockTargets.Contains(phaseBeforeBlock.Value) => phaseBeforeBlock.Value,
         _ => null,
     };
@@ -231,12 +280,14 @@ public static class PhaseMachine
     /// <summary>Phases that are actively being worked by the heartbeat (act as a lock).</summary>
     public static bool IsInProgress(TicketPhase phase) => phase is
         TicketPhase.Speculating or TicketPhase.Implementing or TicketPhase.QaTesting or TicketPhase.Refining
-        or TicketPhase.PeerReviewing;
+        or TicketPhase.PeerReviewing
+        or TicketPhase.Charting or TicketPhase.Scouting or TicketPhase.Sifting;
 
     /// <summary>Phases the heartbeat pulls from and runs the matching skill.</summary>
     public static bool IsActionable(TicketPhase phase) => phase is
         TicketPhase.NeedsSpeculation or TicketPhase.NeedsImplementation or TicketPhase.NeedsQa or TicketPhase.NeedsRefinement
-        or TicketPhase.NeedsPeerReview;
+        or TicketPhase.NeedsPeerReview
+        or TicketPhase.NeedsCharting or TicketPhase.NeedsScouting or TicketPhase.NeedsSifting;
 
     public static bool IsTerminal(TicketPhase phase) => phase == TicketPhase.Done;
 
@@ -253,6 +304,9 @@ public static class PhaseMachine
         TicketPhase.NeedsQa, TicketPhase.QaTesting,
         TicketPhase.NeedsRefinement, TicketPhase.Refining,
         TicketPhase.NeedsPeerReview, TicketPhase.PeerReviewing,
+        TicketPhase.NeedsCharting, TicketPhase.Charting,
+        TicketPhase.NeedsScouting, TicketPhase.Scouting,
+        TicketPhase.NeedsSifting, TicketPhase.Sifting,
     };
 
     public static bool IsWorkable(TicketPhase phase) => IsActionable(phase) || IsInProgress(phase);
@@ -276,7 +330,10 @@ public static class PhaseMachine
     /// there; see <c>ConfigEndpoints.WorkerPhases</c>.
     /// </para>
     /// </summary>
-    public static readonly string[] OptionalSkills = { "review-pr" };
+    public static readonly string[] OptionalSkills = { "review-pr", "chart", "scout", "sift" };
+
+    /// <summary>The skills of the Discovery track's working phases.</summary>
+    public static readonly string[] DiscoverySkills = { "chart", "scout", "sift" };
 
     /// <summary>Every skill the heartbeat might run, required or not.</summary>
     public static readonly string[] AllSkills = RequiredSkills.Concat(OptionalSkills).ToArray();
@@ -310,6 +367,19 @@ public static class PhaseMachine
         // Take the tie away and the track tiebreak becomes unreachable code.
         TicketPhase.NeedsPeerReview => 4,
         TicketPhase.PeerReviewing => 5,
+
+        // The Discovery track, kept low for the reason the Review pair is tied: a scout is work
+        // nobody is waiting on yet, so it must not preempt delivery work that someone is. Chart and
+        // Scout tie with speculation and implementation, where the track breaks the tie in
+        // Delivery's favour. Sift is cheap and is the last step before the owner, so it sits just
+        // above them. Still rising within the track, which is what IsBackward reads.
+        TicketPhase.NeedsCharting => 1,
+        TicketPhase.Charting => 2,
+        TicketPhase.NeedsScouting => 4,
+        TicketPhase.Scouting => 5,
+        TicketPhase.NeedsSifting => 6,
+        TicketPhase.Sifting => 7,
+        TicketPhase.NeedsVerdict => 9,
 
         TicketPhase.NeedsImplementationReview => 6,
         TicketPhase.NeedsQa => 7,
@@ -350,6 +420,9 @@ public static class PhaseMachine
         TicketPhase.NeedsQa => TicketPhase.QaTesting,
         TicketPhase.NeedsRefinement => TicketPhase.Refining,
         TicketPhase.NeedsPeerReview => TicketPhase.PeerReviewing,
+        TicketPhase.NeedsCharting => TicketPhase.Charting,
+        TicketPhase.NeedsScouting => TicketPhase.Scouting,
+        TicketPhase.NeedsSifting => TicketPhase.Sifting,
         _ when IsInProgress(phase) => phase,
         _ => throw new ArgumentException($"{phase} is not a workable phase"),
     };
@@ -366,6 +439,9 @@ public static class PhaseMachine
         TicketPhase.QaTesting => "qa-test",
         TicketPhase.Refining => "refine",
         TicketPhase.PeerReviewing => "review-pr",
+        TicketPhase.Charting => "chart",
+        TicketPhase.Scouting => "scout",
+        TicketPhase.Sifting => "sift",
         _ => throw new ArgumentException($"{inProgress} has no associated skill"),
     };
 
@@ -440,9 +516,7 @@ public static class PhaseMachine
             ? to is TicketPhase.NeedsReview or TicketPhase.Blocked
             : CanTransition(t.Phase, to, t.Track);
 
-    /// <summary>Every phase either track can reach — what the board's own metadata endpoint lists.</summary>
+    /// <summary>Every phase any track can reach — what the board's own metadata endpoint lists.</summary>
     public static IEnumerable<TicketPhase> AllNextPhases(TicketPhase from) =>
-        NextPhases(from, TicketTrack.Delivery)
-            .Concat(NextPhases(from, TicketTrack.Review))
-            .Distinct();
+        Enum.GetValues<TicketTrack>().SelectMany(track => NextPhases(from, track)).Distinct();
 }

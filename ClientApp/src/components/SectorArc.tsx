@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { STATIONS, COLUMNS, GRID, ACTIVE_DOT_PX, stationsForTracks } from './JourneyTrack';
+import { STATIONS, COLUMNS, GRID, ACTIVE_DOT_PX, stationsForTracks, DONE_STATION } from './JourneyTrack';
 import { fade, CAPS, TIER, HEX_GLYPH, SHIP_GLYPH, SHIP_PX, DISPLAY, MONO } from './orbit';
 import type { Tier } from './orbit';
 import type { DashboardState } from '../types/events';
@@ -24,7 +24,7 @@ import { track } from '../theme';
  * it falls between — so the delivery arc runs its own nine stops undisturbed and the lower lane
  * crosses beneath it without a single node of the two lanes ever sharing an x.
  */
-const ARC_Y = [168, 128, 100, 88, 92, 110, 134, 206, 188, 112, 62];
+const ARC_Y = [168, 128, 100, 88, 92, 110, 134, 206, 188, 112, 62, 214, 236, 236, 222];
 
 /** The stations each track's path actually passes through. */
 const DELIVERY_PATH = [0, 1, 2, 3, 4, 5, 6, 9, 10];
@@ -42,6 +42,10 @@ const REVIEW_PATH = [0, 7, 8, 9];
  */
 const REVIEW_ONLY_PATH = [0, 7, 8, 9, 10];
 
+/** The discovery approach: Backlog, chart, scout, sift, the verdict, and the same merge at the gate. */
+const DISCOVERY_PATH = [0, 11, 12, 13, 14, 9];
+const DISCOVERY_ONLY_PATH = [0, 11, 12, 13, 14, 9, 10];
+
 /**
  * Tall enough for the band's lowest node plus the room a label needs under it — the same 46px of
  * slack it has always kept under Backlog.
@@ -53,6 +57,8 @@ const REVIEW_ONLY_PATH = [0, 7, 8, 9, 10];
  */
 const BAND_FULL = 252;
 const BAND_DELIVERY_ONLY = 214;
+/** The discovery lane runs lowest of the three, so a board that shows it needs a little more. */
+const BAND_DISCOVERY = 282;
 
 /**
  * How far a node may swell, and the room kept above the arc for the biggest one to swell into.
@@ -216,7 +222,8 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
   const shown = useMemo(() => stationsForTracks(tracks), [tracks]);
   const reviewShown = STATIONS.some((s, i) => s.track === 'review' && shown.has(i));
   const deliveryShown = STATIONS.some((s, i) => s.track === 'delivery' && shown.has(i));
-  const bandH = reviewShown ? BAND_FULL : BAND_DELIVERY_ONLY;
+  const discoveryShown = STATIONS.some((s, i) => s.track === 'discovery' && shown.has(i));
+  const bandH = discoveryShown ? BAND_DISCOVERY : reviewShown ? BAND_FULL : BAND_DELIVERY_ONLY;
 
   const probes = useRef<(HTMLSpanElement | null)[]>([]);
   const [xs, setXs] = useState<number[]>([]);
@@ -268,9 +275,12 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
   const path = !measured ? ''
     : deliveryShown ? trace(DELIVERY_PATH)
     : reviewShown ? trace(REVIEW_ONLY_PATH)
+    : discoveryShown ? trace(DISCOVERY_ONLY_PATH)
     : '';
   // The second approach, drawn only when there is a main lane for it to merge into.
   const spurPath = measured && deliveryShown && reviewShown ? trace(REVIEW_PATH) : '';
+  // The discovery approach, a spur as the review one is - whenever another lane is the main one.
+  const discoverySpur = measured && discoveryShown && (deliveryShown || reviewShown) ? trace(DISCOVERY_PATH) : '';
   const mode = laneMode(status);
   const lane = LANE[mode];
 
@@ -302,6 +312,12 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
               two share their last point, and whichever is drawn second owns how the join looks.
               Narrower and quieter throughout — it is the shorter path and the rarer one, and a
               second lane at equal weight would read as the pipeline having split in two. */}
+          {discoverySpur && (
+            <>
+              <path d={discoverySpur} fill="none" stroke="rgb(var(--w-line-rgb) / .10)" strokeWidth={16} strokeLinecap="round" />
+              <path d={discoverySpur} fill="none" stroke="rgb(var(--w-line-rgb) / .16)" strokeWidth={1} />
+            </>
+          )}
           {spurPath && (
             <>
               <path d={spurPath} fill="none" stroke="rgb(var(--w-line-rgb) / .10)" strokeWidth={16} strokeLinecap="round" />
@@ -343,7 +359,7 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
         // The two ends of the line, where a ticket is not under way: it has not left Backlog, and
         // it is not going anywhere from Done. Both are holding pens rather than stages, and both
         // fill up without limit, which is what makes them the wrong places to draw a fleet.
-        const terminus = i === 0 || i === STATIONS.length - 1;
+        const terminus = i === 0 || i === DONE_STATION;
         const x = nodeX(i);
         if (x == null) return null;
 

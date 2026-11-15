@@ -25,6 +25,17 @@ public enum TicketPhase
     // ProgressRank, Meanings, HandoffRequirements and PhaseCost, all to save two enum members.
     NeedsPeerReview,
     PeerReviewing,
+    // The Discovery track's phases (see TicketTrack.Discovery, docs/discovery-track-plan.md): three
+    // working pairs - a direction charted into a route, the route scouted in a browser, what was
+    // seen sifted into proposals - and the owner's verdict on them. Their own for the reason the
+    // Review pair is: every behaviour a working phase carries differs from every other track's.
+    NeedsCharting,
+    Charting,
+    NeedsScouting,
+    Scouting,
+    NeedsSifting,
+    Sifting,
+    NeedsVerdict,
     NeedsReview,
     Done,
     Blocked,
@@ -57,6 +68,13 @@ public enum TicketTrack
 {
     Delivery = 0,
     Review = 1,
+    /// <summary>
+    /// Nobody's code: the running product, used the way a person with a job to do would use it,
+    /// and a short list of proposals the owner approves, edits or rejects. Approved ones are filed
+    /// as Delivery tickets that link back (<see cref="Ticket.DiscoveryId"/>). Like Review it shares
+    /// only the parking phases; see docs/discovery-track-plan.md.
+    /// </summary>
+    Discovery = 2,
 }
 
 /// <summary>What a reviewer concluded about someone else's branch, once a human has decided.</summary>
@@ -507,6 +525,13 @@ public class Ticket
     /// rather than read back out of each ticket's description.
     /// </summary>
     public int? PlanUnit { get; set; }
+
+    /// <summary>
+    /// The Discovery ticket this one was filed from, when the owner approved one of its proposals
+    /// (docs/discovery-track-plan.md). Written only by the discovery's Complete, a REST route with
+    /// no tool behind it.
+    /// </summary>
+    public int? DiscoveryId { get; set; }
     public string? PlanOutcomes { get; set; }
 
     /// <summary>

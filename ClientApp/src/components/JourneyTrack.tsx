@@ -7,7 +7,7 @@ import { fade, TIER, DIAMOND } from './orbit';
 // Shared by the board (the sector arc and the per-row tracks) and the ticket drawer.
 
 /** Which track a station belongs to. */
-export type StationTrack = 'both' | 'delivery' | 'review';
+export type StationTrack = 'both' | 'delivery' | 'review' | 'discovery';
 
 /**
  * Where a station sits on the board's column grid.
@@ -45,7 +45,17 @@ export const STATIONS: {
   { label: 'Peer review', short: 'PRVW', cls: 'text-amber-500', track: 'review', at: [6, 7] },
   { label: '✋ Review', short: 'RVEW', cls: 'text-violet-400', track: 'both', at: 7 },
   { label: 'Done', short: 'DONE', cls: 'text-emerald-400', track: 'both', at: 8 },
+  // The Discovery track's four stops, appended rather than placed in meeting order so every index
+  // above keeps its meaning (STATION_OF, the arc's heights and paths). Drawn between the delivery
+  // columns at the midpoints the review lane leaves free, so no two lanes' stops share an x.
+  { label: 'Chart', short: 'CHRT', cls: 'text-sky-400', track: 'discovery', at: [0, 1] },
+  { label: 'Scout', short: 'SCUT', cls: 'text-amber-500', track: 'discovery', at: [2, 3] },
+  { label: 'Sift', short: 'SIFT', cls: 'text-amber-500', track: 'discovery', at: [4, 5] },
+  { label: '✋ Verdict', short: 'VRDT', cls: 'text-violet-400', track: 'discovery', at: [5, 6] },
 ];
+
+/** Done's index: the last stop of every track, though no longer the last entry. */
+export const DONE_STATION = 10;
 
 /**
  * One flat map covering both tracks — a dividend of splitting the review phases off rather than
@@ -66,6 +76,13 @@ export const STATION_OF: Record<Phase, number> = {
   Refining: 6,
   NeedsPeerReview: 7,
   PeerReviewing: 8,
+  NeedsCharting: 11,
+  Charting: 11,
+  NeedsScouting: 12,
+  Scouting: 12,
+  NeedsSifting: 13,
+  Sifting: 13,
+  NeedsVerdict: 14,
   NeedsReview: 9,
   Done: 10,
   Blocked: 0, // real position comes from phaseBeforeBlock
@@ -88,7 +105,7 @@ export function stationX(i: number): number {
 
 /** Station indices a ticket on this track can actually stand on. */
 export function stationsOnTrack(track: Track): number[] {
-  const want: StationTrack = track === 'Review' ? 'review' : 'delivery';
+  const want: StationTrack = track === 'Review' ? 'review' : track === 'Discovery' ? 'discovery' : 'delivery';
   return STATIONS.map((s, i) => (s.track === 'both' || s.track === want ? i : -1)).filter(i => i >= 0);
 }
 

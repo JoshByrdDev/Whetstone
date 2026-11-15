@@ -113,6 +113,11 @@ const TRACK_COPY: Record<Track, { label: string; noun: string; hint: string }> =
     noun: 'peer review',
     hint: "Somebody else's branch: read the diff, drive-test it and stage PR feedback. The pipeline never edits their code and nothing leaves this machine until you send it.",
   },
+  Discovery: {
+    label: 'Discovery',
+    noun: 'discovery',
+    hint: 'Use the running product as someone with a job to do, and bring back a short list of proposals for your verdict. Needs discovery.siteUrl in the project\'s project.defaults.json.',
+  },
 };
 // Pops the native Windows folder dialog (server-side) and returns the chosen path.
 async function pickFolder(initialPath?: string): Promise<string | null> {

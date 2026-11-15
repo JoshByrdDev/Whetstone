@@ -12,6 +12,13 @@ export type Phase =
   | 'Refining'
   | 'NeedsPeerReview'
   | 'PeerReviewing'
+  | 'NeedsCharting'
+  | 'Charting'
+  | 'NeedsScouting'
+  | 'Scouting'
+  | 'NeedsSifting'
+  | 'Sifting'
+  | 'NeedsVerdict'
   | 'NeedsReview'
   | 'Done'
   | 'Blocked';
@@ -25,7 +32,7 @@ export type PhaseKind = 'backlog' | 'queue' | 'active' | 'gate' | 'terminal' | '
  * Distinct from {@link PhaseKind}, which describes a PHASE (is it a queue, a gate, an active run).
  * This describes the TICKET. The track is what a ticket is; the phase is where it is.
  */
-export type Track = 'Delivery' | 'Review';
+export type Track = 'Delivery' | 'Review' | 'Discovery';
 
 export type ReviewSeverity = 'Blocking' | 'Question' | 'Nit' | 'Praise';
 export type ReviewCommentStatus = 'Draft' | 'Approved' | 'Dismissed' | 'Submitted';
@@ -472,6 +479,8 @@ export interface TicketDetail {
   // Whether `branch` is a branch a run made, rather than a name chosen for the first run to make.
   // From then on the base is fixed and a new name is a rename in git (setTicketBranchName).
   branchStarted?: boolean;
+  // The discovery this ticket was filed from, when an owner approved one of its proposals.
+  discoveryId?: number | null;
   blockedReason?: string | null;
   // The same block as the questions the agent actually asked, when it asked in questions. Absent for
   // a fault report, a hand-written block, or anything blocked before the structured form existed —
@@ -546,6 +555,13 @@ export const PHASE_LABEL: Record<Phase, string> = {
   Refining: 'Refining',
   NeedsPeerReview: 'Needs Peer Review',
   PeerReviewing: 'Peer Reviewing',
+  NeedsCharting: 'Needs Charting',
+  Charting: 'Charting',
+  NeedsScouting: 'Needs Scouting',
+  Scouting: 'Scouting',
+  NeedsSifting: 'Needs Sifting',
+  Sifting: 'Sifting',
+  NeedsVerdict: 'Needs Verdict',
   NeedsReview: 'Needs Review',
   Done: 'Done',
   Blocked: 'Blocked',
@@ -558,6 +574,7 @@ export const PHASE_LABEL: Record<Phase, string> = {
  */
 export function phaseLabel(phase: Phase, track: Track = 'Delivery'): string {
   if (track === 'Review' && phase === 'NeedsReview') return 'Feedback Ready';
+  if (track === 'Discovery' && phase === 'NeedsReview') return 'Sign-off';
   return PHASE_LABEL[phase];
 }
 

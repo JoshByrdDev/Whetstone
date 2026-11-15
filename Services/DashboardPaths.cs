@@ -77,6 +77,10 @@ public class DashboardPaths
     public string QaShotsDir => Path.Combine(DataRoot, "qa-shots");
     public string QaShotTicketDir(int ticketId) => Path.Combine(QaShotsDir, ticketId.ToString());
 
+    /// <summary>A discovery's shots (and, later, its video), one folder per ticket (gitignored).</summary>
+    public string DiscoveryDir => Path.Combine(DataRoot, "discovery");
+    public string DiscoveryTicketDir(int ticketId) => Path.Combine(DiscoveryDir, ticketId.ToString());
+
     /// <summary>
     /// The Node script that voices a walkthrough, and its node_modules and model cache (the script and
     /// package.json are tracked; node_modules and models/ are not).

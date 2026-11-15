@@ -38,6 +38,8 @@ $DataRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 # A ticket's workspace on a project whose code is several repos (docs/multi-repo-plan.md). Functions
 # only; a project of one repo takes its set-of-one path, which is Resolve-Worktree as it always was.
 . (Join-Path $DataRoot "worker-repos.ps1")
+# The Discovery track's run (docs/discovery-track-plan.md). Functions only.
+. (Join-Path $DataRoot "worker-discovery.ps1")
 
 # A project's workerEnv, ready to set: the names it may set, each value with {machineCache} made
 # this machine's folder for the project (<data root>/cache/<key>), and the names it may not set.
@@ -2315,7 +2317,9 @@ $isReview    = ($track -eq "Review")
 # A slice's walk-through owns no branch either: it tests the base as it stands. Both read-only kinds
 # skip everything that writes to a branch - the leftover commit, the branch record, the hand-back.
 $isWalkthrough = [bool]$Claim.ticket.walkthrough
-$readsOnly   = $isReview -or $isWalkthrough
+# A discovery owns no code at all: it uses the product as the base has it (docs/discovery-track-plan.md).
+$isDiscovery = ($track -eq "Discovery")
+$readsOnly   = $isReview -or $isWalkthrough -or $isDiscovery
 # The branch under review lives on the review target, not on ticket.branch - a review ticket never
 # owns a branch. Empty for a delivery ticket.
 $reviewBranch = "$($Claim.ticket.review.sourceBranch)".Trim()
@@ -2412,6 +2416,14 @@ You are reading ``$reviewBranch``$(if ($reviewRepo) { " in ``$reviewRepo``" }) t
   under their own name. There is no tool here that posts to the pull request, on purpose.
 - **Finding defects is SUCCESS.** This phase has one forward hand-off and you take it whatever you
   found. There is no route back to implementation - the code is not ours to fix.
+"@
+} elseif ($isDiscovery) {
+    # The phase's own rules are in its skill; these are the ones every discovery phase shares. The
+    # site, the commit and the run's capture folder are appended once they are known (below).
+    $trackRules = @"
+**This ticket is on the DISCOVERY track. Its description is a direction - who to be and what they came to do - and nobody's code is under change.**
+
+Your working directory is the project's base, checked out detached, there to be read. This overrides the "Leave the worktree clean" rule below: change no file and commit nothing - not a fix, not a note. Everything this run produces goes onto the ticket through the discovery tools (``get_discovery``, and this phase's own: ``set_discovery_route`` while Charting, ``log_observation`` and ``log_visit`` while Scouting, ``propose``, ``drop_idea`` and ``withdraw_proposal`` while Sifting). Nothing you write is filed or approved: the owner gives every verdict, and there is no tool that does it for them.
 "@
 } else {
     $trackRules = if ($isWalkthrough) { @"
@@ -2638,13 +2650,13 @@ if ($repoDir) {
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" -BoardBranch "$($Claim.branchName)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BranchPrefix $effectivePrefix `
             -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -ReviewRepo $reviewRepo `
-            -MergeLocally $mergeLocally -OnBase $isWalkthrough
+            -MergeLocally $mergeLocally -OnBase ($isWalkthrough -or $isDiscovery)
     } else {
         Resolve-Worktree -RepoDir $repoDir -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" -BoardBranch "$($Claim.branchName)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BaseBranch $effectiveBase -BranchPrefix $effectivePrefix `
             -CopyFiles @($Claim.project.worktreeCopyFiles) -Setup @($Claim.project.worktreeSetup) `
-            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase $isWalkthrough `
+            -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase ($isWalkthrough -or $isDiscovery) `
             -BackgroundSetup:($skill -eq 'speculate')
     }
 
@@ -2709,6 +2721,10 @@ if ($repoDir) {
         if ($isWalkthrough) {
             Write-Log "  Walk-through worktree: $workDir (detached at $($wt.sha) on '$($wt.branch)')"
             # Not Set-TicketBranch: the base is not this ticket's branch, and a merge must never see it as one.
+        }
+        elseif ($isDiscovery) {
+            Write-Log "  Discovery worktree: $workDir (detached at $($wt.sha) on '$($wt.branch)')"
+            # Not Set-TicketBranch either: a discovery owns no branch.
         }
         elseif ($isReview) {
             if ($multiRepo) {
@@ -2815,6 +2831,35 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
     # discover it, so this run refuses to start without one.
     $requiredServers += 'playwright'
     Write-Log "  Playwright browser configured (captures -> $qaShotDir)"
+}
+# A discovery's scout drives the product too, but on the terms the plan sets for it
+# (docs/discovery-track-plan.md): the browser reaches the run's own site and nothing else
+# (--allowed-origins), its screenshots land in this run's folder under the data root, and the agent
+# has no shell (see $discoveryTools below). browser_run_code_unsafe is refused on top: it runs code
+# in the browser server's own Node process, which is a shell by another name.
+$discoveryRunDir = ""
+$discoverySite = ""
+if ($isDiscovery -and $skill -eq 'scout') {
+    $disc = $Claim.project.discovery
+    $slotStep = if ($Claim.project.stackPorts -and $Claim.project.stackPorts.slotStep) { [int]$Claim.project.stackPorts.slotStep } else { 0 }
+    $slotNow = if ($null -ne $Claim.stackSlot) { [int]$Claim.stackSlot } else { 0 }
+    $discoverySite = Get-DiscoverySiteUrl -SiteUrl "$($disc.siteUrl)" -Slot $slotNow -SlotStep $slotStep
+    $discoveryRunDir = Join-Path (Join-Path (Join-Path $DataRoot 'discovery') "$ticketId") (Join-Path 'runs' (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Path $discoveryRunDir -Force | Out-Null
+    $pwCli = Join-Path $DataRoot "playwright-mcp/node_modules/@playwright/mcp/cli.js"
+    $pwArgs = @("--headless", "--isolated", "--output-dir", $discoveryRunDir, "--viewport-size", "1440x900")
+    if ($discoverySite) { $pwArgs += @("--allowed-origins", (Get-UrlOrigin $discoverySite)) }
+    if (Test-Path -LiteralPath $pwCli) {
+        $mcpServers.playwright = @{ type = "stdio"; command = "node"; args = @($pwCli) + $pwArgs }
+    } else {
+        $mcpServers.playwright = @{
+            type    = "stdio"
+            command = $(if ($OnWindows) { "cmd" } else { "npx" })
+            args    = $(if ($OnWindows) { @("/c", "npx") } else { @() }) + @("--yes", "@playwright/mcp@latest") + $pwArgs
+        }
+    }
+    $requiredServers += 'playwright'
+    Write-Log "  Scout browser configured: $discoverySite only (captures -> $discoveryRunDir)"
 }
 # On a worker host every capture goes to the board host as it lands, for the whole run: the agent
 # hands set_qa_shots this machine's path mid-run, and the board host looks for its own copy.
@@ -3004,6 +3049,42 @@ function Get-SkillText {
     return "(The skill could not be included here. Open ``$($Path -replace '\\', '/')`` with your Read tool and follow it.)"
 }
 
+# A scout's product is brought up by the worker, before the session, because the scout has no shell
+# to do it with: the project's discovery.prepare, in the worktree, told its slot and its site. A
+# prepare that fails stops the run here - a scout pointed at a site that is not there would log
+# the outage as the product's fault.
+$discoveryPrepared = $false
+if ($isDiscovery -and $skill -eq 'scout') {
+    $prepareCmd = "$($Claim.project.discovery.prepare)".Trim()
+    $env:WHETSTONE_SITE_URL = $discoverySite
+    if ($prepareCmd -and $workDir) {
+        Write-Log "  Preparing the product for the scout: $prepareCmd"
+        $prep = Invoke-SetupCommand -Command $prepareCmd -WorkDir $workDir -TimeoutMinutes 20 -StallMinutes 10
+        if ($prep.code -ne 0 -or $prep.timedOut -or $prep.stalled) {
+            $why = if ($prep.timedOut) { "timed out" } elseif ($prep.stalled) { "printed nothing for 10 min" } else { "exited $($prep.code)" }
+            $reason = "The product could not be brought up for this scout: discovery.prepare ($prepareCmd) $why." + (Format-OutputTail -Lines $prep.output)
+            Write-Log "  $(($reason -split "`n")[0]) - blocking ticket #$ticketId."
+            Block-Ticket -TicketId $ticketId -Reason $reason
+            Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "discovery.prepare failed"
+            $cycleTimer.Stop()
+            Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
+                -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
+                -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error" -Detail $runDetail
+            $teardownCmd = "$($Claim.project.discovery.teardown)".Trim()
+            if ($teardownCmd) { $null = Invoke-SetupCommand -Command $teardownCmd -WorkDir $workDir -TimeoutMinutes 5 -StallMinutes 5 }
+            Send-LeaseRelease -TicketId $ticketId -Reason "discovery.prepare failed"
+            Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
+            exit 0
+        }
+        $discoveryPrepared = $true
+    }
+}
+if ($isDiscovery) {
+    $trackRules += Format-DiscoveryNote -Skill $skill -Commit "$(if ($wt) { $wt.sha })" -Site $discoverySite -RunDir $discoveryRunDir `
+        -MaxProposals ([int]$(if ($Claim.project.discovery.maxProposals) { $Claim.project.discovery.maxProposals } else { 6 })) `
+        -Areas @($Claim.project.discovery.areas)
+}
+
 # The skill and the template are hashed as read, before anything is filled in, so the hash names the
 # version of each - not this ticket's copy of it, which would differ on every run.
 $promptTemplate = Get-Content -Path $PromptFile -Raw
@@ -3113,6 +3194,8 @@ $watchdog = Start-AgentWatchdog -RootPid $PID -Pattern $AgentProvider.ProcessPat
 $agentCmd = Get-AgentWorkerCommand -Provider $AgentProvider -Model $phaseModel -Prompt $prompt `
     -WorkDir $workDir -ToolSetup $toolSetup -ReasoningEffort $WorkerReasoningEffort
 $agentArgs = $agentCmd.Args
+# A discovery run has no shell and no editor where the provider can say so (Get-DiscoveryToolArgs).
+if ($isDiscovery) { $agentArgs += @(Get-DiscoveryToolArgs -Provider $AgentProvider.Key -Skill $skill) }
 Write-Log "  Prompt: $($prompt.Length) chars on stdin"
 
 # Where this run's own work will show: each writable repo's worktree, the ref its diff is read
@@ -3404,6 +3487,16 @@ if ($setupJob) { $null = Wait-BackgroundSetup -Job $setupJob }
 #
 # On a workspace of several repos the root is not one, so each repo is asked - the one under review
 # and every one beside it, which were there to be read just the same.
+# The scout's product comes down again, whatever the run did.
+if ($discoveryPrepared) {
+    $teardownCmd = "$($Claim.project.discovery.teardown)".Trim()
+    if ($teardownCmd) {
+        Write-Log "  Taking the scout's product down: $teardownCmd"
+        $down = Invoke-SetupCommand -Command $teardownCmd -WorkDir $workDir -TimeoutMinutes 5 -StallMinutes 5
+        if ($down.code -ne 0) { Write-Log "  discovery.teardown exited $($down.code); the stack may still be up." }
+    }
+}
+$readKind = if ($isDiscovery) { "discovery" } elseif ($isWalkthrough) { "walk-through" } else { "peer review" }
 if ($repoDir -and $readsOnly) {
     $readPlaces = if ($multiRepo -and $workMembers) { @($workMembers | ForEach-Object { @{ dir = $_.dir; path = $_.path } }) }
                   else { @(@{ dir = ''; path = $workDir }) }
@@ -3412,9 +3505,9 @@ if ($repoDir -and $readsOnly) {
         if ($dirty.Count -eq 0) { continue }
         $names = ($dirty | Select-Object -First 10 | ForEach-Object { "- $($_.Trim())" }) -join "`n"
         $inRepo = if ($place.dir) { " in ``$($place.dir)``" } else { "" }
-        Write-Log "  WARNING: review run left $($dirty.Count) modified file(s)$inRepo in a worktree it was only supposed to read."
-        Send-TicketComment -TicketId $ticketId -Body "This peer review run modified $($dirty.Count) file(s)$inRepo in its worktree. It should not have: the branch belongs to someone else and this phase reads only. Nothing was committed and nothing was pushed - the changes are still sitting in the worktree at ``$($place.path)`` for you to look at and discard.`n`n$names"
-        Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "Review run left $($dirty.Count) modified file(s)$inRepo in its worktree"
+        Write-Log "  WARNING: $readKind run left $($dirty.Count) modified file(s)$inRepo in a worktree it was only supposed to read."
+        Send-TicketComment -TicketId $ticketId -Body "This $readKind run modified $($dirty.Count) file(s)$inRepo in its worktree. It should not have: this phase reads only. Nothing was committed and nothing was pushed - the changes are still sitting in the worktree at ``$($place.path)`` for you to look at and discard.`n`n$names"
+        Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "A $readKind run left $($dirty.Count) modified file(s)$inRepo in its worktree"
     }
 }
 # The safety nets every cycle runs on what it leaves behind, for one repo: the leftover commit, and

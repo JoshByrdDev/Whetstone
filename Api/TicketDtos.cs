@@ -267,7 +267,9 @@ public record TicketDetailDto(
     string? BaseBranch = null,
     // Whether Branch is a branch a run made (Ticket.BranchStarted) rather than a name chosen for the
     // first run to make: the drawer's base chip goes and its branch chip renames from then on.
-    bool BranchStarted = false);
+    bool BranchStarted = false,
+    // The discovery this ticket was filed from, when it was (Ticket.DiscoveryId).
+    int? DiscoveryId = null);
 
 /// <summary>A ticket's place in a slice: the slice's number, and its outcomes.</summary>
 public record TicketPlanDto(int Unit, IReadOnlyList<string> Outcomes);
@@ -419,7 +421,8 @@ public static class TicketMapper
         t.ReviewedOn,
         t.ReviewedOnAt,
         SliceBranches.OwnBase(t),
-        t.BranchStarted);
+        t.BranchStarted,
+        t.DiscoveryId);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

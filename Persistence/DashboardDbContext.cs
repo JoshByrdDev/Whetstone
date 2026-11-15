@@ -27,6 +27,10 @@ public class DashboardDbContext : DbContext
     public DbSet<Label> Labels => Set<Label>();
     public DbSet<TicketLabel> TicketLabels => Set<TicketLabel>();
     public DbSet<ReviewTarget> ReviewTargets => Set<ReviewTarget>();
+    public DbSet<DiscoveryRoute> DiscoveryRoutes => Set<DiscoveryRoute>();
+    public DbSet<DiscoveryObservation> DiscoveryObservations => Set<DiscoveryObservation>();
+    public DbSet<DiscoveryVisit> DiscoveryVisits => Set<DiscoveryVisit>();
+    public DbSet<DiscoveryProposal> DiscoveryProposals => Set<DiscoveryProposal>();
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
     public DbSet<GateFinding> GateFindings => Set<GateFinding>();
     public DbSet<StewardQuestion> StewardQuestions => Set<StewardQuestion>();
@@ -328,6 +332,50 @@ public class DashboardDbContext : DbContext
             e.Property(r => r.Verdict).HasConversion<string>().HasMaxLength(32);
             e.HasOne(r => r.Ticket).WithOne(t => t.ReviewTarget!)
                 .HasForeignKey<ReviewTarget>(r => r.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        // The Discovery track's tables (Models/DiscoveryEntities.cs). All cascade with the ticket.
+        b.Entity<DiscoveryRoute>(e =>
+        {
+            e.HasKey(r => r.TicketId);
+            e.Property(r => r.SignedInAs).HasMaxLength(128);
+            e.HasOne(r => r.Ticket).WithOne().HasForeignKey<DiscoveryRoute>(r => r.TicketId).OnDelete(DeleteBehavior.Cascade);
+        });
+        b.Entity<DiscoveryObservation>(e =>
+        {
+            e.Property(o => o.Kind).HasConversion<string>().HasMaxLength(16);
+            e.Property(o => o.Title).HasMaxLength(300);
+            e.Property(o => o.Url).HasMaxLength(2048);
+            e.Property(o => o.Width).HasMaxLength(16);
+            e.Property(o => o.SignedInAs).HasMaxLength(128);
+            e.Property(o => o.Area).HasMaxLength(64);
+            e.Property(o => o.ShotPath).HasMaxLength(1024);
+            e.Property(o => o.Commit).HasMaxLength(64);
+            e.HasOne(o => o.Ticket).WithMany().HasForeignKey(o => o.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(o => o.TicketId);
+        });
+        b.Entity<DiscoveryVisit>(e =>
+        {
+            e.Property(v => v.Url).HasMaxLength(2048);
+            e.Property(v => v.RoutePattern).HasMaxLength(512);
+            e.Property(v => v.Width).HasMaxLength(16);
+            e.Property(v => v.SignedInAs).HasMaxLength(128);
+            e.Property(v => v.Area).HasMaxLength(64);
+            e.Property(v => v.Case).HasMaxLength(128);
+            e.Property(v => v.Commit).HasMaxLength(64);
+            e.HasOne(v => v.Ticket).WithMany().HasForeignKey(v => v.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(v => v.TicketId);
+        });
+        b.Entity<DiscoveryProposal>(e =>
+        {
+            e.Property(p => p.Kind).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.Status).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.RejectReason).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.Title).HasMaxLength(300);
+            e.Property(p => p.Size).HasMaxLength(64);
+            e.Property(p => p.Area).HasMaxLength(64);
+            e.HasOne(p => p.Ticket).WithMany().HasForeignKey(p => p.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(p => p.TicketId);
         });
 
         b.Entity<ReviewComment>(e =>

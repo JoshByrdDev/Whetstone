@@ -1565,7 +1565,7 @@ function rowStatus(t: TicketSummary): string {
   //
   // Only while nothing is running on it. A note posted onto a live run is being dealt with by that
   // run, and the item-by-item progress below is the better thing to be watching in the meantime.
-  const live = ['Speculating', 'Implementing', 'QaTesting', 'Refining', 'PeerReviewing'].includes(t.phase);
+  const live = ['Speculating', 'Implementing', 'QaTesting', 'Refining', 'PeerReviewing', 'Charting', 'Scouting', 'Sifting'].includes(t.phase);
   if (t.unansweredNotes && !live) {
     return t.unansweredNotes === 1 ? 'your note pending' : `${t.unansweredNotes} notes pending`;
   }
@@ -1588,6 +1588,13 @@ function rowStatus(t: TicketSummary): string {
       if (t.skipQaTesting) return 'reading diff';
       return t.qaTotal > 0 ? `review ${t.qaVerified}/${t.qaTotal}` : 'reviewing';
     case 'NeedsPeerReview': return 'next: review';
+    case 'NeedsCharting': return 'next: chart';
+    case 'Charting': return 'charting';
+    case 'NeedsScouting': return 'next: scout';
+    case 'Scouting': return 'scouting';
+    case 'NeedsSifting': return 'next: sift';
+    case 'Sifting': return 'sifting';
+    case 'NeedsVerdict': return 'your verdict';
     case 'NeedsReview':
       // The one phase both tracks share, and the one place a row has to say which it is. A review
       // ticket here is either waiting on ITS OWNER to send the feedback or on the AUTHOR to answer

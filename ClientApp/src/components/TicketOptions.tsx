@@ -1,3 +1,4 @@
+import type { Track } from '../types/tickets';
 /**
  * The per-ticket pipeline settings: the two human review gates, how much QA the ticket gets, and
  * whether refinement waits for an independent Classroom analysis. The gates and QA are off by
@@ -30,7 +31,7 @@ export function TicketOptions({
    * survives the switch unchanged — on either track "skip QA testing" means read the diff and do
    * not stand the app up, which is why the flag is reused rather than reinvented.
    */
-  track?: 'Delivery' | 'Review';
+  track?: Track;
 }) {
   const reviewing = track === 'Review';
   return (

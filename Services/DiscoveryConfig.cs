@@ -1,0 +1,68 @@
+using System.Text.Json;
+
+namespace Whetstone.Services;
+
+/// <summary>One area of a product, named once so every visit, observation and proposal can carry it.</summary>
+public sealed record DiscoveryArea(string Name, string[] Pages, string[] Code);
+
+/// <summary>
+/// A project's <c>discovery</c> block in <c>project.defaults.json</c> (docs/discovery-track-plan.md).
+/// Everything about how a project's product is stood up for a scout is here, never in the
+/// platform: the agent that scouts has no shell, so the worker brings the product up before the
+/// session starts and takes it down after.
+/// </summary>
+public sealed record DiscoveryConfig
+{
+    /// <summary>At most this many proposals per sift. The rest go on the dropped list.</summary>
+    public int MaxProposals { get; init; } = 6;
+
+    /// <summary>
+    /// Where the product answers once prepared, as slot 0 sees it (<c>http://localhost:53590</c>).
+    /// A run on stack slot N adds N times <c>stackPorts.slotStep</c> to the port. The browser is
+    /// allowed this origin and no other.
+    /// </summary>
+    public string SiteUrl { get; init; } = "";
+
+    /// <summary>
+    /// The command that brings the product up on its showcase data, run by the worker in the
+    /// discovery's worktree before Scout starts (pwsh, with WHETSTONE_STACK_SLOT set). It returns
+    /// once the site answers, or fails the run.
+    /// </summary>
+    public string Prepare { get; init; } = "";
+
+    /// <summary>The command that takes it down again after the run, when there is one.</summary>
+    public string Teardown { get; init; } = "";
+
+    /// <summary>The product's areas, for coverage: each one's page patterns and code paths.</summary>
+    public DiscoveryArea[] Areas { get; init; } = Array.Empty<DiscoveryArea>();
+
+    /// <summary>Whether a scout can run here at all: a site to point the browser at.</summary>
+    public bool CanScout => SiteUrl.Length > 0;
+
+    public static DiscoveryConfig From(Dictionary<string, JsonElement> cfg)
+    {
+        if (!cfg.TryGetValue("discovery", out var d) || d.ValueKind != JsonValueKind.Object) return new DiscoveryConfig();
+        var areas = new List<DiscoveryArea>();
+        if (d.TryGetProperty("areas", out var a) && a.ValueKind == JsonValueKind.Array)
+            foreach (var e in a.EnumerateArray())
+                if (e.ValueKind == JsonValueKind.Object && Str(e, "name") is { Length: > 0 } name)
+                    areas.Add(new DiscoveryArea(name, Strs(e, "pages"), Strs(e, "code")));
+        var max = d.TryGetProperty("maxProposals", out var m) && m.ValueKind == JsonValueKind.Number ? m.GetInt32() : 6;
+        return new DiscoveryConfig
+        {
+            MaxProposals = Math.Clamp(max, 1, 20),
+            SiteUrl = Str(d, "siteUrl").TrimEnd('/'),
+            Prepare = Str(d, "prepare"),
+            Teardown = Str(d, "teardown"),
+            Areas = areas.ToArray(),
+        };
+    }
+
+    private static string Str(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";
+
+    private static string[] Strs(JsonElement e, string name) =>
+        e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
+            ? v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!.Trim()).Where(x => x.Length > 0).ToArray()
+            : Array.Empty<string>();
+}

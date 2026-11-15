@@ -21,7 +21,7 @@ foreach ($name in @('Find-RateLimits', 'Save-CodexUsage', 'Get-UsageLimitReset',
     . ([scriptblock]::Create($fn.Extent.Text))
 }
 $DefaultReasoningEffort = 'medium'
-$AgentRoleKeys = @('speculate', 'implement', 'qa-test', 'refine', 'review-pr', 'steward', 'reflection')
+$AgentRoleKeys = @('speculate', 'implement', 'qa-test', 'refine', 'review-pr', 'chart', 'scout', 'sift', 'steward', 'reflection')
 
 $RunDir = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-usage-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $RunDir | Out-Null
@@ -49,14 +49,14 @@ function Check {
 function Clear-Pauses { Get-ChildItem $RunDir -Filter 'usage-limit*.json' | Remove-Item -Force }
 
 try {
-    $all = 'speculate implement qa-test refine review-pr'
+    $all = 'speculate implement qa-test refine review-pr chart scout sift'
 
     Check 'nothing paused leaves every phase open' ((Get-OpenSkills -Paused (Get-PausedProviders)) -join ' ') $all
 
     Set-UsageLimitPause -Provider 'codex' -ResetsAt (Get-Date).AddHours(2) -Text 'hit your limit'
     $paused = Get-PausedProviders
     Check 'a codex refusal pauses codex alone' (($paused.Keys | Sort-Object) -join ' ') 'codex'
-    Check 'and closes only the phase that runs on it' ((Get-OpenSkills -Paused $paused) -join ' ') 'speculate qa-test refine review-pr'
+    Check 'and closes only the phase that runs on it' ((Get-OpenSkills -Paused $paused) -join ' ') 'speculate qa-test refine review-pr chart scout sift'
 
     Set-UsageLimitPause -Provider 'claude' -ResetsAt (Get-Date).AddHours(1) -Text 'hit your limit'
     Check 'both paused closes every phase' (@(Get-OpenSkills -Paused (Get-PausedProviders)).Count) 0

@@ -13,6 +13,7 @@ import { PriorityPicker } from './PriorityPicker';
 const START_PHASES: Record<Track, Phase[]> = {
   Delivery: ['Backlog', 'NeedsSpeculation', 'NeedsImplementation'],
   Review: ['NeedsPeerReview', 'Backlog'],
+  Discovery: ['NeedsCharting', 'Backlog'],
 };
 
 export function CreateTicketModal({
@@ -55,6 +56,10 @@ export function CreateTicketModal({
   const [prUrl, setPrUrl] = useState('');
   const [prAuthor, setPrAuthor] = useState('');
   const reviewing = track === 'Review';
+  // A discovery owns no code: no branch, no base, none of the delivery gates. Its description is
+  // its direction, and required.
+  const discovering = track === 'Discovery';
+  const delivering = !reviewing && !discovering;
 
   // On a project of several repos a pull request is in one of them, so the review names it. Only
   // the writable ones are offered: nothing is delivered from a read-only repo, so no PR is in one.
@@ -102,7 +107,7 @@ export function CreateTicketModal({
   // make, so the toggle disappears rather than standing there as a single button.
   const offered = useMemo<Track[]>(() => {
     const on = new Set(projects.find(p => p.key === projectKey)?.tracks ?? []);
-    const list = (['Delivery', 'Review'] as Track[]).filter(t => on.has(t));
+    const list = (['Delivery', 'Review', 'Discovery'] as Track[]).filter(t => on.has(t));
     return list.length ? list : ['Delivery'];
   }, [projects, projectKey]);
   const offeredKey = offered.join(',');
@@ -227,24 +232,25 @@ export function CreateTicketModal({
     // A review ticket names itself after the branch when nothing better is given, so the title is
     // only ever required on a standalone delivery ticket.
     if (!linked && !reviewing && !title.trim()) { setError('Title is required (or link an issue key).'); return; }
+    if (discovering && !description.trim()) { setError('A discovery needs a direction: who to be and what they came to do.'); return; }
     setBusy(true); setError(null);
     try {
       const options = {
         // The two speculation/implementation gates are delivery-only: a review ticket never enters
         // either phase, so sending them would set flags nothing will ever read.
-        ...(reviewing ? {} : {
+        ...(!delivering ? {} : {
           requiresSpeculationReview: specReview, requiresImplementationReview: implReview,
           skipClassroomAnalysis: skipAnalysis,
         }),
         // This one DOES carry over. On a review ticket it means the same thing it always did -
         // read the diff, do not stand the app up.
-        skipQaTesting: skipQa,
+        ...(discovering ? { track } : { skipQaTesting: skipQa }),
         priority,
         masterNotes: masterNotes.trim() || undefined,
         // Delivery only: a review ticket is read against its pull request's target.
-        ...(!reviewing && offBase ? { baseBranch: baseBranch.trim() } : {}),
+        ...(delivering && offBase ? { baseBranch: baseBranch.trim() } : {}),
         // Delivery only: a review ticket owns no branch.
-        ...(!reviewing && branchName.trim() ? { branch: branchName.trim() } : {}),
+        ...(delivering && branchName.trim() ? { branch: branchName.trim() } : {}),
         ...(reviewing ? {
           track,
           sourceBranch: sourceBranch.trim(),
@@ -293,12 +299,14 @@ export function CreateTicketModal({
                     : 'text-gray-500 border-hair hover:text-gray-300 hover:border-gray-600'
                 }`}
               >
-                {k === 'Delivery' ? 'Our work' : 'Peer review'}
+                {k === 'Delivery' ? 'Our work' : k === 'Review' ? 'Peer review' : 'Discovery'}
               </button>
             ))}
             <span className="text-[11px] text-gray-600 pl-1">
               {reviewing
                 ? "Read someone else's branch and stage feedback. Nothing is ever pushed or posted."
+                : discovering
+                ? 'Use the product as someone with a job to do; you give the verdict on what it proposes.'
                 : 'Plan, build, test and ship a change on our own branch.'}
             </span>
           </div>
@@ -378,7 +386,7 @@ export function CreateTicketModal({
           <PriorityPicker value={priority} onChange={setPriority} />
         </Labeled>
 
-        {!reviewing && (
+        {delivering && (
           <Labeled label="Based on">
             <input
               value={baseBranch}
@@ -404,7 +412,7 @@ export function CreateTicketModal({
           </Labeled>
         )}
 
-        {!reviewing && (
+        {delivering && (
           <Labeled label="Branch name">
             <input
               value={branchName}
@@ -502,8 +510,11 @@ export function CreateTicketModal({
             <Labeled label="Title">
               <input autoFocus value={title} onChange={e => setTitle(e.target.value)} className={inputCls} placeholder="Short summary of the work" />
             </Labeled>
-            <Labeled label="Description">
-              <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} className={inputCls} placeholder="Optional details / context" />
+            <Labeled label={discovering ? 'Direction' : 'Description'}>
+              <textarea value={description} onChange={e => setDescription(e.target.value)} rows={discovering ? 4 : 3} className={inputCls}
+                placeholder={discovering
+                  ? 'Who to be and what they came to do, written as a job: "plan your month of events as someone in a nearby town".'
+                  : 'Optional details / context'} />
             </Labeled>
           </>
         )}
@@ -516,7 +527,7 @@ export function CreateTicketModal({
           />
         </Labeled>
 
-        <div className="border-t border-hair pt-3">
+        {!discovering && <div className="border-t border-hair pt-3">
           <div className="text-xs text-gray-500 mb-2">Pipeline options</div>
           <TicketOptions
             speculation={specReview}
@@ -531,7 +542,7 @@ export function CreateTicketModal({
               if (o.skipClassroomAnalysis !== undefined) setSkipAnalysis(o.skipClassroomAnalysis);
             }}
           />
-        </div>
+        </div>}
 
         <div className="flex justify-end gap-2 pt-2">
           <button onClick={dismiss} className="px-3 py-1.5 text-sm text-gray-400 hover:text-gray-200">Cancel</button>

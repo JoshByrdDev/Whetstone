@@ -15,6 +15,7 @@ import { StewardOnTicket } from './StewardOnTicket';
 import { BugTrace } from './BugTrace';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { ReviewPanel } from './ReviewPanel';
+import { DiscoveryPanel } from './DiscoveryPanel';
 import { JourneyChart } from './JourneyChart';
 import { MONO } from './orbit';
 import { compact } from './metrics/parts';
@@ -265,7 +266,7 @@ export function TicketDetail({
             {/* Under PR review: once a pull request has comments, rounds go on top of what the
                 reviewer saw instead of being rewritten into it. The owner's switch, shown wherever
                 the ticket has a branch of its own that is not finished yet. */}
-            {t.track !== 'Review' && !!t.branch && (t.phase !== 'Done' || !!t.reviewedOn) && (
+            {t.track === 'Delivery' && !!t.branch && (t.phase !== 'Done' || !!t.reviewedOn) && (
               <UnderReviewControl
                 reviewedOn={t.reviewedOn ?? null}
                 reviewedOnAt={t.reviewedOnAt ?? null}
@@ -404,7 +405,7 @@ export function TicketDetail({
 
             {/* Whether this fixes a bug, where the bug came from, and the bugs traced back to this
                 ticket. Delivery only: a review ticket owns no code to blame. */}
-            {t.track !== 'Review' && <BugTrace ticketId={t.id} />}
+            {t.track === 'Delivery' && <BugTrace ticketId={t.id} />}
 
             {/* The way out to the deep version. The brief above is the few hundred words refinement
                 owed you; this is the one you go and ask for when those were not enough. */}
@@ -425,7 +426,7 @@ export function TicketDetail({
                 Absent on a review ticket: work items are a plan for code WE are going to write, and
                 add_work_items already refuses on that track. An empty checklist with an Add box
                 under it invites filling in something nothing will ever read. */}
-            {t.track !== 'Review' && (
+            {t.track === 'Delivery' && (
             <div>
               <div className="flex items-center gap-2.5 mb-3">
                 <ProgressRing done={t.workItems.filter(w => w.done).length} total={t.workItems.length} />
@@ -621,6 +622,7 @@ export function TicketDetail({
                 a review ticket it is the whole point of the drawer, and absent entirely on a
                 delivery one - `review` is null there, and the panel draws nothing. */}
             {t.review && <ReviewPanel t={t} onChanged={reload} />}
+            {t.track === 'Discovery' && <DiscoveryPanel t={t} onChanged={reload} />}
 
             {/* What this ticket is waiting on. The tracker's blocking links, refreshed live, plus
                 anything found here - and the local verdict wins over the tracker either way. */}
@@ -745,13 +747,13 @@ export function TicketDetail({
             {/* One route either way: before a run has made the branch it only records the name; after,
                 it renames the branch in every repo that has it, or refuses and says why (a run holds
                 the ticket, its pull request is open, a worker host has it). */}
-            {t.track !== 'Review' && (
+            {t.track === 'Delivery' && (
               <BranchChip branch={t.branch ?? ''} base={t.baseBranch} started={!!t.branchStarted}
                 onSave={v => { if (v !== (t.branch ?? '')) run(() => api.setTicketBranchName(t.id, v)); }} />
             )}
             {/* Its own base, while there is still a choice to make: before a run has made its branch. A
                 name chosen for the branch is not that. After it the base is on the branch chip, and fixed. */}
-            {t.track !== 'Review' && !t.branchStarted && (
+            {t.track === 'Delivery' && !t.branchStarted && (
               <BaseChip base={t.baseBranch ?? ''} onSave={v => run(() => api.setTicketBaseBranch(t.id, v))} />
             )}
             <WorktreeChip path={t.worktreePath ?? ''} />
