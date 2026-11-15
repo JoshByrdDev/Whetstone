@@ -60,6 +60,7 @@ public static class MachineLimits
         nameof(TicketPhase.NeedsQa), nameof(TicketPhase.QaTesting),
         nameof(TicketPhase.NeedsPeerReview), nameof(TicketPhase.PeerReviewing),
         nameof(TicketPhase.NeedsScouting), nameof(TicketPhase.Scouting),
+        nameof(TicketPhase.NeedsRecheck), nameof(TicketPhase.Rechecking),
     };
 
     /// <summary>Rule B needs this many busy minutes, over at least <see cref="LearnLevels"/> busy counts.</summary>

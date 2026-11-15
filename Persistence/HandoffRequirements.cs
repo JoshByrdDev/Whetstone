@@ -244,6 +244,20 @@ public static class HandoffRequirements
           + "propose for each survivor (at most the project's cap, best first) and drop_idea for "
           + "everything else, one line of reason each. Then set_phase again."),
 
+        (TicketPhase.Rechecking, TicketPhase.NeedsVerdict) => new Requirement(
+            "REQUIRES every approved goal checked on this pass (check_goal: Met, NotMet or Unclear) and "
+          + "at least one proposal written on it (propose, as a FixUp of a goal not met or as New). "
+          + "Refused past the project's recheckRounds.",
+            "Use the product on the route's jobs and call check_goal for every goal get_discovery lists, "
+          + "then propose what still has to change - a FixUp naming its goal, or New - held to the "
+          + "sift's rules. With nothing to propose, or past the rounds, hand off to NeedsReview instead."),
+
+        (TicketPhase.Rechecking, TicketPhase.NeedsReview) => new Requirement(
+            "REQUIRES every approved goal checked on this pass (check_goal). While the project's "
+          + "recheckRounds allow another verdict, a pass that wrote proposals hands off to NeedsVerdict instead.",
+            "Call check_goal for every goal get_discovery lists - Met, NotMet or Unclear, with what you "
+          + "did and saw - then set_phase again. A goal you could not reach is Unclear, said why."),
+
         (TicketPhase.Refining, TicketPhase.NeedsReview) => new Requirement(
             "REQUIRES a learning brief written on this pass. "
           + "The human signing this off did not write any of it - the brief is the only part of the "

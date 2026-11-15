@@ -271,7 +271,9 @@ public record TicketDetailDto(
     // first run to make: the drawer's base chip goes and its branch chip renames from then on.
     bool BranchStarted = false,
     // The discovery this ticket was filed from, when it was (Ticket.DiscoveryId).
-    int? DiscoveryId = null);
+    int? DiscoveryId = null,
+    // A discovery's route gate (Ticket.RequiresRouteReview).
+    bool RequiresRouteReview = false);
 
 /// <summary>A ticket's place in a slice: the slice's number, and its outcomes.</summary>
 public record TicketPlanDto(int Unit, IReadOnlyList<string> Outcomes);
@@ -424,7 +426,8 @@ public static class TicketMapper
         t.ReviewedOnAt,
         SliceBranches.OwnBase(t),
         t.BranchStarted,
-        t.DiscoveryId);
+        t.DiscoveryId,
+        t.RequiresRouteReview);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

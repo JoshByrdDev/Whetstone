@@ -47,6 +47,12 @@ public class DiscoveryRoute
     public int? RunId { get; set; }
 
     public DateTime WrittenAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>When the owner approved it at the route gate. Null when the gate was off, or it has not been approved.</summary>
+    public DateTime? ApprovedAt { get; set; }
+
+    /// <summary>True once the owner changed what Chart wrote, at the gate.</summary>
+    public bool OwnerEdited { get; set; }
 }
 
 /// <summary>What kind of thing a scout noticed.</summary>
@@ -107,6 +113,9 @@ public class DiscoveryObservation
 
     /// <summary>Seconds into the run's recording where this was seen. Null until runs are recorded (build step 3).</summary>
     public double? VideoAt { get; set; }
+
+    /// <summary>0 for the scout; N for what the Nth recheck saw.</summary>
+    public int Round { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
@@ -238,6 +247,15 @@ public class DiscoveryProposal
     /// <summary>The run that wrote it (a sift, later a recheck). See <see cref="DiscoveryObservation.RunId"/>.</summary>
     public int? RunId { get; set; }
 
+    /// <summary>0 when Sift wrote it; N when the Nth recheck did. Recheck yield is the approved share of round 1 and later.</summary>
+    public int Round { get; set; }
+
+    /// <summary>For a recheck's proposal: a fix-up of an approved goal not met, or something new. Null for Sift's.</summary>
+    public RecheckKind? RecheckKind { get; set; }
+
+    /// <summary>For a fix-up: the approved proposal (the goal) it fixes up.</summary>
+    public int? GoalId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? DecidedAt { get; set; }
 }
@@ -291,5 +309,54 @@ public class DiscoveryVerdictEvent
     /// <summary>For Filed: the ticket it became, when it became one.</summary>
     public int? FiledTicketId { get; set; }
 
+    public DateTime At { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>What a recheck's proposal is, beside its kind.</summary>
+public enum RecheckKind
+{
+    /// <summary>An approved goal the recheck found not met: what would still have to change.</summary>
+    FixUp,
+    /// <summary>Anything else the recheck found, on the code as it now is.</summary>
+    New,
+}
+
+/// <summary>What a recheck found of one approved goal, judged by using the product rather than by reading the ticket.</summary>
+public enum GoalOutcome
+{
+    Met,
+    NotMet,
+    /// <summary>Could not tell: the page would not show it, the data was not there, the goal was not about something visible.</summary>
+    Unclear,
+}
+
+/// <summary>
+/// One recheck's finding on one approved goal (a filed Ticket or Bug proposal): did it land. One row
+/// per goal per round - a run that checks a goal twice replaces its own row - and never rewritten
+/// after the round, so "landed the first time" is the outcome of a goal's earliest row, and a goal
+/// once met is not asked about again.
+/// </summary>
+public class DiscoveryGoalCheck
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    /// <summary>The approved proposal this is a check of. Not a foreign key, like the verdict log's.</summary>
+    public int ProposalId { get; set; }
+    /// <summary>The ticket the goal was filed as, when this was written.</summary>
+    public int? FiledTicketId { get; set; }
+
+    /// <summary>Which recheck this was: 1 for the first.</summary>
+    public int Round { get; set; }
+    public GoalOutcome Outcome { get; set; }
+    /// <summary>What it did and saw, in a sentence or two.</summary>
+    public string Note { get; set; } = "";
+    /// <summary>Observations this round that show it, when it logged any.</summary>
+    public List<int> ObservationIds { get; set; } = new();
+
+    /// <summary>The run that wrote it. See <see cref="DiscoveryObservation.RunId"/>.</summary>
+    public int? RunId { get; set; }
+    public string? Commit { get; set; }
     public DateTime At { get; set; } = DateTime.UtcNow;
 }

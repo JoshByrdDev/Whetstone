@@ -43,6 +43,12 @@ export function CreateTicketModal({
   useEffect(() => { setSkipAnalysis(projectSkipsAnalysis(projectKey)); },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectKey]);
+  // A discovery's route gate, defaulted the same way from the project's discovery.reviewRoute.
+  const projectReviewsRoutes = (key: string) => projects.find(p => p.key === key)?.reviewRouteByDefault ?? false;
+  const [routeReview, setRouteReview] = useState(() => projectReviewsRoutes(projectKey));
+  useEffect(() => { setRouteReview(projectReviewsRoutes(projectKey)); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projectKey]);
   const [masterNotes, setMasterNotes] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -244,7 +250,7 @@ export function CreateTicketModal({
         }),
         // This one DOES carry over. On a review ticket it means the same thing it always did -
         // read the diff, do not stand the app up.
-        ...(discovering ? { track } : { skipQaTesting: skipQa }),
+        ...(discovering ? { track, requiresRouteReview: routeReview } : { skipQaTesting: skipQa }),
         priority,
         masterNotes: masterNotes.trim() || undefined,
         // Delivery only: a review ticket is read against its pull request's target.
@@ -526,6 +532,16 @@ export function CreateTicketModal({
             placeholder="Standing instructions for Claude on this ticket. Only you can edit these; every phase reads them and they win over the description."
           />
         </Labeled>
+
+        {discovering && (
+          <label className="flex items-start gap-2 text-sm text-gray-300 cursor-pointer border-t border-hair pt-3">
+            <input type="checkbox" checked={routeReview} onChange={e => setRouteReview(e.target.checked)} className="mt-0.5" />
+            <span>
+              Review the route before it is scouted
+              <span className="block text-xs text-gray-500">You read, and can edit, the persona and jobs the chart wrote before a scout walks them.</span>
+            </span>
+          </label>
+        )}
 
         {!discovering && <div className="border-t border-hair pt-3">
           <div className="text-xs text-gray-500 mb-2">Pipeline options</div>

@@ -72,9 +72,16 @@ public class TicketService
 
     public TicketService(DashboardDbContext db, IssueSnapshotService? snapshots = null,
         TicketDependencyService? dependencies = null, ResourceLeaseService? leases = null,
-        IClassroomGate? classroomGate = null, HeartbeatManager? heartbeat = null, BugTraceQueue? bugTraces = null)
-        => (_db, _snapshots, _dependencies, _leases, _classroomGate, _heartbeat, _bugTraces)
-         = (db, snapshots, dependencies, leases, classroomGate, heartbeat, bugTraces);
+        IClassroomGate? classroomGate = null, HeartbeatManager? heartbeat = null, BugTraceQueue? bugTraces = null,
+        ProjectRegistry? registry = null)
+        => (_db, _snapshots, _dependencies, _leases, _classroomGate, _heartbeat, _bugTraces, _registry)
+         = (db, snapshots, dependencies, leases, classroomGate, heartbeat, bugTraces, registry);
+
+    /// <summary>
+    /// A project's settings, for the one rule here that reads them: how many recheck rounds a
+    /// discovery gets a verdict for. Absent in tests that do not need it, which get the default.
+    /// </summary>
+    private readonly ProjectRegistry? _registry;
 
     /// <summary>
     /// Where a ticket that has landed goes to have its delivered commits recorded and, for a bug, its
@@ -633,6 +640,7 @@ public class TicketService
         switch (t.Phase, to)
         {
             case (TicketPhase.Charting, TicketPhase.NeedsScouting):
+            case (TicketPhase.Charting, TicketPhase.NeedsRouteApproval):
                 var route = await _db.DiscoveryRoutes.AsNoTracking().FirstOrDefaultAsync(r => r.TicketId == t.Id);
                 if (route is null || route.Jobs.Count == 0 || route.WrittenAt < since)
                     return $"This discovery has no route written on this pass. {req.HowToSatisfy}";
@@ -646,9 +654,112 @@ public class TicketService
                         && (p.Status == ProposalStatus.Proposed || p.Status == ProposalStatus.Dropped)))
                     return $"This pass has written no proposal and dropped nothing. {req.HowToSatisfy}";
                 return null;
+            case (TicketPhase.Rechecking, TicketPhase.NeedsVerdict):
+            case (TicketPhase.Rechecking, TicketPhase.NeedsReview):
+                return await RecheckUnmetAsync(t, to, req);
             default:
                 return null;
         }
+    }
+
+    /// <summary>
+    /// What a recheck owes before it hands off: an outcome for every goal it was asked about, and
+    /// its proposals sent where the rounds say - to the verdict while another round is allowed, to
+    /// the sign-off once they are spent.
+    /// </summary>
+    private async Task<string?> RecheckUnmetAsync(Ticket t, TicketPhase to, HandoffRequirements.Requirement req)
+    {
+        var round = await RecheckRoundAsync(t.Id);
+        var since = await RecheckPassStartAsync(t.Id) ?? DateTime.MinValue;
+        var goals = await RecheckGoalIdsAsync(t.Id, round);
+        var checkedIds = await _db.DiscoveryGoalChecks.Where(g => g.TicketId == t.Id && g.Round == round && g.At >= since)
+            .Select(g => g.ProposalId).ToListAsync();
+        var missing = goals.Except(checkedIds).ToList();
+        if (missing.Count > 0)
+            return $"Goal{(missing.Count == 1 ? "" : "s")} {string.Join(", ", missing.Select(i => $"#{i}"))} "
+                 + $"{(missing.Count == 1 ? "has" : "have")} no outcome on this pass. {req.HowToSatisfy}";
+        if (goals.Count == 0
+            && !await _db.DiscoveryObservations.AnyAsync(o => o.TicketId == t.Id && o.Round == round && o.CreatedAt >= since)
+            && !await _db.DiscoveryVisits.AnyAsync(v => v.TicketId == t.Id && v.At >= since))
+            return "There are no approved goals to check, and this pass logged no visit or observation: use the product on the route's jobs first.";
+
+        var proposed = await _db.DiscoveryProposals.CountAsync(p => p.TicketId == t.Id && p.Round == round
+            && p.Status == ProposalStatus.Proposed);
+        var cap = _registry?.GetProjectConfig(t.ProjectKey).Discovery.RecheckRounds ?? DiscoveryConfig.DefaultRecheckRounds;
+        if (to == TicketPhase.NeedsVerdict)
+        {
+            if (round > cap)
+                return $"This is recheck {round}, past the project's {cap} round{(cap == 1 ? "" : "s")} of verdict: "
+                     + "hand off to NeedsReview, where the owner still sees what you proposed.";
+            if (proposed == 0)
+                return "This pass proposed nothing, so there is nothing for a verdict: hand off to NeedsReview.";
+        }
+        else if (proposed > 0 && round <= cap)
+            return $"This pass wrote {proposed} proposal{(proposed == 1 ? "" : "s")}, and recheck {round} of {cap} "
+                 + "still gets the owner's verdict: hand off to NeedsVerdict.";
+        return null;
+    }
+
+    /// <summary>
+    /// When a recheck's hand-off is refused because the other one is right - proposals inside the
+    /// rounds go to the verdict, nothing (or past the rounds) to the sign-off - the phase it should
+    /// have chosen, so the refusal says "go there" rather than "do more and try this again".
+    /// Null when the refusal is about something left undone (a goal unchecked).
+    /// </summary>
+    private async Task<TicketPhase?> RecheckRouteInsteadAsync(Ticket t, TicketPhase to)
+    {
+        if (t.Phase != TicketPhase.Rechecking || to is not (TicketPhase.NeedsVerdict or TicketPhase.NeedsReview)) return null;
+        var other = to == TicketPhase.NeedsVerdict ? TicketPhase.NeedsReview : TicketPhase.NeedsVerdict;
+        return await DiscoveryUnmetAsync(t, other) is null ? other : null;
+    }
+
+    /// <summary>
+    /// Which recheck a discovery is on: the number of times it has entered NeedsRecheck. 0 before
+    /// its first. Read off the transition log, like every other count of where a ticket has been.
+    /// </summary>
+    public Task<int> RecheckRoundAsync(int ticketId) =>
+        _db.PhaseTransitions.CountAsync(p => p.TicketId == ticketId && p.To == TicketPhase.NeedsRecheck);
+
+    /// <summary>When the current recheck began: its last entry into NeedsRecheck. What "this pass" means to a recheck.</summary>
+    public async Task<DateTime?> RecheckPassStartAsync(int ticketId) =>
+        await _db.PhaseTransitions.Where(p => p.TicketId == ticketId && p.To == TicketPhase.NeedsRecheck)
+            .OrderByDescending(p => p.At).Select(p => (DateTime?)p.At).FirstOrDefaultAsync();
+
+    /// <summary>
+    /// The goals recheck <paramref name="round"/> is asked about: every approved proposal that was
+    /// filed as a ticket (Ticket or Bug), except those an earlier round already found met. A goal
+    /// not met, or that could not be told, is asked about again.
+    /// </summary>
+    public async Task<List<int>> RecheckGoalIdsAsync(int ticketId, int round)
+    {
+        var filed = await _db.DiscoveryProposals.Where(p => p.TicketId == ticketId && p.Status == ProposalStatus.Filed
+                && p.FiledTicketId != null && (p.Kind == ProposalKind.Ticket || p.Kind == ProposalKind.Bug))
+            .OrderBy(p => p.Id).Select(p => p.Id).ToListAsync();
+        var met = await _db.DiscoveryGoalChecks.Where(g => g.TicketId == ticketId && g.Round < round && g.Outcome == GoalOutcome.Met)
+            .Select(g => g.ProposalId).Distinct().ToListAsync();
+        return filed.Except(met).ToList();
+    }
+
+    /// <summary>
+    /// Moves a discovery out of AwaitingWork once every ticket its verdicts filed is settled: Done,
+    /// or gone (the owner deleted it, which counts as dropped, not as holding the discovery
+    /// forever). A filed ticket that is Blocked, or anywhere short of Done, holds it. Called when a
+    /// filed ticket reaches Done or is deleted, and whenever the discovery is read, so a missed
+    /// moment is caught up by the next look. Returns whether it moved.
+    /// </summary>
+    public async Task<bool> SettleDiscoveryAsync(int discoveryId)
+    {
+        var d = await _db.Tickets.AsNoTracking().Where(x => x.Id == discoveryId)
+            .Select(x => new { x.Track, x.Phase }).FirstOrDefaultAsync();
+        if (d is null || d.Track != TicketTrack.Discovery || d.Phase != TicketPhase.AwaitingWork) return false;
+        var filed = await _db.DiscoveryProposals.Where(p => p.TicketId == discoveryId && p.FiledTicketId != null)
+            .Select(p => p.FiledTicketId!.Value).ToListAsync();
+        var open = await _db.Tickets.AsNoTracking().Where(x => filed.Contains(x.Id) && x.Phase != TicketPhase.Done)
+            .Select(x => x.Id).ToListAsync();
+        if (open.Count > 0) return false;
+        await TransitionAsync(discoveryId, TicketPhase.NeedsRecheck,
+            $"every ticket it filed is settled ({string.Join(", ", filed.Select(i => $"#{i}"))}) - recheck the product against the approved goals");
+        return true;
     }
 
     // ---- Ticket lifecycle ----
@@ -657,7 +768,8 @@ public class TicketService
         bool requiresSpeculationReview = false, bool requiresImplementationReview = false, string? masterNotes = null,
         bool skipQaTesting = false, TicketPriority priority = TicketPriority.Normal,
         TicketTrack track = TicketTrack.Delivery, ReviewTarget? reviewTarget = null,
-        bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null)
+        bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null,
+        bool requiresRouteReview = false)
     {
         // A ticket's own base is a delivery ticket's: a review ticket is read against the target
         // its pull request names (ReviewTarget.TargetBranch).
@@ -680,6 +792,8 @@ public class TicketService
             BoardOrder = maxOrder + 1,
             RequiresSpeculationReview = requiresSpeculationReview,
             RequiresImplementationReview = requiresImplementationReview,
+            // A discovery's route gate; no other track has a route to look at.
+            RequiresRouteReview = track == TicketTrack.Discovery && requiresRouteReview,
             SkipQaTesting = skipQaTesting,
             SkipClassroomAnalysis = skipClassroomAnalysis,
             Priority = priority,
@@ -717,10 +831,15 @@ public class TicketService
     public async Task<Ticket?> UpdateAsync(int id, string? title, string? description, string? issueKey, string? issueUrl, string? branch, string? projectKey,
         bool? requiresSpeculationReview = null, bool? requiresImplementationReview = null, string? masterNotes = null,
         bool? skipQaTesting = null, TicketPriority? priority = null, bool? shortLoopReview = null,
-        bool? skipClassroomAnalysis = null, bool? fullQaRequired = null, string? needsResources = null)
+        bool? skipClassroomAnalysis = null, bool? fullQaRequired = null, string? needsResources = null,
+        bool? requiresRouteReview = null)
     {
         var t = await _db.Tickets.FindAsync(id);
         if (t is null) return null;
+
+        // The route gate, on a discovery only. Last on the list for the reason the other gates are
+        // out of a positional MCP call's reach: whether the owner looks is the owner's call.
+        if (requiresRouteReview is not null && t.Track == TicketTrack.Discovery) t.RequiresRouteReview = requiresRouteReview.Value;
 
         // Editable between the send-back and the QA pass for the same reason the short loop is.
         if (fullQaRequired is not null) t.FullQaRequired = fullQaRequired.Value;
@@ -958,8 +1077,11 @@ public class TicketService
     {
         var t = await _db.Tickets.FindAsync(id);
         if (t is null) return false;
+        var discoveryId = t.DiscoveryId;
         _db.Tickets.Remove(t);
         await _db.SaveChangesAsync();
+        // A filed ticket the owner deleted is dropped, and dropped counts as settled.
+        if (discoveryId is { } d) await SettleDiscoveryAsync(d);
         return true;
     }
 
@@ -1033,7 +1155,8 @@ public class TicketService
 
             // The Discovery track's artefacts live in tables of their own, so they are counted here.
             if (t.Track == TicketTrack.Discovery && await DiscoveryUnmetAsync(t, to) is { } discoveryUnmet)
-                throw new HandoffRequirementException(discoveryUnmet, t.Phase, to, PhaseMachine.NextPhasesFor(t));
+                throw new HandoffRequirementException(discoveryUnmet, t.Phase, to, PhaseMachine.NextPhasesFor(t),
+                    await RecheckRouteInsteadAsync(t, to));
 
             // Work the owner sent back from review is the pipeline's own miss, and the run that fixes
             // it is the one that knows what it was. Its forward hand-off waits until it has said so.
@@ -1073,6 +1196,17 @@ public class TicketService
         }
 
         var from = t.Phase;
+
+        // A discovery whose owner asked to see its route first is held at the route gate. Chart's
+        // hand-off is NeedsScouting either way, so its skill never needs to know the switch; a
+        // person moving the ticket by hand goes where they said.
+        if (from == TicketPhase.Charting && to == TicketPhase.NeedsScouting && t.RequiresRouteReview && actor != TransitionActor.Human)
+        {
+            to = TicketPhase.NeedsRouteApproval;
+            reason = "the route waits for the owner's approval (route review is on for this discovery)"
+                + (string.IsNullOrWhiteSpace(reason) ? "" : $" - {reason.Trim()}");
+        }
+
         if (to == TicketPhase.Blocked)
         {
             t.PhaseBeforeBlock = from;
@@ -1187,6 +1321,9 @@ public class TicketService
         await _db.SaveChangesAsync();
         WakeFor(to);
         if (to == TicketPhase.Done) _bugTraces?.Enqueue(t.Id);
+
+        // A ticket a discovery filed, settling: the discovery may be waiting on it.
+        if (to == TicketPhase.Done && t.DiscoveryId is { } discoveryId) await SettleDiscoveryAsync(discoveryId);
 
         // Leaving speculation means a plan now exists, built against the linked issue as it stands
         // right now — so this is the moment to record what it was built against. Every later phase

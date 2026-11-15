@@ -83,6 +83,13 @@ export const STATION_OF: Record<Phase, number> = {
   NeedsSifting: 13,
   Sifting: 13,
   NeedsVerdict: 14,
+  // The long tail has no stations of its own: the route gate is the route's, so it stands on Chart,
+  // and the wait for the filed work and the recheck after it are the verdict's consequences, so
+  // they stand on Verdict. The row's own words say which.
+  NeedsRouteApproval: 11,
+  AwaitingWork: 14,
+  NeedsRecheck: 14,
+  Rechecking: 14,
   NeedsReview: 9,
   Done: 10,
   Blocked: 0, // real position comes from phaseBeforeBlock

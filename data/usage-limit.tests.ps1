@@ -21,7 +21,7 @@ foreach ($name in @('Find-RateLimits', 'Save-CodexUsage', 'Get-UsageLimitReset',
     . ([scriptblock]::Create($fn.Extent.Text))
 }
 $DefaultReasoningEffort = 'medium'
-$AgentRoleKeys = @('speculate', 'implement', 'qa-test', 'refine', 'review-pr', 'chart', 'scout', 'sift', 'steward', 'reflection')
+$AgentRoleKeys = @('speculate', 'implement', 'qa-test', 'refine', 'review-pr', 'chart', 'scout', 'sift', 'recheck', 'steward', 'reflection')
 
 $RunDir = Join-Path ([IO.Path]::GetTempPath()) ("whetstone-usage-" + [guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $RunDir | Out-Null

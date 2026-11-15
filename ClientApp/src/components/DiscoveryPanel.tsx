@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TicketDetail } from '../types/tickets';
 import * as api from '../api/discovery';
-import type { Discovery, DiscoveryObservation, DiscoveryProposal, ProposalKind, RejectReason } from '../api/discovery';
+import type { Discovery, DiscoveryObservation, DiscoveryProposal, DiscoveryRoute, GoalCheck, GoalOutcome, ProposalKind, RejectReason } from '../api/discovery';
+import { transitionTicket, updateTicket } from '../api/tickets';
 
 /**
  * A discovery's drawer (docs/discovery-track-plan.md): the route it walked, what it saw, and the
@@ -12,7 +13,21 @@ import type { Discovery, DiscoveryObservation, DiscoveryProposal, ProposalKind, 
  * be reworded, re-kinded, approved, rejected with a reason or snoozed, and Complete files every
  * approved one at once - as Delivery tickets that link back here. There is no tool behind any of
  * these buttons: no run can approve, file or answer anything.
+ *
+ * The long tail (step 2): a route can wait at its gate for the owner's look; once the verdict files
+ * tickets the discovery waits for them, and says which one holds it; then a recheck drives the
+ * product again and says, goal by goal, whether what was approved landed - and its own proposals
+ * come back here for a verdict, a round.
  */
+
+const OUTCOME_STYLE: Record<GoalOutcome, { label: string; cls: string }> = {
+  Met: { label: 'met', cls: 'text-emerald-300' },
+  NotMet: { label: 'not met', cls: 'text-rose-300' },
+  Unclear: { label: 'could not tell', cls: 'text-gray-400' },
+};
+
+/** The phases before a scout has walked the route, when whether the owner looks first can still change. */
+const BEFORE_SCOUT = ['Backlog', 'NeedsCharting', 'Charting', 'NeedsRouteApproval'];
 
 const KIND_STYLE: Record<ProposalKind, { label: string; chip: string }> = {
   Ticket: { label: 'Ticket', chip: 'text-sky-300 border-sky-800/70 bg-sky-950/30' },
@@ -69,8 +84,19 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
 
   if (!d) return error ? <p className="text-[12px] text-rose-300">{error}</p> : null;
 
-  const verdictOpen = t.phase === 'NeedsVerdict';
+  // A verdict is open while the discovery waits for one - and, at the sign-off, on what a recheck
+  // past the rounds proposed, which went there instead of to a verdict.
+  const atSignOff = t.phase === 'NeedsReview';
+  const openFor = (p: DiscoveryProposal) => t.phase === 'NeedsVerdict' || (atSignOff && (p.round ?? 0) > 0);
   const proposals = d.proposals.filter(p => p.status !== 'Dropped');
+  const lateOpen = atSignOff && proposals.some(p => (p.round ?? 0) > 0 && (p.status === 'Proposed' || p.status === 'Approved'));
+  const verdictOpen = t.phase === 'NeedsVerdict' || lateOpen;
+  const rounds = [...new Set(proposals.map(p => p.round ?? 0))].sort((a, b) => b - a);
+  const recheck = d.recheck ?? { round: 0, roundsWithVerdict: 2, goals: [] };
+  const checks = d.goalChecks ?? [];
+  const goalIds = [...new Set([...checks.map(c => c.goalId), ...(['NeedsRecheck', 'Rechecking'].includes(t.phase) ? recheck.goals : [])])];
+  const goals = goalIds.map(id => d.proposals.find(p => p.id === id)).filter(Boolean) as DiscoveryProposal[];
+  const waitingOn = d.filed.filter(f => f.phase !== 'Done');
   const dropped = d.proposals.filter(p => p.status === 'Dropped');
   const undecided = proposals.filter(p => p.status === 'Proposed').length;
   const approved = proposals.filter(p => p.status === 'Approved');
@@ -81,41 +107,78 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
     plural(approved.filter(p => p.kind === 'Slice').length, 'slice briefing', 'written'),
     plural(approved.filter(p => p.kind === 'Decide').length, 'answer', 'recorded'),
   ].filter(Boolean).join(', ');
+  const filesTickets = approved.some(p => p.kind === 'Ticket' || p.kind === 'Bug');
+  const then = atSignOff
+    ? 'the discovery stays at your sign-off: the recheck rounds are spent.'
+    : filesTickets
+    ? 'then this discovery waits for them to be built, and is rechecked.'
+    : 'then this discovery moves to your sign-off.';
 
   return (
     <div className="space-y-4">
       {d.route ? (
-        <div>
-          <Label>Route</Label>
-          <div className="rounded-lg border border-hair bg-black/20 px-3 py-2.5 space-y-2 text-[12px]">
-            <p className="text-gray-200 leading-snug">{d.route.persona}</p>
-            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-500">
-              {d.route.signedInAs && <span>as <span className="text-gray-400">{d.route.signedInAs}</span></span>}
-              {d.route.widths.length > 0 && <span>at {d.route.widths.join(', ')}</span>}
-              {d.route.startCases.length > 0 && <span>from {d.route.startCases.join(', ')}</span>}
-              {d.route.areas.length > 0 && <span>areas {d.route.areas.join(', ')}</span>}
-            </div>
-            <ol className="list-decimal pl-5 space-y-0.5 text-gray-300">
-              {d.route.jobs.map((j, i) => <li key={i}>{j}</li>)}
-            </ol>
-            {d.route.notes && <p className="text-[11px] text-gray-500 leading-snug">{d.route.notes}</p>}
-          </div>
-        </div>
+        <RouteBox ticketId={t.id} route={d.route} gate={t.phase === 'NeedsRouteApproval'} busy={busy} run={run} />
       ) : (
         <p className="text-[12px] text-gray-500">No route yet: the direction is charted into one before anything is scouted.</p>
       )}
 
-      {proposals.length > 0 && (
+      {BEFORE_SCOUT.includes(t.phase) && (
+        <label className="flex items-center gap-2 text-[12px] text-gray-400 cursor-pointer">
+          <input type="checkbox" checked={!!t.requiresRouteReview} disabled={busy}
+            onChange={e => run(() => updateTicket(t.id, { requiresRouteReview: e.target.checked }))} />
+          Review the route before it is scouted
+        </label>
+      )}
+
+      {t.phase === 'AwaitingWork' && (
+        <div className="rounded-lg border border-hair bg-black/25 px-3 py-2.5 text-[12px] space-y-1.5">
+          <div className="text-gray-300">
+            {waitingOn.length === 0
+              ? 'Everything it filed is settled; the recheck is queued.'
+              : `Waiting on ${waitingOn.length} ticket${waitingOn.length === 1 ? '' : 's'} it filed. Once each is done (or deleted), the product is rechecked against what you approved.`}
+          </div>
+          {waitingOn.map(f => (
+            <div key={f.id} className="flex items-baseline gap-2 min-w-0">
+              <span className="font-mono text-gray-500">#{f.id}</span>
+              <span className="text-gray-400 truncate flex-1 min-w-0">{f.title}</span>
+              <span className={`text-[11px] ${f.phase === 'Blocked' ? 'text-rose-300' : 'text-gray-600'}`}>{f.phase === 'Blocked' ? 'blocked - holding this discovery' : f.phase}</span>
+            </div>
+          ))}
+          <button type="button" disabled={busy} onClick={() => run(() => transitionTicket(t.id, 'NeedsReview', 'the owner skipped the recheck'))}
+            className="text-[11px] text-gray-600 hover:text-gray-400 transition-colors">skip the recheck and sign off</button>
+        </div>
+      )}
+
+      {goals.length > 0 && (
         <div>
-          <Label>Proposals</Label>
-          <div className="space-y-2.5">
-            {proposals.map(p => (
-              <ProposalCard key={p.id} ticketId={t.id} p={p} obs={p.observationIds.map(i => obsById.get(i)).filter(Boolean) as DiscoveryObservation[]}
-                open={verdictOpen} busy={busy} run={run} />
-            ))}
+          <Label>
+            {['NeedsRecheck', 'Rechecking'].includes(t.phase)
+              ? `Recheck ${Math.max(recheck.round, 1)} · did each approved goal land`
+              : 'Did each approved goal land'}
+          </Label>
+          <ul className="space-y-2 text-[12px]">
+            {goals.map(g => <GoalRow key={g.id} goal={g} checks={checks.filter(c => c.goalId === g.id)} />)}
+          </ul>
+          <div className="mt-1.5 text-[11px] text-gray-600">
+            {recheck.roundsWithVerdict === 0
+              ? 'Rechecks on this project report to your sign-off.'
+              : `${recheck.roundsWithVerdict} recheck${recheck.roundsWithVerdict === 1 ? '' : 's'} on this project come back to you for a verdict; after that, what they find waits at your sign-off.`}
           </div>
         </div>
       )}
+
+      {rounds.map(r => (
+        <div key={r}>
+          <Label>{r === 0 ? (rounds.length > 1 ? 'Proposals from the sift' : 'Proposals') : `Proposals from recheck ${r}`}</Label>
+          <div className="space-y-2.5">
+            {proposals.filter(p => (p.round ?? 0) === r).map(p => (
+              <ProposalCard key={p.id} ticketId={t.id} p={p} obs={p.observationIds.map(i => obsById.get(i)).filter(Boolean) as DiscoveryObservation[]}
+                goal={p.goalId ? d.proposals.find(x => x.id === p.goalId) : undefined}
+                open={openFor(p)} busy={busy} run={run} />
+            ))}
+          </div>
+        </div>
+      ))}
 
       {verdictOpen && (
         <div className="rounded-lg border border-hair bg-black/25 px-3 py-2.5 flex items-center gap-3 flex-wrap">
@@ -123,7 +186,9 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
             {undecided > 0
               ? `${undecided} still to decide. Complete files every approved proposal at once.`
               : outcome
-              ? `Complete: ${outcome}, then this discovery moves to your sign-off.`
+              ? `Complete: ${outcome}, ${then}`
+              : atSignOff
+              ? 'Nothing approved. Complete records that; the discovery stays at your sign-off.'
               : 'Nothing approved. Complete moves this discovery to your sign-off with nothing filed.'}
           </span>
           <button type="button" disabled={busy || undecided > 0} onClick={() => run(() => api.complete(t.id))}
@@ -153,13 +218,13 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
       {dropped.length > 0 && (
         <details>
           <summary className="cursor-pointer text-[11px] text-gray-500 hover:text-gray-300 transition-colors">
-            Dropped by the sift ({dropped.length})
+            Dropped ({dropped.length})
           </summary>
           <ul className="mt-2 space-y-1 text-[12px]">
             {dropped.map(p => (
               <li key={p.id} className="flex items-baseline gap-2 text-gray-400 leading-snug">
                 <span className="flex-1 min-w-0">{p.title} <span className="text-gray-600">· {p.dropReason}</span></span>
-                {verdictOpen && (
+                {t.phase === 'NeedsVerdict' && (
                   <button type="button" disabled={busy} onClick={() => run(() => api.restore(p.id))}
                     title="Promote it to a proposal, to decide with the rest" className={`${btn} flex-none`}>Restore</button>
                 )}
@@ -172,7 +237,7 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
       {d.observations.length > 0 && (
         <details>
           <summary className="cursor-pointer text-[11px] text-gray-500 hover:text-gray-300 transition-colors">
-            Everything the scout logged ({d.observations.length} observations, {d.visits.length} pages)
+            Everything {recheck.round > 0 ? 'the scout and rechecks' : 'the scout'} logged ({d.observations.length} observations, {d.visits.length} pages)
           </summary>
           <ul className="mt-2 space-y-2">
             {d.observations.map(o => <ObservationRow key={o.id} ticketId={t.id} o={o} />)}
@@ -185,6 +250,102 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
 
 function plural(n: number, noun: string, verb: string) {
   return n === 0 ? '' : `${n} ${noun}${n === 1 ? '' : 's'} ${verb}`;
+}
+
+function RouteBox({ ticketId, route, gate, busy, run }: {
+  ticketId: number;
+  route: DiscoveryRoute;
+  gate: boolean;
+  busy: boolean;
+  run: (fn: () => Promise<unknown>) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [persona, setPersona] = useState(route.persona);
+  const [jobs, setJobs] = useState(route.jobs.join('\n'));
+  const [signedInAs, setSignedInAs] = useState(route.signedInAs ?? '');
+  const [widths, setWidths] = useState(route.widths.join(', '));
+  useEffect(() => {
+    setPersona(route.persona); setJobs(route.jobs.join('\n')); setSignedInAs(route.signedInAs ?? ''); setWidths(route.widths.join(', '));
+  }, [route.persona, route.jobs, route.signedInAs, route.widths]);
+  const field = 'w-full text-[12px] bg-black/40 border border-hair rounded px-2 py-1.5 text-gray-200 focus:outline-none focus:border-gray-600';
+
+  const save = () => run(async () => {
+    await api.editRoute(ticketId, {
+      persona: persona.trim(), jobs: jobs.split('\n').map(j => j.trim()).filter(Boolean),
+      signedInAs: signedInAs.trim(), widths: widths.split(',').map(w => w.trim()).filter(Boolean),
+    });
+    setEditing(false);
+  });
+
+  return (
+    <div>
+      <Label>{gate ? 'Route · waiting for your look' : 'Route'}</Label>
+      <div className={`rounded-lg border px-3 py-2.5 space-y-2 text-[12px] ${gate ? 'border-violet-800/60 bg-violet-950/10' : 'border-hair bg-black/20'}`}>
+        {editing ? (
+          <div className="space-y-1.5">
+            <textarea value={persona} onChange={e => setPersona(e.target.value)} rows={2} className={field} placeholder="Who the person is" />
+            <textarea value={jobs} onChange={e => setJobs(e.target.value)} rows={4} className={field} placeholder="Jobs, one per line" />
+            <div className="flex gap-1.5 max-sm:flex-col">
+              <input value={signedInAs} onChange={e => setSignedInAs(e.target.value)} className={`${field} min-w-0`} placeholder="Signed in as" />
+              <input value={widths} onChange={e => setWidths(e.target.value)} className={`${field} min-w-0`} placeholder="Widths: 1440x900, 390x844" />
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" disabled={busy || !persona.trim() || !jobs.trim()} onClick={save} className={btn}>Save</button>
+              <button type="button" onClick={() => setEditing(false)} className="text-[11px] text-gray-600 hover:text-gray-400 transition-colors">Cancel</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <p className="text-gray-200 leading-snug">{route.persona}</p>
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-500">
+              {route.signedInAs && <span>as <span className="text-gray-400">{route.signedInAs}</span></span>}
+              {route.widths.length > 0 && <span>at {route.widths.join(', ')}</span>}
+              {route.startCases.length > 0 && <span>from {route.startCases.join(', ')}</span>}
+              {route.areas.length > 0 && <span>areas {route.areas.join(', ')}</span>}
+              {route.ownerEdited && <span>edited by you</span>}
+            </div>
+            <ol className="list-decimal pl-5 space-y-0.5 text-gray-300">
+              {route.jobs.map((j, i) => <li key={i}>{j}</li>)}
+            </ol>
+            {route.notes && <p className="text-[11px] text-gray-500 leading-snug">{route.notes}</p>}
+          </>
+        )}
+        {gate && !editing && (
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            <button type="button" disabled={busy} onClick={() => run(() => api.approveRoute(ticketId))}
+              className="orbit-primary btn-act px-3 py-1.5 text-[12px] bg-blue-500 text-void disabled:bg-gray-700 disabled:text-gray-500">
+              Approve route
+            </button>
+            <button type="button" disabled={busy} onClick={() => setEditing(true)} className={btn}>Edit</button>
+            <button type="button" disabled={busy} onClick={() => run(() => transitionTicket(ticketId, 'NeedsCharting', 'the owner asked for the direction to be charted again'))}
+              className="text-[11px] text-gray-600 hover:text-gray-400 transition-colors">chart again</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GoalRow({ goal, checks }: { goal: DiscoveryProposal; checks: GoalCheck[] }) {
+  const latest = checks[checks.length - 1];
+  return (
+    <li className="rounded-lg border border-hair bg-black/20 px-3 py-2">
+      <div className="flex items-baseline gap-2 min-w-0">
+        <span className="text-gray-200 leading-snug flex-1 min-w-0">{goal.title}</span>
+        {goal.filedTicketId && <span className="font-mono text-[11px] text-gray-600">#{goal.filedTicketId}</span>}
+        <span className={`text-[11px] ${latest ? OUTCOME_STYLE[latest.outcome].cls : 'text-gray-600'}`}>
+          {latest ? OUTCOME_STYLE[latest.outcome].label : 'not checked yet'}
+        </span>
+      </div>
+      {checks.map(c => (
+        <div key={c.id} className="mt-1 text-[11px] text-gray-500 leading-snug">
+          <span className="text-gray-600">recheck {c.round} · </span>
+          <span className={OUTCOME_STYLE[c.outcome].cls}>{OUTCOME_STYLE[c.outcome].label}</span>
+          <span> - {c.note}</span>
+        </div>
+      ))}
+    </li>
+  );
 }
 
 function ObservationRow({ ticketId, o }: { ticketId: number; o: DiscoveryObservation }) {
@@ -209,10 +370,12 @@ function ObservationRow({ ticketId, o }: { ticketId: number; o: DiscoveryObserva
   );
 }
 
-function ProposalCard({ ticketId, p, obs, open, busy, run }: {
+function ProposalCard({ ticketId, p, obs, goal, open, busy, run }: {
   ticketId: number;
   p: DiscoveryProposal;
   obs: DiscoveryObservation[];
+  /** For a recheck's fix-up: the approved goal it fixes up. */
+  goal?: DiscoveryProposal;
   open: boolean;
   busy: boolean;
   run: (fn: () => Promise<unknown>) => Promise<void>;
@@ -250,6 +413,12 @@ function ProposalCard({ ticketId, p, obs, open, busy, run }: {
       <div className="flex items-baseline gap-2 flex-wrap">
         <span className="font-mono text-[11px] text-gray-600">{p.rank}</span>
         <span className={`text-[10px] uppercase tracking-wide rounded border px-1.5 ${style.chip}`}>{style.label}</span>
+        {p.recheckKind && (
+          <span className={`text-[10px] uppercase tracking-wide rounded border px-1.5 ${p.recheckKind === 'FixUp' ? 'text-amber-300 border-amber-800/70' : 'text-gray-400 border-hair'}`}
+            title={p.recheckKind === 'FixUp' && goal ? `Fixes up: ${goal.title}` : undefined}>
+            {p.recheckKind === 'FixUp' ? 'fix-up' : 'new'}
+          </span>
+        )}
         {p.size && <span className="text-[11px] text-gray-600">{p.size}</span>}
         {p.edited && <span className="text-[11px] text-gray-600">edited</span>}
         <span className="flex-1" />
@@ -281,6 +450,9 @@ function ProposalCard({ ticketId, p, obs, open, busy, run }: {
       ) : (
         <>
           <div className="mt-1.5 text-[13px] text-gray-100 leading-snug">{p.title}</div>
+          {p.recheckKind === 'FixUp' && goal && (
+            <div className="mt-0.5 text-[11px] text-gray-500 leading-snug">fixes up: {goal.title}</div>
+          )}
           {p.why && <div className="mt-1 text-[12px] text-gray-400 leading-snug">{p.why}</div>}
           <div className="mt-1.5 text-[12px] text-gray-300 leading-snug whitespace-pre-wrap">{p.body}</div>
           {p.workItems.length > 0 && (

@@ -32,7 +32,10 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     string? BaseBranch = null,
     // The name its branch will have, instead of the board's default (BranchNaming). Blank is the
     // default. Refused when another open ticket of the project has it, or a writable repo already does.
-    string? Branch = null);
+    string? Branch = null,
+    // A discovery's route gate (Ticket.RequiresRouteReview). Absent = the project's
+    // discovery.reviewRoute, off unless it says so. Refused on any other track.
+    bool? RequiresRouteReview = null);
 
 /// <summary>The owner setting a ticket's own base before it has a branch. Blank is the project's base.</summary>
 public record SetBaseBranchRequest(string? BaseBranch);
@@ -58,7 +61,9 @@ public record UpdateTicketRequest(string? Title, string? Description, string? Is
     bool? SkipQaTesting = null, string? Priority = null, bool? ShortLoopReview = null,
     bool? SkipClassroomAnalysis = null, bool? FullQaRequired = null,
     // The whole list of what this ticket's testing needs whatever its branch changes; [] clears it.
-    string[]? Needs = null);
+    string[]? Needs = null,
+    // A discovery's route gate; refused once its route has been walked, since there is nothing left to look at first.
+    bool? RequiresRouteReview = null);
 public record TransitionRequest(string ToPhase, string? Reason);
 public record SetBranchRequest(string? Branch, string? WorktreePath);
 public record OrderRequest(double BoardOrder);
@@ -594,6 +599,8 @@ public static class TicketEndpoints
                     repoType = cfg.RepoType,
                     // What a new ticket's "skip classroom analysis" box starts as for this project.
                     skipClassroomAnalysisByDefault = cfg.SkipClassroomAnalysisByDefault,
+                    // What a new discovery's route-review box starts as (discovery.reviewRoute).
+                    reviewRouteByDefault = cfg.Discovery.ReviewRoute,
                     // What a ticket's testing can ask for whatever its branch changes (Ticket.NeedsResources):
                     // the resources this project takes only for some branches. Empty when there are none.
                     askableResources = cfg.AskableResources,
@@ -960,6 +967,8 @@ public static class TicketEndpoints
                 if (!registry.GetProjectConfig(projectKey).Discovery.CanScout)
                     return Results.BadRequest(new { error = "This project has no discovery.siteUrl in its project.defaults.json, so a scout would have no product to use." });
             }
+            else if (req.RequiresRouteReview == true)
+                return Results.BadRequest(new { error = "Only a discovery has a route to review." });
 
             // Title required only for standalone tickets; a linked one pulls it from the tracker.
             if (issueKey is null && string.IsNullOrWhiteSpace(title))
@@ -989,7 +998,8 @@ public static class TicketEndpoints
                 req.RequiresSpeculationReview ?? false, req.RequiresImplementationReview ?? false, req.MasterNotes,
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,
-                ownBase, branch);
+                ownBase, branch,
+                requiresRouteReview: req.RequiresRouteReview ?? registry.GetProjectConfig(projectKey).Discovery.ReviewRoute);
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             // Photographed now, while it waits in its queue, so the first run already has the pictures.
             captures.Enqueue(t.Id);
@@ -1037,6 +1047,16 @@ public static class TicketEndpoints
                     : (string.IsNullOrWhiteSpace(issueUrl) ? DeriveIssueUrl(tracker, resulting) : issueUrl);
 
             string? needs = null;
+            // The route gate decides whether the owner looks before a scout walks, so it is settable
+            // only while there is still a walk ahead of the route.
+            if (req.RequiresRouteReview is not null)
+            {
+                if (cur.Track != TicketTrack.Discovery)
+                    return Results.BadRequest(new { error = "Only a discovery has a route to review." });
+                if (cur.Phase is not (TicketPhase.Backlog or TicketPhase.NeedsCharting or TicketPhase.Charting or TicketPhase.NeedsRouteApproval))
+                    return Results.BadRequest(new { error = "This discovery's route has already been walked; route review is set before the scout." });
+            }
+
             if (req.Needs is not null)
             {
                 var (v, err) = registry.GetProjectConfig(req.ProjectKey ?? cur.ProjectKey).NeedsFrom(req.Needs);
@@ -1050,7 +1070,7 @@ public static class TicketEndpoints
                 req.IssueKey is null ? null : (normalized ?? ""),
                 issueUrl, req.Branch, req.ProjectKey,
                 req.RequiresSpeculationReview, req.RequiresImplementationReview, req.MasterNotes, req.SkipQaTesting,
-                priority, req.ShortLoopReview, req.SkipClassroomAnalysis, req.FullQaRequired, needs);
+                priority, req.ShortLoopReview, req.SkipClassroomAnalysis, req.FullQaRequired, needs, req.RequiresRouteReview);
             if (t is null) return Results.NotFound();
             var r = await resolver.ResolveAsync(t);
             return Results.Ok(TicketMapper.ToDetail(t, r.Title, r.Description, r.Unavailable, tracker: tracker));
