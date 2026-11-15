@@ -48,6 +48,8 @@ public sealed class ReconRoutesTests : IDisposable
                            { "name": "Billing", "pages": ["/billing"], "code": ["src/billing"] } ],
                 "roles": ["member", "admin"] } }
             """);
+        Project("delta", $$"""{ "displayName": "Delta", "projectPath": {{path}}, "baseBranch": "main", "tracks": ["Delivery", "Discovery"], "discovery": { "siteUrl": "http://localhost:53590/" } }""");
+        Project("echo", $$"""{ "displayName": "Echo", "projectPath": {{path}}, "baseBranch": "main", "tracks": ["Delivery", "Discovery"], "discovery": { } }""");
         Project("bravo", $$"""{ "displayName": "Bravo", "projectPath": {{path}}, "baseBranch": "main", "discovery": { } }""");
         Project("charlie", $$"""{ "displayName": "Charlie", "projectPath": {{path}}, "baseBranch": "main" }""");
         File.WriteAllText(Path.Combine(data, "config.defaults.json"), """{ "baseBranch": "main" }""");
@@ -110,11 +112,16 @@ public sealed class ReconRoutesTests : IDisposable
         var r = Service(db);
 
         var before = r.Projects();
-        Assert.Equal(["alpha", "bravo"], before.Select(p => p.Key));
+        Assert.Equal(["alpha", "bravo", "delta", "echo"], before.Select(p => p.Key));
         Assert.All(before, p => Assert.False(p.Built));
         Assert.Equal(["Events", "Billing"], before[0].Areas.Select(a => a.Name));
         Assert.Equal(["member", "admin"], before[0].Roles);
         Assert.Empty(before[1].Areas);
+        // alpha can scout but has not switched the Discovery track on; bravo has no siteUrl either.
+        Assert.Contains("tracks", before[0].CannotFile);
+        Assert.Contains("tracks", before[1].CannotFile);
+        Assert.Null(before[2].CannotFile);
+        Assert.Contains("siteUrl", before[3].CannotFile);
 
         Publish("mart_recon_projects", """
             SELECT 'alpha' AS project_key, 0 AS project_ordinal, 1 AS area_count, 2 AS role_count,

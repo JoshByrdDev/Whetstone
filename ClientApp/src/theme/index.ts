@@ -9,6 +9,8 @@ export type { Theme, TierName, Glass, Backdrop, BackdropLayer, Motion, Shape, Ve
 export type { Mascot, MascotProps, MascotPalette, Mood } from './mascot';
 export { agentPalette } from './mascot';
 export { fade, deepen, lighten } from './mix';
+export { RECON_STATE, reconState } from './recon';
+export type { ReconState, ReconStateToken } from './recon';
 export { THEMES, DEFAULT_THEME, resolveTheme } from './registry';
 export type { ThemePref, ThemeMode, Weekday } from './preference';
 export { WEEKDAYS, WEEKDAY_LABEL, weekOf, resolvePref, nextTheme } from './preference';

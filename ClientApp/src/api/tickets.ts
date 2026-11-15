@@ -61,6 +61,8 @@ export const createTicket = (body: {
   // Delivery only: the name its branch is created under, instead of the board's default. Refused
   // when another open ticket of the project or a writable repo already has it.
   branch?: string;
+  // Discovery only: the Recon suggestion it was filed from (Ticket.ReconFrom), set by Scout this.
+  reconFrom?: string;
 }) => fetch('/api/tickets', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);
 
 // The name a ticket filed now would get (the new-ticket form's placeholder).

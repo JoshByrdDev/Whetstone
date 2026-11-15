@@ -43,10 +43,11 @@ public sealed class ReconService
     /// One project the tab can show: what its config says now, and what the marts were last built
     /// from. <see cref="Built"/> false is "Recon has not been built yet"; <see cref="BuiltAreas"/>
     /// differing from the config's count is a refresh behind an edit to the areas.
+    /// <see cref="CannotFile"/> says why Scout this cannot file a discovery here, or is null when it can.
     /// </summary>
     public sealed record ProjectView(
         string Key, string DisplayName, IReadOnlyList<AreaView> Areas, IReadOnlyList<string> Roles,
-        bool Built, int? BuiltAreas, int? BuiltRoles, object? BuiltAt, object? InputsAt, bool? HistoryOk, object? Repos);
+        bool Built, int? BuiltAreas, int? BuiltRoles, object? BuiltAt, object? InputsAt, bool? HistoryOk, object? Repos, string? CannotFile);
 
     /// <summary>Every enabled project with a <c>discovery</c> block, in the board's order. Empty hides the tab.</summary>
     public IReadOnlyList<ProjectView> Projects()
@@ -65,10 +66,22 @@ public sealed class ReconService
                 built?.GetValueOrDefault("areaCount") is { } ac ? Convert.ToInt32(ac) : null,
                 built?.GetValueOrDefault("roleCount") is { } rc ? Convert.ToInt32(rc) : null,
                 built?.GetValueOrDefault("builtAt"), built?.GetValueOrDefault("inputsAt"),
-                built?.GetValueOrDefault("historyOk") as bool?, built?.GetValueOrDefault("repos")));
+                built?.GetValueOrDefault("historyOk") as bool?, built?.GetValueOrDefault("repos"),
+                CannotFile(cfg)));
         }
         return list;
     }
+
+    /// <summary>
+    /// Why a discovery cannot be filed on this project from the tab - the create route's own
+    /// refusals, said before the owner fills the form in rather than after.
+    /// </summary>
+    public static string? CannotFile(ProjectConfig cfg) =>
+        !cfg.Tracks.Contains(TicketTrack.Discovery)
+            ? "Discovery is not one of this project's tracks: add it to \"tracks\" in its project.defaults.json to file a discovery from here."
+        : !cfg.Discovery.CanScout
+            ? "This project's discovery block has no siteUrl, so a scout would have no product to use."
+        : null;
 
     /// <summary>The project, if the tab can show it; refused as not found otherwise.</summary>
     private ProjectConfig Project(string project)

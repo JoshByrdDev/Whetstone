@@ -16,18 +16,35 @@ const START_PHASES: Record<Track, Phase[]> = {
   Discovery: ['NeedsCharting', 'Backlog'],
 };
 
+/**
+ * What the form opens already filled in with. Recon's Scout this (docs/recon-tab-plan.md): a
+ * discovery on one project with the suggestion's direction, a one-line note saying where it came
+ * from, and the suggestion's key, which the ticket keeps as its ReconFrom. The owner edits any of
+ * it and files through the same create route as every other ticket.
+ */
+export interface TicketPrefill {
+  projectKey: string;
+  track: Track;
+  title?: string;
+  description?: string;
+  /** Said under the description, not sent: where this ticket's wording came from. */
+  note?: string;
+  reconFrom?: string;
+}
+
 export function CreateTicketModal({
-  projects, onClose, onCreated,
+  projects, onClose, onCreated, prefill,
 }: {
   projects: ProjectInfo[];
   onClose: () => void;
   onCreated: (id: number) => void;
+  prefill?: TicketPrefill;
 }) {
-  const [projectKey, setProjectKey] = useState(projects[0]?.key ?? '');
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
+  const [projectKey, setProjectKey] = useState(prefill?.projectKey ?? projects[0]?.key ?? '');
+  const [title, setTitle] = useState(prefill?.title ?? '');
+  const [description, setDescription] = useState(prefill?.description ?? '');
   const [issueKey, setIssueKey] = useState('');
-  const [phase, setPhase] = useState<Phase>('Backlog');
+  const [phase, setPhase] = useState<Phase>(prefill ? START_PHASES[prefill.track][0] : 'Backlog');
   const [priority, setPriority] = useState<Priority>(DEFAULT_PRIORITY);
   // All three off by default — Claude runs the pipeline end to end unless asked to stop, and QA
   // runs in full unless the ticket is small enough to be worth only a code review.
@@ -56,7 +73,7 @@ export function CreateTicketModal({
   // Which pipeline this ticket runs on. Chosen HERE and only here: nothing moves a ticket between
   // tracks afterwards, because one that switched mid-flight would be sitting in a phase its new
   // track does not have.
-  const [track, setTrack] = useState<Track>('Delivery');
+  const [track, setTrack] = useState<Track>(prefill?.track ?? 'Delivery');
   const [sourceBranch, setSourceBranch] = useState('');
   const [targetBranch, setTargetBranch] = useState('');
   const [prUrl, setPrUrl] = useState('');
@@ -251,6 +268,8 @@ export function CreateTicketModal({
         // This one DOES carry over. On a review ticket it means the same thing it always did -
         // read the diff, do not stand the app up.
         ...(discovering ? { track, requiresRouteReview: routeReview } : { skipQaTesting: skipQa }),
+        // Only while it is still the project and track the suggestion was for.
+        ...(discovering && prefill?.reconFrom && projectKey === prefill.projectKey ? { reconFrom: prefill.reconFrom } : {}),
         priority,
         masterNotes: masterNotes.trim() || undefined,
         // Delivery only: a review ticket is read against its pull request's target.
@@ -521,6 +540,9 @@ export function CreateTicketModal({
                 placeholder={discovering
                   ? 'Who to be and what they came to do, written as a job: "plan your month of events as someone in a nearby town".'
                   : 'Optional details / context'} />
+              {discovering && prefill?.note && projectKey === prefill.projectKey && (
+                <div className="mt-1 text-[11px] text-gray-500">{prefill.note}</div>
+              )}
             </Labeled>
           </>
         )}
