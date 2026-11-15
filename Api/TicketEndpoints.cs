@@ -905,7 +905,10 @@ public static class TicketEndpoints
             if (!registry.IsEnabled(projectKey))
                 return Results.BadRequest(new { error = $"Unknown or missing project '{projectKey}'" });
 
-            var phase = TicketPhase.Backlog;
+            // A bug filed without a phase goes straight into the queue, not Backlog: a bug is fixed,
+            // not scheduled, and one parked in Backlog waits for a person who may not know it is there.
+            var phase = req.IsBug == true && (req.Track is null || req.Track.Equals("Delivery", StringComparison.OrdinalIgnoreCase))
+                ? TicketPhase.NeedsSpeculation : TicketPhase.Backlog;
             if (!string.IsNullOrEmpty(req.Phase) && !Enum.TryParse(req.Phase, true, out phase))
                 return Results.BadRequest(new { error = $"Unknown phase '{req.Phase}'" });
 

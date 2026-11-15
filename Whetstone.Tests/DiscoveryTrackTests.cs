@@ -314,7 +314,9 @@ public class DiscoveryTrackTests : IDisposable
         var filed = await db.Tickets.Include(t => t.WorkItems).Where(t => t.DiscoveryId == id).OrderBy(t => t.Id).ToListAsync();
         Assert.Equal(2, filed.Count);
         Assert.All(filed, t => Assert.Equal(TicketTrack.Delivery, t.Track));
-        Assert.All(filed, t => Assert.Equal(TicketPhase.Backlog, t.Phase));
+        // A ticket waits in Backlog for the owner to order it; a bug goes straight into the queue.
+        Assert.Equal(TicketPhase.Backlog, filed[0].Phase);
+        Assert.Equal(TicketPhase.NeedsSpeculation, filed[1].Phase);
         Assert.Equal("A month view of events", filed[0].Title);
         Assert.Equal(2, filed[0].WorkItems.Count);
         Assert.False(filed[0].IsBug);

@@ -396,7 +396,10 @@ public class DiscoveryService
                 case ProposalKind.Bug:
                     var body = p.Body + (string.IsNullOrWhiteSpace(p.Why) ? "" : $"\n\n**Why:** {p.Why}")
                         + $"\n\n_Filed from discovery #{ticketId} ({(t.Title ?? "").Trim()}), proposal #{p.Id}._";
-                    var nt = await _tickets.CreateAsync(t.ProjectKey, p.Title, body, null, null, TicketPhase.Backlog,
+                    // A bug goes straight into the queue, as every bug filed is: it was seen, and the
+                    // owner approved it. A ticket waits in Backlog for the owner to put it in order.
+                    var nt = await _tickets.CreateAsync(t.ProjectKey, p.Title, body, null, null,
+                        p.Kind == ProposalKind.Bug ? TicketPhase.NeedsSpeculation : TicketPhase.Backlog,
                         priority: t.Priority, skipClassroomAnalysis: cfg.SkipClassroomAnalysisByDefault);
                     if (p.Kind == ProposalKind.Bug) await _tickets.SetBugAsync(nt.Id, true);
                     foreach (var w in p.WorkItems) await _tickets.AddWorkItemAsync(nt.Id, w);

@@ -1959,15 +1959,17 @@ function ConvertFrom-ReflectOutput {
     return , $items
 }
 
-# A bug reflection noticed in passing, filed as a ticket in the Backlog.
+# A bug reflection noticed in passing, filed as a ticket in Needs Speculation.
 #
 # Not a note: a bug written into the notes store is read by every later run as how the code is meant
 # to behave, and fixed by nobody. One project's store held a quarter bug reports - privacy and money
 # among them - none of which ever became a ticket. And not the Suggestions queue either: that queue's
 # one action is "apply", which hands its items to an agent that edits skills and prompts, so a code
-# defect there is in front of the wrong reader with the wrong button. A Backlog ticket is in front of
-# the owner, on the board, where bugs are triaged anyway - and nothing claims a Backlog ticket, so it
-# costs no run until a person moves it on. It is marked a bug so a fix of it is traced like any other.
+# defect there is in front of the wrong reader with the wrong button. A ticket is on the board, where
+# bugs are triaged anyway. It goes straight to Needs Speculation rather than Backlog: parked in
+# Backlog, a defect waited for a person who did not know it was there, and the first run on it is
+# the check its description asks for - confirmed, or blocked as wrong or already fixed for the owner
+# to close. It is marked a bug so a fix of it is traced like any other.
 #
 # Returns the new ticket's id, or $null when the board could not be reached or refused it.
 function New-DefectTicket {
@@ -1980,7 +1982,7 @@ function New-DefectTicket {
         "(reflection key ``$Key``). Nobody has checked it yet: confirm it before planning a fix, and delete " +
         "this ticket if it is wrong."
     $body = @{
-        projectKey = $ProjectKey; title = $title; description = $desc; phase = 'Backlog'
+        projectKey = $ProjectKey; title = $title; description = $desc; phase = 'NeedsSpeculation'
         isBug = $true; skipClassroomAnalysis = $true
     }
     # Based where the ticket it was seen on is - its own base, else its open slice - which the board
