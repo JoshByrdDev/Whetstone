@@ -321,7 +321,8 @@ this.) So retention is part of the video step, not a clean-up for later:
    **Built** - see "Step 2 as built".
 3. **Video.** Recording, chapters, clips on proposals, ffmpeg in setup, and the retention above -
    the video and its pruning ship together. **Built** - see "Step 3 as built".
-4. **Taste.** The taste file and its fold, once there are verdicts to fold.
+4. **Taste.** The taste file and its fold, once there are verdicts to fold. **Built** - see
+   "Step 4 as built".
 5. **Measuring.** The Discovery marts and their Metrics section, once step 1 has produced a few
    weeks of verdicts. What they read is recorded from step 1 on ("What is measured").
 
@@ -407,7 +408,7 @@ What step 1 settled, and where it stopped short of the design above:
   model, provider, effort and skill hash without a column of its own. A proposal names its
   observations; a filed ticket carries `DiscoveryId` and its proposal `FiledTicketId`; a Bug
   proposal files with `IsBug`. `VideoAt` is on the observation, empty until step 3 records video.
-  The taste file's version waits for step 4.
+  The taste file's version is recorded from step 4 on (`DiscoveryTasteRead`).
 
 ## Step 2 as built
 
@@ -534,7 +535,91 @@ What step 3 settled, and where it departed from or fell short of the design abov
   played in the drawer. Complete removed the rejected clip (410 after) and kept its still and the
   approved clip. The Setup check row read ok.
 
+## Step 4 as built
+
+What step 4 settled, and where it departed from or fell short of the design above:
+
+- **The file** is `data/projects/<key>/discovery/taste.md`, in the project folder and its own repo
+  (`DashboardPaths.DiscoveryTasteFile`). It has two sections under a short preamble: **The owner's**,
+  which no fold changes, and **Learned**, which each fold rewrites. A file the owner wrote without the
+  headings is all theirs; a fold adds its section after it. That split is the answer to "which changes
+  need the owner": a fold may only *suggest* a change to the owner's section (after a
+  `SUGGESTIONS FOR THE OWNER:` line in its answer), and the panel shows the suggestion beside the
+  file for the owner to make or leave.
+- **What counts toward a fold** is wider than the plan's "every N rejections": the brief asked for
+  verdicts, so the count is *proposals whose verdict teaches* - approved (edited or not), rejected as
+  generic or wrong, or restored from the dropped list - among those whose verdict is closed (decided,
+  and the discovery no longer at `NeedsVerdict`, where a change of mind is a click away).
+  `discovery.tasteFoldEvery` (default 10, 1..100) is that count. Not now, a snooze and already decided
+  ride along in the fold's material marked "teaches nothing", so they are never folded twice, and are
+  not counted. *New to me*, edits (with their distance and a changed kind or title) and changes of
+  mind are told to the fold beside the verdict they belong to. Already decided is listed on the panel
+  as "a decision the register may be missing"; the verdict does not yet offer to record it in the
+  steward's register (below).
+- **Who runs the fold: a worker run, after it is done**, beside reflection - the notes store's
+  maintenance is the precedent, for the reasons it gives: the reflection command (provider, cheap
+  model, effort) and the worktree are already set up, it is outside the run's measured window, and it
+  is board-host only (`-not $onHost`) and skipped after a usage limit. Any run of the project carries
+  it, not only a discovery's. `Invoke-DiscoveryTasteFold` in `data/worker-discovery.ps1` asks the board
+  (`POST /api/discovery/projects/<key>/taste/fold/begin`), and only when one is due runs the model on
+  the prompt the board wrote, then hands the answer back (`.../fold/finish`). The board starts no model
+  for it, so a QA copy needs nothing in `QaIsolation`'s table: the copy's heartbeat is refused, and
+  with it every fold.
+- **The board owns the file.** Begin takes a claim (15 minutes, kept in `DiscoveryTasteState`, so two
+  runs finishing together fold once) and remembers the file's hash and the events it handed out.
+  Finish checks the answer (`ParseReply`: not empty, at least one `- ` rule, no headings, at most 40
+  non-blank lines and 6000 characters, fences and a stray `## Learned` stripped), refuses it if the file
+  changed since begin, writes the Learned section with the owner's section as it is on disk, commits
+  **that one file** in the project folder's repo with a message naming the verdicts and discoveries
+  (`ProjectRepo.CommitFile`; a stand-in identity when git has none, as the baseline commit does), and
+  appends a `DiscoveryTasteVersion`. A refused answer or a failed run folds nothing, lets the claim go,
+  and says so on the panel ("Not folded: ..."); the verdicts wait for the next run. A folder that is
+  not a repo still gets the file, and the version says it is not committed.
+- **Versions are by content.** A version is the file's SHA-256 with line ends made LF. Whenever the
+  board reads the file and finds it changed outside - an edit in the folder, a `git revert` of a fold -
+  it records an `Outside` version first, with the commit when the file on disk is a commit's, so what
+  a run read always has a number. Sources: `Fold`, `Owner`, `Revert`, `Outside`; a fold keeps the
+  verdict events it took in (`EventIds`), how many verdicts taught, its suggestions, and the ticket
+  whose run it rode on. Versions are appended, never rewritten, and keep their whole text.
+- **The version each run read** is a `DiscoveryTasteRead` row (run id, round, phase, version), written
+  when a Sifting or Rechecking run calls `get_discovery`, which now hands it `taste` (text, version, and
+  a note on how to apply it, or a plain "no taste file yet" with no verdicts folded). One row per run,
+  round and version, with no version when there was no file. A proposal leads to its taste through its
+  `RunId`, the same join as everything else; the mart that compares approval before and after a fold
+  is step 5's.
+- **The owner's routes**, none with a tool behind it: `GET /api/discovery/projects/<key>/taste` (the
+  panel's whole state), `GET .../taste/versions/<id>`, `PUT .../taste` (an edit of the whole file,
+  committed as "edited by the owner"), `POST .../taste/versions/<id>/restore` (put back, as a new
+  version), and `PUT .../taste/fold-request` (fold at the next run, below the count; never with nothing
+  to fold, and cleared by the fold).
+- **The panel** is a *Taste* section in every discovery's drawer (`DiscoveryTaste.tsx`), not a page of
+  its own: which version this discovery's sift and rechecks read, the file, how many verdicts toward
+  the next fold (or "No verdicts yet, so there is nothing to fold"), the last fold's note and
+  suggestions, the already-decided list, and the versions with show and put back. Checked at 375px
+  wide with no sideways scroll.
+- **Skills**: the sift and recheck skills read `taste` and apply it - what it says is unwanted is
+  dropped against it unless the case is different and `why` says how; it never replaces the specs and
+  decisions - in the templates and every project's copy, word for word. The sift and recheck prompts
+  say the same in a line (`Format-DiscoveryNote`). The copies' Skills-page baselines were left as they
+  were, as step 3 left them.
+- **Proven on the QA copy**: two discoveries on alpha, scouted and sifted through the board's own
+  `/mcp`, with seven verdicts (an edited approval new to the owner, generic and wrong rejections with
+  notes, a not now). The first sift read no file; the count reached `tasteFoldEvery: 3` only after
+  Complete; begin refused a second claim; the first fold's answer was written by hand, the second's by
+  a real cheap model run on the board's prompt (outside the copy), which merged the new verdicts into
+  the existing lines as asked. Both landed as versions 1 and 2, each one commit of `discovery/taste.md`
+  in the project folder; a third discovery's sift recorded reading version 2. An edit from the drawer
+  and a put back of version 1 became versions 3 and 4, with their commits.
+- **Fell short / not done**: the fold itself was not run by a worker on the copy, which refuses the
+  heartbeat; the script half is covered by `worker-discovery.tests.ps1` and the board half by the
+  `DiscoveryTaste` tests. Already decided is shown, not offered as a decision to record. A fold reads
+  verdicts only, not the owner's later edits to the filed tickets. The owner's edit is of the whole
+  file in a textarea, with no diff view between versions beyond showing each one.
+
 ## Open for whoever builds it
 
 - ~~How a proposal's clip is cut~~ - settled in "Step 3 as built": on demand, and before its recording is pruned.
 - ~~What Recheck reads of the original observations~~ - settled in "Step 2 as built".
+- ~~Who runs the taste fold, and what it counts~~ - settled in "Step 4 as built".
+- Already decided as a decision to record: the verdict could prefill the steward's register (on a
+  project that has one) from the rejection's note, rather than only listing it on the taste panel.
