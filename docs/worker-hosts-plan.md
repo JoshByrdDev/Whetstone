@@ -109,7 +109,11 @@ or its branch is gone from the board host.
 
 *As built* (it was promised here and not built until a worker host filled its disk: each worktree
 held its own package install, and every run after the disk filled failed at `git worktree add`).
-Hourly, and again at once while a pass ran out of time, the runner lists each project's worktrees
+Hourly, and five minutes after a pass that stopped with more to do, the runner starts a pass in a
+process of its own (`data/runner-reap-pass.ps1`, functions in `data/runner-reap.ps1`) and goes on
+with its loop. The first version reaped inline: one removal of a worktree full of packages took
+minutes on Windows, no start order was read meanwhile, and the board gave up on every run it sent.
+A pass lists each project's worktrees
 straight under its worktree root, as git lists them, and asks `POST /api/hosts/<name>/worktrees`
 which may go. It names each by its folder and what it holds - a branch, or for a detached checkout
 its kind and ticket - never by its path. The board answers from its tickets (`HostWorktrees`), on
@@ -121,14 +125,23 @@ the board's own reaper's rule:
 | `review-<branch>`, detached | every review of that branch has been Done for the retention: one open review keeps it, since the next pass reuses it rather than installing again |
 | `walkthrough-ticket-<id>` (a walk-through or a discovery), detached | its ticket is Done for the retention, gone, or has not moved for the retention - it is the base, checked out, and holds no work |
 
-A retention of 0 keeps everything there as here. The runner then removes only those, with `git
-worktree remove` (never forced, so the branch and anything committed stay), under the hub lock the
-workers take, and only after its own checks, which the board cannot make: no live run's claim names
-it, nothing uncommitted or untracked, no stopped rebase or merge, and nothing git wrote there in the
-last hour. A locked worktree, one outside the root or deeper in it, and a folder git does not know
-are never touched. What it reaped, and what it kept though the board said it may go, is in the
-runner log. A pass stops starting removals after 45 seconds, so a host clearing a backlog keeps
-checking in. A project of several repos never runs on a worker host, so there are no workspaces
+A retention of 0 keeps everything there as here. The pass then removes only those, and only after
+its own checks, which the board cannot make: no live run's claim names it (the runner rewrites
+`run/reap-held.json` every loop and before it launches each worker, and the pass reads it again just
+before each move), nothing uncommitted or untracked, no stopped rebase or merge, and nothing git
+wrote there in the last hour. Removal is two steps. Under the hub lock the workers take, waited for
+five seconds at most, the worktree is moved aside to `.reaping-<name>` and detached, so its branch
+is free for a run that starts now. Then, without the lock, `git worktree remove` of the moved copy,
+however long it takes. A `.reaping-*` folder a killed pass left is finished by the next. The branch
+always stays. A locked worktree, one outside the root or deeper in it, and a folder git does not
+know are never touched. What it reaped, and what it kept though the board said it may go, is in the
+runner log. A pass stops starting removals after ten minutes, when the hub stays busy, or when
+`runner.stop` appears, and says there is more.
+
+A start order the orchestrator has given up on (two minutes unanswered, its claim released) is
+dropped at the next check-in rather than handed over (`DropReleasedStarts`): a runner that checked
+in late used to start it anyway, on a ticket that might be running elsewhere, and the next check-in
+killed it as revoked - sometimes halfway through `git worktree add`. A project of several repos never runs on a worker host, so there are no workspaces
 there to reap.
 
 **The low-disk guard.** Every few minutes the check-in carries the free space on the drives holding

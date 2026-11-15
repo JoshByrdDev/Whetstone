@@ -237,3 +237,49 @@ public class WorkerHostDiskTests
         Assert.True(Assert.Single(svc.Snapshot()).Dispatchable);
     }
 }
+
+/// <summary>
+/// A start the orchestrator gave up on is not handed to a runner that checks in late
+/// (<see cref="Whetstone.Api.WorkerHostEndpoints.DropReleasedStarts"/>).
+/// </summary>
+public class WorkerHostStaleStartTests
+{
+    private const string Board = "1111111111111111111111111111111111111111";
+
+    [Fact]
+    public void A_start_whose_claim_was_released_is_dropped_and_the_rest_kept()
+    {
+        var orders = new[]
+        {
+            new HostOrder("start", 11, 801, null),
+            new HostOrder("start", 12, 802, null),
+            new HostOrder("kill", 13, 700, null),
+        };
+        var kept = Whetstone.Api.WorkerHostEndpoints.DropReleasedStarts(orders, new HashSet<int> { 802 }, out var dropped);
+        Assert.Equal(new[] { 801 }, dropped);
+        Assert.Equal(new[] { 802, 700 }, kept.Select(o => o.RunId));
+    }
+
+    [Fact]
+    public void Nothing_released_leaves_the_orders_as_they_are()
+    {
+        var orders = new[] { new HostOrder("start", 11, 801, null) };
+        Assert.Same(orders, Whetstone.Api.WorkerHostEndpoints.DropReleasedStarts(orders, new HashSet<int> { 801 }, out var dropped));
+        Assert.Empty(dropped);
+    }
+
+    [Fact]
+    public async Task A_dropped_start_no_longer_counts_as_out()
+    {
+        var now = new DateTime(2026, 10, 17, 12, 0, 0, DateTimeKind.Utc);
+        var cfg = WorkerHostConfig.Read(JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(
+            """{ "workerHosts": [{ "name": "bravo-host", "slots": 2 }] }""")!);
+        var svc = new WorkerHostService(() => cfg, () => Board, () => now);
+        svc.Enqueue("bravo-host", new HostOrder("start", 11, 801, null));
+        var taken = await svc.CheckInAsync("bravo-host", Board, Array.Empty<HostRun>(), null, TimeSpan.Zero);
+        Assert.Single(taken!);
+        Assert.Equal(1, Assert.Single(svc.Snapshot()).Out);
+        svc.ForgetHanded("bravo-host", new[] { 801 });
+        Assert.Equal(0, Assert.Single(svc.Snapshot()).Out);
+    }
+}

@@ -27,7 +27,7 @@ function Write-Log { param([string]$Message) }
 # What reaping this host's worktrees takes from the scripts runner.ps1 dot-sources.
 . (Join-Path $PSScriptRoot 'worker-board.ps1')
 . (Join-Path $PSScriptRoot 'worker-repos.ps1')
-function Invoke-WithMutex { param([string]$Name, [scriptblock]$Body, [int]$TimeoutMs) return & $Body }
+. (Join-Path $PSScriptRoot 'runner-reap.ps1')
 
 $tree = [System.Management.Automation.Language.Parser]::ParseFile($runner, [ref]$null, [ref]$null)
 foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
@@ -602,7 +602,7 @@ exit 3
         $script:asked += @($Items | ForEach-Object { "$Key/$($_.name)" })
         return @($Items | ForEach-Object { [pscustomobject]@{ name = $_.name; reap = ($_.name -ne 'tk-open'); why = 'Done long ago' } }) }
     $projects = @{ alpha = @{ path = $hub; worktreeRoot = $wtRoot } }
-    $r = Remove-HostWorktrees -Projects $projects -Ask $askAll -Held @{ 'b:jb/PROJ-7' = $true; 'n:jb-PROJ-7' = $true } -QuietMinutes 0
+    $r = Remove-HostWorktrees -Projects $projects -Ask $askAll -Held { @{ 'b:jb/PROJ-7' = $true; 'n:jb-PROJ-7' = $true } } -QuietMinutes 0
     Check 'reap: a worktree a live run holds is never asked about' (@($script:asked | Where-Object { $_ -like '*PROJ-7' }).Count) 0
     Check 'reap: what the board says may go and nothing here keeps goes' (@($r.removed | ForEach-Object { ($_ -split ':')[0] } | Sort-Object) -join ',') 'alpha/review-feature-x,alpha/tk-done,alpha/walkthrough-ticket-5'
     Check 'reap: ... off the disk, ignored packages and all' (Test-Path $done) $false
@@ -617,6 +617,7 @@ exit 3
     Check 'reap: a detached one it cannot place is not touched' (Test-Path $odd) $true
     Check 'reap: a folder git does not know is not touched' (Test-Path (Join-Path $wtRoot 'not-a-worktree')) $true
     Check 'reap: nothing failed' @($r.failed).Count 0
+    Check 'reap: nothing is left moved aside' @(Get-ChildItem -LiteralPath $wtRoot -Directory -Force | Where-Object { $_.Name -like '.reaping-*' }).Count 0
 
     # Freshly written: a run this runner does not know about yet may be in it.
     $fresh = Add-Wt 'tk-fresh' 'tk-fresh'
@@ -630,6 +631,64 @@ exit 3
     Check 'reap: a board it cannot ask removes nothing, and says so' "$(@($r4.removed).Count) $(@($r4.failed | Where-Object { $_ -like '*board unreachable*' }).Count) $(Test-Path $fresh)" '0 1 True'
     $r5 = Remove-HostWorktrees -Projects @{ ghost = @{ path = (Join-Path $root 'no-clone'); worktreeRoot = '' } } -Ask $askAll -QuietMinutes 0
     Check 'reap: a project with no clone here is skipped' "$(@($r5.removed).Count) $(@($r5.failed).Count)" '0 0'
+
+    # A run that starts between the board's answer and the move: the held list is read again
+    # under the lock, so the worktree it is about to use is not moved out from under it.
+    $script:heldCalls = 0
+    $lateHeld = { $script:heldCalls++; if ($script:heldCalls -le 1) { @{} } else { @{ 'b:tk-fresh' = $true } } }
+    $r6 = Remove-HostWorktrees -Projects $projects -Ask $askAll -Held $lateHeld -QuietMinutes 0
+    Check 'reap: a run that starts after the board answered keeps its worktree' ((Test-Path $fresh) -and @($r6.kept | Where-Object { $_ -like 'alpha/tk-fresh:*holds it now*' }).Count -eq 1) $true
+    $r7 = Remove-HostWorktrees -Projects $projects -Ask $askAll -Held { $null } -QuietMinutes 0
+    Check 'reap: not knowing what the runs hold, it removes nothing' "$(@($r7.removed).Count) $(Test-Path $fresh) $(@($r7.failed).Count)" '0 True 1'
+
+    # The hub lock held elsewhere - a worker making a worktree: the pass does not queue behind it.
+    $lockName = 'Local\CDH-' + ("hub-$hub" -replace '[^A-Za-z0-9_-]', '-')
+    $holder = Start-Process -FilePath $Self -PassThru @Hide -ArgumentList @('-NoProfile', '-Command',
+        "`$m = New-Object System.Threading.Mutex(`$false, '$lockName'); `$null = `$m.WaitOne(); Start-Sleep -Seconds 20")
+    Start-Sleep -Seconds 3
+    $t0 = Get-Date
+    $r8 = Remove-HostWorktrees -Projects $projects -Ask $askAll -QuietMinutes 0 -LockWaitMs 1000
+    $took = ((Get-Date) - $t0).TotalSeconds
+    Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue
+    Check 'reap: the hub busy, it gives up within its short wait' ($took -lt 10) $true
+    Check '... says there is more, and touched nothing' "$($r8.more) $(@($r8.removed).Count) $(Test-Path $fresh)" 'True 0 True'
+    Check '... and says why' (@($r8.kept | Where-Object { $_ -like '*hub was busy*' }).Count) 1
+
+    # A pass killed between its two steps leaves a moved-aside folder; the next pass finishes it.
+    $half = Join-Path $wtRoot 'tk-half'
+    git -C $hub worktree add -b tk-half $half main *> $null
+    git -C $hub worktree move $half (Join-Path $wtRoot '.reaping-tk-half') *> $null
+    git -C (Join-Path $wtRoot '.reaping-tk-half') checkout --quiet --detach *> $null
+    $r9 = Remove-HostWorktrees -Projects $projects -Ask { param($Key, $Items) @() } -QuietMinutes 0
+    Check 'reap: a folder a killed pass moved aside is finished off' "$(Test-Path (Join-Path $wtRoot '.reaping-tk-half')) $(@($r9.removed | Where-Object { $_ -like 'alpha/tk-half:*' }).Count)" 'False 1'
+    Check '... the branch kept' ([bool](git -C $hub branch --list tk-half)) $true
+
+    Write-Host "== The held list and the pass cadence"
+    $hf = Join-Path $root 'reap-held.json'
+    Write-ReapHeld -Path $hf -Held @{ 'b:tk-1' = $true; 'n:tk-1' = $true }
+    $back = Read-ReapHeld -Path $hf
+    Check 'held file: read back' "$($back['b:tk-1']) $($back['n:tk-1']) $($back.Count)" 'True True 2'
+    Write-ReapHeld -Path $hf -Held @{ 'b:tk-1' = $true } -Now (Get-Date).AddMinutes(-30)
+    Check 'held file: one the runner stopped writing reads as unknown' ($null -eq (Read-ReapHeld -Path $hf)) $true
+    Check 'held file: none at all reads as unknown' ($null -eq (Read-ReapHeld -Path (Join-Path $root 'no-held.json'))) $true
+
+    $t = Get-Date '2026-11-16T10:00:00'
+    Check 'cadence: a pass that finished comes back in an hour' (Get-NextReapAt -ExitCode 0 -Now $t) $t.AddMinutes(60)
+    Check 'cadence: one that stopped with more comes back in five minutes, not every loop' (Get-NextReapAt -ExitCode $ReapMoreExit -Now $t) $t.AddMinutes(5)
+    Check 'cadence: one that failed waits the hour too' (Get-NextReapAt -ExitCode 1 -Now $t) $t.AddMinutes(60)
+
+    # The runner's loop starts a pass and goes on: a removal that takes minutes runs in the pass's
+    # own process, so the loop reads its next start order straight away. A stand-in pass that
+    # takes 15s proves the start returns at once and the pass is still going.
+    $slow = Join-Path $root 'slow-pass.ps1'
+    Set-Content -LiteralPath $slow -Value 'Start-Sleep -Seconds 15; exit 10' -Encoding ascii
+    $t0 = Get-Date
+    $pass = Start-ReapPass -Script $slow
+    $took = ((Get-Date) - $t0).TotalSeconds
+    Check 'a slow removal does not hold up the loop: starting the pass returns at once' ($took -lt 5) $true
+    Check '... while the pass is still running' ($pass -and -not $pass.HasExited) $true
+    if ($pass) { $pass.WaitForExit(30000) | Out-Null }
+    Check '... and its "more" reaches the runner as its exit code' $pass.ExitCode $ReapMoreExit
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.

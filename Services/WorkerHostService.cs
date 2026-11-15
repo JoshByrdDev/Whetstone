@@ -388,6 +388,14 @@ public class WorkerHostService
         return latest;
     }
 
+    /// <summary>Starts a check-in carried away but the route dropped (their claim was released): not out after all.</summary>
+    public void ForgetHanded(string name, IEnumerable<int> runIds)
+    {
+        lock (_lock)
+            if (_hosts.TryGetValue(name, out var s))
+                foreach (var id in runIds) s.Handed.Remove(id);
+    }
+
     /// <summary>Queue an order for a host. False for a host the config does not name.</summary>
     public bool Enqueue(string name, HostOrder order)
     {

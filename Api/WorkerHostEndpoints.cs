@@ -70,6 +70,22 @@ public static class WorkerHostEndpoints
     private static readonly object StopGate = new();
 
     /// <summary>
+    /// The orders a check-in carries away, less any start whose claim is no longer live. The
+    /// orchestrator gives a start up after two minutes unanswered and releases its claim; the order
+    /// itself stayed queued, so a runner that was slow to check in started it anyway - a run nobody
+    /// was waiting for, on a ticket that might already be running elsewhere, killed at the next
+    /// check-in as revoked, sometimes halfway through making its worktree. Such a start is dropped
+    /// here instead, before the runner ever sees it.
+    /// </summary>
+    public static IReadOnlyList<HostOrder> DropReleasedStarts(IReadOnlyList<HostOrder> orders, ISet<int> liveRunIds, out List<int> dropped)
+    {
+        dropped = orders.Where(o => o.Kind == "start" && !liveRunIds.Contains(o.RunId)).Select(o => o.RunId).ToList();
+        if (dropped.Count == 0) return orders;
+        var gone = dropped.ToHashSet();
+        return orders.Where(o => !(o.Kind == "start" && gone.Contains(o.RunId))).ToList();
+    }
+
+    /// <summary>
     /// Switch Off every host whose "stop after current runs" has drained (<see cref="WorkerHostService.DrainedStops"/>).
     /// Worked out here on the board, from what the runners report, whenever something reads or hears
     /// from the hosts - a check-in, the orchestrator's pass, the page - so neither the orchestrator nor
@@ -251,6 +267,13 @@ public static class WorkerHostEndpoints
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
             var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot,
                 req.ClaudeLogins, req.UsageLimits, req.PsVersion, req.WindowsPowerShell ?? false, req.Disks);
+            if (orders is not null && orders.Any(o => o.Kind == "start"))
+            {
+                var startIds = orders.Where(o => o.Kind == "start").Select(o => o.RunId).ToList();
+                var stillLive = await leases.LiveRunsAsync(startIds);
+                orders = DropReleasedStarts(orders, stillLive, out var dropped);
+                if (dropped.Count > 0) hosts.ForgetHanded(name, dropped);
+            }
             FinishDrainedStops(paths, hosts);
             return CheckinResult(name, orders, revoked, commit.Get());
         });
