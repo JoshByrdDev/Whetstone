@@ -49,14 +49,14 @@ function Check {
 function Clear-Pauses { Get-ChildItem $RunDir -Filter 'usage-limit*.json' | Remove-Item -Force }
 
 try {
-    $all = 'speculate implement qa-test refine review-pr chart scout sift'
+    $all = 'speculate implement qa-test refine review-pr chart scout sift recheck'
 
     Check 'nothing paused leaves every phase open' ((Get-OpenSkills -Paused (Get-PausedProviders)) -join ' ') $all
 
     Set-UsageLimitPause -Provider 'codex' -ResetsAt (Get-Date).AddHours(2) -Text 'hit your limit'
     $paused = Get-PausedProviders
     Check 'a codex refusal pauses codex alone' (($paused.Keys | Sort-Object) -join ' ') 'codex'
-    Check 'and closes only the phase that runs on it' ((Get-OpenSkills -Paused $paused) -join ' ') 'speculate qa-test refine review-pr chart scout sift'
+    Check 'and closes only the phase that runs on it' ((Get-OpenSkills -Paused $paused) -join ' ') 'speculate qa-test refine review-pr chart scout sift recheck'
 
     Set-UsageLimitPause -Provider 'claude' -ResetsAt (Get-Date).AddHours(1) -Text 'hit your limit'
     Check 'both paused closes every phase' (@(Get-OpenSkills -Paused (Get-PausedProviders)).Count) 0
