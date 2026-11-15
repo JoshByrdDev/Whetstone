@@ -245,10 +245,11 @@ after a slice is released is a later idea, not this plan.
 Board host only at first; a worker host can run Scout once its stack leases and the data-root
 mirror cover the video.
 
-## Set up for what comes next: the Scout tab
+## Set up for what comes next: the Recon tab
 
-Not in this plan, but planned after it: a **Scout** tab (scout as a verb) for the before and after
-of scouting - what has been scouted, how recently and as whom, where scouting paid off, what
+Not in this plan, but planned after it: a **Recon** tab for the before and after
+of scouting (the name is the tab's alone: **Scout** stays the phase that does the scouting, and
+the two are never called by each other's name) - what has been scouted, how recently and as whom, where scouting paid off, what
 changed since, and what is worth scouting next, with directions it can suggest for the owner to
 file. Nothing here builds it. What this plan owes it is the record: a tab can only map coverage
 that the runs wrote down, and history that was never recorded cannot be backfilled from video.
