@@ -32,7 +32,12 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     string? BaseBranch = null,
     // The name its branch will have, instead of the board's default (BranchNaming). Blank is the
     // default. Refused when another open ticket of the project has it, or a writable repo already does.
-    string? Branch = null);
+    string? Branch = null,
+    // The ticket of the same project whose run noticed what this one is about (a defect seen in
+    // passing). With no BaseBranch of its own, it takes that ticket's base: its own base, else its
+    // slice while the slice is open (SliceBranches.InheritedFromAsync) - so it is based where the
+    // code it is about exists, not on a project base that may have none of it.
+    int? FoundOn = null);
 
 /// <summary>The owner setting a ticket's own base before it has a branch. Blank is the project's base.</summary>
 public record SetBaseBranchRequest(string? BaseBranch);
@@ -890,7 +895,8 @@ public static class TicketEndpoints
         });
 
         app.MapPost("/api/tickets", async (CreateTicketRequest req, TicketService svc, ProjectRegistry registry,
-            LinkedIssueResolver resolver, IssueTrackerFactory trackers, PrototypeCaptureQueue captures, TicketGitService git) =>
+            LinkedIssueResolver resolver, IssueTrackerFactory trackers, PrototypeCaptureQueue captures, TicketGitService git,
+            DashboardDbContext db) =>
         {
             // Named, never inferred. A ticket carries its project for the rest of its life - it
             // decides the repo, the branch, the tracker and the skills - so a create that did not
@@ -975,7 +981,18 @@ public static class TicketEndpoints
             // the first claim.
             if (track == TicketTrack.Review && !string.IsNullOrWhiteSpace(req.BaseBranch))
                 return Results.BadRequest(new { error = "A peer review ticket is read against its pull request's target, not a base of its own." });
-            var (ownBase, baseError) = await OwnBaseAsync(git, projectKey, req.BaseBranch);
+            // Found on another ticket: based where that ticket is, unless a base was named outright.
+            string? inheritedBase = null;
+            int? planUnit = null;
+            if (req.FoundOn is { } foundOn && track == TicketTrack.Delivery)
+            {
+                var source = await db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == foundOn);
+                if (source is null || source.ProjectKey != projectKey)
+                    return Results.BadRequest(new { error = $"Ticket #{foundOn} is not a ticket of {projectKey}." });
+                if (string.IsNullOrWhiteSpace(req.BaseBranch))
+                    (inheritedBase, planUnit) = await SliceBranches.InheritedFromAsync(db, registry.GetProjectConfig(projectKey), source);
+            }
+            var (ownBase, baseError) = await OwnBaseAsync(git, projectKey, req.BaseBranch ?? inheritedBase);
             if (baseError is not null) return Results.BadRequest(new { error = baseError });
 
             // A branch name of its own, which the first run creates. A review ticket owns no branch.
@@ -989,7 +1006,7 @@ public static class TicketEndpoints
                 req.RequiresSpeculationReview ?? false, req.RequiresImplementationReview ?? false, req.MasterNotes,
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,
-                ownBase, branch);
+                ownBase, branch, planUnit);
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             // Photographed now, while it waits in its queue, so the first run already has the pictures.
             captures.Enqueue(t.Id);

@@ -97,6 +97,23 @@ public static class SliceBranches
         return BaseFor(cfg, ticket.PlanUnit, await RowOfAsync(db, cfg, ticket, ct));
     }
 
+    /// <summary>
+    /// What a ticket filed about something seen on <paramref name="source"/> takes from it, so it is
+    /// based where the code it is about exists: the source's own base if it has one, else its slice
+    /// while that slice is open. Both null when the source is on the project's base, or its slice was
+    /// released (its code is in the base now) or abandoned. Without this, a defect a run noticed in a
+    /// slice's code was filed on the project's base, which has none of that code, and blocked there.
+    /// </summary>
+    public static async Task<(string? OwnBase, int? Unit)> InheritedFromAsync(DashboardDbContext db, ProjectConfig cfg,
+        Ticket source, CancellationToken ct = default)
+    {
+        if (OwnBase(source) is { } own) return (own, null);
+        if (!cfg.SliceBranchesOn) return (null, null);
+        return BaseFor(cfg, source.PlanUnit, await RowOfAsync(db, cfg, source, ct)) is null
+            ? (null, null)
+            : (null, source.PlanUnit);
+    }
+
     /// <summary>The base the ticket's owner filed it on, trimmed, or null when it has none of its own.</summary>
     public static string? OwnBase(Ticket ticket) =>
         string.IsNullOrWhiteSpace(ticket.BaseBranch) ? null : ticket.BaseBranch.Trim();

@@ -627,6 +627,44 @@ exit 1
     Check 'a neighbour of the same project, no base of its own: forks from origin/main' (Get-Sha $nwt.path HEAD) (Get-Sha $fb.hub 'origin/main')
     Check '... with none of the feature in it' (Test-Path (Join-Path $nwt.path 'feature.txt')) $false
 
+    # ---- a branch cut on the project's base, then the ticket moved to a slice ----------------
+    # A defect filed on main and then put in the slice whose code it is about. The slice was cut
+    # before main's latest, so it does not contain the branch: a fast-forward cannot move it, and
+    # the rebase would carry main's newer commits into the ticket. With nothing of its own, it is
+    # reset to the slice; with one commit of its own, or anything uncommitted, it is left alone.
+    Write-Host "== a branch moved to a new base"
+    $mv = New-Hub 'moved'
+    git -C $mv.hub branch --no-track slice/13-cards main *> $null
+    $sw = Join-Path $root 'moved-slice'
+    git -C $mv.hub worktree add $sw slice/13-cards *> $null
+    Add-Commit -Dir $sw -File 'cards.txt' -Subject 'the slice''s own code'
+    git -C $mv.hub worktree remove --force $sw *> $null
+    Add-Commit -Dir $mv.hub -File 'main-later.txt' -Subject 'main moves on, the slice has not taken it'
+
+    $ew = Join-Path $root 'moved-empty'
+    git -C $mv.hub worktree add -b ticket-1 $ew main *> $null
+    Check 'no prior base given: an empty branch the slice does not contain stays put' `
+        (Update-MergedBranch -Path $ew -BaseRef 'slice/13-cards') 0
+    Check 'with the project''s base: it is moved' `
+        ((Update-MergedBranch -Path $ew -BaseRef 'slice/13-cards' -PriorBaseRef 'main') -gt 0) $true
+    Check '... to the slice''s tip' (Get-Sha $ew HEAD) (Get-Sha $mv.hub 'slice/13-cards')
+    Check '... with the slice''s code in it' (Test-Path (Join-Path $ew 'cards.txt')) $true
+    Check '... and none of main''s newer work' (Test-Path (Join-Path $ew 'main-later.txt')) $false
+    Check 'already on the slice: nothing to do' (Update-MergedBranch -Path $ew -BaseRef 'slice/13-cards' -PriorBaseRef 'main') 0
+
+    $ow = Join-Path $root 'moved-own'
+    git -C $mv.hub worktree add -b ticket-2 $ow main *> $null
+    Add-Commit -Dir $ow -File 'fix.txt' -Subject 'the ticket''s own work'
+    $before = Get-Sha $ow HEAD
+    Check 'a commit of its own: left alone' (Update-MergedBranch -Path $ow -BaseRef 'slice/13-cards' -PriorBaseRef 'main') 0
+    Check '... where it was' (Get-Sha $ow HEAD) $before
+
+    $dw = Join-Path $root 'moved-dirty'
+    git -C $mv.hub worktree add -b ticket-3 $dw main *> $null
+    Set-Content -Path (Join-Path $dw 'wip.txt') -Value 'not committed' -Encoding ascii
+    Check 'uncommitted work: left alone' (Update-MergedBranch -Path $dw -BaseRef 'slice/13-cards' -PriorBaseRef 'main') 0
+    Check '... and kept' (Test-Path (Join-Path $dw 'wip.txt')) $true
+
     # ---- a ticket's branch name ---------------------------------------------------------------
     # The board names it (BranchNaming, handed over as the claim's branchName); the recorded name
     # outranks it, and only a claim without the field falls back to the key the script used to build.

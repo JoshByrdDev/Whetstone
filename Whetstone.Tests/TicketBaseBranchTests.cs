@@ -90,6 +90,57 @@ public class TicketBaseBranchTests : IDisposable
         Assert.Null(await SliceBranches.ForTicketAsync(db, bravo, new Ticket { ProjectKey = "bravo" }));
     }
 
+    // ---- a ticket found on another: based where that one is ----------------------------------
+
+    [Fact]
+    public async Task A_defect_found_on_a_slice_ticket_is_filed_in_that_slice()
+    {
+        await using var db = new DashboardDbContext(_options);
+        db.StewardUnits.Add(new StewardUnit { ProjectKey = "bravo", Unit = 13, Branch = Slice, AgreedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        var bravo = _registry.GetProjectConfig("bravo");
+
+        var (own, unit) = await SliceBranches.InheritedFromAsync(db, bravo, new Ticket { ProjectKey = "bravo", PlanUnit = 13 });
+        Assert.Null(own);
+        Assert.Equal(13, unit);
+
+        // And so it is based on the slice's branch, by the one rule everything else asks.
+        var svc = new TicketService(db);
+        var t = await svc.CreateAsync("bravo", "A defect", null, null, null, TicketPhase.Backlog, planUnit: unit);
+        Assert.Equal(Slice, await SliceBranches.ForTicketAsync(db, bravo, t));
+    }
+
+    [Fact]
+    public async Task A_defect_found_on_a_released_or_abandoned_slice_is_on_the_projects_base()
+    {
+        await using var db = new DashboardDbContext(_options);
+        db.StewardUnits.Add(new StewardUnit { ProjectKey = "bravo", Unit = 13, Branch = Slice, AgreedAt = DateTime.UtcNow, ReleasedAt = DateTime.UtcNow });
+        db.StewardUnits.Add(new StewardUnit { ProjectKey = "bravo", Unit = 14, Branch = "slice/14-x", AgreedAt = DateTime.UtcNow, AbandonedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        var bravo = _registry.GetProjectConfig("bravo");
+
+        Assert.Equal((null, null), await SliceBranches.InheritedFromAsync(db, bravo, new Ticket { ProjectKey = "bravo", PlanUnit = 13 }));
+        Assert.Equal((null, null), await SliceBranches.InheritedFromAsync(db, bravo, new Ticket { ProjectKey = "bravo", PlanUnit = 14 }));
+        Assert.Equal((null, null), await SliceBranches.InheritedFromAsync(db, bravo, new Ticket { ProjectKey = "bravo" }));
+    }
+
+    [Fact]
+    public async Task A_defect_found_on_a_feature_ticket_takes_its_own_base_on_any_project()
+    {
+        await using var db = new DashboardDbContext(_options);
+        db.StewardUnits.Add(new StewardUnit { ProjectKey = "bravo", Unit = 13, Branch = Slice, AgreedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+
+        // Its own base outranks its slice, as it does for the ticket it was found on.
+        Assert.Equal((Feature, null), await SliceBranches.InheritedFromAsync(db, _registry.GetProjectConfig("bravo"),
+            new Ticket { ProjectKey = "bravo", PlanUnit = 13, BaseBranch = Feature }));
+        // A project without slice branches: only an own base is inherited.
+        Assert.Equal((Feature, null), await SliceBranches.InheritedFromAsync(db, _registry.GetProjectConfig("alpha"),
+            new Ticket { ProjectKey = "alpha", BaseBranch = Feature }));
+        Assert.Equal((null, null), await SliceBranches.InheritedFromAsync(db, _registry.GetProjectConfig("alpha"),
+            new Ticket { ProjectKey = "alpha", PlanUnit = 13 }));
+    }
+
     [Fact]
     public async Task A_tickets_own_base_works_on_a_project_without_slice_branches()
     {

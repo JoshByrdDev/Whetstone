@@ -657,7 +657,7 @@ public class TicketService
         bool requiresSpeculationReview = false, bool requiresImplementationReview = false, string? masterNotes = null,
         bool skipQaTesting = false, TicketPriority priority = TicketPriority.Normal,
         TicketTrack track = TicketTrack.Delivery, ReviewTarget? reviewTarget = null,
-        bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null)
+        bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null, int? planUnit = null)
     {
         // A ticket's own base is a delivery ticket's: a review ticket is read against the target
         // its pull request names (ReviewTarget.TargetBranch).
@@ -686,6 +686,9 @@ public class TicketService
             Track = track,
             MasterNotes = string.IsNullOrWhiteSpace(masterNotes) ? null : masterNotes.Trim(),
             BaseBranch = string.IsNullOrWhiteSpace(baseBranch) ? null : baseBranch.Trim(),
+            // The slice it belongs to, when it was filed about another ticket's slice (FoundOn). A
+            // link to the slice and none of its outcomes: what bases it, not what it delivers.
+            PlanUnit = track == TicketTrack.Delivery ? planUnit : null,
             // A name chosen at filing, which the first run creates. Not BranchMadeAt: nothing exists yet.
             Branch = track == TicketTrack.Review || string.IsNullOrWhiteSpace(branch) ? null : branch.Trim(),
         };
