@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TicketDetail } from '../types/tickets';
 import * as api from '../api/discovery';
-import type { Discovery, DiscoveryObservation, DiscoveryProposal, DiscoveryRoute, GoalCheck, GoalOutcome, ProposalKind, RejectReason } from '../api/discovery';
+import type { Discovery, DiscoveryObservation, DiscoveryProposal, DiscoveryRecording, DiscoveryRoute, GoalCheck, GoalOutcome, ProposalKind, RejectReason } from '../api/discovery';
+import { RemovedShot } from './RemovedShot';
 import { transitionTicket, updateTicket } from '../api/tickets';
 
 /**
@@ -18,6 +19,10 @@ import { transitionTicket, updateTicket } from '../api/tickets';
  * tickets the discovery waits for them, and says which one holds it; then a recheck drives the
  * product again and says, goal by goal, whether what was approved landed - and its own proposals
  * come back here for a verdict, a round.
+ *
+ * Video (step 3): a recorded run's whole video plays here with its chapters, each observation can
+ * jump to where it was seen, and each proposal plays a clip cut around what it cites - cut the first
+ * time it is played. What retention has removed says when it went, rather than failing to load.
  */
 
 const OUTCOME_STYLE: Record<GoalOutcome, { label: string; cls: string }> = {
@@ -67,6 +72,15 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
   useEffect(() => { load(); }, [t.id, t.phase, t.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const obsById = useMemo(() => new Map((d?.observations ?? []).map(o => [o.id, o])), [d]);
+  // The recordings' players, so an observation can jump to the moment it was seen.
+  const players = useRef(new Map<number, HTMLVideoElement>());
+  const seek = (recordingId: number, at: number) => {
+    const v = players.current.get(recordingId);
+    if (!v) return;
+    v.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    v.currentTime = Math.max(0, at - 3);
+    void v.play().catch(() => { /* the user can press play */ });
+  };
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -108,6 +122,9 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
     plural(approved.filter(p => p.kind === 'Decide').length, 'answer', 'recorded'),
   ].filter(Boolean).join(', ');
   const filesTickets = approved.some(p => p.kind === 'Ticket' || p.kind === 'Bug');
+  const recordings = d.recordings ?? [];
+  const live = new Set(recordings.filter(r => !r.prunedAt).map(r => r.id));
+  const noClips = recordings.some(r => !r.prunedAt) && d.media && !d.media.ffmpeg;
   const then = atSignOff
     ? 'the discovery stays at your sign-off: the recheck rounds are spent.'
     : filesTickets
@@ -200,6 +217,23 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
 
       {error && <p className="text-[12px] text-rose-300">{error}</p>}
 
+      {recordings.length > 0 && (
+        <div>
+          <Label>{recordings.length === 1 ? 'The run, recorded' : 'The runs, recorded'}</Label>
+          {noClips && (
+            <p className="mb-2 text-[11px] text-gray-500 leading-snug">
+              Clips are not set up on this machine (ffmpeg - see System, Setup check), so proposals show their screenshots and the whole recording plays here.
+            </p>
+          )}
+          <div className="space-y-3">
+            {recordings.map(r => (
+              <RecordingPlayer key={r.id} ticketId={t.id} r={r}
+                register={el => { if (el) players.current.set(r.id, el); else players.current.delete(r.id); }} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {d.filed.length > 0 && (
         <div>
           <Label>Filed from this discovery</Label>
@@ -240,7 +274,10 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
             Everything {recheck.round > 0 ? 'the scout and rechecks' : 'the scout'} logged ({d.observations.length} observations, {d.visits.length} pages)
           </summary>
           <ul className="mt-2 space-y-2">
-            {d.observations.map(o => <ObservationRow key={o.id} ticketId={t.id} o={o} />)}
+            {d.observations.map(o => (
+              <ObservationRow key={o.id} ticketId={t.id} o={o}
+                onSeek={o.recordingId && o.videoAt != null && live.has(o.recordingId) ? () => seek(o.recordingId!, o.videoAt!) : undefined} />
+            ))}
           </ul>
         </details>
       )}
@@ -348,26 +385,102 @@ function GoalRow({ goal, checks }: { goal: DiscoveryProposal; checks: GoalCheck[
   );
 }
 
-function ObservationRow({ ticketId, o }: { ticketId: number; o: DiscoveryObservation }) {
+function clock(seconds: number) {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function ObservationRow({ ticketId, o, onSeek }: { ticketId: number; o: DiscoveryObservation; onSeek?: () => void }) {
   return (
     <li className="flex gap-2.5 items-start text-[12px]">
-      {o.shot && (
+      {o.shot && (o.shotPrunedAt ? (
+        <RemovedShot removedOn={o.shotPrunedAt} what="Shot" className="w-16 h-11 flex-none text-[9.5px] px-1"
+          title="No proposal kept it; what the scout saw is still here" />
+      ) : (
         <a href={api.shotUrl(ticketId, o.shot)} target="_blank" rel="noreferrer" className="orbit-tap flex-none">
           <img src={api.shotUrl(ticketId, o.shot)} alt="" className="w-16 h-11 object-cover object-top rounded border border-hair" />
         </a>
-      )}
+      ))}
       <div className="min-w-0 flex-1">
         <div className="text-gray-300 leading-snug">
           <span className="text-[10px] uppercase tracking-wide text-gray-500 mr-1.5">{OBS_LABEL[o.kind]}</span>
           {o.title}
         </div>
         <div className="text-gray-500 leading-snug">{o.saw}</div>
-        {(o.url || o.width) && (
-          <div className="text-[11px] text-gray-600 truncate">{[o.width, o.url].filter(Boolean).join(' · ')}</div>
+        {(o.url || o.width || onSeek) && (
+          <div className="flex items-baseline gap-2 min-w-0 text-[11px] text-gray-600">
+            {onSeek && (
+              <button type="button" onClick={onSeek} title="Play the recording from just before this was seen"
+                className="orbit-tap flex-none rounded border border-hair px-1.5 text-gray-400 hover:text-gray-200">
+                ▶ {clock(o.videoAt ?? 0)}
+              </button>
+            )}
+            <span className="truncate min-w-0">{[o.width, o.url].filter(Boolean).join(' · ')}</span>
+          </div>
         )}
       </div>
     </li>
   );
+}
+
+/** One run's whole recording, with its chapters as places to jump to. Removed is said, not broken. */
+function RecordingPlayer({ ticketId, r, register }: { ticketId: number; r: DiscoveryRecording; register: (el: HTMLVideoElement | null) => void }) {
+  const ref = useRef<HTMLVideoElement | null>(null);
+  const who = r.round === 0 ? 'The scout' : `Recheck ${r.round}`;
+  const length = r.seconds > 0 ? clock(r.seconds) : null;
+  if (r.prunedAt) {
+    return (
+      <RemovedShot removedOn={r.prunedAt} what={`${who}'s recording`} className="h-12"
+        title="Kept for a week after the verdict it fed; the clips and screenshots carry the evidence from there" />
+    );
+  }
+  const jump = (at: number) => {
+    const v = ref.current;
+    if (!v) return;
+    v.currentTime = at;
+    void v.play().catch(() => { /* the user can press play */ });
+  };
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[11px] text-gray-500">{who}{length ? ` · ${length}` : ''}{r.verdictAt ? ' · kept a week after its verdict' : ''}</div>
+      <video ref={el => { ref.current = el; register(el); }} src={api.recordingUrl(ticketId, r.id)} controls preload="metadata"
+        className="w-full max-w-full rounded-lg border border-hair bg-black" />
+      {r.chapters.some(c => c.videoAt != null) && (
+        <div className="flex flex-wrap gap-1.5">
+          {r.chapters.filter(c => c.videoAt != null).map(c => (
+            <button key={c.id} type="button" onClick={() => jump(c.videoAt!)} title={`Jump to ${clock(c.videoAt!)}`}
+              className="orbit-tap text-[11px] px-2 py-0.5 rounded border border-hair text-gray-400 hover:text-gray-200 min-w-0 max-w-full truncate">
+              <span className="font-mono text-gray-600 mr-1">{clock(c.videoAt!)}</span>{c.title}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A proposal's clip: played (and so cut) here, or why there is none. */
+function ProposalClip({ p }: { p: DiscoveryProposal }) {
+  const [failed, setFailed] = useState(false);
+  switch (p.clip) {
+    case 'Ready':
+    case 'Cuttable':
+      return failed ? (
+        <p className="mt-2 text-[11px] text-gray-500">The clip could not be cut; the screenshots below are its evidence.</p>
+      ) : (
+        <video src={api.clipUrl(p.id)} controls preload="metadata" onError={() => setFailed(true)}
+          className="mt-2 w-full max-w-full rounded-lg border border-hair bg-black" />
+      );
+    case 'Removed':
+      return p.clipPrunedAt ? (
+        <RemovedShot removedOn={p.clipPrunedAt} what="Clip" className="mt-2 h-10"
+          title={p.status === 'Rejected' || p.status === 'Snoozed' ? 'A rejected or snoozed proposal keeps one still, not its clip' : 'Kept for 90 days after the discovery was done'} />
+      ) : null;
+    case 'RecordingRemoved':
+      return <p className="mt-2 text-[11px] text-gray-500">Its recording was removed before a clip was cut.</p>;
+    default:
+      return null;
+  }
 }
 
 function ProposalCard({ ticketId, p, obs, goal, open, busy, run }: {
@@ -422,6 +535,13 @@ function ProposalCard({ ticketId, p, obs, goal, open, busy, run }: {
         {p.size && <span className="text-[11px] text-gray-600">{p.size}</span>}
         {p.edited && <span className="text-[11px] text-gray-600">edited</span>}
         <span className="flex-1" />
+        {(p.clip && p.clip !== 'None') || obs.some(o => o.shot && !o.shotPrunedAt) ? (
+          <button type="button" disabled={busy} aria-pressed={!!p.pinned} onClick={() => run(() => api.pin(p.id, !p.pinned))}
+            title={p.pinned ? 'Kept: its clip and shots outlive every retention rule. Press to let them go in time.' : 'Keep its clip and shots past every retention rule'}
+            className={`orbit-tap text-[10px] uppercase tracking-wide rounded border px-1.5 ${p.pinned ? 'border-amber-700/70 text-amber-300 bg-amber-950/30' : 'border-hair text-gray-600 hover:text-gray-300'}`}>
+            {p.pinned ? 'kept' : 'keep'}
+          </button>
+        ) : null}
         <span className={`text-[11px] ${p.status === 'Approved' || p.status === 'Filed' ? 'text-emerald-300' : 'text-gray-500'}`}>{statusWord}</span>
       </div>
 
@@ -464,13 +584,20 @@ function ProposalCard({ ticketId, p, obs, goal, open, busy, run }: {
         </>
       )}
 
+      <ProposalClip p={p} />
+
       {obs.some(o => o.shot) && (
         <div className="mt-2 flex gap-1.5 flex-wrap">
-          {obs.filter(o => o.shot).map(o => (
+          {obs.filter(o => o.shot && !o.shotPrunedAt).map(o => (
             <a key={o.id} href={api.shotUrl(ticketId, o.shot!)} target="_blank" rel="noreferrer" title={o.title} className="orbit-tap">
               <img src={api.shotUrl(ticketId, o.shot!)} alt={o.title} className="w-24 h-16 object-cover object-top rounded border border-hair" />
             </a>
           ))}
+          {obs.some(o => o.shot && o.shotPrunedAt) && (
+            <RemovedShot removedOn={obs.find(o => o.shotPrunedAt)!.shotPrunedAt!} className="w-24 h-16 text-[10px] px-1"
+              what={`${obs.filter(o => o.shotPrunedAt).length} shot${obs.filter(o => o.shotPrunedAt).length === 1 ? '' : 's'}`}
+              title="One still per proposal is kept; the rest went with the verdict or later" />
+          )}
         </div>
       )}
 
