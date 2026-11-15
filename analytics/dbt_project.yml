@@ -28,3 +28,6 @@ models:
 vars:
   # The windows every mart is cut by. 0 is the whole history.
   windows: [7, 30, 90, 0]
+  # Below this many closed verdicts in a scope, a Discovery rate is not shown as a number: the page
+  # says "not enough verdicts yet" rather than a rate of 0% or 100% from two proposals.
+  discovery_min_verdicts: 10
