@@ -29,6 +29,8 @@ public sealed class AnalyticsService
         "mart_qa_rulings", "mart_escapes", "mart_rebase_returns",
         // The Discovery track's measures (docs/discovery-track-plan.md, "What is measured").
         "fct_discovery_proposals", "mart_discovery_funnel", "mart_discovery_rejections", "mart_discovery_versions",
+        // Recon: where to point the next scout (docs/recon-tab-plan.md, "The marts").
+        "mart_recon_projects", "mart_recon_coverage", "mart_recon_patterns", "mart_recon_yield", "mart_recon_suggestions",
     ];
 
     /// <summary>
@@ -65,22 +67,24 @@ public sealed class AnalyticsService
     private readonly QaIsolation _isolation;
     private readonly ILogger<AnalyticsService> _log;
     private readonly Func<string, string?> _findOnPath;
+    private readonly ReconInputs? _recon;
     private readonly object _gate = new();
     private Process? _refresh;
 
-    public AnalyticsService(DashboardPaths paths, QaIsolation isolation, ILogger<AnalyticsService> log)
-        : this(paths, isolation, log, name => SetupCheckService.FindOnPath(name, Environment.GetEnvironmentVariable("PATH")))
+    public AnalyticsService(DashboardPaths paths, QaIsolation isolation, ILogger<AnalyticsService> log, ReconInputs recon)
+        : this(paths, isolation, log, name => SetupCheckService.FindOnPath(name, Environment.GetEnvironmentVariable("PATH")), recon)
     { }
 
     public AnalyticsService(DashboardPaths paths, QaIsolation isolation, ILogger<AnalyticsService> log,
-        Func<string, string?> findOnPath) =>
-        (_paths, _isolation, _log, _findOnPath) = (paths, isolation, log, findOnPath);
+        Func<string, string?> findOnPath, ReconInputs? recon = null) =>
+        (_paths, _isolation, _log, _findOnPath, _recon) = (paths, isolation, log, findOnPath, recon);
 
     public string OutDir => Path.Combine(_paths.DataRoot, "analytics");
     public string MartsDir => Path.Combine(OutDir, "marts");
     private string StatusFile => Path.Combine(OutDir, "refresh.json");
     private string LockFile => Path.Combine(OutDir, "refresh.lock");
     private string LogFile => Path.Combine(OutDir, "refresh.log");
+    public string ReconInputsFile => Path.Combine(OutDir, ReconInputs.FileName);
 
     /// <summary>
     /// The dbt project: <c>analytics/</c> in the checkout the app runs from. Found by walking up to
@@ -174,6 +178,34 @@ public sealed class AnalyticsService
     /// which is outside the copy's folder. Everything else the refresh reads is the copy's own data
     /// root and this checkout's git history.
     /// </para>
+    /// </summary>
+    public async Task<(bool Started, string Message)> StartRefreshAsync(CancellationToken ct = default)
+    {
+        if (Unavailable() is { } why) return (false, why);
+        if (IsRunning()) return (false, "A refresh is already running.");
+        await WriteReconInputsAsync(ct);
+        return StartRefresh();
+    }
+
+    /// <summary>
+    /// Recon's inputs, written before a refresh starts (<see cref="ReconInputs"/>). A failure is
+    /// logged and leaves no file rather than an old one, so the Recon marts build empty rather than
+    /// from areas the config no longer has; the rest of the refresh is not held up by it.
+    /// </summary>
+    public async Task WriteReconInputsAsync(CancellationToken ct = default)
+    {
+        if (_recon is null) return;
+        try { await _recon.WriteAsync(OutDir, ct); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "Recon inputs could not be written; the Recon marts will build empty");
+            try { File.Delete(ReconInputsFile); } catch (IOException) { }
+        }
+    }
+
+    /// <summary>
+    /// Start the refresh process as things stand, without writing Recon's inputs first. The routes
+    /// use <see cref="StartRefreshAsync"/>.
     /// </summary>
     public (bool Started, string Message) StartRefresh()
     {

@@ -3,9 +3,10 @@
 -- from the event log, what it became, and whether it landed. The grain both the Discovery marts
 -- and Recon's (docs/recon-tab-plan.md, "The marts") read, so its names are theirs: Recon adds to it.
 --
--- `area` is the proposal's own, as Sift wrote it. Recon (R2) derives an area from its observations'
--- URLs against the project's `discovery.areas`, which this model cannot see yet; it is meant to
--- replace this column's value in place, keeping the name.
+-- `area` is Recon's (int_recon_proposal_area): the area most of its observations' URLs fall in by
+-- the project's `discovery.areas` page patterns, else Sift's own Area when it names one of them,
+-- else '(unmapped)'. On a project that names no areas it is Sift's own word, as written.
+-- `area_source` says which: url, sift, none, or own (no areas named).
 --
 -- `verdict_closed`: decided, and the verdict round it was in is over - the discovery left
 -- NeedsVerdict after the proposal was written, a Complete filed something after it, or the
@@ -85,7 +86,8 @@ select
     p.kind,
     p.draft_kind,
     p.rank,
-    p.area,
+    coalesce(ra.area, p.area)                                           as area,
+    coalesce(ra.area_source, 'own')                                     as area_source,
     coalesce(nullif(p.draft_title, ''), p.title)                         as draft_title,
     p.title,
     p.created_at,
@@ -160,3 +162,4 @@ left join goal g on g.proposal_id = p.proposal_id
 left join obs o on o.proposal_id = p.proposal_id
 left join {{ ref('int_discovery_repeats') }} rp on rp.proposal_id = p.proposal_id
 left join {{ ref('stg_board__tickets') }} ft on ft.ticket_id = v.filed_ticket_id
+left join {{ ref('int_recon_proposal_area') }} ra on ra.proposal_id = p.proposal_id

@@ -40,6 +40,19 @@ public class ReconTests : IDisposable
                            { "name": "Billing", "pages": ["/billing"] } ],
                 "roles": ["signed out", " member ", "", "Member", "admin"] } }
             """);
+        // bravo is two repos with a discovery block and no roles; charlie has no discovery block.
+        var bravo = Path.Combine(_root, "bravo");
+        Directory.CreateDirectory(Path.Combine(bravo, "bravo-api"));
+        Directory.CreateDirectory(Path.Combine(bravo, "bravo-web"));
+        Directory.CreateDirectory(Path.Combine(data, "projects", "bravo"));
+        File.WriteAllText(Path.Combine(data, "projects", "bravo", "project.defaults.json"), $$"""
+            { "displayName": "Bravo", "projectPath": {{JsonSerializer.Serialize(bravo)}}, "baseBranch": "main",
+              "repos": [ { "dir": "bravo-api" }, { "dir": "bravo-web", "baseBranch": "develop", "readOnly": true } ],
+              "discovery": { "areas": [ { "name": "Help", "pages": ["/help"], "code": ["bravo-web/src/help"] } ] } }
+            """);
+        Directory.CreateDirectory(Path.Combine(data, "projects", "charlie"));
+        File.WriteAllText(Path.Combine(data, "projects", "charlie", "project.defaults.json"),
+            $$"""{ "displayName": "Charlie", "projectPath": {{JsonSerializer.Serialize(repo)}}, "baseBranch": "main" }""");
         File.WriteAllText(Path.Combine(data, "config.defaults.json"), """{ "baseBranch": "main" }""");
         _paths = new DashboardPaths(data);
         _registry = new ProjectRegistry(_paths);
@@ -69,6 +82,8 @@ public class ReconTests : IDisposable
         // " member " and "Member" are one role; the first spelling is kept.
         Assert.Equal(["signed out", "member", "admin"], d.Roles);
         Assert.Equal(["Events", "Billing"], d.Areas.Select(a => a.Name));
+        Assert.True(d.Present);
+        Assert.False(_registry.GetProjectConfig("charlie").Discovery.Present);
     }
 
     [Fact]
@@ -95,6 +110,104 @@ public class ReconTests : IDisposable
         Assert.Equal(["signed out", "member", "admin"], project.GetProperty("roles").EnumerateArray().Select(x => x.GetString()));
         // Names only: the patterns are the board's to apply at refresh time.
         Assert.DoesNotContain("/events", project.GetRawText());
+    }
+
+    // ---- what the refresh is handed ------------------------------------------------------------
+
+    [Fact]
+    public async Task The_inputs_name_every_project_with_a_discovery_block_and_each_repos_base()
+    {
+        var asked = new List<(string Repo, string Branch)>();
+        var inputs = await new ReconInputs(_registry, (repo, _, branch, _) =>
+        {
+            asked.Add((Path.GetFileName(repo), branch));
+            return Task.FromResult<string?>(branch == "develop" ? null : "origin/" + branch);
+        }).BuildAsync();
+
+        Assert.Equal(["alpha", "bravo"], inputs.Projects.Select(p => p.Key));
+        var alpha = inputs.Projects[0];
+        Assert.Equal(["signed out", "member", "admin"], alpha.Roles);
+        Assert.Equal(["/events/**"], alpha.Areas[0].Pages);
+        Assert.Equal(["src/events"], alpha.Areas[0].Code);
+        var one = Assert.Single(alpha.Repos);
+        Assert.Equal(("", "origin/main"), (one.Dir, one.BaseRef));
+
+        // A project of several repos: each with its own base, a missing one left null for the
+        // refresh to report rather than guessed.
+        var bravo = inputs.Projects[1];
+        Assert.Empty(bravo.Roles);
+        Assert.Equal(["bravo-api", "bravo-web"], bravo.Repos.Select(r => r.Dir));
+        Assert.Equal(["origin/main", null], bravo.Repos.Select(r => r.BaseRef));
+        Assert.True(bravo.Repos[1].ReadOnly);
+        Assert.Contains(("bravo-web", "develop"), asked);
+    }
+
+    [Fact]
+    public async Task The_inputs_file_is_written_where_the_refresh_reads_it()
+    {
+        var out_ = Path.Combine(_root, "data", "analytics");
+        var analytics = new AnalyticsService(_paths, new QaIsolation(false), Microsoft.Extensions.Logging.Abstractions.NullLogger<AnalyticsService>.Instance,
+            _ => null, new ReconInputs(_registry, (_, _, b, _) => Task.FromResult<string?>(b)));
+        await analytics.WriteReconInputsAsync();
+
+        Assert.Equal(Path.Combine(out_, "recon-inputs.json"), analytics.ReconInputsFile);
+        using var doc = JsonDocument.Parse(File.ReadAllText(analytics.ReconInputsFile));
+        var projects = doc.RootElement.GetProperty("projects");
+        Assert.Equal(2, projects.GetArrayLength());
+        // The names refresh.py reads.
+        var p = projects[0];
+        Assert.Equal("alpha", p.GetProperty("key").GetString());
+        Assert.Equal("Events", p.GetProperty("areas")[0].GetProperty("name").GetString());
+        Assert.Equal("/events/**", p.GetProperty("areas")[0].GetProperty("pages")[0].GetString());
+        Assert.Equal("main", p.GetProperty("repos")[0].GetProperty("baseRef").GetString());
+        Assert.True(p.GetProperty("repos")[0].TryGetProperty("path", out _));
+        Assert.True(p.GetProperty("repos")[0].TryGetProperty("dir", out _));
+        Assert.True(doc.RootElement.TryGetProperty("writtenAt", out _));
+    }
+
+    [Fact]
+    public async Task Inputs_that_cannot_be_written_leave_no_stale_file()
+    {
+        var analytics = new AnalyticsService(_paths, new QaIsolation(false), Microsoft.Extensions.Logging.Abstractions.NullLogger<AnalyticsService>.Instance,
+            _ => null, new ReconInputs(_registry, (_, _, _, _) => throw new InvalidOperationException("git is gone")));
+        Directory.CreateDirectory(analytics.OutDir);
+        File.WriteAllText(analytics.ReconInputsFile, "{ \"projects\": [] }");
+        // A resolver that throws is a null base for that repo, not a failed write.
+        await analytics.WriteReconInputsAsync();
+        using (var doc = JsonDocument.Parse(File.ReadAllText(analytics.ReconInputsFile)))
+            Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("projects")[0].GetProperty("repos")[0].GetProperty("baseRef").ValueKind);
+
+        // A write that fails outright removes the old file, so the marts build empty rather than old.
+        var blocked = new AnalyticsService(new DashboardPaths(Path.Combine(_root, "data")), new QaIsolation(false),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<AnalyticsService>.Instance, _ => null,
+            new ReconInputs(_registry, (_, _, _, _) => Task.FromResult<string?>("main")));
+        Directory.CreateDirectory(analytics.ReconInputsFile + ".tmp");
+        await blocked.WriteReconInputsAsync();
+        Assert.False(File.Exists(analytics.ReconInputsFile));
+    }
+
+    [Fact]
+    public void Recons_marts_are_published_and_read_as_a_pair()
+    {
+        foreach (var m in new[] { "mart_recon_projects", "mart_recon_coverage", "mart_recon_patterns", "mart_recon_yield", "mart_recon_suggestions" })
+            Assert.Contains(m, AnalyticsService.Marts);
+    }
+
+    [Fact]
+    public void The_phone_split_is_the_boards_own()
+    {
+        // Written twice and the two must agree (docs/recon-tab-plan.md): the dbt width bucket and NARROW_PX.
+        string? Find(string rel)
+        {
+            for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+                if (File.Exists(Path.Combine(dir.FullName, "Whetstone.csproj"))) return Path.Combine(dir.FullName, rel);
+            return null;
+        }
+        var macro = File.ReadAllText(Find(Path.Combine("analytics", "macros", "recon.sql"))!);
+        var hook = File.ReadAllText(Find(Path.Combine("ClientApp", "src", "hooks", "useNarrow.ts"))!);
+        var px = System.Text.RegularExpressions.Regex.Match(hook, @"NARROW_PX\s*=\s*(\d+)").Groups[1].Value;
+        Assert.Equal("640", px);
+        Assert.Contains($"< {px} then 'phone'", macro);
     }
 
     // ---- ReconFrom ----------------------------------------------------------------------------

@@ -58,6 +58,8 @@ sources:
         columns:
           - name: Id
             tests: [unique]
+      # Recon's Not now (docs/recon-tab-plan.md). Empty on a database from before the Recon migration.
+      - name: ReconDismissalEvents
       - name: DiscoveryGoalChecks
       - name: DiscoveryTasteVersions
       - name: DiscoveryTasteReads
@@ -80,3 +82,17 @@ sources:
       - name: transcript_tool_uses
       - name: transcript_tool_results
       - name: transcript_costs
+
+  # Recon's inputs (docs/recon-tab-plan.md, "Loading"): what the board's config says each project's
+  # areas and roles are, and each repo's base history from git. Written by refresh.py from the
+  # recon-inputs.json the board writes before a refresh; empty when a refresh ran without it.
+  - name: recon
+    schema: raw
+    tables:
+      - name: recon_projects
+      - name: recon_areas
+      - name: recon_roles
+      - name: recon_repos
+      - name: recon_commits
+      - name: recon_commit_members
+      - name: recon_visit_commits

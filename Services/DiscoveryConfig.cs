@@ -96,6 +96,9 @@ public sealed record DiscoveryConfig
     /// </summary>
     public string[] Roles { get; init; } = Array.Empty<string>();
 
+    /// <summary>Whether the project's config has a <c>discovery</c> block at all: what puts it on the Recon tab.</summary>
+    public bool Present { get; init; }
+
     /// <summary>Whether a scout can run here at all: a site to point the browser at.</summary>
     public bool CanScout => SiteUrl.Length > 0;
 
@@ -114,6 +117,7 @@ public sealed record DiscoveryConfig
         var budget = d.TryGetProperty("storageBudgetMb", out var sb) && sb.ValueKind == JsonValueKind.Number && sb.TryGetInt64(out var mb) ? mb : DefaultStorageBudgetMb;
         return new DiscoveryConfig
         {
+            Present = true,
             MaxProposals = Math.Clamp(max, 1, 20),
             RecheckRounds = Math.Clamp(rounds, 0, 10),
             ReviewRoute = review,

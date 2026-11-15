@@ -30,6 +30,12 @@ that changed since last time, runs `dbt build`, and only if every model and test
 new parquet files in. A failed refresh leaves the published marts exactly as they were.
 `--rebuild` forgets the incremental transcript load; `--no-transcripts` skips them.
 
+It also loads Recon's inputs: each project's areas and roles, and each repo's base ref, from
+`<data root>/analytics/recon-inputs.json`, which the board writes before every refresh it starts
+(`ReconInputs`) because those rules live in C#; and each base's first-parent history from git. A
+refresh started by hand reads whatever file the board last wrote, and with none the Recon marts
+build empty and the log says so.
+
 ## Decision: how the board reads the marts
 
 **Chosen: dbt writes the marts as parquet; the API reads the parquet with DuckDB.NET; the API
@@ -124,7 +130,8 @@ a skill is invisible to the git side - one more reason skills are committed.
 | `fct_runs`, `fct_tool_calls`, `fct_tickets` | The drill-down: one run, its calls, one ticket |
 | `fct_bug_links`, `mart_bugs` | Bugs traced to their cause: confirmed and escaped bugs by the stage that missed them, who found them, and what wrote them |
 | `fct_experiment_tickets`, `mart_experiment_arms`, `mart_experiments` | A/B experiments: per arm, cost per ticket to Done and the three guardrails; per experiment, its stage, the Fisher tests and the suggested verdict |
-| `fct_discovery_proposals`, `mart_discovery_funnel`, `mart_discovery_rejections`, `mart_discovery_versions` | The Discovery track (`docs/discovery-track-plan.md`, "Step 5 as built"): one row per proposal with its verdict, lineage and run; the funnel from observation to landed goal with approval per dollar and per owner-minute; rejections by reason; and each skill and taste-file version against the one before. Windowed by when the discovery was filed, and every rate null below `discovery_min_verdicts` closed verdicts. `fct_discovery_proposals` and the `stg_board__discovery_*` models are shared with the Recon tab |
+| `fct_discovery_proposals`, `mart_discovery_funnel`, `mart_discovery_rejections`, `mart_discovery_versions` | The Discovery track (`docs/discovery-track-plan.md`, "Step 5 as built"): one row per proposal with its verdict, lineage and run; the funnel from observation to landed goal with approval per dollar and per owner-minute; rejections by reason; and each skill and taste-file version against the one before. Windowed by when the discovery was filed, and every rate null below `discovery_min_verdicts` closed verdicts. `fct_discovery_proposals` and the `stg_board__discovery_*` models are shared with the Recon tab, and its `area` is Recon's: the area most of the proposal's observations' URLs fall in |
+| `mart_recon_projects`, `mart_recon_coverage`, `mart_recon_patterns`, `mart_recon_yield`, `mart_recon_suggestions` | The Recon tab (`docs/recon-tab-plan.md`, "R1 and R2 as built"): per project, every area x role x width cell with when it was scouted and what changed in the area's code since, the route patterns inside an area, yield by area and by direction lineage per window, and the ranked suggestions with the facts behind each. All but yield are all of history and never cut by window or summed across projects |
 
 "Cost" is tokens and wall clock, as on the rest of the page - the fleet runs on a subscription, so
 headroom is the scarce thing. `fct_runs.list_cost_usd` carries Claude Code's own list-price figure

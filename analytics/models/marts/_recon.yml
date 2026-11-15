@@ -1,0 +1,199 @@
+version: 2
+
+# Recon's marts (docs/recon-tab-plan.md, "The marts"): what the Recon tab reads. Coverage, patterns
+# and suggestions are all of history per project; yield is cut by window. Fixtures use alpha and
+# bravo as project keys.
+models:
+  - name: mart_recon_projects
+    columns:
+      - name: project_key
+        tests: [unique, not_null]
+  - name: mart_recon_coverage
+    tests:
+      - unique_combination: {columns: [project_key, area, role, width]}
+    columns:
+      - name: state
+        tests:
+          - accepted_values: {values: [gap, fresh, changed, unknown]}
+  - name: mart_recon_patterns
+    tests:
+      - unique_combination: {columns: [project_key, area, route_pattern, role, width]}
+  - name: mart_recon_yield
+    tests:
+      - unique_combination: {columns: [window_days, project_key, cut, cut_key]}
+    columns:
+      - name: cut
+        tests:
+          - accepted_values: {values: [area, direction]}
+  - name: mart_recon_suggestions
+    tests:
+      - unique_combination: {columns: [project_key, suggestion_key]}
+      - unique_combination: {columns: [project_key, rank]}
+    columns:
+      - name: kind
+        tests:
+          - accepted_values: {values: [rerun, gap, changed]}
+      - name: rule
+        tests:
+          - accepted_values: {values: [1, 2, 3, 4], quote: false}
+
+unit_tests:
+  # alpha lists one role. Events' member-at-a-desk cell was last scouted on a commit off the base:
+  # unknown, not fresh. A visit as a role the list does not have fills an 'other' cell outside the
+  # config, and its changes since count. bravo lists no roles: one 'any role' column, and its Help
+  # area has no code paths, so a scouted cell there is fresh.
+  - name: recon_coverage_has_every_cell_and_says_unknown
+    model: mart_recon_coverage
+    given:
+      - input: ref('stg_recon__projects')
+        rows:
+          - {project_key: alpha, role_count: 1}
+          - {project_key: bravo, role_count: 0}
+      - input: ref('stg_recon__areas')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0, has_code: true}
+          - {project_key: bravo, area: Help, area_ordinal: 0, has_code: false}
+      - input: ref('stg_recon__roles')
+        rows:
+          - {project_key: alpha, role: member, role_ordinal: 0}
+      - input: ref('int_recon_visit_area')
+        rows:
+          - {visit_id: 1, discovery_id: 1, project_key: alpha, area: Events, area_ordinal: 0, role: member, role_ordinal: 0, width: desk, seconds: 30, visited_at: '2026-10-01 10:00:00', commit_sha: x1, placement: unknown}
+          - {visit_id: 2, discovery_id: 1, project_key: alpha, area: Events, area_ordinal: 0, role: other, role_ordinal: 1000000, width: phone, seconds: 10, visited_at: '2026-10-01 10:05:00', commit_sha: c1, resolved_sha: c1full, placement: line, fp_index: 3}
+          - {visit_id: 3, discovery_id: 2, project_key: bravo, area: Help, area_ordinal: 0, role: any role, role_ordinal: 0, width: phone, seconds: 5, visited_at: '2026-10-02 10:00:00', commit_sha: c9, placement: line, fp_index: 0}
+      - input: ref('int_recon_visit_since')
+        rows:
+          - {visit_id: 2, commits_since: 2, files_since: 4, tickets_since: [30, 31]}
+          - {visit_id: 3, commits_since: 0, files_since: 0, tickets_since: []}
+      - input: ref('int_recon_area_state')
+        rows:
+          - {project_key: alpha, area: Events, has_code: true, area_head_commit: h0, cooling: false}
+          - {project_key: bravo, area: Help, has_code: false, area_head_commit: null, cooling: false}
+      - input: ref('fct_discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 1, shown: true, approved: true}
+      - input: ref('stg_board__discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 1, observation_ids: [1]}
+      - input: ref('int_recon_observation_area')
+        rows:
+          - {observation_id: 1, discovery_id: 1, project_key: alpha, area: Events, role: member, width: desk}
+    expect:
+      rows:
+        - {project_key: alpha, area: Events, role: member, width: phone, in_config: true, visits: 0, state: gap, last_commit: null, commits_since: 0, tickets_since: '[]', shown: 0, approved: 0, area_head_commit: h0}
+        - {project_key: alpha, area: Events, role: member, width: desk, in_config: true, visits: 1, state: unknown, last_commit: x1, commits_since: 0, tickets_since: '[]', shown: 1, approved: 1, area_head_commit: h0}
+        - {project_key: alpha, area: Events, role: other, width: phone, in_config: false, visits: 1, state: changed, last_commit: c1full, commits_since: 2, tickets_since: '[30,31]', shown: 0, approved: 0, area_head_commit: h0}
+        - {project_key: bravo, area: Help, role: any role, width: phone, in_config: true, visits: 1, state: fresh, last_commit: c9, commits_since: 0, tickets_since: '[]', shown: 0, approved: 0, area_head_commit: null}
+        - {project_key: bravo, area: Help, role: any role, width: desk, in_config: true, visits: 0, state: gap, last_commit: null, commits_since: 0, tickets_since: '[]', shown: 0, approved: 0, area_head_commit: null}
+
+  # The rules, in their order. Events changed since it was scouted and a past direction had an
+  # approval there: rerun, first - and every cell of it is covered, so it has no gap row. Billing,
+  # never scouted, changed in the last 30 days: gap, rule 2. Search is the same with more files, but
+  # cooling, so it sinks below Billing. Admin (never scouted) and Help (scouted, no code paths, one
+  # empty cell) are gaps under rule 3, never-scouted first; Help is never a changed row. Shop changed
+  # since, but its past direction had nothing approved: changed, rule 4, last.
+  - name: recon_suggestions_follow_the_rule_order
+    model: mart_recon_suggestions
+    given:
+      - input: ref('int_recon_area_state')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0, has_code: true, state: changed, last_visited_at: '2026-10-03 10:00:00', last_commit: e1e1e1e1e1, commits_since: 4, files_since: 5, tickets_since: [30], changed_recently: true, commits_90d: 4, files_90d: 5, tickets_90d: [30], area_head_commit: h0, cooling: false}
+          - {project_key: alpha, area: Billing, area_ordinal: 1, has_code: true, state: never, changed_recently: true, commits_90d: 2, files_90d: 2, tickets_since: [], tickets_90d: [], cooling: false}
+          - {project_key: alpha, area: Search, area_ordinal: 2, has_code: true, state: never, changed_recently: true, commits_90d: 9, files_90d: 9, tickets_since: [], tickets_90d: [], cooling: true}
+          - {project_key: alpha, area: Help, area_ordinal: 3, has_code: false, state: fresh, last_visited_at: '2026-10-01 10:00:00', last_commit: e1e1e1e1e1, commits_since: 0, files_since: 0, tickets_since: [], tickets_90d: [], changed_recently: false, cooling: false}
+          - {project_key: alpha, area: Admin, area_ordinal: 4, has_code: true, state: never, changed_recently: false, commits_90d: 0, files_90d: 0, tickets_since: [], tickets_90d: [], cooling: false}
+          - {project_key: alpha, area: Shop, area_ordinal: 5, has_code: true, state: changed, last_visited_at: '2026-10-02 10:00:00', last_commit: e1e1e1e1e1, commits_since: 1, files_since: 1, tickets_since: [], tickets_90d: [], changed_recently: false, cooling: false}
+      - input: ref('mart_recon_coverage')
+        rows:
+          - {project_key: alpha, area: Events, role: member, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: changed}
+          - {project_key: alpha, area: Events, role: member, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: fresh}
+          - {project_key: alpha, area: Billing, role: member, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Billing, role: member, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: gap}
+          - {project_key: alpha, area: Search, role: member, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Search, role: member, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: gap}
+          - {project_key: alpha, area: Help, role: member, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Help, role: member, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: fresh}
+          - {project_key: alpha, area: Admin, role: member, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Admin, role: member, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: gap}
+          - {project_key: alpha, area: Shop, role: member, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: changed}
+          - {project_key: alpha, area: Shop, role: member, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: changed}
+      - input: ref('int_discovery_tickets')
+        rows:
+          - {discovery_id: 10, project_key: alpha, direction: 'Plan your month as a member', direction_lineage_id: 10, created_at: '2026-10-03 09:00:00'}
+          - {discovery_id: 11, project_key: alpha, direction: 'Buy something', direction_lineage_id: 11, created_at: '2026-10-02 09:00:00'}
+      - input: ref('fct_discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, area: Events, shown: true, approved: true, new_to_me: true}
+          - {proposal_id: 2, discovery_id: 11, area: Shop, shown: true, approved: false, new_to_me: false}
+    expect:
+      rows:
+        - {rank: 1, rule: 1, kind: rerun, suggestion_key: 'rerun:10', area: Events, direction: 'Plan your month as a member', source_discovery_id: 10, files_changed: 5, cooling: false, reasons: '["scouted 3 Oct on e1e1e1e","4 commits, 5 files in its code since, from 1 ticket","this direction: 1 approved here, 1 new to me"]'}
+        - {rank: 2, rule: 2, kind: gap, suggestion_key: 'gap:Billing', area: Billing, direction: 'Nobody has used Billing yet.', source_discovery_id: null, files_changed: 2, cooling: false, reasons: '["never scouted","its code changed in the last 30 days (2 commits in 90)"]'}
+        - {rank: 3, rule: 2, kind: gap, suggestion_key: 'gap:Search', area: Search, direction: 'Nobody has used Search yet.', source_discovery_id: null, files_changed: 9, cooling: true, reasons: '["never scouted","its code changed in the last 30 days (9 commits in 90)","cooling: its last 3 discoveries had nothing approved here"]'}
+        - {rank: 4, rule: 3, kind: gap, suggestion_key: 'gap:Admin', area: Admin, direction: 'Nobody has used Admin yet.', source_discovery_id: null, files_changed: 0, cooling: false, reasons: '["never scouted"]'}
+        - {rank: 5, rule: 3, kind: gap, suggestion_key: 'gap:Help', area: Help, direction: 'Nobody has used Help as anyone on a phone.', source_discovery_id: null, files_changed: 0, cooling: false, reasons: '["scouted 1 Oct on e1e1e1e","never as member on a phone","no code paths, so never stale"]'}
+        - {rank: 6, rule: 4, kind: changed, suggestion_key: 'changed:Shop', area: Shop, direction: 'Shop has changed since it was scouted on 2 Oct. Use it again as the people it is for, and see what is different.', source_discovery_id: null, files_changed: 1, cooling: false, reasons: '["scouted 2 Oct on e1e1e1e","1 commit, 1 file in its code since","nothing approved from past directions here"]'}
+
+  # A gap is named per area, collapsing whole roles and whole widths: with three roles, admin
+  # missing at both widths and everyone missing on a phone is "as admin, or as anyone on a phone".
+  # Once a visit covers a cell it leaves the stub; once every cell is covered the gap row is gone.
+  - name: recon_a_gap_names_its_empty_cells_and_goes_when_they_are_covered
+    model: mart_recon_suggestions
+    given:
+      - input: ref('int_recon_area_state')
+        rows:
+          - {project_key: alpha, area: Billing, area_ordinal: 0, has_code: true, state: fresh, last_visited_at: '2026-10-03 10:00:00', last_commit: b1b1b1b1, commits_since: 0, files_since: 0, tickets_since: [], tickets_90d: [], changed_recently: false, cooling: false}
+          - {project_key: alpha, area: Events, area_ordinal: 1, has_code: true, state: fresh, last_visited_at: '2026-10-03 10:00:00', last_commit: b1b1b1b1, commits_since: 0, files_since: 0, tickets_since: [], tickets_90d: [], changed_recently: false, cooling: false}
+      - input: ref('mart_recon_coverage')
+        rows:
+          - {project_key: alpha, area: Billing, role: signed out, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Billing, role: signed out, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: fresh}
+          - {project_key: alpha, area: Billing, role: member, role_ordinal: 1, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Billing, role: member, role_ordinal: 1, width: desk, width_ordinal: 1, in_config: true, state: fresh}
+          - {project_key: alpha, area: Billing, role: admin, role_ordinal: 2, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Billing, role: admin, role_ordinal: 2, width: desk, width_ordinal: 1, in_config: true, state: gap}
+          - {project_key: alpha, area: Events, role: signed out, role_ordinal: 0, width: phone, width_ordinal: 0, in_config: true, state: fresh}
+          - {project_key: alpha, area: Events, role: signed out, role_ordinal: 0, width: desk, width_ordinal: 1, in_config: true, state: fresh}
+          - {project_key: alpha, area: Events, role: member, role_ordinal: 1, width: phone, width_ordinal: 0, in_config: true, state: fresh}
+          - {project_key: alpha, area: Events, role: member, role_ordinal: 1, width: desk, width_ordinal: 1, in_config: true, state: fresh}
+          - {project_key: alpha, area: Events, role: admin, role_ordinal: 2, width: phone, width_ordinal: 0, in_config: true, state: fresh}
+          - {project_key: alpha, area: Events, role: admin, role_ordinal: 2, width: desk, width_ordinal: 1, in_config: true, state: fresh}
+      - input: ref('int_discovery_tickets')
+        format: sql
+        rows: "select null::integer as discovery_id, null::varchar as project_key, null::varchar as direction, null::integer as direction_lineage_id, null::timestamp as created_at where false"
+      - input: ref('fct_discovery_proposals')
+        format: sql
+        rows: "select null::integer as proposal_id, null::integer as discovery_id, null::varchar as area, null::boolean as shown, null::boolean as approved, null::boolean as new_to_me where false"
+    expect:
+      rows:
+        - {suggestion_key: 'gap:Billing', rank: 1, direction: 'Nobody has used Billing as admin, or as anyone on a phone.', cells: '[{"role":"signed out","width":"phone"},{"role":"member","width":"phone"},{"role":"admin","width":"phone"},{"role":"admin","width":"desk"}]'}
+
+  # A direction and its reruns are one lineage: discovery 11 reran 10, so their proposals count
+  # together under 10's title, and Scout again reruns the latest of them. By area, a discovery
+  # counts where it visited or proposed; only its proposals in the area count there.
+  - name: recon_yield_follows_a_direction_across_its_reruns
+    model: mart_recon_yield
+    overrides:
+      vars:
+        windows: [0]
+    given:
+      - input: ref('int_discovery_tickets')
+        rows:
+          - {discovery_id: 10, project_key: alpha, track: Discovery, direction: 'Plan your month', direction_lineage_id: 10, direction_lineage_title: 'Plan a month', created_at: '2026-10-01 09:00:00', cost_usd: 1.5, cost_complete: true}
+          - {discovery_id: 11, project_key: alpha, track: Discovery, direction: 'Plan your month again', direction_lineage_id: 10, direction_lineage_title: 'Plan a month', created_at: '2026-11-01 09:00:00', cost_usd: null, cost_complete: false}
+      - input: ref('int_recon_visit_area')
+        rows:
+          - {visit_id: 1, discovery_id: 10, project_key: alpha, area: Events}
+          - {visit_id: 2, discovery_id: 11, project_key: alpha, area: Events}
+          - {visit_id: 3, discovery_id: 11, project_key: alpha, area: Billing}
+      - input: ref('fct_discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, area: Events, shown: true, approved: true, verdict: approved, new_to_me: true, filed: true}
+          - {proposal_id: 2, discovery_id: 11, area: Events, shown: true, approved: false, verdict: rejected, reject_reason: Generic, new_to_me: false, filed: false}
+          - {proposal_id: 3, discovery_id: 11, area: Billing, shown: true, approved: true, verdict: approved, new_to_me: false, filed: true}
+          - {proposal_id: 4, discovery_id: 11, area: Billing, shown: false, approved: false, verdict: undecided, new_to_me: null, filed: false}
+    expect:
+      rows:
+        - {window_days: 0, project_key: alpha, cut: area, cut_key: Billing, label: Billing, discoveries: 1, shown: 1, approved: 1, rejected: 0, rejected_generic: 0, new_to_me: 0, filed: 1, cost_usd: null, cost_complete: false, latest_discovery_id: 11}
+        - {window_days: 0, project_key: alpha, cut: area, cut_key: Events, label: Events, discoveries: 2, shown: 2, approved: 1, rejected: 1, rejected_generic: 1, new_to_me: 1, filed: 1, cost_usd: null, cost_complete: false, latest_discovery_id: 11}
+        - {window_days: 0, project_key: alpha, cut: direction, cut_key: '10', label: 'Plan a month', discoveries: 2, shown: 3, approved: 2, rejected: 1, rejected_generic: 1, new_to_me: 1, filed: 2, cost_usd: null, cost_complete: false, latest_discovery_id: 11}

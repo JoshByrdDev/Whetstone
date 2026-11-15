@@ -9,14 +9,17 @@ Everything it writes is under <data root>/analytics/ (gitignored, one machine's)
     marts/*.parquet    what the board reads, swapped in whole once a build has passed its tests.
     refresh.json       how the last refresh went - read by the board's status route.
 
-Three sources, loaded into the warehouse's `raw` schema:
+Four sources, loaded into the warehouse's `raw` schema:
 
   * the board database, read through SQLite's backup API into a private snapshot, so the live
     database is only ever read and never held;
   * every skill's and the worker prompt's git history, so a run recorded before runs carried a
     skill hash still lands on the version it was given;
   * the Claude worker transcripts under ~/.claude/projects, found from the worktree roots the
-    board's tickets name, and loaded incrementally: a file is re-read only when it has changed.
+    board's tickets name, and loaded incrementally: a file is re-read only when it has changed;
+  * Recon's inputs: each project's areas and roles and each repo's resolved base ref, from the
+    recon-inputs.json the board writes before it starts a refresh, and each base's first-parent
+    history read from git (docs/recon-tab-plan.md, "Loading").
 
 A refresh that fails leaves the published marts as they were. See docs/analytics.md.
 """
@@ -51,6 +54,8 @@ PUBLISHED = [
     "mart_qa_rulings", "mart_escapes", "mart_rebase_returns",
     # The Discovery track's measures (docs/discovery-track-plan.md, "What is measured"; step 5).
     "fct_discovery_proposals", "mart_discovery_funnel", "mart_discovery_rejections", "mart_discovery_versions",
+    # Recon: where to point the next scout (docs/recon-tab-plan.md, "The marts").
+    "mart_recon_projects", "mart_recon_coverage", "mart_recon_patterns", "mart_recon_yield", "mart_recon_suggestions",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an
@@ -118,8 +123,8 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         # A Delivery ticket filed from a discovery's proposal names it (AddDiscoveryTrack). The
         # description is a discovery's direction; only stg_board__discovery_tickets reads it.
         "DiscoveryId": "INTEGER", "Description": "VARCHAR", "RequiresRouteReview": "BOOLEAN",
-        # Recon's "Scout this" key (docs/recon-tab-plan.md, R1). NULL until that migration ships;
-        # read now so a rerun's results already count toward the direction it reran.
+        # Recon's "Scout this" key (docs/recon-tab-plan.md, R1): gap:/changed:/rerun:<id>. A rerun's
+        # results count toward the direction it reran.
         "ReconFrom": "VARCHAR",
     },
     # The Discovery track's record (docs/discovery-track-plan.md). Lists (Jobs, Areas, ObservationIds,
@@ -171,6 +176,12 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
     "DiscoveryTasteReads": {
         "Id": "INTEGER", "TicketId": "INTEGER", "RunId": "INTEGER", "Round": "INTEGER", "Phase": "VARCHAR",
         "VersionId": "INTEGER", "VersionNumber": "INTEGER", "Hash": "VARCHAR", "At": "VARCHAR",
+    },
+    # Recon's Not now, append-only (docs/recon-tab-plan.md). Loaded for history only: the board
+    # applies set-asides live, from its own table, so one takes effect without a refresh.
+    "ReconDismissalEvents": {
+        "Id": "INTEGER", "ProjectKey": "VARCHAR", "SuggestionKey": "VARCHAR", "Kind": "VARCHAR",
+        "AreaHeadCommit": "VARCHAR", "Until": "VARCHAR", "At": "VARCHAR",
     },
     # Bug tracing: a bug ticket traced to the tickets whose commits wrote the lines it fixed.
     "BugLinks": {
@@ -543,7 +554,172 @@ def load_transcript_batch(con: duckdb.DuckDBPyConnection, paths: list[str]) -> N
     con.execute("DROP TABLE _lines")
 
 
-# ---- 4. dbt, then publishing -----------------------------------------------------------------
+# ---- 4. Recon's inputs: each project's areas, roles and base history ---------------------------
+
+RECON_DDL = {
+    # One row per project with a `discovery` block, as the board's config had it when it started
+    # this refresh.
+    "recon_projects": "project_key VARCHAR, ordinal INTEGER, areas INTEGER, roles INTEGER, inputs_at VARCHAR",
+    "recon_areas": "project_key VARCHAR, area VARCHAR, ordinal INTEGER, pages VARCHAR[], code VARCHAR[]",
+    "recon_roles": "project_key VARCHAR, role VARCHAR, ordinal INTEGER",
+    # Each repo's resolved base ref (TicketGitService's rule, applied by the board) and its tip.
+    "recon_repos": "project_key VARCHAR, repo VARCHAR, base_ref VARCHAR, tip_sha VARCHAR, commits INTEGER, error VARCHAR",
+    # The base's first-parent line, newest first (fp_index 0 is the tip), one row per commit and
+    # file. `path` starts with the repo's folder on a project of several repos, as an area's code
+    # path does. A commit that changed no file has one row with a NULL path.
+    "recon_commits": """project_key VARCHAR, repo VARCHAR, sha VARCHAR, fp_index INTEGER, committed_at VARCHAR,
+        subject VARCHAR, is_merge BOOLEAN, path VARCHAR""",
+    # The commits a first-parent merge brought in (its second side), so a ticket whose recorded
+    # commits are the merged ones is still found. A non-merge commit is its own only member.
+    "recon_commit_members": "project_key VARCHAR, repo VARCHAR, sha VARCHAR, member_sha VARCHAR",
+    # Where each commit a visit or observation recorded sits on that line: `line` (on it),
+    # `merged` (an ancestor brought in by the first-parent commit at fp_index) or `unknown` (not an
+    # ancestor of the base at all - a rewritten base - or not in this repo).
+    "recon_visit_commits": "project_key VARCHAR, repo VARCHAR, commit_sha VARCHAR, resolved_sha VARCHAR, fp_index INTEGER, placement VARCHAR",
+}
+
+RECON_DAYS = 90
+
+
+def load_recon(con: duckdb.DuckDBPyConnection, inputs_file: Path) -> dict:
+    """Recon's inputs. Areas, roles and each repo's base ref come from recon-inputs.json, which the
+    board writes before it starts a refresh, because the rules for them (the merged project config,
+    which ref is the base) live in C# and must not be written a third time here. Without the file -
+    a refresh started by hand - nothing is loaded and the Recon marts build empty."""
+    for name, ddl in RECON_DDL.items():
+        con.execute(f"CREATE OR REPLACE TABLE raw.{name} ({ddl})")
+    if not inputs_file.exists():
+        log(f"  recon: no {inputs_file.name} (a refresh the board did not start), so the Recon marts build empty")
+        return {"inputs": False}
+    try:
+        inputs = json.loads(inputs_file.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as e:
+        log(f"  recon: {inputs_file.name} could not be read ({e}), so the Recon marts build empty")
+        return {"inputs": False, "error": str(e)}
+
+    at = inputs.get("writtenAt")
+    projects, areas, roles, repos = [], [], [], []
+    commits, members, placed = [], [], []
+    for pi, proj in enumerate(inputs.get("projects") or []):
+        key = proj.get("key")
+        if not key:
+            continue
+        p_areas = [a for a in proj.get("areas") or [] if a.get("name")]
+        p_roles = [r for r in proj.get("roles") or [] if r]
+        projects.append((key, pi, len(p_areas), len(p_roles), at))
+        for ai, a in enumerate(p_areas):
+            areas.append((key, a["name"], ai, list(a.get("pages") or []), list(a.get("code") or [])))
+        for ri, r in enumerate(p_roles):
+            roles.append((key, r, ri))
+        # The commits this project's visits and observations recorded, to place on each repo's line.
+        recorded = sorted({r[0] for r in con.execute("""
+            SELECT DISTINCT trim(c) FROM (
+                SELECT v."Commit" AS c FROM raw."DiscoveryVisits" v JOIN raw."Tickets" t ON t."Id" = v."TicketId" WHERE t."ProjectKey" = ?
+                UNION ALL
+                SELECT o."Commit" FROM raw."DiscoveryObservations" o JOIN raw."Tickets" t ON t."Id" = o."TicketId" WHERE t."ProjectKey" = ?)
+            WHERE c IS NOT NULL AND trim(c) <> ''""", [key, key]).fetchall()})
+        for repo in proj.get("repos") or []:
+            got = load_recon_repo(key, repo, recorded)
+            repos.append(got["repo"])
+            commits += got["commits"]
+            members += got["members"]
+            placed += got["placed"]
+
+    for name, rows in (("recon_projects", projects), ("recon_areas", areas), ("recon_roles", roles),
+                       ("recon_repos", repos), ("recon_commits", commits), ("recon_commit_members", members),
+                       ("recon_visit_commits", placed)):
+        if rows:
+            con.executemany(f"INSERT INTO raw.{name} VALUES ({', '.join('?' * len(rows[0]))})", rows)
+    log(f"  recon: {len(projects)} projects, {len(areas)} areas, {len(roles)} roles, "
+        f"{len({(c[0], c[1], c[2]) for c in commits})} base commits, {len(placed)} recorded commits placed")
+    return {"inputs": True, "projects": len(projects), "areas": len(areas), "roles": len(roles),
+            "repos": len(repos), "commits": len({(c[0], c[1], c[2]) for c in commits})}
+
+
+def load_recon_repo(key: str, repo: dict, recorded: list[str]) -> dict:
+    """One repo's base line, from the oldest commit a visit recorded (or RECON_DAYS back) to the tip."""
+    folder, path, base = repo.get("dir") or "", repo.get("path") or "", repo.get("baseRef")
+    out: dict = {"repo": (key, folder, base, None, 0, None), "commits": [], "members": [], "placed": []}
+
+    def fail(why: str) -> dict:
+        log(f"  recon: {key}{'/' + folder if folder else ''}: {why}; its areas' staleness is unknown")
+        out["repo"] = (key, folder, base, None, 0, why)
+        out["placed"] = [(key, folder, c, None, None, "unknown") for c in recorded]
+        return out
+
+    cwd = Path(path)
+    if not path or not cwd.is_dir():
+        return fail(f"no repo at {path or '(no path)'}")
+    if not base:
+        return fail("no base ref (the base branch is neither local nor on origin)")
+    tip = (git(cwd, "rev-parse", "--verify", "--quiet", f"{base}^{{commit}}") or "").strip()
+    if not tip:
+        return fail(f"{base} does not resolve")
+
+    line = [l.strip() for l in (git(cwd, "rev-list", "--first-parent", base) or "").splitlines() if l.strip()]
+    pos = {sha: i for i, sha in enumerate(line)}
+
+    # Each recorded commit: on the line, merged in by a first-parent commit, or unknown.
+    oldest = -1
+    for c in recorded:
+        full = (git(cwd, "rev-parse", "--verify", "--quiet", f"{c}^{{commit}}") or "").strip()
+        if not full:
+            out["placed"].append((key, folder, c, None, None, "unknown"))
+            continue
+        if full in pos:
+            out["placed"].append((key, folder, c, full, pos[full], "line"))
+            oldest = max(oldest, pos[full])
+            continue
+        # An ancestor but off the line: the oldest first-parent commit that contains it is where it
+        # came in. Not an ancestor at all (a rewritten base): unknown, never fresh.
+        if git(cwd, "merge-base", "--is-ancestor", full, base) is None:
+            out["placed"].append((key, folder, c, full, None, "unknown"))
+            continue
+        path_in = [l.strip() for l in (git(cwd, "rev-list", "--first-parent", "--ancestry-path", f"{full}..{base}") or "").splitlines() if l.strip()]
+        at = pos.get(path_in[-1]) if path_in else None
+        out["placed"].append((key, folder, c, full, at, "merged" if at is not None else "unknown"))
+        if at is not None:
+            oldest = max(oldest, at)
+
+    since = len([l for l in (git(cwd, "rev-list", "--first-parent", f"--since={RECON_DAYS}.days", base) or "").splitlines() if l.strip()])
+    n = max(since, oldest + 1)
+    out["repo"] = (key, folder, base, tip, n, None)
+    if n == 0:
+        return out
+
+    log_out = git(cwd, "log", "--first-parent", "--diff-merges=first-parent", "--name-only",
+                  "--format=@@%H\t%P\t%cI\t%s", "-n", str(n), base) or ""
+    current, files, merges = None, [], []
+
+    def flush() -> None:
+        if current is None:
+            return
+        sha, parents, at, subject = current
+        is_merge = len(parents) > 1
+        prefix = folder + "/" if folder else ""
+        for f in (files or [None]):
+            out["commits"].append((key, folder, sha, pos.get(sha), at, subject[:200], is_merge, prefix + f if f else None))
+        out["members"].append((key, folder, sha, sha))
+        if is_merge:
+            merges.append((sha, parents[0]))
+
+    for raw_line in log_out.splitlines():
+        if raw_line.startswith("@@"):
+            flush()
+            sha, parents, at, subject = (raw_line[2:].split("\t", 3) + ["", "", ""])[:4]
+            current, files = (sha, parents.split(), at, subject), []
+        elif raw_line.strip() and current is not None:
+            files.append(raw_line.strip())
+    flush()
+
+    for sha, first in merges[:500]:
+        for m in (git(cwd, "rev-list", f"{first}..{sha}") or "").splitlines():
+            if m.strip() and m.strip() != sha:
+                out["members"].append((key, folder, sha, m.strip()))
+    return out
+
+
+# ---- 5. dbt, then publishing -----------------------------------------------------------------
 
 def run_dbt(warehouse: Path) -> None:
     """`dbt build`, in a process of its own: dbt-duckdb keeps its connection for the life of the
@@ -667,6 +843,11 @@ def main() -> int:
             else:
                 status["transcriptRows"] = load_transcripts(con, args.transcripts_dir or claude_projects_dir())
             step("transcripts", t0)
+
+            t0 = time.time()
+            log("recon inputs")
+            status["recon"] = load_recon(con, out_dir / "recon-inputs.json")
+            step("recon", t0)
             con.execute("CHECKPOINT")
         finally:
             con.close()

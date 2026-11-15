@@ -1,0 +1,275 @@
+version: 2
+
+# Recon's intermediate models (docs/recon-tab-plan.md, "The marts"). Fixtures use alpha and bravo
+# as project keys and placeholder routes. The page-pattern syntax under test is the one written
+# beside DiscoveryArea in Services/DiscoveryConfig.cs.
+models:
+  - name: int_recon_page_area
+    tests:
+      - unique_combination: {columns: [project_key, path]}
+  - name: int_recon_visit_area
+    columns:
+      - name: visit_id
+        tests: [unique, not_null]
+      - name: width
+        tests:
+          - accepted_values: {values: [phone, desk, unknown]}
+      - name: placement
+        tests:
+          - accepted_values: {values: [line, merged, unknown]}
+  - name: int_recon_observation_area
+    columns:
+      - name: observation_id
+        tests: [unique, not_null]
+  - name: int_recon_proposal_area
+    columns:
+      - name: proposal_id
+        tests: [unique, not_null]
+  - name: int_recon_visit_since
+    columns:
+      - name: visit_id
+        tests: [unique, not_null]
+  - name: int_recon_area_state
+    tests:
+      - unique_combination: {columns: [project_key, area]}
+    columns:
+      - name: state
+        tests:
+          - accepted_values: {values: [never, fresh, changed, unknown]}
+
+unit_tests:
+  # Two areas' patterns match /events/summer-fair: the one with no '**' wins. '**' matches no
+  # segment at all (/Events/ is /events), '[slug]' and '*' one each, the root is '', case and a
+  # trailing slash do not matter, query and fragment are dropped. A project with no areas, or a path
+  # no pattern matches, has no row.
+  - name: recon_the_more_specific_page_pattern_wins
+    model: int_recon_page_area
+    given:
+      - input: ref('stg_recon__areas')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0, pages: ['/events/**']}
+          - {project_key: alpha, area: Event detail, area_ordinal: 1, pages: ['/events/[slug]']}
+          - {project_key: alpha, area: Tickets, area_ordinal: 2, pages: ['/events/*/tickets']}
+          - {project_key: alpha, area: Home, area_ordinal: 3, pages: ['/', '/start']}
+          - {project_key: alpha, area: Billing, area_ordinal: 4, pages: ['/billing']}
+      - input: ref('stg_board__discovery_tickets')
+        rows:
+          - {discovery_id: 1, project_key: alpha}
+          - {discovery_id: 2, project_key: bravo}
+      - input: ref('stg_board__discovery_visits')
+        rows:
+          - {visit_id: 1, discovery_id: 1, url: 'http://localhost:53590/events/summer-fair'}
+          - {visit_id: 2, discovery_id: 1, url: 'http://localhost:53590/Events/?when=week'}
+          - {visit_id: 3, discovery_id: 1, url: 'http://localhost:53590/events/summer-fair/tickets#top'}
+          - {visit_id: 4, discovery_id: 1, url: 'http://localhost:53590/'}
+          - {visit_id: 5, discovery_id: 1, url: 'http://localhost:53590/nowhere'}
+          - {visit_id: 6, discovery_id: 2, url: 'http://localhost:53590/events/x'}
+          - {visit_id: 7, discovery_id: 1, url: '/START'}
+      - input: ref('stg_board__discovery_observations')
+        rows:
+          - {observation_id: 1, discovery_id: 1, url: 'http://localhost:53590/billing/'}
+    expect:
+      rows:
+        - {project_key: alpha, path: '/events/summer-fair', area: Event detail, pattern: '/events/[slug]'}
+        - {project_key: alpha, path: '/events', area: Events, pattern: '/events/**'}
+        - {project_key: alpha, path: '/events/summer-fair/tickets', area: Tickets, pattern: '/events/*/tickets'}
+        - {project_key: alpha, path: '', area: Home, pattern: '/'}
+        - {project_key: alpha, path: '/start', area: Home, pattern: '/start'}
+        - {project_key: alpha, path: '/billing', area: Billing, pattern: '/billing'}
+
+  # A visit's area is the URL's, else the scout's own when it names one of the project's areas
+  # (in any case), else '(unmapped)'. Its role is matched without case, else 'other', or 'any role'
+  # on a project that lists none. 639 wide is a phone, 640 a desk (NARROW_PX). A commit found on the
+  # line in one repo wins over unknown in another; a commit no repo has is unknown, never fresh.
+  - name: recon_a_visit_is_placed_by_url_role_width_and_commit
+    model: int_recon_visit_area
+    given:
+      - input: ref('stg_board__discovery_tickets')
+        rows:
+          - {discovery_id: 1, project_key: alpha}
+          - {discovery_id: 2, project_key: bravo}
+      - input: ref('stg_board__discovery_visits')
+        rows:
+          - {visit_id: 1, discovery_id: 1, url: 'http://x/events/a', area: Billing, signed_in_as: ' Member ', width: '639x900', commit_sha: c1, seconds: 30}
+          - {visit_id: 2, discovery_id: 1, url: 'http://x/other', area: billing, signed_in_as: admin, width: '640x900', commit_sha: c2}
+          - {visit_id: 3, discovery_id: 1, url: 'http://x/other', area: Settings, signed_in_as: null, width: wide, commit_sha: null}
+          - {visit_id: 4, discovery_id: 2, url: 'http://x/help', area: null, signed_in_as: admin, width: '390x844', commit_sha: c1}
+      - input: ref('int_recon_page_area')
+        rows:
+          - {project_key: alpha, path: '/events/a', area: Events, area_ordinal: 0, pattern: '/events/**'}
+      - input: ref('stg_recon__areas')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0}
+          - {project_key: alpha, area: Billing, area_ordinal: 1}
+      - input: ref('stg_recon__roles')
+        rows:
+          - {project_key: alpha, role: member, role_match: member, role_ordinal: 0}
+      - input: ref('stg_recon__visit_commits')
+        rows:
+          - {project_key: alpha, repo: 'alpha-api', commit_sha: c1, resolved_sha: c1full, fp_index: 4, placement: line}
+          - {project_key: alpha, repo: 'alpha-web', commit_sha: c1, resolved_sha: null, fp_index: null, placement: unknown}
+    expect:
+      rows:
+        - {visit_id: 1, area: Events, area_source: url, route_pattern: '/events/**', role: member, width: phone, commit_repo: 'alpha-api', resolved_sha: c1full, fp_index: 4, placement: line}
+        - {visit_id: 2, area: Billing, area_source: scout, route_pattern: '/other', role: other, width: desk, commit_repo: null, resolved_sha: null, fp_index: null, placement: unknown}
+        - {visit_id: 3, area: '(unmapped)', area_source: none, route_pattern: '/other', role: other, width: unknown, commit_repo: null, resolved_sha: null, fp_index: null, placement: unknown}
+        - {visit_id: 4, area: '(unmapped)', area_source: none, route_pattern: '/help', role: any role, width: phone, commit_repo: null, resolved_sha: null, fp_index: null, placement: unknown}
+
+  # An area's code paths are git pathspecs in glob form: a folder takes everything under it, '*'
+  # stays in one segment, '**/' crosses folders. A merge's tickets are found through the commits it
+  # brought in.
+  - name: recon_code_paths_match_as_globs_and_merges_find_their_tickets
+    model: int_recon_area_commits
+    given:
+      - input: ref('stg_recon__areas')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0, code: ['src/events']}
+          - {project_key: alpha, area: Billing, area_ordinal: 1, code: ['src/**/billing*.ts']}
+          - {project_key: alpha, area: Help, area_ordinal: 2, code: []}
+      - input: ref('stg_recon__commits')
+        rows:
+          - {project_key: alpha, repo: '', sha: m1, fp_index: 0, committed_at: '2026-11-01 10:00:00', is_merge: true, path: 'src/events/list.ts'}
+          - {project_key: alpha, repo: '', sha: m1, fp_index: 0, committed_at: '2026-11-01 10:00:00', is_merge: true, path: 'src/eventsx/list.ts'}
+          - {project_key: alpha, repo: '', sha: c2, fp_index: 1, committed_at: '2026-10-01 10:00:00', is_merge: false, path: 'src/pay/billing-form.ts'}
+          - {project_key: alpha, repo: '', sha: c2, fp_index: 1, committed_at: '2026-10-01 10:00:00', is_merge: false, path: 'src/pay/billing/form.css'}
+          - {project_key: alpha, repo: '', sha: c3, fp_index: 2, committed_at: '2026-09-01 10:00:00', is_merge: false, path: null}
+      - input: ref('stg_recon__commit_members')
+        rows:
+          - {project_key: alpha, repo: '', sha: m1, member_sha: m1}
+          - {project_key: alpha, repo: '', sha: m1, member_sha: f1}
+          - {project_key: alpha, repo: '', sha: c2, member_sha: c2}
+      - input: ref('stg_board__ticket_commits')
+        rows:
+          - {ticket_commit_id: 1, ticket_id: 30, project_key: alpha, repo: '', sha: f1}
+    expect:
+      rows:
+        - {area: Events, sha: m1, path: 'src/events/list.ts', ticket_ids: [30]}
+        - {area: Billing, sha: c2, path: 'src/pay/billing-form.ts', ticket_ids: []}
+
+  # What changed since a visit: on its repo's line, after it. A visit on the line does not count its
+  # own commit; a visit merged in by the first-parent commit at its fp_index counts that merge. A
+  # commit in another repo, or another area, is not counted.
+  - name: recon_changes_since_a_visit_follow_the_first_parent_line
+    model: int_recon_visit_since
+    given:
+      - input: ref('int_recon_visit_area')
+        rows:
+          - {visit_id: 1, project_key: alpha, area: Events, commit_repo: '', fp_index: 3, placement: line}
+          - {visit_id: 2, project_key: alpha, area: Events, commit_repo: '', fp_index: 3, placement: merged}
+          - {visit_id: 3, project_key: alpha, area: Events, commit_repo: '', fp_index: null, placement: unknown}
+          - {visit_id: 4, project_key: alpha, area: Billing, commit_repo: '', fp_index: 0, placement: line}
+      - input: ref('int_recon_area_commits')
+        rows:
+          - {project_key: alpha, area: Events, repo: '', sha: a, fp_index: 3, path: 'src/events/a.ts', ticket_ids: [5]}
+          - {project_key: alpha, area: Events, repo: '', sha: b, fp_index: 1, path: 'src/events/b.ts', ticket_ids: [6, 7]}
+          - {project_key: alpha, area: Events, repo: '', sha: b, fp_index: 1, path: 'src/events/c.ts', ticket_ids: [6, 7]}
+          - {project_key: alpha, area: Events, repo: 'alpha-web', sha: w, fp_index: 0, path: 'alpha-web/src/events/x.ts', ticket_ids: [8]}
+          - {project_key: alpha, area: Billing, repo: '', sha: b, fp_index: 1, path: 'src/billing/b.ts', ticket_ids: []}
+    expect:
+      rows:
+        - {visit_id: 1, commits_since: 1, files_since: 2, tickets_since: [6, 7]}
+        - {visit_id: 2, commits_since: 2, files_since: 3, tickets_since: [5, 6, 7]}
+        - {visit_id: 4, commits_since: 0, files_since: 0, tickets_since: []}
+
+  # A proposal's area: most of its observations' URLs (a tie goes to the area listed first), else
+  # Sift's own when it names a project area, else '(unmapped)'. A project that names no areas gets
+  # no row, so the proposal keeps Sift's word.
+  - name: recon_a_proposal_takes_the_area_most_of_its_observations_were_in
+    model: int_recon_proposal_area
+    given:
+      - input: ref('stg_board__discovery_tickets')
+        rows:
+          - {discovery_id: 1, project_key: alpha}
+          - {discovery_id: 2, project_key: bravo}
+      - input: ref('stg_recon__projects')
+        rows:
+          - {project_key: alpha, area_count: 2}
+          - {project_key: bravo, area_count: 0}
+      - input: ref('stg_recon__areas')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0}
+          - {project_key: alpha, area: Billing, area_ordinal: 1}
+      - input: ref('stg_board__discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 1, area: Billing, observation_ids: [1, 2, 3]}
+          - {proposal_id: 2, discovery_id: 1, area: null, observation_ids: [1, 3]}
+          - {proposal_id: 3, discovery_id: 1, area: 'billing', observation_ids: [4]}
+          - {proposal_id: 4, discovery_id: 1, area: Calendar, observation_ids: []}
+          - {proposal_id: 5, discovery_id: 2, area: Calendar, observation_ids: []}
+      - input: ref('int_recon_observation_area')
+        rows:
+          - {observation_id: 1, discovery_id: 1, area: Events, area_source: url, area_ordinal: 0}
+          - {observation_id: 2, discovery_id: 1, area: Events, area_source: url, area_ordinal: 0}
+          - {observation_id: 3, discovery_id: 1, area: Billing, area_source: url, area_ordinal: 1}
+          - {observation_id: 4, discovery_id: 1, area: Events, area_source: scout, area_ordinal: 0}
+    expect:
+      rows:
+        - {proposal_id: 1, area: Events, area_source: url}
+        - {proposal_id: 2, area: Events, area_source: url}
+        - {proposal_id: 3, area: Billing, area_source: sift}
+        - {proposal_id: 4, area: '(unmapped)', area_source: none}
+
+  # Staleness and cooling per area. Events changed since its scout, and recently. Billing was last
+  # scouted on a commit off the base: unknown, not fresh, though nothing is counted since. Help has
+  # no code paths: fresh however old. Shop had three visits but one discovery: not cooling. Admin's
+  # last three judged discoveries found nothing approved there: cooling. Search was never scouted.
+  - name: recon_area_state_unknown_no_code_and_cooling
+    model: int_recon_area_state
+    given:
+      - input: ref('stg_recon__projects')
+        rows:
+          - {project_key: alpha}
+      - input: ref('stg_recon__areas')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0, has_code: true}
+          - {project_key: alpha, area: Billing, area_ordinal: 1, has_code: true}
+          - {project_key: alpha, area: Help, area_ordinal: 2, has_code: false}
+          - {project_key: alpha, area: Shop, area_ordinal: 3, has_code: true}
+          - {project_key: alpha, area: Admin, area_ordinal: 4, has_code: true}
+          - {project_key: alpha, area: Search, area_ordinal: 5, has_code: true}
+      - input: ref('int_recon_visit_area')
+        rows:
+          - {visit_id: 1, discovery_id: 1, project_key: alpha, area: Events, visited_at: '2026-10-01 10:00:00', commit_sha: e1, placement: line, fp_index: 3}
+          - {visit_id: 2, discovery_id: 1, project_key: alpha, area: Billing, visited_at: '2026-10-01 10:00:00', commit_sha: x1, placement: unknown}
+          - {visit_id: 3, discovery_id: 1, project_key: alpha, area: Help, visited_at: '2025-01-01 10:00:00', commit_sha: e1, placement: line, fp_index: 3}
+          - {visit_id: 4, discovery_id: 2, project_key: alpha, area: Shop, visited_at: '2026-10-02 10:00:00', commit_sha: e1, placement: line, fp_index: 3}
+          - {visit_id: 5, discovery_id: 2, project_key: alpha, area: Shop, visited_at: '2026-10-02 10:01:00', commit_sha: e1, placement: line, fp_index: 3}
+          - {visit_id: 6, discovery_id: 2, project_key: alpha, area: Shop, visited_at: '2026-10-02 10:02:00', commit_sha: e1, placement: line, fp_index: 3}
+          - {visit_id: 7, discovery_id: 3, project_key: alpha, area: Admin, visited_at: '2026-10-03 10:00:00', commit_sha: e1, placement: line, fp_index: 3}
+          - {visit_id: 8, discovery_id: 4, project_key: alpha, area: Admin, visited_at: '2026-10-04 10:00:00', commit_sha: e1, placement: line, fp_index: 3}
+          - {visit_id: 9, discovery_id: 5, project_key: alpha, area: Admin, visited_at: '2026-10-05 10:00:00', commit_sha: e1, placement: line, fp_index: 3}
+      - input: ref('int_recon_visit_since')
+        rows:
+          - {visit_id: 1, commits_since: 2, files_since: 3, tickets_since: [30]}
+          - {visit_id: 3, commits_since: 0, files_since: 0, tickets_since: []}
+          - {visit_id: 6, commits_since: 0, files_since: 0, tickets_since: []}
+          - {visit_id: 9, commits_since: 0, files_since: 0, tickets_since: []}
+      - input: ref('int_recon_area_commits')
+        format: sql
+        rows: |
+          select 'alpha' as project_key, 'Events' as area, '' as repo, 'h1' as sha, 1 as fp_index,
+                 cast(timezone('UTC', now()) as timestamp) - interval 5 day as committed_at, 'x' as subject,
+                 'src/events/a.ts' as path, [30] as ticket_ids
+          union all
+          select 'alpha', 'Events', '', 'h0', 0, cast(timezone('UTC', now()) as timestamp) - interval 2 day, 'y', 'src/events/b.ts', []::integer[]
+          union all
+          select 'alpha', 'Search', '', 's1', 2, cast(timezone('UTC', now()) as timestamp) - interval 60 day, 'z', 'src/search/a.ts', []::integer[]
+      - input: ref('int_discovery_tickets')
+        rows:
+          - {discovery_id: 1, project_key: alpha, is_done: true, created_at: '2026-10-01 09:00:00'}
+          - {discovery_id: 2, project_key: alpha, is_done: true, created_at: '2026-10-02 09:00:00'}
+          - {discovery_id: 3, project_key: alpha, is_done: true, created_at: '2026-10-03 09:00:00'}
+          - {discovery_id: 4, project_key: alpha, is_done: true, created_at: '2026-10-04 09:00:00'}
+          - {discovery_id: 5, project_key: alpha, is_done: true, created_at: '2026-10-05 09:00:00'}
+      - input: ref('fct_discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 3, area: Admin, shown: true, approved: false, verdict_closed: true}
+          - {proposal_id: 2, discovery_id: 4, area: Admin, shown: true, approved: false, verdict_closed: true}
+    expect:
+      rows:
+        - {area: Events, state: changed, commits_since: 2, files_since: 3, changed_recently: true, commits_90d: 2, files_90d: 2, area_head_commit: h0, discoveries: 1, cooling: false}
+        - {area: Billing, state: unknown, commits_since: 0, files_since: 0, changed_recently: false, commits_90d: 0, files_90d: 0, area_head_commit: null, discoveries: 1, cooling: false}
+        - {area: Help, state: fresh, commits_since: 0, files_since: 0, changed_recently: false, commits_90d: 0, files_90d: 0, area_head_commit: null, discoveries: 1, cooling: false}
+        - {area: Shop, state: fresh, commits_since: 0, files_since: 0, changed_recently: false, commits_90d: 0, files_90d: 0, area_head_commit: null, discoveries: 1, cooling: false}
+        - {area: Admin, state: fresh, commits_since: 0, files_since: 0, changed_recently: false, commits_90d: 0, files_90d: 0, area_head_commit: null, discoveries: 3, cooling: true}
+        - {area: Search, state: never, commits_since: 0, files_since: 0, changed_recently: false, commits_90d: 1, files_90d: 1, area_head_commit: s1, discoveries: 0, cooling: false}
