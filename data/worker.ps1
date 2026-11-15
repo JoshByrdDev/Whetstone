@@ -2866,7 +2866,8 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
 }
 # A discovery's scout drives the product too, but on the terms the plan sets for it
 # (docs/discovery-track-plan.md): the browser reaches the run's own site and nothing else
-# (--allowed-origins), its screenshots land in this run's folder under the data root, and the agent
+# (--allowed-origins), its screenshots and its recording land in this run's folder under the data
+# root (Get-DiscoveryBrowserArgs, which also asks for the devtools caps that record), and the agent
 # has no shell (see $discoveryTools below). browser_run_code_unsafe is refused on top: it runs code
 # in the browser server's own Node process, which is a shell by another name.
 $discoveryRunDir = ""
@@ -2879,8 +2880,7 @@ if ($isDiscovery -and (Test-DiscoveryDrives $skill)) {
     $discoveryRunDir = Join-Path (Join-Path (Join-Path $DataRoot 'discovery') "$ticketId") (Join-Path 'runs' (Get-Date -Format 'yyyyMMdd-HHmmss'))
     New-Item -ItemType Directory -Path $discoveryRunDir -Force | Out-Null
     $pwCli = Join-Path $DataRoot "playwright-mcp/node_modules/@playwright/mcp/cli.js"
-    $pwArgs = @("--headless", "--isolated", "--output-dir", $discoveryRunDir, "--viewport-size", "1440x900")
-    if ($discoverySite) { $pwArgs += @("--allowed-origins", (Get-UrlOrigin $discoverySite)) }
+    $pwArgs = @(Get-DiscoveryBrowserArgs -RunDir $discoveryRunDir -Site $discoverySite)
     if (Test-Path -LiteralPath $pwCli) {
         $mcpServers.playwright = @{ type = "stdio"; command = "node"; args = @($pwCli) + $pwArgs }
     } else {

@@ -8,8 +8,8 @@ namespace Whetstone.Mcp;
 /// <summary>
 /// The Discovery track's tools, on the workers' own <c>/mcp</c> (docs/discovery-track-plan.md).
 /// <para>
-/// Each one is refused outside its phase - a route only while Charting, observations and visits only
-/// while Scouting or Rechecking, proposals only while Sifting or Rechecking, a goal's outcome only
+/// Each one is refused outside its phase - a route only while Charting, observations, visits and
+/// chapters only while Scouting or Rechecking, proposals only while Sifting or Rechecking, a goal's outcome only
 /// while Rechecking - which is how a phase sees only its own part of the
 /// record without a second server. THERE IS NO TOOL THAT APPROVES, FILES OR ANSWERS: the verdict and
 /// Complete are REST routes a person presses, so a run that thinks a proposal is good has said so and
@@ -126,6 +126,23 @@ public class DiscoveryTools
             var o = await svc.LogObservationAsync(ticketId, new DiscoveryService.ObservationInput(kind, title, saw, tried, job, url, width,
                 signedInAs, area, shotPath, focus?.X, focus?.Y, focus?.W, focus?.H, commit));
             return new { o.Id, kind = o.Kind.ToString(), shot = o.ShotPath };
+        }
+        catch (DiscoveryService.Refused e) { return Refusal(e); }
+    }
+
+    [McpServerTool, Description(
+        "SCOUTING AND RECHECKING ONLY. Mark a chapter in this run's recording: each job as you begin it, and each step within a job that a person " +
+        "watching would want to jump to. Call it right after browser_video_chapter (which shows the card in the video); this is how the board knows where " +
+        "the chapter falls, and chapters are where a proposal's clip is cut. Harmless when the run is not being recorded.")]
+    public static async Task<object> MarkChapter(DiscoveryService svc,
+        [Description("The local ticket id of the discovery.")] int ticketId,
+        [Description("The chapter's title, as on its card: the job, or the step within it.")] string title,
+        [Description("Which of the route's jobs it begins or belongs to, 0-based.")] int? job = null)
+    {
+        try
+        {
+            var c = await svc.MarkChapterAsync(ticketId, title, job);
+            return new { c.Id, c.At };
         }
         catch (DiscoveryService.Refused e) { return Refusal(e); }
     }

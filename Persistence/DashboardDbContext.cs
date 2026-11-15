@@ -33,6 +33,8 @@ public class DashboardDbContext : DbContext
     public DbSet<DiscoveryProposal> DiscoveryProposals => Set<DiscoveryProposal>();
     public DbSet<DiscoveryVerdictEvent> DiscoveryVerdictEvents => Set<DiscoveryVerdictEvent>();
     public DbSet<DiscoveryGoalCheck> DiscoveryGoalChecks => Set<DiscoveryGoalCheck>();
+    public DbSet<DiscoveryRecording> DiscoveryRecordings => Set<DiscoveryRecording>();
+    public DbSet<DiscoveryChapter> DiscoveryChapters => Set<DiscoveryChapter>();
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
     public DbSet<GateFinding> GateFindings => Set<GateFinding>();
     public DbSet<StewardQuestion> StewardQuestions => Set<StewardQuestion>();
@@ -399,6 +401,19 @@ public class DashboardDbContext : DbContext
             e.HasOne(g => g.Ticket).WithMany().HasForeignKey(g => g.TicketId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(g => g.TicketId);
             e.HasIndex(g => g.ProposalId);
+        });
+        b.Entity<DiscoveryRecording>(e =>
+        {
+            e.Property(r => r.File).HasMaxLength(256);
+            e.Property(r => r.Source).HasMaxLength(1024);
+            e.HasOne(r => r.Ticket).WithMany().HasForeignKey(r => r.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(r => r.TicketId);
+        });
+        b.Entity<DiscoveryChapter>(e =>
+        {
+            e.Property(c => c.Title).HasMaxLength(300);
+            e.HasOne(c => c.Ticket).WithMany().HasForeignKey(c => c.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(c => c.TicketId);
         });
 
         b.Entity<ReviewComment>(e =>

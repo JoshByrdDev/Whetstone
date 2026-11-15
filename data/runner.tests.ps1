@@ -517,11 +517,12 @@ exit 3
     New-Copy 'qa-captures/12/sub/page.md' $old
     New-Copy 'issue-attachments/12/from-PROJ-1/mock.png' $old
     New-Copy 'ticket-files/12/log.txt' $old
+    New-Copy 'discovery/12/runs/20261115-053000/video-2026-11-15T05-30-00-000Z.webm' $old
     New-Copy 'qa-captures/13/shot.png' $old
     New-Copy 'qa-captures/14/shot.png' (Get-Date)
     New-Copy 'qa-captures/notes/readme.txt' $old
     $gone = @(Remove-HostTicketCopies -DataRoot $hd -Keep @(13))
-    Check 'copies: an old ticket nobody holds goes from every store' (@($gone | Sort-Object) -join ',') 'issue-attachments/12,qa-captures/12,ticket-files/12'
+    Check 'copies: an old ticket nobody holds goes from every store' (@($gone | Sort-Object) -join ',') 'discovery/12,issue-attachments/12,qa-captures/12,ticket-files/12'
     Check 'copies: ... and is off the disk' (Test-Path (Join-Path $hd 'qa-captures/12')) $false
     Check 'copies: a ticket a run here holds is kept' (Test-Path (Join-Path $hd 'qa-captures/13/shot.png')) $true
     Check 'copies: one written to in the last hour is kept' (Test-Path (Join-Path $hd 'qa-captures/14/shot.png')) $true

@@ -7,7 +7,8 @@ namespace Whetstone.Services;
 
 /// <summary>
 /// Keeps the board's two stores of QA pictures from growing without limit - the policy is
-/// docs/capture-retention.md, and this is all of its enforcement on the board host.
+/// docs/capture-retention.md, and this is all of its enforcement on the board host. The same pass
+/// prunes the Discovery track's media (<see cref="DiscoveryMedia"/>), on the plan's own terms.
 /// <para>
 /// <c>qa-captures/&lt;ticket&gt;</c> is the QA browser's own output, which nothing reads once
 /// <c>set_qa_shots</c> has copied the chosen files out; <c>qa-shots/&lt;ticket&gt;</c> is what the
@@ -29,7 +30,13 @@ public class CaptureRetention : BackgroundService
     public const string LedgerFile = "capture-retention.jsonl";
 
     /// <summary>What the policy keeps. A non-positive days or budget turns that rule off.</summary>
-    public sealed record Policy(int QaCapturesDays = 7, int QaShotsDays = 90, long QaCapturesBudgetMb = 2048, long QaShotsBudgetMb = 1024)
+    /// <remarks>
+    /// The discovery days are the Discovery track's (docs/discovery-track-plan.md, "What is kept"):
+    /// a recording from the verdict it fed, a kept clip from the discovery's Done. Its budget is per
+    /// project, <c>discovery.storageBudgetMb</c>, not here.
+    /// </remarks>
+    public sealed record Policy(int QaCapturesDays = 7, int QaShotsDays = 90, long QaCapturesBudgetMb = 2048, long QaShotsBudgetMb = 1024,
+        int DiscoveryRecordingDays = 7, int DiscoveryClipDays = 90)
     {
         /// <summary>
         /// <c>retention</c> from the global config. A key that is missing or not a number keeps its
@@ -42,11 +49,13 @@ public class CaptureRetention : BackgroundService
             int Int(string k, int d) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var i) ? i : d;
             long Long(string k, long d) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var i) ? i : d;
             return new Policy(Int("qaCapturesDays", p.QaCapturesDays), Int("qaShotsDays", p.QaShotsDays),
-                Long("qaCapturesBudgetMb", p.QaCapturesBudgetMb), Long("qaShotsBudgetMb", p.QaShotsBudgetMb));
+                Long("qaCapturesBudgetMb", p.QaCapturesBudgetMb), Long("qaShotsBudgetMb", p.QaShotsBudgetMb),
+                Int("discoveryRecordingDays", p.DiscoveryRecordingDays), Int("discoveryClipDays", p.DiscoveryClipDays));
         }
     }
 
-    public enum Store { QaCaptures, QaShots }
+    /// <summary>The stores a pass prunes. <c>Discovery</c> is <c>discovery/&lt;ticket&gt;</c>, pruned file by file (<see cref="DiscoveryMedia"/>).</summary>
+    public enum Store { QaCaptures, QaShots, Discovery }
 
     /// <summary>One ticket folder a pass removed, as the ledger records it.</summary>
     public sealed record Pruned(Store Store, int TicketId, string Reason, long Bytes, DateTime At);
@@ -70,7 +79,10 @@ public class CaptureRetention : BackgroundService
             {
                 using var scope = _scopes.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<DashboardDbContext>();
-                var pruned = await PruneAsync(db, _paths, Policy.From(_registry.GetGlobalConfig()), DateTime.UtcNow, _log, stoppingToken);
+                var global = _registry.GetGlobalConfig();
+                var pruned = await PruneAsync(db, _paths, Policy.From(global), DateTime.UtcNow, _log, stoppingToken,
+                    discoveryBudgetMb: key => { try { return _registry.GetProjectConfig(key).Discovery.StorageBudgetMb; } catch { return 0; } },
+                    ffmpeg: Ffmpeg.Find(global));
                 if (pruned.Count > 0)
                     _log.LogInformation("Capture retention removed {Count} ticket folder(s), {Mb:F1}MB",
                         pruned.Count, pruned.Sum(p => p.Bytes) / 1048576.0);
@@ -92,12 +104,15 @@ public class CaptureRetention : BackgroundService
     /// One pass over both stores. Returns every ticket folder it removed, each also appended to the
     /// ledger; what it could not remove (a file held open) is left for the next pass.
     /// </summary>
+    /// <param name="discoveryBudgetMb">Each project's <c>discovery.storageBudgetMb</c>; null leaves the discovery budget off.</param>
+    /// <param name="ffmpeg">Where ffmpeg is, to cut the clips that outlive a recording before it goes; null cuts none.</param>
     public static async Task<IReadOnlyList<Pruned>> PruneAsync(DashboardDbContext db, DashboardPaths paths, Policy policy,
-        DateTime now, ILogger log, CancellationToken ct = default)
+        DateTime now, ILogger log, CancellationToken ct = default, Func<string, long>? discoveryBudgetMb = null, string? ffmpeg = null)
     {
         var pruned = new List<Pruned>();
         pruned.AddRange(await PruneStoreAsync(db, paths, Store.QaCaptures, policy.QaCapturesDays, policy.QaCapturesBudgetMb, now, log, ct));
         pruned.AddRange(await PruneStoreAsync(db, paths, Store.QaShots, policy.QaShotsDays, policy.QaShotsBudgetMb, now, log, ct));
+        pruned.AddRange(await DiscoveryMedia.PruneAsync(db, paths, policy, discoveryBudgetMb ?? (_ => 0), ffmpeg, now, log, ct));
         if (pruned.Count > 0) AppendLedger(paths, pruned, log);
         return pruned;
     }
@@ -204,27 +219,28 @@ public class CaptureRetention : BackgroundService
         Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    private static void AppendLedger(DashboardPaths paths, IEnumerable<Pruned> pruned, ILogger log)
+    public static void AppendLedger(DashboardPaths paths, IEnumerable<Pruned> pruned, ILogger? log)
     {
         try
         {
             Directory.CreateDirectory(paths.GlobalLogsDir);
             File.AppendAllLines(Path.Combine(paths.GlobalLogsDir, LedgerFile), pruned.Select(p => JsonSerializer.Serialize(p, LedgerJson)));
         }
-        catch (Exception ex) { log.LogWarning(ex, "Could not append to the capture retention ledger"); }
+        catch (Exception ex) { log?.LogWarning(ex, "Could not append to the capture retention ledger"); }
     }
 
     /// <summary>
     /// What a pruned shot's image URL answers with: a picture that says when it went, so a deck or
     /// a cached page that only has the URL shows the notice and not a broken image.
     /// </summary>
-    public static string RemovedPlaceholderSvg(DateTime prunedAt) =>
+    public static string RemovedPlaceholderSvg(DateTime prunedAt, string what = "QA shot",
+        string why = "kept for a while after the ticket was done; its caption is still on the ticket") =>
         $"""
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360" width="640" height="360">
           <rect width="640" height="360" fill="#16181d"/>
           <rect x="8" y="8" width="624" height="344" fill="none" stroke="#3a3f4a" stroke-dasharray="6 6"/>
-          <text x="320" y="170" text-anchor="middle" font-family="system-ui, sans-serif" font-size="22" fill="#9aa1ad">QA shot removed on {prunedAt.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)}</text>
-          <text x="320" y="204" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" fill="#6b7280">kept for a while after the ticket was done; its caption is still on the ticket</text>
+          <text x="320" y="170" text-anchor="middle" font-family="system-ui, sans-serif" font-size="22" fill="#9aa1ad">{what} removed on {prunedAt.ToString("d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture)}</text>
+          <text x="320" y="204" text-anchor="middle" font-family="system-ui, sans-serif" font-size="15" fill="#6b7280">{why}</text>
         </svg>
         """;
 }

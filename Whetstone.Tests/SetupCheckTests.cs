@@ -206,4 +206,28 @@ public class SetupCheckTests
             AllClaude, Array.Empty<(string, string)>()), "prototype-capture");
         Assert.Equal("ok", ok.State);
     }
+
+    [Fact]
+    public void Discovery_video_is_asked_about_only_once_a_project_can_be_scouted()
+    {
+        Assert.DoesNotContain(SetupCheckService.Evaluate(Machine(), AllClaude, Array.Empty<(string, string)>()), i => i.Key == "ffmpeg");
+        var ok = Item(SetupCheckService.Evaluate(Machine() with { DiscoveryVideo = () => (new[] { "alpha" }, "/usr/bin/ffmpeg", true) },
+            AllClaude, Array.Empty<(string, string)>()), "ffmpeg");
+        Assert.Equal("ok", ok.State);
+        Assert.False(ok.Required);
+    }
+
+    [Fact]
+    public void Discovery_video_says_which_ffmpeg_is_missing_and_what_is_lost()
+    {
+        var noClips = SetupCheckService.DiscoveryVideo(new[] { "alpha" }, null, recorder: true);
+        Assert.Equal("warn", noClips.State);
+        Assert.Contains("no ffmpeg to cut clips", noClips.Detail);
+        Assert.Contains("ffmpegPath", noClips.Fix);
+        var noRecorder = SetupCheckService.DiscoveryVideo(new[] { "alpha" }, "/usr/bin/ffmpeg", recorder: false);
+        Assert.Contains("without video", noRecorder.Detail);
+        Assert.Contains("install ffmpeg", noRecorder.Fix);
+        var neither = SetupCheckService.DiscoveryVideo(new[] { "alpha" }, null, recorder: false);
+        Assert.Contains("screenshots only", neither.Detail);
+    }
 }

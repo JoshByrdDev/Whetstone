@@ -37,7 +37,9 @@ public class DiscoveryService
         IReadOnlyList<DiscoveryGoalCheck> GoalChecks,
         int Round,
         IReadOnlyList<int> Goals,
-        int RecheckRounds);
+        int RecheckRounds,
+        IReadOnlyList<DiscoveryRecording> Recordings,
+        IReadOnlyList<DiscoveryChapter> Chapters);
 
     public sealed record FiledTicket(int Id, string? Title, string Phase, int? ProposalId, string? BlockedReason = null);
 
@@ -46,10 +48,15 @@ public class DiscoveryService
 
     // ---- reading ----------------------------------------------------------------------------
 
+    /// <summary>Where this machine's ffmpeg is, for the recordings' lengths and the clips; null when it has none.</summary>
+    public string? FfmpegPath => Ffmpeg.Find(_registry.GetGlobalConfig());
+
     public async Task<View?> GetAsync(int ticketId)
     {
         var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId);
         if (t is null || t.Track != TicketTrack.Discovery) return null;
+        // A run's finished recording is picked up the first time anything reads the discovery after it.
+        await DiscoveryMedia.AdoptAsync(_db, _paths, ticketId, FfmpegPath, DateTime.UtcNow);
         var route = await _db.DiscoveryRoutes.AsNoTracking().FirstOrDefaultAsync(r => r.TicketId == ticketId);
         var obs = await _db.DiscoveryObservations.AsNoTracking().Where(o => o.TicketId == ticketId).OrderBy(o => o.Id).ToListAsync();
         var visits = await _db.DiscoveryVisits.AsNoTracking().Where(v => v.TicketId == ticketId).OrderBy(v => v.Id).ToListAsync();
@@ -61,10 +68,12 @@ public class DiscoveryService
             .OrderBy(g => g.Round).ThenBy(g => g.ProposalId).ToListAsync();
         var round = await _tickets.RecheckRoundAsync(ticketId);
         var goals = await _tickets.RecheckGoalIdsAsync(ticketId, Math.Max(round, 1));
+        var recordings = await _db.DiscoveryRecordings.AsNoTracking().Where(r => r.TicketId == ticketId).OrderBy(r => r.Id).ToListAsync();
+        var chapters = await _db.DiscoveryChapters.AsNoTracking().Where(c => c.TicketId == ticketId).OrderBy(c => c.At).ToListAsync();
         return new View(route, obs, visits, props,
             filed.Select(f => new FiledTicket(f.Id, f.Title, f.Phase.ToString(),
                 props.FirstOrDefault(p => p.FiledTicketId == f.Id)?.Id, f.BlockedReason)).ToList(),
-            checks, round, goals, _registry.GetProjectConfig(t.ProjectKey).Discovery.RecheckRounds);
+            checks, round, goals, _registry.GetProjectConfig(t.ProjectKey).Discovery.RecheckRounds, recordings, chapters);
     }
 
     /// <summary>Catches a discovery up out of AwaitingWork if its filed tickets settled while nobody was looking.</summary>
@@ -174,6 +183,7 @@ public class DiscoveryService
         };
         if (i.FocusW is > 0 && i.FocusH is > 0 && i.FocusX is >= 0 && i.FocusY is >= 0)
             (o.FocusX, o.FocusY, o.FocusW, o.FocusH) = (i.FocusX, i.FocusY, i.FocusW, i.FocusH);
+        o.ObservedAt = ShotTaken(i.ShotPath, o.CreatedAt);
         _db.DiscoveryObservations.Add(o);
         await _db.SaveChangesAsync();
         if (!string.IsNullOrWhiteSpace(i.ShotPath))
@@ -182,6 +192,42 @@ public class DiscoveryService
             await _db.SaveChangesAsync();
         }
         return o;
+    }
+
+    /// <summary>
+    /// When an observation was seen: its screenshot's write time - the frame it shows - when that is
+    /// a plausible few minutes before it was logged, else the time it was logged. The recording is
+    /// stamped against this, so a clip shows the moment rather than the scout thinking about it.
+    /// </summary>
+    public static DateTime ShotTaken(string? shotPath, DateTime loggedAt)
+    {
+        if (string.IsNullOrWhiteSpace(shotPath)) return loggedAt;
+        try
+        {
+            var f = new FileInfo(shotPath.Trim().Trim('"'));
+            if (!f.Exists) return loggedAt;
+            var at = f.LastWriteTimeUtc;
+            return at <= loggedAt.AddSeconds(2) && loggedAt - at < TimeSpan.FromMinutes(10) ? at : loggedAt;
+        }
+        catch { return loggedAt; }
+    }
+
+    /// <summary>
+    /// A chapter in the run's recording: a job begun, or a step within one. Stamped by the board's
+    /// clock as it is marked; placed in the video when the recording is adopted.
+    /// </summary>
+    public async Task<DiscoveryChapter> MarkChapterAsync(int ticketId, string title, int? job)
+    {
+        var t = await InPhaseAsync(ticketId, Driving, "mark_chapter");
+        if (string.IsNullOrWhiteSpace(title)) throw new Refused("Name the chapter: the job, or the step within it.");
+        var c = new DiscoveryChapter
+        {
+            TicketId = ticketId, Title = Cap(title, 300), Job = job is >= 0 ? job : null, Round = await RoundOfAsync(t),
+            RunId = await _tickets.LiveRunIdAsync(ticketId), At = DateTime.UtcNow,
+        };
+        _db.DiscoveryChapters.Add(c);
+        await _db.SaveChangesAsync();
+        return c;
     }
 
     public async Task<DiscoveryVisit> LogVisitAsync(int ticketId, string url, string? routePattern, string? width,
@@ -532,6 +578,10 @@ public class DiscoveryService
             + (briefed > 0 ? $", {briefed} slice briefing{(briefed == 1 ? "" : "s")}" : "")
             + $", {props.Count(p => p.Status == ProposalStatus.Rejected)} rejected, {props.Count(p => p.Status == ProposalStatus.Snoozed)} snoozed.";
         await _tickets.AddCommentAsync(ticketId, summary, AuthorKind.System);
+        // What the verdict no longer needs: a rejected or snoozed proposal's clip (one still is
+        // kept), the shots nothing kept uses, the run folders. The recordings' 7 days start now.
+        var pruned = await DiscoveryMedia.PruneAtCompleteAsync(_db, _paths, ticketId, FfmpegPath, DateTime.UtcNow);
+        if (pruned.Count > 0) CaptureRetention.AppendLedger(_paths, pruned, null);
         if (atSignOff)
             return new CompleteResult(filedIds.Count, answered, briefed, filedIds, t.Phase.ToString());
         // Tickets filed: the discovery waits for them to be built, then is rechecked. Nothing to
@@ -541,6 +591,35 @@ public class DiscoveryService
         if (next == TicketPhase.AwaitingWork) await _tickets.SettleDiscoveryAsync(ticketId);
         var phase = await PhaseAsync(ticketId) ?? moved?.Phase ?? next;
         return new CompleteResult(filedIds.Count, answered, briefed, filedIds, phase.ToString());
+    }
+
+    // ---- media ---------------------------------------------------------------------------------
+
+    /// <summary>
+    /// The owner's pin on a proposal: its clip and shots are kept by every retention rule, the budget
+    /// included, until it is unpinned. A REST route with no tool behind it.
+    /// </summary>
+    public async Task<DiscoveryProposal> PinAsync(int proposalId, bool pinned)
+    {
+        var p = await _db.DiscoveryProposals.FirstOrDefaultAsync(x => x.Id == proposalId)
+            ?? throw new Refused($"There is no proposal {proposalId}.");
+        if (p.Status == ProposalStatus.Dropped) throw new Refused($"Proposal {proposalId} is on the dropped list: restore it first.");
+        p.Pinned = pinned;
+        await _db.SaveChangesAsync();
+        return p;
+    }
+
+    /// <summary>A proposal's clip, cut now if it has not been. Null with the reason when there is none to play.</summary>
+    public Task<(string? Path, DiscoveryMedia.ClipState State, string? Error)> ClipAsync(int proposalId, CancellationToken ct = default) =>
+        DiscoveryMedia.EnsureClipAsync(_db, _paths, proposalId, FfmpegPath, ct);
+
+    /// <summary>A recording's file on disk, or null once it is pruned or when it is not this discovery's.</summary>
+    public async Task<(string? Path, DateTime? PrunedAt)> RecordingAsync(int ticketId, int recordingId)
+    {
+        var r = await _db.DiscoveryRecordings.AsNoTracking().FirstOrDefaultAsync(x => x.Id == recordingId && x.TicketId == ticketId);
+        if (r is null) return (null, null);
+        var path = Path.Combine(_paths.DiscoveryTicketDir(ticketId), r.File);
+        return (r.PrunedAt is null && File.Exists(path) ? path : null, r.PrunedAt);
     }
 
     // ---- the owner's look at a route ----------------------------------------------------------

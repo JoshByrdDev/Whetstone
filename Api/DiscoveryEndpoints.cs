@@ -1,4 +1,6 @@
+using Microsoft.EntityFrameworkCore;
 using Whetstone.Models;
+using Whetstone.Persistence;
 using Whetstone.Services;
 
 namespace Whetstone.Api;
@@ -8,6 +10,9 @@ public record DiscoveryVerdictRequest(
     string? Status = null, string? Title = null, string? Why = null, string? Body = null, IReadOnlyList<string>? WorkItems = null,
     string? Kind = null, string? RejectReason = null, string? RejectNote = null, DateTime? SnoozeUntil = null, string? Answer = null,
     bool? NewToMe = null);
+
+/// <summary>The owner's pin on a proposal's media.</summary>
+public record DiscoveryPinRequest(bool Pinned);
 
 /// <summary>The owner's edit of a route at its gate. Each field absent is left as Chart wrote it.</summary>
 public record DiscoveryRouteEditRequest(string? Persona = null, IReadOnlyList<string>? Jobs = null, string? SignedInAs = null,
@@ -20,14 +25,19 @@ public record DiscoveryRouteEditRequest(string? Persona = null, IReadOnlyList<st
 /// </summary>
 public static class DiscoveryEndpoints
 {
+    private static string VideoType(string path) =>
+        path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? "video/mp4" : "video/webm";
+
     public static void MapDiscoveryEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/tickets/{id:int}/discovery", async (int id, DiscoveryService svc) =>
+        app.MapGet("/api/tickets/{id:int}/discovery", async (int id, DiscoveryService svc, DashboardPaths paths) =>
         {
             // A discovery waiting on work that settled while nothing was watching moves on now.
             await svc.SettleAsync(id);
             var v = await svc.GetAsync(id);
             if (v is null) return Results.NotFound();
+            var dir = paths.DiscoveryTicketDir(id);
+            var ffmpeg = svc.FfmpegPath is not null;
             return Results.Ok(new
             {
                 route = v.Route is null ? null : new
@@ -39,7 +49,7 @@ public static class DiscoveryEndpoints
                 {
                     o.Id, kind = o.Kind.ToString(), o.Title, o.Saw, o.Tried, o.Job, o.Url, o.Width, o.SignedInAs, o.Area,
                     shot = o.ShotPath, focus = o.FocusW is null ? null : new { x = o.FocusX, y = o.FocusY, w = o.FocusW, h = o.FocusH },
-                    o.CreatedAt, o.Round,
+                    o.CreatedAt, o.Round, o.ShotPrunedAt, o.RecordingId, o.VideoAt,
                 }),
                 visits = v.Visits.Select(x => new { x.Id, x.Url, x.RoutePattern, x.Width, x.SignedInAs, x.Seconds, x.Area, x.Case, x.At }),
                 proposals = v.Proposals.Select(p => new
@@ -49,7 +59,16 @@ public static class DiscoveryEndpoints
                     p.RejectNote, p.SnoozeUntil, p.Answer, p.FiledTicketId, p.FiledNote, p.Edited, p.CreatedAt, p.DecidedAt,
                     p.NewToMe, draftKind = p.DraftKind.ToString(), p.DraftTitle, p.DraftWhy, p.DraftBody, p.DraftWorkItems,
                     p.Round, recheckKind = p.RecheckKind?.ToString(), p.GoalId,
+                    clip = DiscoveryMedia.StateOf(p, v.Observations, v.Recordings, dir, ffmpeg).ToString(), p.ClipPrunedAt, p.Pinned,
                 }),
+                // The runs' videos, each with its chapters; a pruned one keeps its row and says when it went.
+                recordings = v.Recordings.Select(r => new
+                {
+                    r.Id, r.Round, r.StartedAt, r.Seconds, r.Bytes, r.VerdictAt, r.PrunedAt,
+                    chapters = v.Chapters.Where(c => c.RecordingId == r.Id).Select(c => new { c.Id, c.Title, c.Job, c.VideoAt }),
+                }),
+                // Whether this machine can cut clips at all - the drawer says so rather than showing players that fail.
+                media = new { ffmpeg },
                 filed = v.Filed,
                 goalChecks = v.GoalChecks.Select(g => new
                 {
@@ -61,10 +80,49 @@ public static class DiscoveryEndpoints
             });
         });
 
-        app.MapGet("/api/tickets/{id:int}/discovery/shots/{name}", (int id, string name, DiscoveryService svc) =>
+        app.MapGet("/api/tickets/{id:int}/discovery/shots/{name}", async (int id, string name, DiscoveryService svc, DashboardDbContext db) =>
         {
             var disk = svc.ShotDiskPath(id, name);
-            return disk is null ? Results.NotFound() : Results.File(disk, QaShotStore.ContentType(name));
+            if (disk is not null) return Results.File(disk, QaShotStore.ContentType(name));
+            // Pruned is said, not broken: whatever only has the URL shows when it went.
+            var pruned = await db.DiscoveryObservations.AsNoTracking().Where(o => o.TicketId == id && o.ShotPath == name && o.ShotPrunedAt != null)
+                .Select(o => o.ShotPrunedAt).FirstOrDefaultAsync();
+            return pruned is { } at
+                ? Results.Text(CaptureRetention.RemovedPlaceholderSvg(at, "Screenshot", "no proposal kept it; what the scout saw is still on the discovery"), "image/svg+xml")
+                : Results.NotFound();
+        });
+
+        // A run's whole recording, for scrubbing while deciding. Ranges, so a browser can seek in it.
+        app.MapGet("/api/tickets/{id:int}/discovery/recordings/{rec:int}", async (int id, int rec, DiscoveryService svc) =>
+        {
+            var (path, pruned) = await svc.RecordingAsync(id, rec);
+            if (path is not null) return Results.File(path, VideoType(path), enableRangeProcessing: true);
+            return pruned is null ? Results.NotFound() : Results.StatusCode(StatusCodes.Status410Gone);
+        });
+
+        // A proposal's clip, cut from its recording the first time it is asked for. Nothing past the
+        // data folder: ffmpeg reads one file under it and writes another.
+        app.MapGet("/api/discovery/proposals/{id:int}/clip", async (int id, DiscoveryService svc, CancellationToken ct) =>
+        {
+            var (path, state, error) = await svc.ClipAsync(id, ct);
+            if (path is not null) return Results.File(path, VideoType(path), enableRangeProcessing: true);
+            return state switch
+            {
+                DiscoveryMedia.ClipState.Removed or DiscoveryMedia.ClipState.RecordingRemoved => Results.StatusCode(StatusCodes.Status410Gone),
+                DiscoveryMedia.ClipState.Cuttable => Results.Problem(error ?? "The clip could not be cut.", statusCode: 500),
+                _ => Results.NotFound(new { error = state.ToString() }),
+            };
+        });
+
+        // The owner's pin: a proposal's clip and shots outlive every retention rule until unpinned.
+        app.MapPut("/api/discovery/proposals/{id:int}/pin", async (int id, DiscoveryPinRequest req, DiscoveryService svc) =>
+        {
+            try
+            {
+                var p = await svc.PinAsync(id, req.Pinned);
+                return Results.Ok(new { p.Id, p.Pinned });
+            }
+            catch (DiscoveryService.Refused e) { return Results.BadRequest(new { error = e.Message }); }
         });
 
         app.MapPut("/api/discovery/proposals/{id:int}", async (int id, DiscoveryVerdictRequest req, DiscoveryService svc) =>
