@@ -245,6 +245,39 @@ after a slice is released is a later idea, not this plan.
 Board host only at first; a worker host can run Scout once its stack leases and the data-root
 mirror cover the video.
 
+## Set up for what comes next: the Scout tab
+
+Not in this plan, but planned after it: a **Scout** tab (scout as a verb) for the before and after
+of scouting - what has been scouted, how recently and as whom, where scouting paid off, what
+changed since, and what is worth scouting next, with directions it can suggest for the owner to
+file. Nothing here builds it. What this plan owes it is the record: a tab can only map coverage
+that the runs wrote down, and history that was never recorded cannot be backfilled from video.
+So from the first run, Discovery keeps these, structured rather than in prose:
+
+- **Where it went.** Every page a run visited (the URL and, where the project can say, its route
+  pattern), at which width, signed in as which role, and for how long. Scout and Recheck log it
+  from their browser; it is not left to be read back out of a recording.
+- **What it ran on.** The commit of the code each run used, so "scouted before this changed" is a
+  diff, not a guess.
+- **Which area.** A project names its areas once (`discovery.areas` in `project.defaults.json`:
+  each area's page patterns and code paths - its showcase modules are the natural first list), and
+  every visit, observation and proposal carries the area it belongs to. Page patterns give the
+  tab coverage from the user's side; code paths give it what changed since, from git.
+- **Which showcase cases.** A run that starts from a case, or lands on one, records its id, so
+  cases never visited show up as cold spots.
+- **Who it was.** The persona and role on the route, so coverage is by kind of user as well as by
+  page.
+- **What it yielded.** Proposals and verdicts stay linked to the run, the area and the tickets
+  they became, so the tab can say where scouting found things worth doing and where it has
+  stopped finding them.
+- **Directions as things to reuse.** A route and its direction can be copied into a new
+  discovery, so a direction that paid off is run again after its area changes rather than
+  rewritten.
+
+The rule the tab will need, and that the record keeps possible: suggestions are the owner's to
+file, the same way ideas and verdicts are. A suggested direction becomes a discovery ticket only
+when the owner files it.
+
 ## Decided
 
 - A track of its own, named **Discovery**.
