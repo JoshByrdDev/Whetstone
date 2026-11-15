@@ -9,7 +9,8 @@ namespace Whetstone.Services;
 /// <para>
 /// Two kinds of writer, kept apart by which methods they can reach. A run writes through the MCP
 /// tools - a route while Charting, observations and visits while Scouting, proposals and the dropped
-/// list while Sifting - and each of those is refused outside its own phase. The owner writes the
+/// list while Sifting, and a recheck's goal outcomes beside the scout's and the sift's writes while
+/// Rechecking - and each of those is refused outside its own phase. The owner writes the
 /// verdict and Complete through REST routes with no tool behind them, so no run can approve, file
 /// or answer anything.
 /// </para>
@@ -32,9 +33,13 @@ public class DiscoveryService
         IReadOnlyList<DiscoveryObservation> Observations,
         IReadOnlyList<DiscoveryVisit> Visits,
         IReadOnlyList<DiscoveryProposal> Proposals,
-        IReadOnlyList<FiledTicket> Filed);
+        IReadOnlyList<FiledTicket> Filed,
+        IReadOnlyList<DiscoveryGoalCheck> GoalChecks,
+        int Round,
+        IReadOnlyList<int> Goals,
+        int RecheckRounds);
 
-    public sealed record FiledTicket(int Id, string? Title, string Phase, int? ProposalId);
+    public sealed record FiledTicket(int Id, string? Title, string Phase, int? ProposalId, string? BlockedReason = null);
 
     private const long MaxShotBytes = 10 * 1024 * 1024;
     private static readonly HashSet<string> ShotTypes = new(StringComparer.OrdinalIgnoreCase) { ".png", ".jpg", ".jpeg", ".webp" };
@@ -51,11 +56,19 @@ public class DiscoveryService
         var props = await _db.DiscoveryProposals.AsNoTracking().Where(p => p.TicketId == ticketId)
             .OrderBy(p => p.Status == ProposalStatus.Dropped).ThenBy(p => p.Rank).ThenBy(p => p.Id).ToListAsync();
         var filed = await _db.Tickets.AsNoTracking().Where(x => x.DiscoveryId == ticketId).OrderBy(x => x.Id)
-            .Select(x => new { x.Id, x.Title, x.Phase }).ToListAsync();
+            .Select(x => new { x.Id, x.Title, x.Phase, x.BlockedReason }).ToListAsync();
+        var checks = await _db.DiscoveryGoalChecks.AsNoTracking().Where(g => g.TicketId == ticketId)
+            .OrderBy(g => g.Round).ThenBy(g => g.ProposalId).ToListAsync();
+        var round = await _tickets.RecheckRoundAsync(ticketId);
+        var goals = await _tickets.RecheckGoalIdsAsync(ticketId, Math.Max(round, 1));
         return new View(route, obs, visits, props,
             filed.Select(f => new FiledTicket(f.Id, f.Title, f.Phase.ToString(),
-                props.FirstOrDefault(p => p.FiledTicketId == f.Id)?.Id)).ToList());
+                props.FirstOrDefault(p => p.FiledTicketId == f.Id)?.Id, f.BlockedReason)).ToList(),
+            checks, round, goals, _registry.GetProjectConfig(t.ProjectKey).Discovery.RecheckRounds);
     }
+
+    /// <summary>Catches a discovery up out of AwaitingWork if its filed tickets settled while nobody was looking.</summary>
+    public Task<bool> SettleAsync(int ticketId) => _tickets.SettleDiscoveryAsync(ticketId);
 
     public Task<TicketPhase?> PhaseAsync(int ticketId) =>
         _db.Tickets.AsNoTracking().Where(t => t.Id == ticketId).Select(t => (TicketPhase?)t.Phase).FirstOrDefaultAsync();
@@ -92,17 +105,27 @@ public class DiscoveryService
 
     // ---- what a run writes ------------------------------------------------------------------
 
-    private async Task<Ticket> InPhaseAsync(int ticketId, TicketPhase phase, string tool)
+    private Task<Ticket> InPhaseAsync(int ticketId, TicketPhase phase, string tool) => InPhaseAsync(ticketId, new[] { phase }, tool);
+
+    private async Task<Ticket> InPhaseAsync(int ticketId, TicketPhase[] phases, string tool)
     {
         var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId)
             ?? throw new Refused($"Ticket {ticketId} not found.");
         if (t.Track != TicketTrack.Discovery)
             throw new Refused($"Ticket {ticketId} is a {t.Track} ticket, not a discovery: {tool} is the Discovery track's.");
-        if (t.Phase != phase)
-            throw new Refused($"{tool} is for the {phase} phase, and ticket {ticketId} is in {t.Phase}. "
+        if (!phases.Contains(t.Phase))
+            throw new Refused($"{tool} is for the {string.Join(" and ", phases)} phase{(phases.Length == 1 ? "" : "s")}, and ticket {ticketId} is in {t.Phase}. "
                 + "Each phase of a discovery writes only its own part of the record.");
         return t;
     }
+
+    /// <summary>The phases that use the product in a browser: the scout, and the recheck after it.</summary>
+    private static readonly TicketPhase[] Driving = { TicketPhase.Scouting, TicketPhase.Rechecking };
+    /// <summary>The phases that write proposals: the sift, and the recheck held to its rules.</summary>
+    private static readonly TicketPhase[] Proposing = { TicketPhase.Sifting, TicketPhase.Rechecking };
+
+    /// <summary>The round a write belongs to: 0 for the scout and sift, N for the Nth recheck.</summary>
+    private async Task<int> RoundOfAsync(Ticket t) => t.Phase == TicketPhase.Rechecking ? await _tickets.RecheckRoundAsync(t.Id) : 0;
 
     public async Task<DiscoveryRoute> SetRouteAsync(int ticketId, string persona, IReadOnlyList<string> jobs,
         IReadOnlyList<string>? startCases, IReadOnlyList<string>? widths, string? signedInAs, string? notes, IReadOnlyList<string>? areas)
@@ -123,6 +146,9 @@ public class DiscoveryService
         route.Notes = Blank(notes);
         route.Areas = Clean(areas);
         route.WrittenAt = DateTime.UtcNow;
+        // A route charted again is Chart's again, waiting for a fresh look if the gate is on.
+        route.OwnerEdited = false;
+        route.ApprovedAt = null;
         route.RunId = await _tickets.LiveRunIdAsync(ticketId);
         await _db.SaveChangesAsync();
         return route;
@@ -134,7 +160,7 @@ public class DiscoveryService
 
     public async Task<DiscoveryObservation> LogObservationAsync(int ticketId, ObservationInput i)
     {
-        await InPhaseAsync(ticketId, TicketPhase.Scouting, "log_observation");
+        var t = await InPhaseAsync(ticketId, Driving, "log_observation");
         if (!Enum.TryParse<ObservationKind>(i.Kind?.Replace("-", "").Replace(" ", ""), true, out var kind))
             throw new Refused($"Unknown kind '{i.Kind}'. Use Wall, Judgement, Idea, RoughEdge or Bug.");
         if (string.IsNullOrWhiteSpace(i.Title)) throw new Refused("Give it a title: what you noticed, in a line.");
@@ -144,7 +170,7 @@ public class DiscoveryService
         {
             TicketId = ticketId, Kind = kind, Title = Cap(i.Title, 300), Saw = i.Saw.Trim(), Tried = Blank(i.Tried),
             Job = i.Job, Url = Blank(i.Url), Width = Blank(i.Width), SignedInAs = Blank(i.SignedInAs), Area = Blank(i.Area),
-            Commit = Blank(i.Commit), RunId = await _tickets.LiveRunIdAsync(ticketId),
+            Commit = Blank(i.Commit), RunId = await _tickets.LiveRunIdAsync(ticketId), Round = await RoundOfAsync(t),
         };
         if (i.FocusW is > 0 && i.FocusH is > 0 && i.FocusX is >= 0 && i.FocusY is >= 0)
             (o.FocusX, o.FocusY, o.FocusW, o.FocusH) = (i.FocusX, i.FocusY, i.FocusW, i.FocusH);
@@ -161,7 +187,7 @@ public class DiscoveryService
     public async Task<DiscoveryVisit> LogVisitAsync(int ticketId, string url, string? routePattern, string? width,
         string? signedInAs, int? seconds, string? area, string? showcaseCase, string? commit)
     {
-        await InPhaseAsync(ticketId, TicketPhase.Scouting, "log_visit");
+        await InPhaseAsync(ticketId, Driving, "log_visit");
         if (string.IsNullOrWhiteSpace(url)) throw new Refused("Which page? Pass its URL.");
         var v = new DiscoveryVisit
         {
@@ -175,11 +201,28 @@ public class DiscoveryService
     }
 
     public sealed record ProposalInput(string Kind, string Title, string? Why, string Body,
-        IReadOnlyList<string>? WorkItems, string? Size, string? Confidence, string? Area, IReadOnlyList<int>? ObservationIds);
+        IReadOnlyList<string>? WorkItems, string? Size, string? Confidence, string? Area, IReadOnlyList<int>? ObservationIds,
+        string? RecheckKind = null, int? GoalId = null);
 
     public async Task<DiscoveryProposal> ProposeAsync(int ticketId, ProposalInput i)
     {
-        var t = await InPhaseAsync(ticketId, TicketPhase.Sifting, "propose");
+        var t = await InPhaseAsync(ticketId, Proposing, "propose");
+        var round = await RoundOfAsync(t);
+        RecheckKind? rk = null;
+        int? goal = null;
+        if (round > 0)
+        {
+            if (!Enum.TryParse<RecheckKind>(i.RecheckKind?.Replace("-", "").Replace(" ", ""), true, out var parsed))
+                throw new Refused("A recheck's proposal says what it is: recheckKind FixUp (an approved goal not met - name it in goalId) or New.");
+            rk = parsed;
+            if (rk == Models.RecheckKind.FixUp)
+            {
+                var goals = await _tickets.RecheckGoalIdsAsync(ticketId, round);
+                if (i.GoalId is not { } g || !goals.Contains(g))
+                    throw new Refused($"A fix-up names the goal it fixes up: goalId is one of {(goals.Count == 0 ? "(none - there are no goals left to check)" : string.Join(", ", goals))}.");
+                goal = g;
+            }
+        }
         if (!Enum.TryParse<ProposalKind>(i.Kind, true, out var kind))
             throw new Refused($"Unknown kind '{i.Kind}'. Use Ticket, Bug, Slice or Decide.");
         if (string.IsNullOrWhiteSpace(i.Title)) throw new Refused("Give it a title: what would be true for the person, in a sentence.");
@@ -188,11 +231,9 @@ public class DiscoveryService
         if (ids.Count == 0) throw new Refused("A proposal stands on what the scout saw: name at least one observation id.");
 
         var max = _registry.GetProjectConfig(t.ProjectKey).Discovery.MaxProposals;
-        var since = await _tickets.LastBackwardAtAsync(ticketId) ?? DateTime.MinValue;
-        var count = await _db.DiscoveryProposals.CountAsync(p => p.TicketId == ticketId
-            && p.Status == ProposalStatus.Proposed && p.CreatedAt >= since);
+        var count = await ThisPassProposedAsync(t, round);
         if (count >= max)
-            throw new Refused($"This sift already has {count} proposals, the project's cap. Keep the best {max}: "
+            throw new Refused($"This {(round > 0 ? "recheck" : "sift")} already has {count} proposals, the project's cap. Keep the best {max}: "
                 + "withdraw_proposal one you would bet on less, or drop_idea this one with its reason.");
 
         var p = new DiscoveryProposal
@@ -200,6 +241,7 @@ public class DiscoveryService
             TicketId = ticketId, Kind = kind, Rank = count + 1, Title = Cap(i.Title, 300), Why = Blank(i.Why), Body = i.Body.Trim(),
             WorkItems = Clean(i.WorkItems), Size = Blank(i.Size), Confidence = Blank(i.Confidence), Area = Blank(i.Area),
             ObservationIds = ids, RunId = await _tickets.LiveRunIdAsync(ticketId),
+            Round = round, RecheckKind = rk, GoalId = goal,
         };
         KeepDraft(p);
         _db.DiscoveryProposals.Add(p);
@@ -207,9 +249,22 @@ public class DiscoveryService
         return p;
     }
 
+    /// <summary>
+    /// The undecided proposals this pass has kept: a sift's since the discovery last went back (an
+    /// earlier sift's still count against the cap until withdrawn), a recheck's in its own round.
+    /// </summary>
+    private async Task<int> ThisPassProposedAsync(Ticket t, int round)
+    {
+        if (round > 0)
+            return await _db.DiscoveryProposals.CountAsync(p => p.TicketId == t.Id && p.Status == ProposalStatus.Proposed && p.Round == round);
+        var since = await _tickets.LastBackwardAtAsync(t.Id) ?? DateTime.MinValue;
+        return await _db.DiscoveryProposals.CountAsync(p => p.TicketId == t.Id
+            && p.Status == ProposalStatus.Proposed && p.CreatedAt >= since && p.Round == 0);
+    }
+
     public async Task<DiscoveryProposal> DropIdeaAsync(int ticketId, string idea, string reason, IReadOnlyList<int>? observationIds)
     {
-        await InPhaseAsync(ticketId, TicketPhase.Sifting, "drop_idea");
+        var t = await InPhaseAsync(ticketId, Proposing, "drop_idea");
         if (string.IsNullOrWhiteSpace(idea)) throw new Refused("Name the idea you are dropping, in a line.");
         if (string.IsNullOrWhiteSpace(reason))
             throw new Refused("Say why: generic, already decided (which decision), already planned (which slice), wrong, or not worth it.");
@@ -218,7 +273,7 @@ public class DiscoveryService
             TicketId = ticketId, Kind = ProposalKind.Ticket, Status = ProposalStatus.Dropped, Title = Cap(idea, 300),
             DropReason = reason.Trim(), ObservationIds = await CheckObservationsAsync(ticketId, observationIds),
             Rank = await _db.DiscoveryProposals.CountAsync(x => x.TicketId == ticketId && x.Status == ProposalStatus.Dropped) + 1,
-            RunId = await _tickets.LiveRunIdAsync(ticketId),
+            RunId = await _tickets.LiveRunIdAsync(ticketId), Round = await RoundOfAsync(t),
         };
         KeepDraft(p);
         _db.DiscoveryProposals.Add(p);
@@ -229,11 +284,14 @@ public class DiscoveryService
     /// <summary>A sift taking back one of its own undecided proposals - its own or an earlier pass's.</summary>
     public async Task<DiscoveryProposal> WithdrawAsync(int ticketId, int proposalId, string reason)
     {
-        await InPhaseAsync(ticketId, TicketPhase.Sifting, "withdraw_proposal");
+        var t = await InPhaseAsync(ticketId, Proposing, "withdraw_proposal");
         var p = await _db.DiscoveryProposals.FirstOrDefaultAsync(x => x.Id == proposalId && x.TicketId == ticketId)
             ?? throw new Refused($"Discovery {ticketId} has no proposal {proposalId}.");
         if (p.Status != ProposalStatus.Proposed)
             throw new Refused($"Proposal {proposalId} is {p.Status}: the owner has already decided it, and only they can change that.");
+        var round = await RoundOfAsync(t);
+        if (p.Round != round)
+            throw new Refused($"Proposal {proposalId} is {(p.Round == 0 ? "the sift's" : $"recheck {p.Round}'s")}, not this pass's: it is the owner's to decide.");
         if (string.IsNullOrWhiteSpace(reason)) throw new Refused("Say in a line why it no longer makes the cut.");
         p.Status = ProposalStatus.Dropped;
         p.DropReason = reason.Trim();
@@ -241,6 +299,39 @@ public class DiscoveryService
         p.CreatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
         return p;
+    }
+
+    /// <summary>
+    /// A recheck's finding on one approved goal: did it land, judged by using the product. One row
+    /// per goal per round; calling it again in the same round replaces this round's row.
+    /// </summary>
+    public async Task<DiscoveryGoalCheck> CheckGoalAsync(int ticketId, int proposalId, string outcome, string note,
+        IReadOnlyList<int>? observationIds, string? commit)
+    {
+        var t = await InPhaseAsync(ticketId, TicketPhase.Rechecking, "check_goal");
+        if (!Enum.TryParse<GoalOutcome>(outcome?.Replace("-", "").Replace(" ", ""), true, out var o))
+            throw new Refused($"Unknown outcome '{outcome}'. Use Met, NotMet or Unclear.");
+        if (string.IsNullOrWhiteSpace(note))
+            throw new Refused("Say what you did and what you saw: the owner reads this beside the goal.");
+        var round = await _tickets.RecheckRoundAsync(ticketId);
+        var goals = await _tickets.RecheckGoalIdsAsync(ticketId, round);
+        if (!goals.Contains(proposalId))
+            throw new Refused($"Proposal {proposalId} is not a goal of this recheck. The goals are {(goals.Count == 0 ? "none" : string.Join(", ", goals))}: "
+                + "approved proposals filed as tickets that no earlier recheck found met.");
+        var ids = await CheckObservationsAsync(ticketId, observationIds);
+        var filedTicket = await _db.DiscoveryProposals.Where(p => p.Id == proposalId).Select(p => p.FiledTicketId).FirstAsync();
+
+        var row = await _db.DiscoveryGoalChecks.FirstOrDefaultAsync(g => g.TicketId == ticketId && g.ProposalId == proposalId && g.Round == round);
+        if (row is null) { row = new DiscoveryGoalCheck { TicketId = ticketId, ProposalId = proposalId, Round = round }; _db.DiscoveryGoalChecks.Add(row); }
+        row.Outcome = o;
+        row.Note = note.Trim();
+        row.ObservationIds = ids;
+        row.FiledTicketId = filedTicket;
+        row.Commit = Blank(commit);
+        row.RunId = await _tickets.LiveRunIdAsync(ticketId);
+        row.At = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        return row;
     }
 
     private async Task<List<int>> CheckObservationsAsync(int ticketId, IReadOnlyList<int>? ids)
@@ -291,7 +382,7 @@ public class DiscoveryService
     {
         var p = await _db.DiscoveryProposals.Include(x => x.Ticket).FirstOrDefaultAsync(x => x.Id == proposalId)
             ?? throw new Refused($"There is no proposal {proposalId}.");
-        if (p.Ticket!.Phase != TicketPhase.NeedsVerdict)
+        if (!VerdictOpen(p.Ticket!.Phase, p))
             throw new Refused($"Discovery {p.TicketId} is in {p.Ticket.Phase}: a verdict is given while it waits for one.");
         if (p.Status is ProposalStatus.Filed or ProposalStatus.Dropped)
             throw new Refused($"Proposal {proposalId} is {p.Status} and cannot be changed.");
@@ -366,6 +457,13 @@ public class DiscoveryService
         return p;
     }
 
+    /// <summary>
+    /// Whether a proposal can be decided now: while the discovery waits for a verdict, or - for a
+    /// recheck's proposal past the rounds, which went to the sign-off instead - at the sign-off.
+    /// </summary>
+    private static bool VerdictOpen(TicketPhase phase, DiscoveryProposal p) =>
+        phase == TicketPhase.NeedsVerdict || (phase == TicketPhase.NeedsReview && p.Round > 0);
+
     public sealed record CompleteResult(int Filed, int Answered, int Briefed, IReadOnlyList<int> TicketIds, string Phase);
 
     /// <summary>
@@ -377,9 +475,13 @@ public class DiscoveryService
         var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId)
             ?? throw new Refused($"Ticket {ticketId} not found.");
         if (t.Track != TicketTrack.Discovery) throw new Refused($"Ticket {ticketId} is not a discovery.");
-        if (t.Phase != TicketPhase.NeedsVerdict) throw new Refused($"Discovery {ticketId} is in {t.Phase}, not waiting for a verdict.");
-
-        var props = await _db.DiscoveryProposals.Where(p => p.TicketId == ticketId).OrderBy(p => p.Rank).ToListAsync();
+        var props = await _db.DiscoveryProposals.Where(p => p.TicketId == ticketId).OrderBy(p => p.Round).ThenBy(p => p.Rank).ToListAsync();
+        // At the sign-off, Complete is for what a recheck past the rounds proposed: it files the
+        // approved ones and leaves the discovery where it is, because the rounds are spent.
+        var atSignOff = t.Phase == TicketPhase.NeedsReview;
+        if (atSignOff && !props.Any(p => p.Round > 0 && p.Status is ProposalStatus.Proposed or ProposalStatus.Approved))
+            throw new Refused($"Discovery {ticketId} is at its sign-off with nothing a recheck proposed left to decide.");
+        if (!atSignOff && t.Phase != TicketPhase.NeedsVerdict) throw new Refused($"Discovery {ticketId} is in {t.Phase}, not waiting for a verdict.");
         var undecided = props.Where(p => p.Status == ProposalStatus.Proposed).ToList();
         if (undecided.Count > 0)
             throw new Refused($"{undecided.Count} proposal{(undecided.Count == 1 ? " is" : "s are")} still undecided "
@@ -430,9 +532,80 @@ public class DiscoveryService
             + (briefed > 0 ? $", {briefed} slice briefing{(briefed == 1 ? "" : "s")}" : "")
             + $", {props.Count(p => p.Status == ProposalStatus.Rejected)} rejected, {props.Count(p => p.Status == ProposalStatus.Snoozed)} snoozed.";
         await _tickets.AddCommentAsync(ticketId, summary, AuthorKind.System);
-        var moved = await _tickets.TransitionAsync(ticketId, TicketPhase.NeedsReview, summary, TransitionActor.Human);
-        return new CompleteResult(filedIds.Count, answered, briefed, filedIds, (moved?.Phase ?? TicketPhase.NeedsReview).ToString());
+        if (atSignOff)
+            return new CompleteResult(filedIds.Count, answered, briefed, filedIds, t.Phase.ToString());
+        // Tickets filed: the discovery waits for them to be built, then is rechecked. Nothing to
+        // build - only answers, briefings, rejections - and there is nothing to recheck.
+        var next = filedIds.Count > 0 ? TicketPhase.AwaitingWork : TicketPhase.NeedsReview;
+        var moved = await _tickets.TransitionAsync(ticketId, next, summary, TransitionActor.Human);
+        if (next == TicketPhase.AwaitingWork) await _tickets.SettleDiscoveryAsync(ticketId);
+        var phase = await PhaseAsync(ticketId) ?? moved?.Phase ?? next;
+        return new CompleteResult(filedIds.Count, answered, briefed, filedIds, phase.ToString());
     }
+
+    // ---- the owner's look at a route ----------------------------------------------------------
+
+    public sealed record RouteEdit(string? Persona = null, IReadOnlyList<string>? Jobs = null, string? SignedInAs = null,
+        IReadOnlyList<string>? StartCases = null, IReadOnlyList<string>? Widths = null, string? Notes = null, IReadOnlyList<string>? Areas = null);
+
+    /// <summary>
+    /// The owner edits the route at its gate, before a scout walks it. Marked as edited, so "how often
+    /// does the owner change what Chart wrote" is a count rather than a memory.
+    /// </summary>
+    public async Task<DiscoveryRoute> EditRouteAsync(int ticketId, RouteEdit e)
+    {
+        var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId)
+            ?? throw new Refused($"Ticket {ticketId} not found.");
+        if (t.Track != TicketTrack.Discovery) throw new Refused($"Ticket {ticketId} is not a discovery.");
+        if (t.Phase != TicketPhase.NeedsRouteApproval)
+            throw new Refused($"Discovery {ticketId} is in {t.Phase}: the route is edited at its gate, before it is walked.");
+        var r = await _db.DiscoveryRoutes.FirstOrDefaultAsync(x => x.TicketId == ticketId)
+            ?? throw new Refused($"Discovery {ticketId} has no route to edit: send it back to be charted.");
+        var before = RouteText(r);
+        if (e.Persona is not null)
+        {
+            if (string.IsNullOrWhiteSpace(e.Persona)) throw new Refused("A route needs a persona: who the scout plays.");
+            r.Persona = e.Persona.Trim();
+        }
+        if (e.Jobs is not null)
+        {
+            var j = Clean(e.Jobs);
+            if (j.Count == 0) throw new Refused("A route needs at least one job.");
+            if (j.Count > 8) throw new Refused("At most eight jobs.");
+            r.Jobs = j;
+        }
+        if (e.SignedInAs is not null) r.SignedInAs = Blank(e.SignedInAs);
+        if (e.StartCases is not null) r.StartCases = Clean(e.StartCases);
+        if (e.Widths is not null) r.Widths = Clean(e.Widths);
+        if (e.Notes is not null) r.Notes = Blank(e.Notes);
+        if (e.Areas is not null) r.Areas = Clean(e.Areas);
+        if (RouteText(r) != before) r.OwnerEdited = true;
+        await _db.SaveChangesAsync();
+        return r;
+    }
+
+    /// <summary>
+    /// The owner's approval of a route at its gate: the discovery goes on to be scouted. A REST
+    /// route with no tool behind it, like every other owner action on a discovery.
+    /// </summary>
+    public async Task<TicketPhase> ApproveRouteAsync(int ticketId)
+    {
+        var t = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == ticketId)
+            ?? throw new Refused($"Ticket {ticketId} not found.");
+        if (t.Track != TicketTrack.Discovery) throw new Refused($"Ticket {ticketId} is not a discovery.");
+        if (t.Phase != TicketPhase.NeedsRouteApproval)
+            throw new Refused($"Discovery {ticketId} is in {t.Phase}, not waiting for its route to be approved.");
+        var r = await _db.DiscoveryRoutes.FirstOrDefaultAsync(x => x.TicketId == ticketId)
+            ?? throw new Refused($"Discovery {ticketId} has no route to approve: send it back to be charted.");
+        r.ApprovedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+        var moved = await _tickets.TransitionAsync(ticketId, TicketPhase.NeedsScouting,
+            r.OwnerEdited ? "route approved as the owner edited it" : "route approved as charted", TransitionActor.Human);
+        return moved?.Phase ?? TicketPhase.NeedsScouting;
+    }
+
+    private static string RouteText(DiscoveryRoute r) => string.Join("\n", new[] { r.Persona, r.SignedInAs ?? "", r.Notes ?? "" }
+        .Concat(r.Jobs).Concat(r.StartCases).Concat(r.Widths).Concat(r.Areas));
 
     // ---- the verdict log ----------------------------------------------------------------------
 

@@ -36,6 +36,13 @@ public enum TicketPhase
     NeedsSifting,
     Sifting,
     NeedsVerdict,
+    // Step 2 of the track, the long tail: the owner's look at a route before it is walked (off
+    // unless the ticket's switch is on), the wait while what the verdict filed is built, and the
+    // recheck that drives the product again once it is.
+    NeedsRouteApproval,
+    AwaitingWork,
+    NeedsRecheck,
+    Rechecking,
     NeedsReview,
     Done,
     Blocked,
@@ -399,6 +406,14 @@ public class Ticket
     /// Note this is NOT the final NeedsReview sign-off, which is never skipped.
     /// </summary>
     public bool RequiresImplementationReview { get; set; }
+
+    /// <summary>
+    /// A discovery's route-approval gate (<see cref="TicketPhase.NeedsRouteApproval"/>): the owner
+    /// reads, and may edit, the route Chart wrote before a scout walks it. Off by default, defaulted
+    /// from the project's <c>discovery.reviewRoute</c> when the ticket is filed. Meaningless on any
+    /// other track. Like the other gates, the human's call: no MCP tool sets it.
+    /// </summary>
+    public bool RequiresRouteReview { get; set; }
 
     /// <summary>
     /// Run QA as a code review only — no app, no browser, no QA checklist. For work small or

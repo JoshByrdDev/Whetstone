@@ -46,6 +46,8 @@ export const createTicket = (body: {
   skipQaTesting?: boolean; priority?: Priority;
   // Absent = the project's default (ProjectInfo.skipClassroomAnalysisByDefault).
   skipClassroomAnalysis?: boolean;
+  // A discovery's route gate. Absent = the project's discovery.reviewRoute.
+  requiresRouteReview?: boolean;
   // Review track only, and settable only here: nothing moves a ticket between tracks afterwards.
   // sourceBranch is required when track is 'Review' — a review ticket with no branch to read has
   // nothing to work on, and the server refuses it rather than failing later in the worker.
@@ -87,6 +89,7 @@ export const updateTicket = (id: number, body: Partial<{
   requiresSpeculationReview: boolean; requiresImplementationReview: boolean; masterNotes: string;
   skipQaTesting: boolean; priority: Priority; shortLoopReview: boolean; skipClassroomAnalysis: boolean;
   fullQaRequired: boolean;
+  requiresRouteReview: boolean;
   // The whole list; [] clears it.
   needs: string[];
 }>) => fetch(`/api/tickets/${id}`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify(body) }).then(json<TicketDetail>);

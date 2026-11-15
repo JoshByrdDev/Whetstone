@@ -865,7 +865,7 @@ function Test-OffHours {
 
 # The roles the heartbeat runs, in pipeline order. Mirrors AgentRoles.HeartbeatRoles in C#, which a
 # test there checks against this line.
-$AgentRoleKeys = @('speculate', 'implement', 'qa-test', 'refine', 'review-pr', 'chart', 'scout', 'sift', 'steward', 'reflection')
+$AgentRoleKeys = @('speculate', 'implement', 'qa-test', 'refine', 'review-pr', 'chart', 'scout', 'sift', 'recheck', 'steward', 'reflection')
 
 # How hard a run thinks when its role does not say. Never "whatever the CLI defaults to": claude's
 # default moves with the model (Opus 5 ran at high, Opus 5.5 at medium). Mirrors

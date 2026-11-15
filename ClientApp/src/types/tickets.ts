@@ -19,6 +19,10 @@ export type Phase =
   | 'NeedsSifting'
   | 'Sifting'
   | 'NeedsVerdict'
+  | 'NeedsRouteApproval'
+  | 'AwaitingWork'
+  | 'NeedsRecheck'
+  | 'Rechecking'
   | 'NeedsReview'
   | 'Done'
   | 'Blocked';
@@ -134,6 +138,8 @@ export interface ProjectInfo {
    * each ticket carries its own setting. Absent from an older server, which meant off.
    */
   skipClassroomAnalysisByDefault?: boolean;
+  /** What a new discovery's route-review box starts as (discovery.reviewRoute). Absent meant off. */
+  reviewRouteByDefault?: boolean;
   /**
    * What a ticket's testing can ask for whatever its branch changes: the resources this project
    * takes only for the branches that touch their paths (an emulator only a phone-app change gets).
@@ -483,6 +489,8 @@ export interface TicketDetail {
   branchStarted?: boolean;
   // The discovery this ticket was filed from, when an owner approved one of its proposals.
   discoveryId?: number | null;
+  // A discovery's route gate: the owner reads the route before a scout walks it.
+  requiresRouteReview?: boolean;
   blockedReason?: string | null;
   // The same block as the questions the agent actually asked, when it asked in questions. Absent for
   // a fault report, a hand-written block, or anything blocked before the structured form existed —
@@ -564,6 +572,10 @@ export const PHASE_LABEL: Record<Phase, string> = {
   NeedsSifting: 'Needs Sifting',
   Sifting: 'Sifting',
   NeedsVerdict: 'Needs Verdict',
+  NeedsRouteApproval: 'Needs Route Approval',
+  AwaitingWork: 'Awaiting Work',
+  NeedsRecheck: 'Needs Recheck',
+  Rechecking: 'Rechecking',
   NeedsReview: 'Needs Review',
   Done: 'Done',
   Blocked: 'Blocked',

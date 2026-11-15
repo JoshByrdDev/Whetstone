@@ -33,6 +33,22 @@ public sealed record DiscoveryConfig
     /// <summary>The command that takes it down again after the run, when there is one.</summary>
     public string Teardown { get; init; } = "";
 
+    public const int DefaultRecheckRounds = 2;
+
+    /// <summary>
+    /// How many rechecks get the owner's verdict. A recheck past this many can still propose, but
+    /// only to the sign-off, where the owner sees what it found; so rounds end. 0 means every
+    /// recheck reports to the sign-off.
+    /// </summary>
+    public int RecheckRounds { get; init; } = DefaultRecheckRounds;
+
+    /// <summary>
+    /// The default for a new discovery's route-review switch: whether the owner reads the route
+    /// Chart wrote before a scout walks it. Off unless the project says so; the filing form can
+    /// change it per ticket.
+    /// </summary>
+    public bool ReviewRoute { get; init; }
+
     /// <summary>The product's areas, for coverage: each one's page patterns and code paths.</summary>
     public DiscoveryArea[] Areas { get; init; } = Array.Empty<DiscoveryArea>();
 
@@ -48,9 +64,13 @@ public sealed record DiscoveryConfig
                 if (e.ValueKind == JsonValueKind.Object && Str(e, "name") is { Length: > 0 } name)
                     areas.Add(new DiscoveryArea(name, Strs(e, "pages"), Strs(e, "code")));
         var max = d.TryGetProperty("maxProposals", out var m) && m.ValueKind == JsonValueKind.Number ? m.GetInt32() : 6;
+        var rounds = d.TryGetProperty("recheckRounds", out var rr) && rr.ValueKind == JsonValueKind.Number ? rr.GetInt32() : DefaultRecheckRounds;
+        var review = d.TryGetProperty("reviewRoute", out var rv) && rv.ValueKind == JsonValueKind.True;
         return new DiscoveryConfig
         {
             MaxProposals = Math.Clamp(max, 1, 20),
+            RecheckRounds = Math.Clamp(rounds, 0, 10),
+            ReviewRoute = review,
             SiteUrl = Str(d, "siteUrl").TrimEnd('/'),
             Prepare = Str(d, "prepare"),
             Teardown = Str(d, "teardown"),

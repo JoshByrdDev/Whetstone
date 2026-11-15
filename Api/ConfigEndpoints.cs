@@ -180,6 +180,7 @@ public static class ConfigEndpoints
         ["chart"] = ("Chart", "pipeline", "Turns a discovery's direction into a route: who the person is and the jobs they came to do. Cheap; no browser."),
         ["scout"] = ("Scout", "pipeline", "Uses the running product as that person, in a browser, and logs everything it notices."),
         ["sift"] = ("Sift", "pipeline", "A fresh pair of eyes on what the scout logged: checks it against what is known and writes the few proposals worth your verdict."),
+        ["recheck"] = ("Recheck", "pipeline", "Uses the product again once the approved work is built: did each goal land, and anything new worth your verdict."),
         [AgentRoles.Steward] = ("Steward", "fleet",
             "Stands in for a ticket's owner between runs, on projects that switch it on. Reads and decides; changes no file."),
         [AgentRoles.Reflection] = ("Reflection", "fleet", "Writes the lessons-learned note after each worker run."),

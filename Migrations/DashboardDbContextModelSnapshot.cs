@@ -433,6 +433,56 @@ namespace Whetstone.Migrations
                     b.ToTable("CycleRuns");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.DiscoveryGoalCheck", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Commit")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("FiledTicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Note")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.PrimitiveCollection<string>("ObservationIds")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ProposalId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProposalId");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("DiscoveryGoalChecks");
+                });
+
             modelBuilder.Entity("Whetstone.Models.DiscoveryObservation", b =>
                 {
                     b.Property<int>("Id")
@@ -469,6 +519,9 @@ namespace Whetstone.Migrations
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int?>("RunId")
                         .HasColumnType("INTEGER");
@@ -573,6 +626,9 @@ namespace Whetstone.Migrations
                     b.Property<int?>("FiledTicketId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("GoalId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -588,12 +644,19 @@ namespace Whetstone.Migrations
                     b.Property<int>("Rank")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("RecheckKind")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("RejectNote")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("RejectReason")
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int?>("RunId")
                         .HasColumnType("INTEGER");
@@ -637,6 +700,9 @@ namespace Whetstone.Migrations
                     b.Property<int>("TicketId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("TEXT");
+
                     b.PrimitiveCollection<string>("Areas")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -647,6 +713,9 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("Notes")
                         .HasColumnType("TEXT");
+
+                    b.Property<bool>("OwnerEdited")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Persona")
                         .IsRequired()
@@ -2351,6 +2420,9 @@ namespace Whetstone.Migrations
                     b.Property<bool>("RequiresImplementationReview")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("RequiresRouteReview")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("RequiresSpeculationReview")
                         .HasColumnType("INTEGER");
 
@@ -2770,6 +2842,17 @@ namespace Whetstone.Migrations
                 });
 
             modelBuilder.Entity("Whetstone.Models.CycleRun", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryGoalCheck", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithMany()

@@ -318,6 +318,7 @@ this.) So retention is part of the video step, not a clean-up for later:
 1. **The core loop.** Track, Chart (no gate), Scout without video, Sift, Verdict, Complete filing
    linked tickets. The pilot, made real, and already useful. **Built** - see "Step 1 as built".
 2. **The long tail.** Awaiting work, Recheck and its rounds, and the route-approval gate.
+   **Built** - see "Step 2 as built".
 3. **Video.** Recording, chapters, clips on proposals, ffmpeg in setup, and the retention above -
    the video and its pruning ship together.
 4. **Taste.** The taste file and its fold, once there are verdicts to fold.
@@ -408,9 +409,51 @@ What step 1 settled, and where it stopped short of the design above:
   proposal files with `IsBug`. `VideoAt` is on the observation, empty until step 3 records video.
   The taste file's version waits for step 4.
 
+## Step 2 as built
+
+What step 2 settled, and where it stopped short of the design above:
+
+- **Phases** add `NeedsRouteApproval`, `AwaitingWork`, `NeedsRecheck` and `Rechecking`. The track
+  runs Chart, (route approval), Scout, Sift, Verdict, then Awaiting work, Recheck, and either a
+  new verdict or Sign-off. The journey reuses the existing stations: route approval sits on
+  Chart's, the long tail on Verdict's. A recheck round is not rework: Awaiting work and Recheck
+  rank with Verdict, so going round again is a forward move.
+- **The route gate is a redirect, not a second chart hand-off.** A chart run that hands off to
+  scouting on a ticket with `RequiresRouteReview` lands in `NeedsRouteApproval` instead, so the
+  chart skill does not change. The owner edits the route (`PUT .../discovery/route`, which marks
+  it `OwnerEdited`) and approves it (`POST .../discovery/route/approve`, `ApprovedAt`), or sends
+  it back to Chart. Both are REST routes with no tool behind them. Off by default; the project's
+  `discovery.reviewRoute` sets the filing form's checkbox, and a ticket can change it until
+  scouting starts. There is no Settings control for it yet - it is a config key.
+- **Complete** moves a discovery that filed tickets to Awaiting work, and one that filed nothing
+  to Sign-off as before.
+- **Settling is checked, not polled**: after any ticket reaches Done, after a ticket is deleted,
+  and when the drawer reads the discovery. Every filed ticket Done or gone moves it to
+  `NeedsRecheck`. A Blocked filed ticket holds it, and the drawer names it and its reason. The
+  owner can skip the recheck from the drawer (straight to Sign-off). Slice and Decide proposals
+  file no ticket in step 1, so they never hold one.
+- **Rounds.** A round is an entry into `NeedsRecheck`. `discovery.recheckRounds` (default 2,
+  0..10) is how many rounds may go back to a verdict: within it, a round with proposals must hand
+  off to `NeedsVerdict`, and past it the run goes to Sign-off, where the owner rules on its
+  proposals beside Complete (late proposals are filed by Complete without another round).
+  `recheckRounds: 0` means the recheck still runs once, straight to Sign-off.
+- **Goals** for a round are the filed Ticket and Bug proposals not already judged met in an
+  earlier round. Recheck records one `check_goal` per goal per round (Met / NotMet / Unclear, a
+  note and the observations behind it) and cannot hand off until each is checked. A proposal is
+  marked `FixUp` (and must name a current goal it fixes) or `New`, and Sift's rules and the
+  per-round `maxProposals` cap apply.
+- **What Recheck reads of the earlier observations** (the open question below): this round's in
+  full, earlier rounds' as one line each - id, kind, title, round - beside the earlier goal checks and
+  every proposal with its verdict, enough to know what was seen without re-proposing it.
+- **Recorded for the marts**: `DiscoveryGoalChecks` (one row per goal per round, with run id and
+  commit - recheck's landed rate), `Round`, `RecheckKind` and `GoalId` on proposals (recheck's
+  yield, fix-up against new), `Round` on observations, and `ApprovedAt` / `OwnerEdited` on the
+  route. Verdict events need nothing new: a recheck proposal's verdict is an event like any.
+- **Same berth as Scout**: the `recheck` skill (`data/skill-templates/recheck/skill.md`) runs with
+  the scout's browser, `discovery.prepare` / `teardown` and the `app-stack` lease, and no shell.
+
 ## Open for whoever builds it
 
 - How a proposal's clip is cut: on demand when the Verdict page opens it, or once when Sift
   finishes.
-- What Recheck reads of the original observations: enough to know what was seen, not so much that
-  it re-proposes the same things.
+- ~~What Recheck reads of the original observations~~ - settled in "Step 2 as built".

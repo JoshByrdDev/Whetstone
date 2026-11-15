@@ -52,19 +52,30 @@ public static class PhaseMachine
         // the owner sending a discovery back from the verdict. Leaving the verdict forward is the
         // owner's Complete (DiscoveryService.CompleteAsync), never a worker's hand-off.
         [TicketPhase.NeedsCharting]       = new[] { TicketPhase.Charting },
-        [TicketPhase.Charting]            = new[] { TicketPhase.NeedsScouting },
+        // Chart's one hand-off is NeedsScouting. On a ticket whose route-review switch is on, the
+        // board holds that hand-off at NeedsRouteApproval instead (TicketService.TransitionAsync),
+        // so the chart skill is the same whether the owner looks at the route or not.
+        [TicketPhase.Charting]            = new[] { TicketPhase.NeedsScouting, TicketPhase.NeedsRouteApproval },
+        [TicketPhase.NeedsRouteApproval]  = new[] { TicketPhase.NeedsScouting, TicketPhase.NeedsCharting },
         [TicketPhase.NeedsScouting]       = new[] { TicketPhase.Scouting },
         [TicketPhase.Scouting]            = new[] { TicketPhase.NeedsSifting },
         [TicketPhase.NeedsSifting]        = new[] { TicketPhase.Sifting },
         [TicketPhase.Sifting]             = new[] { TicketPhase.NeedsVerdict, TicketPhase.NeedsScouting },
-        [TicketPhase.NeedsVerdict]        = new[] { TicketPhase.NeedsReview, TicketPhase.NeedsSifting, TicketPhase.NeedsScouting, TicketPhase.NeedsCharting },
+        [TicketPhase.NeedsVerdict]        = new[] { TicketPhase.AwaitingWork, TicketPhase.NeedsReview, TicketPhase.NeedsSifting, TicketPhase.NeedsScouting, TicketPhase.NeedsCharting },
+        // The long tail. AwaitingWork is parked until every ticket the verdict filed is settled,
+        // and the board moves it on (TicketService.SettleDiscoveryAsync) - or the owner skips the
+        // recheck by hand. A recheck that wrote proposals goes back to the verdict (a round, while
+        // discovery.recheckRounds allows); one that wrote none, or is past the cap, goes to sign-off.
+        [TicketPhase.AwaitingWork]        = new[] { TicketPhase.NeedsRecheck, TicketPhase.NeedsReview },
+        [TicketPhase.NeedsRecheck]        = new[] { TicketPhase.Rechecking },
+        [TicketPhase.Rechecking]          = new[] { TicketPhase.NeedsVerdict, TicketPhase.NeedsReview },
 
         // Review approve → done; changes requested → back to implementation, or back to speculation
         // when what was asked for is new scope rather than a correction (see
         // TicketService.RequestChangesAsync); or another refinement pass when the code is right and
         // only its write-up/validation is not. On the Review track the same gate instead loops back
         // for a re-review once the author has pushed.
-        [TicketPhase.NeedsReview]         = new[] { TicketPhase.Done, TicketPhase.NeedsImplementation, TicketPhase.NeedsSpeculation, TicketPhase.NeedsRefinement, TicketPhase.NeedsPeerReview, TicketPhase.NeedsScouting },
+        [TicketPhase.NeedsReview]         = new[] { TicketPhase.Done, TicketPhase.NeedsImplementation, TicketPhase.NeedsSpeculation, TicketPhase.NeedsRefinement, TicketPhase.NeedsPeerReview, TicketPhase.NeedsScouting, TicketPhase.NeedsRecheck },
         // Reopen a finished ticket.
         [TicketPhase.Done]                = new[] { TicketPhase.NeedsImplementation },
         [TicketPhase.Blocked]             = Array.Empty<TicketPhase>(),
@@ -94,6 +105,10 @@ public static class PhaseMachine
         TicketPhase.NeedsSifting,
         TicketPhase.Sifting,
         TicketPhase.NeedsVerdict,
+        TicketPhase.NeedsRouteApproval,
+        TicketPhase.AwaitingWork,
+        TicketPhase.NeedsRecheck,
+        TicketPhase.Rechecking,
     };
 
     /// <summary>
@@ -174,6 +189,15 @@ public static class PhaseMachine
             [(TicketPhase.NeedsVerdict, TicketPhase.NeedsScouting)] = "BACKWARD: the owner wants the route scouted again.",
             [(TicketPhase.NeedsVerdict, TicketPhase.NeedsCharting)] = "BACKWARD: the owner wants the direction charted again.",
             [(TicketPhase.NeedsReview, TicketPhase.NeedsScouting)] = "BACKWARD: the owner wants the product scouted again on the same route. Not a move an automated worker makes.",
+            [(TicketPhase.Charting, TicketPhase.NeedsRouteApproval)] = "The route-review gate: the owner reads the route before it is walked. Chart does not choose this - hand off to NeedsScouting, and a ticket whose route-review switch is on is held here by the board.",
+            [(TicketPhase.NeedsRouteApproval, TicketPhase.NeedsScouting)] = "The owner approved the route (as written or edited): queue it for the scout. Made from the drawer, never by a worker.",
+            [(TicketPhase.NeedsRouteApproval, TicketPhase.NeedsCharting)] = "BACKWARD: the owner wants the direction charted again.",
+            [(TicketPhase.NeedsVerdict, TicketPhase.AwaitingWork)] = "The owner's Complete filed tickets: the discovery waits until every one is settled, then the board queues a recheck. Made from the Verdict panel, never by a worker.",
+            [(TicketPhase.AwaitingWork, TicketPhase.NeedsRecheck)] = "Every ticket the verdict filed is settled (Done, or dropped): queue the recheck. Made by the board when the last one settles.",
+            [(TicketPhase.AwaitingWork, TicketPhase.NeedsReview)] = "The owner skips the recheck and takes the discovery to sign-off.",
+            [(TicketPhase.Rechecking, TicketPhase.NeedsVerdict)] = "FORWARD, A RECHECK ROUND: every approved goal is checked (check_goal) and this pass wrote proposals - fix-ups of goals not met, or anything new - for the owner's verdict. Refused past the project's recheckRounds; then the proposals go to NeedsReview, where the owner still sees them.",
+            [(TicketPhase.Rechecking, TicketPhase.NeedsReview)] = "FORWARD, AND THE SUCCESS PATH WHEN NOTHING IS LEFT: every approved goal is checked (check_goal) and this pass proposed nothing - or the rounds are spent, and what it proposed waits at the sign-off.",
+            [(TicketPhase.NeedsReview, TicketPhase.NeedsRecheck)] = "BACKWARD: the owner wants the product rechecked against the approved goals. Not a move an automated worker makes.",
         };
 
     /// <summary>How the <paramref name="from"/> → <paramref name="to"/> move is meant to be used, if it is described.</summary>
@@ -244,6 +268,9 @@ public static class PhaseMachine
         TicketPhase.NeedsScouting,
         TicketPhase.NeedsSifting,
         TicketPhase.NeedsVerdict,
+        TicketPhase.NeedsRouteApproval,
+        TicketPhase.AwaitingWork,
+        TicketPhase.NeedsRecheck,
         TicketPhase.NeedsReview,
     };
 
@@ -273,6 +300,7 @@ public static class PhaseMachine
         TicketPhase.Charting => TicketPhase.NeedsCharting,
         TicketPhase.Scouting => TicketPhase.NeedsScouting,
         TicketPhase.Sifting => TicketPhase.NeedsSifting,
+        TicketPhase.Rechecking => TicketPhase.NeedsRecheck,
         not null when UnblockTargets.Contains(phaseBeforeBlock.Value) => phaseBeforeBlock.Value,
         _ => null,
     };
@@ -281,13 +309,13 @@ public static class PhaseMachine
     public static bool IsInProgress(TicketPhase phase) => phase is
         TicketPhase.Speculating or TicketPhase.Implementing or TicketPhase.QaTesting or TicketPhase.Refining
         or TicketPhase.PeerReviewing
-        or TicketPhase.Charting or TicketPhase.Scouting or TicketPhase.Sifting;
+        or TicketPhase.Charting or TicketPhase.Scouting or TicketPhase.Sifting or TicketPhase.Rechecking;
 
     /// <summary>Phases the heartbeat pulls from and runs the matching skill.</summary>
     public static bool IsActionable(TicketPhase phase) => phase is
         TicketPhase.NeedsSpeculation or TicketPhase.NeedsImplementation or TicketPhase.NeedsQa or TicketPhase.NeedsRefinement
         or TicketPhase.NeedsPeerReview
-        or TicketPhase.NeedsCharting or TicketPhase.NeedsScouting or TicketPhase.NeedsSifting;
+        or TicketPhase.NeedsCharting or TicketPhase.NeedsScouting or TicketPhase.NeedsSifting or TicketPhase.NeedsRecheck;
 
     public static bool IsTerminal(TicketPhase phase) => phase == TicketPhase.Done;
 
@@ -307,6 +335,7 @@ public static class PhaseMachine
         TicketPhase.NeedsCharting, TicketPhase.Charting,
         TicketPhase.NeedsScouting, TicketPhase.Scouting,
         TicketPhase.NeedsSifting, TicketPhase.Sifting,
+        TicketPhase.NeedsRecheck, TicketPhase.Rechecking,
     };
 
     public static bool IsWorkable(TicketPhase phase) => IsActionable(phase) || IsInProgress(phase);
@@ -330,10 +359,10 @@ public static class PhaseMachine
     /// there; see <c>ConfigEndpoints.WorkerPhases</c>.
     /// </para>
     /// </summary>
-    public static readonly string[] OptionalSkills = { "review-pr", "chart", "scout", "sift" };
+    public static readonly string[] OptionalSkills = { "review-pr", "chart", "scout", "sift", "recheck" };
 
     /// <summary>The skills of the Discovery track's working phases.</summary>
-    public static readonly string[] DiscoverySkills = { "chart", "scout", "sift" };
+    public static readonly string[] DiscoverySkills = { "chart", "scout", "sift", "recheck" };
 
     /// <summary>Every skill the heartbeat might run, required or not.</summary>
     public static readonly string[] AllSkills = RequiredSkills.Concat(OptionalSkills).ToArray();
@@ -380,6 +409,15 @@ public static class PhaseMachine
         TicketPhase.NeedsSifting => 6,
         TicketPhase.Sifting => 7,
         TicketPhase.NeedsVerdict => 9,
+        // The route gate sits between Chart and Scout. The long tail ties with the verdict, on
+        // purpose: verdict -> awaiting work -> recheck -> verdict is a loop by design (a round), and
+        // with a rank of its own one of its edges would count as rework - which a round is not. A
+        // recheck is the last step before the owner, like Sift, so it claims at the verdict's rank,
+        // tied with refinement, where the track breaks the tie in Delivery's favour.
+        TicketPhase.NeedsRouteApproval => 3,
+        TicketPhase.AwaitingWork => 9,
+        TicketPhase.NeedsRecheck => 9,
+        TicketPhase.Rechecking => 9,
 
         TicketPhase.NeedsImplementationReview => 6,
         TicketPhase.NeedsQa => 7,
@@ -423,6 +461,7 @@ public static class PhaseMachine
         TicketPhase.NeedsCharting => TicketPhase.Charting,
         TicketPhase.NeedsScouting => TicketPhase.Scouting,
         TicketPhase.NeedsSifting => TicketPhase.Sifting,
+        TicketPhase.NeedsRecheck => TicketPhase.Rechecking,
         _ when IsInProgress(phase) => phase,
         _ => throw new ArgumentException($"{phase} is not a workable phase"),
     };
@@ -442,6 +481,7 @@ public static class PhaseMachine
         TicketPhase.Charting => "chart",
         TicketPhase.Scouting => "scout",
         TicketPhase.Sifting => "sift",
+        TicketPhase.Rechecking => "recheck",
         _ => throw new ArgumentException($"{inProgress} has no associated skill"),
     };
 

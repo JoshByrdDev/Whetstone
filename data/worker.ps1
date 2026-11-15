@@ -2454,7 +2454,7 @@ You are reading ``$reviewBranch``$(if ($reviewRepo) { " in ``$reviewRepo``" }) t
     $trackRules = @"
 **This ticket is on the DISCOVERY track. Its description is a direction - who to be and what they came to do - and nobody's code is under change.**
 
-Your working directory is the project's base, checked out detached, there to be read. This overrides the "Leave the worktree clean" rule below: change no file and commit nothing - not a fix, not a note. Everything this run produces goes onto the ticket through the discovery tools (``get_discovery``, and this phase's own: ``set_discovery_route`` while Charting, ``log_observation`` and ``log_visit`` while Scouting, ``propose``, ``drop_idea`` and ``withdraw_proposal`` while Sifting). Nothing you write is filed or approved: the owner gives every verdict, and there is no tool that does it for them.
+Your working directory is the project's base, checked out detached, there to be read. This overrides the "Leave the worktree clean" rule below: change no file and commit nothing - not a fix, not a note. Everything this run produces goes onto the ticket through the discovery tools (``get_discovery``, and this phase's own: ``set_discovery_route`` while Charting, ``log_observation`` and ``log_visit`` while Scouting, ``propose``, ``drop_idea`` and ``withdraw_proposal`` while Sifting, and while Rechecking ``check_goal`` beside the scout's and the sift's). Nothing you write is filed or approved: the owner gives every verdict, and there is no tool that does it for them.
 "@
 } else {
     $trackRules = if ($isWalkthrough) { @"
@@ -2871,7 +2871,7 @@ if ($skill -in $browserSkills -and -not $skipQaTesting) {
 # in the browser server's own Node process, which is a shell by another name.
 $discoveryRunDir = ""
 $discoverySite = ""
-if ($isDiscovery -and $skill -eq 'scout') {
+if ($isDiscovery -and (Test-DiscoveryDrives $skill)) {
     $disc = $Claim.project.discovery
     $slotStep = if ($Claim.project.stackPorts -and $Claim.project.stackPorts.slotStep) { [int]$Claim.project.stackPorts.slotStep } else { 0 }
     $slotNow = if ($null -ne $Claim.stackSlot) { [int]$Claim.stackSlot } else { 0 }
@@ -2891,7 +2891,7 @@ if ($isDiscovery -and $skill -eq 'scout') {
         }
     }
     $requiredServers += 'playwright'
-    Write-Log "  Scout browser configured: $discoverySite only (captures -> $discoveryRunDir)"
+    Write-Log "  $(if ($skill -eq 'recheck') { 'Recheck' } else { 'Scout' }) browser configured: $discoverySite only (captures -> $discoveryRunDir)"
 }
 # On a worker host every capture goes to the board host as it lands, for the whole run: the agent
 # hands set_qa_shots this machine's path mid-run, and the board host looks for its own copy.
@@ -3086,7 +3086,7 @@ function Get-SkillText {
 # prepare that fails stops the run here - a scout pointed at a site that is not there would log
 # the outage as the product's fault.
 $discoveryPrepared = $false
-if ($isDiscovery -and $skill -eq 'scout') {
+if ($isDiscovery -and (Test-DiscoveryDrives $skill)) {
     $prepareCmd = "$($Claim.project.discovery.prepare)".Trim()
     $env:WHETSTONE_SITE_URL = $discoverySite
     if ($prepareCmd -and $workDir) {

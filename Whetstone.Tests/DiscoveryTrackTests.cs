@@ -12,7 +12,7 @@ namespace Whetstone.Tests;
 /// tracks, the phase each of its tools is refused outside, what each hand-off owes, and the
 /// owner's Complete - the one way anything a discovery found becomes a ticket.
 /// </summary>
-public class DiscoveryTrackTests : IDisposable
+public partial class DiscoveryTrackTests : IDisposable
 {
     private readonly string _root;
     private readonly SqliteConnection _conn;
@@ -28,7 +28,7 @@ public class DiscoveryTrackTests : IDisposable
         Directory.CreateDirectory(repo);
         Directory.CreateDirectory(Path.Combine(data, "projects", "alpha"));
         File.WriteAllText(Path.Combine(data, "projects", "alpha", "project.defaults.json"),
-            $$"""{ "displayName": "Alpha", "projectPath": {{System.Text.Json.JsonSerializer.Serialize(repo)}}, "baseBranch": "main", "discovery": { "siteUrl": "http://localhost:53590/", "maxProposals": 2 } }""");
+            $$"""{ "displayName": "Alpha", "projectPath": {{System.Text.Json.JsonSerializer.Serialize(repo)}}, "baseBranch": "main", "discovery": { "siteUrl": "http://localhost:53590/", "maxProposals": 2, "recheckRounds": 1 } }""");
         File.WriteAllText(Path.Combine(data, "config.defaults.json"), """{ "baseBranch": "main" }""");
         _paths = new DashboardPaths(data);
         _registry = new ProjectRegistry(_paths);
@@ -49,7 +49,7 @@ public class DiscoveryTrackTests : IDisposable
     private (DashboardDbContext Db, TicketService Tickets, DiscoveryService Discovery) New()
     {
         var db = new DashboardDbContext(_options);
-        var tickets = new TicketService(db);
+        var tickets = new TicketService(db, registry: _registry);
         return (db, tickets, new DiscoveryService(db, tickets, _registry, _paths));
     }
 
@@ -309,7 +309,7 @@ public class DiscoveryTrackTests : IDisposable
         var r = await v.CompleteAsync(id);
 
         Assert.Equal(2, r.Filed);
-        Assert.Equal("NeedsReview", r.Phase);
+        Assert.Equal("AwaitingWork", r.Phase);
         await using var db = new DashboardDbContext(_options);
         var filed = await db.Tickets.Include(t => t.WorkItems).Where(t => t.DiscoveryId == id).OrderBy(t => t.Id).ToListAsync();
         Assert.Equal(2, filed.Count);

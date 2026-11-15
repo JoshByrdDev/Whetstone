@@ -167,6 +167,8 @@ public class ProjectConfig
             ["review-pr"] = new[] { "app-stack" },
             // A scout drives the product on the same stack and ports as QA.
             ["scout"] = new[] { "app-stack" },
+            // So does a recheck, which drives it again once the approved work is built.
+            ["recheck"] = new[] { "app-stack" },
         };
 
     /// <summary>
