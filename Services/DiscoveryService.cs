@@ -123,6 +123,7 @@ public class DiscoveryService
         route.Notes = Blank(notes);
         route.Areas = Clean(areas);
         route.WrittenAt = DateTime.UtcNow;
+        route.RunId = await _tickets.LiveRunIdAsync(ticketId);
         await _db.SaveChangesAsync();
         return route;
     }
@@ -143,7 +144,7 @@ public class DiscoveryService
         {
             TicketId = ticketId, Kind = kind, Title = Cap(i.Title, 300), Saw = i.Saw.Trim(), Tried = Blank(i.Tried),
             Job = i.Job, Url = Blank(i.Url), Width = Blank(i.Width), SignedInAs = Blank(i.SignedInAs), Area = Blank(i.Area),
-            Commit = Blank(i.Commit),
+            Commit = Blank(i.Commit), RunId = await _tickets.LiveRunIdAsync(ticketId),
         };
         if (i.FocusW is > 0 && i.FocusH is > 0 && i.FocusX is >= 0 && i.FocusY is >= 0)
             (o.FocusX, o.FocusY, o.FocusW, o.FocusH) = (i.FocusX, i.FocusY, i.FocusW, i.FocusH);
@@ -166,7 +167,7 @@ public class DiscoveryService
         {
             TicketId = ticketId, Url = Cap(url, 2048), RoutePattern = Blank(routePattern), Width = Blank(width),
             SignedInAs = Blank(signedInAs), Seconds = seconds is >= 0 ? seconds : null, Area = Blank(area),
-            Case = Blank(showcaseCase), Commit = Blank(commit),
+            Case = Blank(showcaseCase), Commit = Blank(commit), RunId = await _tickets.LiveRunIdAsync(ticketId),
         };
         _db.DiscoveryVisits.Add(v);
         await _db.SaveChangesAsync();
@@ -198,8 +199,9 @@ public class DiscoveryService
         {
             TicketId = ticketId, Kind = kind, Rank = count + 1, Title = Cap(i.Title, 300), Why = Blank(i.Why), Body = i.Body.Trim(),
             WorkItems = Clean(i.WorkItems), Size = Blank(i.Size), Confidence = Blank(i.Confidence), Area = Blank(i.Area),
-            ObservationIds = ids,
+            ObservationIds = ids, RunId = await _tickets.LiveRunIdAsync(ticketId),
         };
+        KeepDraft(p);
         _db.DiscoveryProposals.Add(p);
         await _db.SaveChangesAsync();
         return p;
@@ -216,7 +218,9 @@ public class DiscoveryService
             TicketId = ticketId, Kind = ProposalKind.Ticket, Status = ProposalStatus.Dropped, Title = Cap(idea, 300),
             DropReason = reason.Trim(), ObservationIds = await CheckObservationsAsync(ticketId, observationIds),
             Rank = await _db.DiscoveryProposals.CountAsync(x => x.TicketId == ticketId && x.Status == ProposalStatus.Dropped) + 1,
+            RunId = await _tickets.LiveRunIdAsync(ticketId),
         };
+        KeepDraft(p);
         _db.DiscoveryProposals.Add(p);
         await _db.SaveChangesAsync();
         return p;
@@ -279,7 +283,8 @@ public class DiscoveryService
 
     public sealed record VerdictInput(
         string? Status = null, string? Title = null, string? Why = null, string? Body = null, IReadOnlyList<string>? WorkItems = null,
-        string? Kind = null, string? RejectReason = null, string? RejectNote = null, DateTime? SnoozeUntil = null, string? Answer = null);
+        string? Kind = null, string? RejectReason = null, string? RejectNote = null, DateTime? SnoozeUntil = null, string? Answer = null,
+        bool? NewToMe = null);
 
     /// <summary>The owner edits a proposal or decides it. Only while the discovery waits for a verdict.</summary>
     public async Task<DiscoveryProposal> DecideAsync(int proposalId, VerdictInput v)
@@ -301,7 +306,10 @@ public class DiscoveryService
             if (k != p.Kind) { p.Kind = k; p.Edited = true; }
         }
         if (v.Answer is not null) p.Answer = Blank(v.Answer);
+        var newToMeChanged = v.NewToMe is not null && v.NewToMe != p.NewToMe;
+        if (newToMeChanged) p.NewToMe = v.NewToMe;
 
+        VerdictEventKind? happened = null;
         if (v.Status is not null)
         {
             if (!Enum.TryParse<ProposalStatus>(v.Status, true, out var s) || s is ProposalStatus.Filed or ProposalStatus.Dropped)
@@ -317,11 +325,43 @@ public class DiscoveryService
                 p.RejectNote = Blank(v.RejectNote);
             }
             if (s == ProposalStatus.Snoozed) p.SnoozeUntil = v.SnoozeUntil;
+            happened = s switch
+            {
+                ProposalStatus.Approved => VerdictEventKind.Approved,
+                ProposalStatus.Rejected => VerdictEventKind.Rejected,
+                ProposalStatus.Snoozed => VerdictEventKind.Snoozed,
+                _ => VerdictEventKind.Undone,
+            };
         }
+        else if (newToMeChanged) happened = VerdictEventKind.NewToMe;
         if (p.Status == ProposalStatus.Approved && p.Kind == ProposalKind.Decide && string.IsNullOrWhiteSpace(p.Answer))
             throw new Refused("A Decide proposal is approved with your answer: say what you decide.");
         if (string.IsNullOrWhiteSpace(p.Title) || string.IsNullOrWhiteSpace(p.Body))
             throw new Refused("A proposal needs a title and a body.");
+        if (happened is { } kind) Record(p, kind);
+        await _db.SaveChangesAsync();
+        return p;
+    }
+
+    /// <summary>
+    /// The owner promotes a line Sift dropped to a proposal, undecided, at the end of the list. It
+    /// is recorded: restores are how "Sift cut too much" is counted.
+    /// </summary>
+    public async Task<DiscoveryProposal> RestoreAsync(int proposalId)
+    {
+        var p = await _db.DiscoveryProposals.Include(x => x.Ticket).FirstOrDefaultAsync(x => x.Id == proposalId)
+            ?? throw new Refused($"There is no proposal {proposalId}.");
+        if (p.Ticket!.Phase != TicketPhase.NeedsVerdict)
+            throw new Refused($"Discovery {p.TicketId} is in {p.Ticket.Phase}: a dropped line is restored while it waits for a verdict.");
+        if (p.Status != ProposalStatus.Dropped)
+            throw new Refused($"Proposal {proposalId} is {p.Status}, not on the dropped list.");
+        p.Status = ProposalStatus.Proposed;
+        // A dropped line is a title and a reason; it needs a body to be decided, and the title is
+        // the honest start of one. Whatever the owner writes over it counts as their edit.
+        if (string.IsNullOrWhiteSpace(p.Body)) p.Body = p.Title;
+        p.Rank = (await _db.DiscoveryProposals.Where(x => x.TicketId == p.TicketId && x.Status != ProposalStatus.Dropped)
+            .MaxAsync(x => (int?)x.Rank) ?? 0) + 1;
+        Record(p, VerdictEventKind.Restored);
         await _db.SaveChangesAsync();
         return p;
     }
@@ -377,6 +417,7 @@ public class DiscoveryService
                     break;
             }
             p.Status = ProposalStatus.Filed;
+            Record(p, VerdictEventKind.Filed, t.ProjectKey);
         }
         await _db.SaveChangesAsync();
 
@@ -388,6 +429,66 @@ public class DiscoveryService
         await _tickets.AddCommentAsync(ticketId, summary, AuthorKind.System);
         var moved = await _tickets.TransitionAsync(ticketId, TicketPhase.NeedsReview, summary, TransitionActor.Human);
         return new CompleteResult(filedIds.Count, answered, briefed, filedIds, (moved?.Phase ?? TicketPhase.NeedsReview).ToString());
+    }
+
+    // ---- the verdict log ----------------------------------------------------------------------
+
+    /// <summary>Sift's words as written, kept apart from whatever the owner edits them into.</summary>
+    private static void KeepDraft(DiscoveryProposal p)
+    {
+        p.DraftKind = p.Kind;
+        p.DraftTitle = p.Title;
+        p.DraftWhy = p.Why;
+        p.DraftBody = p.Body;
+        p.DraftWorkItems = p.WorkItems.ToList();
+    }
+
+    /// <summary>Appends one event for what the owner just did, measured against Sift's draft. Never updates one.</summary>
+    private void Record(DiscoveryProposal p, VerdictEventKind kind, string? projectKey = null)
+    {
+        var draft = EditText(p.DraftTitle, p.DraftWhy, p.DraftBody, p.DraftWorkItems);
+        var now = EditText(p.Title, p.Why, p.Body, p.WorkItems);
+        _db.DiscoveryVerdictEvents.Add(new DiscoveryVerdictEvent
+        {
+            TicketId = p.TicketId, ProposalId = p.Id, ProjectKey = projectKey ?? p.Ticket?.ProjectKey ?? "",
+            Kind = kind,
+            RejectReason = kind == VerdictEventKind.Rejected ? p.RejectReason : null,
+            Note = kind == VerdictEventKind.Rejected ? p.RejectNote : null,
+            NewToMe = p.NewToMe,
+            Edited = draft != now || p.Kind != p.DraftKind,
+            KindChanged = p.Kind != p.DraftKind,
+            EditDistance = EditDistance(draft, now),
+            DraftLength = draft.Length,
+            FiledTicketId = kind == VerdictEventKind.Filed ? p.FiledTicketId : null,
+            At = DateTime.UtcNow,
+        });
+    }
+
+    private static string EditText(string title, string? why, string body, IEnumerable<string> items) =>
+        string.Join("\n", new[] { title, why ?? "", body }.Concat(items));
+
+    /// <summary>
+    /// Levenshtein distance in characters, on texts capped at 8000 each so a pathological body costs
+    /// a bounded amount; past the cap the length difference stands in for the rest.
+    /// </summary>
+    public static int EditDistance(string a, string b)
+    {
+        const int cap = 8000;
+        var extra = Math.Abs(Math.Max(a.Length - cap, 0) - Math.Max(b.Length - cap, 0));
+        if (a.Length > cap) a = a[..cap];
+        if (b.Length > cap) b = b[..cap];
+        if (a == b) return extra;
+        var prev = new int[b.Length + 1];
+        var cur = new int[b.Length + 1];
+        for (var j = 0; j <= b.Length; j++) prev[j] = j;
+        for (var i = 1; i <= a.Length; i++)
+        {
+            cur[0] = i;
+            for (var j = 1; j <= b.Length; j++)
+                cur[j] = Math.Min(Math.Min(cur[j - 1] + 1, prev[j] + 1), prev[j - 1] + (a[i - 1] == b[j - 1] ? 0 : 1));
+            (prev, cur) = (cur, prev);
+        }
+        return prev[b.Length] + extra;
     }
 
     // ---- small helpers ----------------------------------------------------------------------

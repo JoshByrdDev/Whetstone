@@ -39,6 +39,13 @@ public class DiscoveryRoute
     /// <summary>The areas (discovery.areas) this route is expected to cover.</summary>
     public List<string> Areas { get; set; } = new();
 
+    /// <summary>
+    /// The run that wrote it: the ticket lease held when the call was made (<c>ClaimResult.RunId</c>),
+    /// which is the run's <see cref="CycleRun.LeaseRunId"/> - and through it the run's model, provider,
+    /// effort and skill version. Null for a write made with no live lease.
+    /// </summary>
+    public int? RunId { get; set; }
+
     public DateTime WrittenAt { get; set; } = DateTime.UtcNow;
 }
 
@@ -90,6 +97,17 @@ public class DiscoveryObservation
 
     /// <summary>The commit the product was built from on this run.</summary>
     public string? Commit { get; set; }
+
+    /// <summary>
+    /// The run that wrote it: the ticket lease held when the call was made (<c>ClaimResult.RunId</c>),
+    /// which is the run's <see cref="CycleRun.LeaseRunId"/> - and through it the run's model, provider,
+    /// effort and skill version. Null for a write made with no live lease.
+    /// </summary>
+    public int? RunId { get; set; }
+
+    /// <summary>Seconds into the run's recording where this was seen. Null until runs are recorded (build step 3).</summary>
+    public double? VideoAt { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 }
 
@@ -110,6 +128,14 @@ public class DiscoveryVisit
     /// <summary>A showcase case the page belongs to, when it does.</summary>
     public string? Case { get; set; }
     public string? Commit { get; set; }
+
+    /// <summary>
+    /// The run that wrote it: the ticket lease held when the call was made (<c>ClaimResult.RunId</c>),
+    /// which is the run's <see cref="CycleRun.LeaseRunId"/> - and through it the run's model, provider,
+    /// effort and skill version. Null for a write made with no live lease.
+    /// </summary>
+    public int? RunId { get; set; }
+
     public DateTime At { get; set; } = DateTime.UtcNow;
 }
 
@@ -195,6 +221,75 @@ public class DiscoveryProposal
     /// <summary>True once the owner has changed what Sift wrote.</summary>
     public bool Edited { get; set; }
 
+    /// <summary>
+    /// Sift's draft as it was written, kept beside whatever the owner edits it into, so "how much
+    /// did the owner rewrite" is a comparison rather than a memory. Written once, by propose or
+    /// drop_idea, and never changed.
+    /// </summary>
+    public ProposalKind DraftKind { get; set; }
+    public string DraftTitle { get; set; } = "";
+    public string? DraftWhy { get; set; }
+    public string DraftBody { get; set; } = "";
+    public List<string> DraftWorkItems { get; set; } = new();
+
+    /// <summary>The owner's one tap: this is something they had not already thought of. Null until they say.</summary>
+    public bool? NewToMe { get; set; }
+
+    /// <summary>The run that wrote it (a sift, later a recheck). See <see cref="DiscoveryObservation.RunId"/>.</summary>
+    public int? RunId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? DecidedAt { get; set; }
+}
+
+/// <summary>What a verdict event records (<see cref="DiscoveryVerdictEvent.Kind"/>).</summary>
+public enum VerdictEventKind
+{
+    Approved,
+    Rejected,
+    Snoozed,
+    /// <summary>A verdict taken back: the proposal is undecided again.</summary>
+    Undone,
+    /// <summary>A line Sift dropped, promoted by the owner to a proposal.</summary>
+    Restored,
+    /// <summary>The owner's "new to me" set or cleared, apart from a verdict.</summary>
+    NewToMe,
+    /// <summary>Complete acted on an approved proposal: a ticket filed, a briefing written, an answer recorded.</summary>
+    Filed,
+}
+
+/// <summary>
+/// One thing the owner did to a proposal, appended and never rewritten (docs/discovery-track-plan.md,
+/// "What is measured"): a changed mind is a second event, so approval rate, rejections by reason,
+/// edits and restores are counts over this log rather than over the proposal's latest state.
+/// The proposal's own columns are the current state the drawer shows; this is the history the
+/// marts read.
+/// </summary>
+public class DiscoveryVerdictEvent
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    /// <summary>Not a foreign key: the log outlives anything that removes a proposal.</summary>
+    public int ProposalId { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    public VerdictEventKind Kind { get; set; }
+    public RejectReason? RejectReason { get; set; }
+    public string? Note { get; set; }
+    public bool? NewToMe { get; set; }
+
+    /// <summary>Whether what the owner acted on differed from Sift's draft, and by how much.</summary>
+    public bool Edited { get; set; }
+    public bool KindChanged { get; set; }
+    /// <summary>Characters of edit distance between the draft and the proposal as acted on (title, why, body, work items).</summary>
+    public int EditDistance { get; set; }
+    /// <summary>The draft's own length in the same characters, so the distance can be read as a share.</summary>
+    public int DraftLength { get; set; }
+
+    /// <summary>For Filed: the ticket it became, when it became one.</summary>
+    public int? FiledTicketId { get; set; }
+
+    public DateTime At { get; set; } = DateTime.UtcNow;
 }

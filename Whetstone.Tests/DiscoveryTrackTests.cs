@@ -339,4 +339,117 @@ public class DiscoveryTrackTests : IDisposable
         Assert.Equal(0, r.Filed);
         Assert.Equal(1, r.Answered);
     }
+
+    // ---- what is measured: the verdict log, drafts and lineage ------------------------------
+
+    [Fact]
+    public async Task Every_verdict_is_appended_and_a_changed_mind_is_a_second_event()
+    {
+        var (id, obs) = await Sifting();
+        var (_, _, d) = New();
+        var p = await d.ProposeAsync(id, new("Ticket", "A month view", null, "A calendar on /events", null, null, null, null, new[] { obs }));
+        await SetPhase(id, TicketPhase.NeedsVerdict);
+        var (_, _, v) = New();
+        await v.DecideAsync(p.Id, new(Status: "Approved", NewToMe: true));
+        await v.DecideAsync(p.Id, new(Status: "Proposed"));
+        await v.DecideAsync(p.Id, new(Status: "Rejected", RejectReason: "AlreadyDecided", RejectNote: "decision 12"));
+        await v.DecideAsync(p.Id, new(NewToMe: false));
+
+        await using var db = new DashboardDbContext(_options);
+        var events = await db.DiscoveryVerdictEvents.Where(e => e.ProposalId == p.Id).OrderBy(e => e.Id).ToListAsync();
+        Assert.Equal(new[] { VerdictEventKind.Approved, VerdictEventKind.Undone, VerdictEventKind.Rejected, VerdictEventKind.NewToMe },
+            events.Select(e => e.Kind));
+        Assert.True(events[0].NewToMe);
+        Assert.Equal(RejectReason.AlreadyDecided, events[2].RejectReason);
+        Assert.Equal("decision 12", events[2].Note);
+        Assert.False(events[3].NewToMe);
+        Assert.All(events, e => Assert.Equal("alpha", e.ProjectKey));
+        Assert.All(events, e => Assert.False(e.Edited));
+    }
+
+    [Fact]
+    public async Task Siftings_draft_is_kept_beside_the_owners_edit_and_the_edit_is_measured()
+    {
+        var (id, obs) = await Sifting();
+        var (_, _, d) = New();
+        var p = await d.ProposeAsync(id, new("Ticket", "A month view", "Planning is the job", "A calendar on /events",
+            new[] { "Grid" }, null, null, null, new[] { obs }));
+        await SetPhase(id, TicketPhase.NeedsVerdict);
+        var (_, _, v) = New();
+        await v.DecideAsync(p.Id, new(Title: "A month view of events", Kind: "Bug"));
+        await v.DecideAsync(p.Id, new(Status: "Approved"));
+
+        await using var db = new DashboardDbContext(_options);
+        var row = await db.DiscoveryProposals.SingleAsync(x => x.Id == p.Id);
+        Assert.Equal("A month view", row.DraftTitle);
+        Assert.Equal(ProposalKind.Ticket, row.DraftKind);
+        Assert.Equal("A calendar on /events", row.DraftBody);
+        Assert.Equal(new[] { "Grid" }, row.DraftWorkItems);
+        Assert.Equal("A month view of events", row.Title);
+        var e = await db.DiscoveryVerdictEvents.SingleAsync(x => x.ProposalId == p.Id);
+        Assert.True(e.Edited);
+        Assert.True(e.KindChanged);
+        Assert.Equal(" of events".Length, e.EditDistance);
+        Assert.True(e.DraftLength > e.EditDistance);
+    }
+
+    [Fact]
+    public async Task A_restored_drop_is_recorded_and_must_be_decided_before_complete()
+    {
+        var (id, obs) = await Sifting();
+        var (_, _, d) = New();
+        var keep = await d.ProposeAsync(id, new("Ticket", "A month view", null, "b", null, null, null, null, new[] { obs }));
+        var dropped = await d.DropIdeaAsync(id, "Add search", "generic", new[] { obs });
+        Assert.Equal("Add search", dropped.DraftTitle);
+        await SetPhase(id, TicketPhase.NeedsVerdict);
+
+        var (_, _, v) = New();
+        await v.DecideAsync(keep.Id, new(Status: "Approved"));
+        var restored = await v.RestoreAsync(dropped.Id);
+        Assert.Equal(ProposalStatus.Proposed, restored.Status);
+        Assert.Equal(2, restored.Rank);
+        await Assert.ThrowsAsync<DiscoveryService.Refused>(() => v.RestoreAsync(keep.Id));
+        await Assert.ThrowsAsync<DiscoveryService.Refused>(() => v.CompleteAsync(id));
+        await v.DecideAsync(dropped.Id, new(Status: "Rejected", RejectReason: "NotNow"));
+        await v.CompleteAsync(id);
+
+        await using var db = new DashboardDbContext(_options);
+        var kinds = await db.DiscoveryVerdictEvents.Where(e => e.TicketId == id).OrderBy(e => e.Id).Select(e => e.Kind).ToListAsync();
+        Assert.Equal(new[] { VerdictEventKind.Approved, VerdictEventKind.Restored, VerdictEventKind.Rejected, VerdictEventKind.Filed }, kinds);
+        var filed = await db.DiscoveryVerdictEvents.SingleAsync(e => e.TicketId == id && e.Kind == VerdictEventKind.Filed);
+        Assert.Equal(keep.Id, filed.ProposalId);
+        Assert.NotNull(filed.FiledTicketId);
+        Assert.Equal(id, (await db.Tickets.SingleAsync(t => t.Id == filed.FiledTicketId)).DiscoveryId);
+    }
+
+    [Fact]
+    public async Task Each_written_row_names_the_run_that_wrote_it()
+    {
+        var id = await DiscoveryIn(TicketPhase.Scouting);
+        int runId;
+        await using (var ctx = new DashboardDbContext(_options))
+        {
+            var leases = new ResourceLeaseService(ctx);
+            await leases.TryAcquireAllAsync(new[] { ResourceLeaseService.TicketKey(id) }, id, "scout", TimeSpan.FromMinutes(60));
+            runId = await ctx.ResourceLeases.Where(l => l.ResourceKey == ResourceLeaseService.TicketKey(id)).Select(l => l.Id).SingleAsync();
+        }
+        var (_, _, d) = New();
+        var o = await d.LogObservationAsync(id, new DiscoveryService.ObservationInput("Wall", "No month view", "Each event alone",
+            null, 0, null, null, null, null, null, null, null, null, null, "abc123"));
+        var visit = await d.LogVisitAsync(id, "/events", "/events", "1440", "member", 30, "events", "case-1", "abc123");
+        Assert.Equal(runId, o.RunId);
+        Assert.Equal(runId, visit.RunId);
+        await SetPhase(id, TicketPhase.Sifting);
+        var (_, _, s) = New();
+        var p = await s.ProposeAsync(id, new("Ticket", "A month view", null, "b", null, null, null, null, new[] { o.Id }));
+        Assert.Equal(runId, p.RunId);
+    }
+
+    [Fact]
+    public void Edit_distance_counts_characters()
+    {
+        Assert.Equal(0, DiscoveryService.EditDistance("same", "same"));
+        Assert.Equal(3, DiscoveryService.EditDistance("kitten", "sitting"));
+        Assert.Equal(4, DiscoveryService.EditDistance("", "four"));
+    }
 }

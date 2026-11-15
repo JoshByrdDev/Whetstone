@@ -1912,7 +1912,8 @@ public class TicketService
     }
 
     /// <summary>The run holding the ticket's lease now - its id, as QA rulings record it - or null.</summary>
-    private Task<int?> LiveRunIdAsync(int ticketId)
+    /// <summary>The live run on a ticket: the id of its unreleased, unexpired ticket lease (<c>ClaimResult.RunId</c>), or null.</summary>
+    public Task<int?> LiveRunIdAsync(int ticketId)
     {
         var key = ResourceLeaseService.TicketKey(ticketId);
         var now = DateTime.UtcNow;

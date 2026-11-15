@@ -470,6 +470,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Saw")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -496,6 +499,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("Url")
                         .HasMaxLength(2048)
                         .HasColumnType("TEXT");
+
+                    b.Property<double?>("VideoAt")
+                        .HasColumnType("REAL");
 
                     b.Property<string>("Width")
                         .HasMaxLength(16)
@@ -534,6 +540,27 @@ namespace Whetstone.Migrations
                     b.Property<DateTime?>("DecidedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DraftBody")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DraftKind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DraftTitle")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DraftWhy")
+                        .HasColumnType("TEXT");
+
+                    b.PrimitiveCollection<string>("DraftWorkItems")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("DropReason")
                         .HasColumnType("TEXT");
 
@@ -551,6 +578,9 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool?>("NewToMe")
+                        .HasColumnType("INTEGER");
+
                     b.PrimitiveCollection<string>("ObservationIds")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -564,6 +594,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("RejectReason")
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("Size")
                         .HasMaxLength(64)
@@ -619,6 +652,9 @@ namespace Whetstone.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("SignedInAs")
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
@@ -637,6 +673,65 @@ namespace Whetstone.Migrations
                     b.HasKey("TicketId");
 
                     b.ToTable("DiscoveryRoutes");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryVerdictEvent", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DraftLength")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("EditDistance")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("Edited")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("FiledTicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("KindChanged")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool?>("NewToMe")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("ProposalId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("RejectReason")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProposalId");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("DiscoveryVerdictEvents");
                 });
 
             modelBuilder.Entity("Whetstone.Models.DiscoveryVisit", b =>
@@ -663,6 +758,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("RoutePattern")
                         .HasMaxLength(512)
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<int?>("Seconds")
                         .HasColumnType("INTEGER");
@@ -2709,6 +2807,17 @@ namespace Whetstone.Migrations
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithOne()
                         .HasForeignKey("Whetstone.Models.DiscoveryRoute", "TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryVerdictEvent", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 

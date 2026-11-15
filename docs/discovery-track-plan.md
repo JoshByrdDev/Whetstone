@@ -395,6 +395,18 @@ What step 1 settled, and where it stopped short of the design above:
   **Decide** proposal's answer is kept on the proposal, not written to the steward's register.
   Both are for a later step to carry further.
 - **The worktree** is the walk-through's: detached on the base, never a branch.
+- **What is measured is recorded from the first verdict.** Every owner action on a proposal is a
+  row in `DiscoveryVerdictEvents`, appended and never updated: approve, reject (with its reason
+  and note), snooze, undo, restore from the dropped list, the one-tap *new to me*, and Complete's
+  filing (with the ticket it became). Each event measures the proposal as acted on against Sift's
+  draft, which is kept on the proposal (`Draft*`) and never changed: edited or not, kind changed
+  or not, and the edit distance beside the draft's length.
+- **Lineage** is the run's lease id (`RunId`) on every route, observation, visit and proposal -
+  the same id `CycleRun.LeaseRunId` and `QaRulingEvent.RunId` carry - so a row leads to its run's
+  model, provider, effort and skill hash without a column of its own. A proposal names its
+  observations; a filed ticket carries `DiscoveryId` and its proposal `FiledTicketId`; a Bug
+  proposal files with `IsBug`. `VideoAt` is on the observation, empty until step 3 records video.
+  The taste file's version waits for step 4.
 
 ## Open for whoever builds it
 

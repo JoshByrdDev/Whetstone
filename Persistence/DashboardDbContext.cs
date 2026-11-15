@@ -31,6 +31,7 @@ public class DashboardDbContext : DbContext
     public DbSet<DiscoveryObservation> DiscoveryObservations => Set<DiscoveryObservation>();
     public DbSet<DiscoveryVisit> DiscoveryVisits => Set<DiscoveryVisit>();
     public DbSet<DiscoveryProposal> DiscoveryProposals => Set<DiscoveryProposal>();
+    public DbSet<DiscoveryVerdictEvent> DiscoveryVerdictEvents => Set<DiscoveryVerdictEvent>();
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
     public DbSet<GateFinding> GateFindings => Set<GateFinding>();
     public DbSet<StewardQuestion> StewardQuestions => Set<StewardQuestion>();
@@ -374,8 +375,20 @@ public class DashboardDbContext : DbContext
             e.Property(p => p.Title).HasMaxLength(300);
             e.Property(p => p.Size).HasMaxLength(64);
             e.Property(p => p.Area).HasMaxLength(64);
+            e.Property(p => p.DraftKind).HasConversion<string>().HasMaxLength(16);
+            e.Property(p => p.DraftTitle).HasMaxLength(300);
             e.HasOne(p => p.Ticket).WithMany().HasForeignKey(p => p.TicketId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(p => p.TicketId);
+        });
+
+        b.Entity<DiscoveryVerdictEvent>(e =>
+        {
+            e.Property(v => v.Kind).HasConversion<string>().HasMaxLength(16);
+            e.Property(v => v.RejectReason).HasConversion<string>().HasMaxLength(16);
+            e.Property(v => v.ProjectKey).HasMaxLength(64);
+            e.HasOne(v => v.Ticket).WithMany().HasForeignKey(v => v.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(v => v.TicketId);
+            e.HasIndex(v => v.ProposalId);
         });
 
         b.Entity<ReviewComment>(e =>

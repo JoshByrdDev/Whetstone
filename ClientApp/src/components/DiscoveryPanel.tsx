@@ -157,8 +157,12 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
           </summary>
           <ul className="mt-2 space-y-1 text-[12px]">
             {dropped.map(p => (
-              <li key={p.id} className="text-gray-400 leading-snug">
-                {p.title} <span className="text-gray-600">· {p.dropReason}</span>
+              <li key={p.id} className="flex items-baseline gap-2 text-gray-400 leading-snug">
+                <span className="flex-1 min-w-0">{p.title} <span className="text-gray-600">· {p.dropReason}</span></span>
+                {verdictOpen && (
+                  <button type="button" disabled={busy} onClick={() => run(() => api.restore(p.id))}
+                    title="Promote it to a proposal, to decide with the rest" className={`${btn} flex-none`}>Restore</button>
+                )}
               </li>
             ))}
           </ul>
@@ -324,6 +328,12 @@ function ProposalCard({ ticketId, p, obs, open, busy, run }: {
               className="text-[11px] text-gray-600 hover:text-gray-400 transition-colors">undo</button>
           )}
           <span className="flex-1" />
+          <button type="button" disabled={busy} aria-pressed={!!p.newToMe}
+            onClick={() => run(() => api.decide(p.id, { newToMe: !p.newToMe }))}
+            title="Something you had not already thought of"
+            className={`orbit-tap text-[11px] px-2 py-1 rounded border ${p.newToMe ? 'border-amber-700/70 text-amber-300 bg-amber-950/30' : 'border-hair text-gray-500 hover:text-gray-300'}`}>
+            new to me
+          </button>
           <button type="button" onClick={() => setEditing(true)} className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors">edit</button>
         </div>
       )}

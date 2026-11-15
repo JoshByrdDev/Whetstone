@@ -62,6 +62,12 @@ export interface DiscoveryProposal {
   filedTicketId?: number | null;
   filedNote?: string | null;
   edited: boolean;
+  /** The owner's one tap: something they had not already thought of. Null until they say. */
+  newToMe?: boolean | null;
+  /** Sift's words as written, kept beside the owner's edits. */
+  draftKind?: ProposalKind;
+  draftTitle?: string;
+  draftBody?: string;
 }
 
 export interface Discovery {
@@ -83,6 +89,7 @@ export interface VerdictChange {
   rejectNote?: string;
   snoozeUntil?: string | null;
   answer?: string;
+  newToMe?: boolean;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -109,3 +116,8 @@ export const decide = (proposalId: number, change: VerdictChange) =>
 export const complete = (ticketId: number) =>
   fetch(`/api/tickets/${ticketId}/discovery/complete`, { method: 'POST' })
     .then(json<{ filed: number; answered: number; briefed: number; ticketIds: number[]; phase: string }>);
+
+/** Promotes a line Sift dropped to an undecided proposal. Recorded: restores are how a sift that cut too much is counted. */
+export const restore = (proposalId: number) =>
+  fetch(`/api/discovery/proposals/${proposalId}/restore`, { method: 'POST' })
+    .then(json<{ id: number; status: ProposalStatus; rank: number }>);

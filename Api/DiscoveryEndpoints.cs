@@ -6,7 +6,8 @@ namespace Whetstone.Api;
 /// <summary>The owner's verdict on one proposal: an edit, a decision, or both.</summary>
 public record DiscoveryVerdictRequest(
     string? Status = null, string? Title = null, string? Why = null, string? Body = null, IReadOnlyList<string>? WorkItems = null,
-    string? Kind = null, string? RejectReason = null, string? RejectNote = null, DateTime? SnoozeUntil = null, string? Answer = null);
+    string? Kind = null, string? RejectReason = null, string? RejectNote = null, DateTime? SnoozeUntil = null, string? Answer = null,
+    bool? NewToMe = null);
 
 /// <summary>
 /// The owner's side of a discovery (docs/discovery-track-plan.md). Reading the record, and the
@@ -40,6 +41,7 @@ public static class DiscoveryEndpoints
                     p.Id, p.Rank, kind = p.Kind.ToString(), status = p.Status.ToString(), p.Title, p.Why, p.Body, p.WorkItems,
                     p.Size, p.Confidence, p.Area, p.ObservationIds, p.DropReason, rejectReason = p.RejectReason?.ToString(),
                     p.RejectNote, p.SnoozeUntil, p.Answer, p.FiledTicketId, p.FiledNote, p.Edited, p.CreatedAt, p.DecidedAt,
+                    p.NewToMe, draftKind = p.DraftKind.ToString(), p.DraftTitle, p.DraftWhy, p.DraftBody, p.DraftWorkItems,
                 }),
                 filed = v.Filed,
             });
@@ -56,8 +58,18 @@ public static class DiscoveryEndpoints
             try
             {
                 var p = await svc.DecideAsync(id, new DiscoveryService.VerdictInput(req.Status, req.Title, req.Why, req.Body,
-                    req.WorkItems, req.Kind, req.RejectReason, req.RejectNote, req.SnoozeUntil, req.Answer));
+                    req.WorkItems, req.Kind, req.RejectReason, req.RejectNote, req.SnoozeUntil, req.Answer, req.NewToMe));
                 return Results.Ok(new { p.Id, status = p.Status.ToString(), p.Edited });
+            }
+            catch (DiscoveryService.Refused e) { return Results.BadRequest(new { error = e.Message }); }
+        });
+
+        app.MapPost("/api/discovery/proposals/{id:int}/restore", async (int id, DiscoveryService svc) =>
+        {
+            try
+            {
+                var p = await svc.RestoreAsync(id);
+                return Results.Ok(new { p.Id, status = p.Status.ToString(), p.Rank });
             }
             catch (DiscoveryService.Refused e) { return Results.BadRequest(new { error = e.Message }); }
         });
