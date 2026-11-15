@@ -320,7 +320,7 @@ this.) So retention is part of the video step, not a clean-up for later:
 2. **The long tail.** Awaiting work, Recheck and its rounds, and the route-approval gate.
    **Built** - see "Step 2 as built".
 3. **Video.** Recording, chapters, clips on proposals, ffmpeg in setup, and the retention above -
-   the video and its pruning ship together.
+   the video and its pruning ship together. **Built** - see "Step 3 as built".
 4. **Taste.** The taste file and its fold, once there are verdicts to fold.
 5. **Measuring.** The Discovery marts and their Metrics section, once step 1 has produced a few
    weeks of verdicts. What they read is recorded from step 1 on ("What is measured").
@@ -452,8 +452,89 @@ What step 2 settled, and where it stopped short of the design above:
 - **Same berth as Scout**: the `recheck` skill (`data/skill-templates/recheck/skill.md`) runs with
   the scout's browser, `discovery.prepare` / `teardown` and the `app-stack` lease, and no shell.
 
+## Step 3 as built
+
+What step 3 settled, and where it departed from or fell short of the design above:
+
+- **The board finds the recording; the agent is not trusted to report it.** The scout's browser
+  starts with `--caps devtools` (`Get-DiscoveryBrowserArgs` in `data/worker-discovery.ps1`), and
+  the scout calls `browser_start_video` with no filename, so the video lands in the run's folder
+  as `video-<start>.webm`. The browser writes the file only at `browser_stop_video`. Whenever the
+  board reads a discovery, completes a verdict or runs retention, it *adopts* any finished video
+  under `discovery/<ticket>/runs/` (`DiscoveryMedia.AdoptAsync`): moves it to `rec<id>.webm` beside
+  the shots, records a `DiscoveryRecording`, and stamps what was logged during its span. A scout
+  cut short, or one that forgets to say it recorded, still has its video adopted. There is no
+  route or tool that reports a video.
+- **Second 0 comes from the file's name**, which the browser server stamps as recording starts.
+  Measured against frames, video time matched wall time to within the 0.5s sample; the file's
+  length, by contrast, runs about a second past wall time. A video with any other name falls back
+  to its last write less its length.
+- **An observation's moment is its screenshot's write time** (`DiscoveryObservation.ObservedAt`),
+  not when it was logged: a model logs a few seconds after it sees, and the clip should show the
+  thing, not the scout thinking. With no shot, or a shot older than ten minutes, the time it was
+  logged stands in. `VideoAt` and `RecordingId` are set at adoption.
+- **Chapters are the board's, through a tool** (`mark_chapter`, Scouting and Rechecking only, a
+  `DiscoveryChapter` row) beside the browser's own `browser_video_chapter` card. The browser does
+  not say when a chapter fell, so the skills tell the agent to make both calls in the same
+  message. Called one after the other, the board's stamp falls about two seconds after the card
+  starts, because the card call blocks while it shows.
+- **A clip is cut on demand, the first time it is played** (the plan's open question), and again,
+  if it never was, before the recording it comes from is pruned. One clip per proposal
+  (`p<id>.mp4`), from the recording holding most of what it cites. Around each cited moment: from
+  the chapter it falls in, but at most 20s and at least 5s before it, to 4s after it or the next
+  chapter, whichever comes first. Spans that overlap are joined, and the clip is capped at 90s
+  (`DiscoveryMedia.ClipSpans`). H.264 in MP4, at most 1280 wide, falling back to VP8 WebM for an
+  ffmpeg built without libx264. A clip of about ten seconds cut in under a second on the QA copy.
+  Two cuts run at a time, one per proposal.
+- **Two ffmpegs.** The browser records with Playwright's own (`playwright install ffmpeg` in
+  `data/playwright-mcp`, into the user's cache). Without it, `browser_start_video` fails, and the
+  skill says to carry on with screenshots and say so. The board cuts clips with the machine's own
+  (PATH, or `ffmpegPath` in the global config). Without it there are recordings but no clips, and
+  the drawer says so. The Setup check's *Discovery video (ffmpeg)* row covers both, and shows only
+  once a project can be scouted.
+- **Retention is part of `CaptureRetention`**, not a second service. The same pass and the same
+  ledger, with the store `discovery`, pruned file by file rather than by folder
+  (`DiscoveryMedia.PruneAsync`):
+  - **At Complete** (`PruneAtCompleteAsync`): a rejected or snoozed proposal's clip goes, cut or
+    not (`ClipPrunedAt`, so none is cut after). Its first cited screenshot stays as its still. Any
+    shot no approved, filed, undecided or pinned proposal, still or goal check uses goes
+    (`ShotPrunedAt`). Recordings get `VerdictAt`, which starts their seven days. The run folders
+    go too: the browser's scratch, all of it already copied out.
+  - **Each pass**: a recording seven days after `VerdictAt`, or after Done for one that fed no
+    verdict, open discovery or not, after first cutting the clips that outlive it. A kept clip
+    90 days after Done, and every shot but each proposal's still with it. Run folders a day old
+    once nothing drives the ticket. Orphans whole. Days are `retention.discoveryRecordingDays` /
+    `discoveryClipDays` in the global config.
+  - **The budget** (`discovery.storageBudgetMb`, default 2048, per project): past it, a whole Done
+    discovery's media at a time, the one Done longest first, stills included. Never an open
+    discovery's, never a pinned proposal's.
+  - **The pin** (`PUT /api/discovery/proposals/{id}/pin`, REST with no tool behind it) keeps a
+    proposal's clip and shots through every rule, the budget included.
+  - **Pruned is said**: rows stay with when. The drawer shows "Clip removed on", "Recording removed
+    on" and "Shot removed on" (`RemovedShot`, which now names what went), a removed recording or
+    clip answers 410, and a removed shot's URL answers with the placeholder picture.
+- **The stills keep beyond the 90 days**, which is a reading of the plan's table: "one still kept
+  per proposal" is said of rejected ones at Complete, and step 3 applies it to approved ones at 90
+  days too. Every proposal keeps a picture until the budget takes it. Goal checks' shots are kept
+  while the discovery is open and go at 90 days.
+- **The drawer** plays each recording with its chapters as jump points, and each observation seen
+  on camera has a "▶ m:ss" that plays the recording from just before it. Each proposal plays its
+  clip, and a *keep* toggle pins it. Checked at 390px wide with no sideways scroll.
+- **Worker hosts**: `Remove-HostTicketCopies` in `runner.ps1` sweeps `discovery/<ticket>` like the
+  other ticket copies. Scout still runs on the board host only. `log_observation` copies a
+  screenshot from a path on the board's own disk, and that would need the capture upload QA uses
+  before a worker host could scout.
+- **Fell short / not done**: recording size is the browser's default (it scales a 1280x800
+  viewport down to 800x500), because the skill does not pass `size`. A run that stops and restarts
+  its video gets a clip from only one of the recordings. Nothing re-adopts a video moved by hand.
+  The verdict-time numbers ("Time to verdict", active minutes on the page) record no clip views.
+- **Proven on the QA copy**: a scout played through the board's own `/mcp` and the pinned
+  Playwright MCP, with the worker's browser arguments, against the copy's own board. The 18s
+  recording was adopted with both observations and both chapters stamped. Two clips of about 9s
+  played in the drawer. Complete removed the rejected clip (410 after) and kept its still and the
+  approved clip. The Setup check row read ok.
+
 ## Open for whoever builds it
 
-- How a proposal's clip is cut: on demand when the Verdict page opens it, or once when Sift
-  finishes.
+- ~~How a proposal's clip is cut~~ - settled in "Step 3 as built": on demand, and before its recording is pruned.
 - ~~What Recheck reads of the original observations~~ - settled in "Step 2 as built".

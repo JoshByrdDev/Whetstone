@@ -66,6 +66,16 @@ A days value of zero or less turns that store's time rule off; a budget of zero 
 budget off. A pass runs a few minutes after start and then every six hours. It touches nothing
 past the data folder, so it runs on a QA copy as well.
 
+## The Discovery track's media
+
+The same pass prunes `discovery/<ticket>/` - a run's recording, the clips cut from it and the
+screenshots - on the Discovery plan's terms rather than these (`docs/discovery-track-plan.md`,
+"What is kept, and for how long" and "Step 3 as built"), with the ledger's store `discovery`. Its
+days are `retention.discoveryRecordingDays` (7, from the verdict a recording fed) and
+`discoveryClipDays` (90, from the discovery's Done), and its budget is per project,
+`discovery.storageBudgetMb` (2048). Unlike the two stores above it prunes file by file, because a
+discovery keeps one still per proposal and whatever the owner pinned.
+
 ## Not covered
 
 - An open ticket's captures grow with every QA run on it, since each run adds to the same folder.
