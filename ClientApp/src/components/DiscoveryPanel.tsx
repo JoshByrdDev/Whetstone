@@ -73,7 +73,14 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
   const proposals = d.proposals.filter(p => p.status !== 'Dropped');
   const dropped = d.proposals.filter(p => p.status === 'Dropped');
   const undecided = proposals.filter(p => p.status === 'Proposed').length;
-  const approved = proposals.filter(p => p.status === 'Approved').length;
+  const approved = proposals.filter(p => p.status === 'Approved');
+  // What Complete will do, in its own words: a ticket or bug is filed, a slice becomes a briefing,
+  // a decision is answered - three different things, so they are counted apart.
+  const outcome = [
+    plural(approved.filter(p => p.kind === 'Ticket' || p.kind === 'Bug').length, 'ticket', 'filed'),
+    plural(approved.filter(p => p.kind === 'Slice').length, 'slice briefing', 'written'),
+    plural(approved.filter(p => p.kind === 'Decide').length, 'answer', 'recorded'),
+  ].filter(Boolean).join(', ');
 
   return (
     <div className="space-y-4">
@@ -115,8 +122,8 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
           <span className="text-[12px] text-gray-400 flex-1 min-w-0">
             {undecided > 0
               ? `${undecided} still to decide. Complete files every approved proposal at once.`
-              : approved > 0
-              ? `${approved} approved. Complete files ${approved === 1 ? 'it' : 'them'} and moves this discovery to your sign-off.`
+              : outcome
+              ? `Complete: ${outcome}, then this discovery moves to your sign-off.`
               : 'Nothing approved. Complete moves this discovery to your sign-off with nothing filed.'}
           </span>
           <button type="button" disabled={busy || undecided > 0} onClick={() => run(() => api.complete(t.id))}
@@ -170,6 +177,10 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
       )}
     </div>
   );
+}
+
+function plural(n: number, noun: string, verb: string) {
+  return n === 0 ? '' : `${n} ${noun}${n === 1 ? '' : 's'} ${verb}`;
 }
 
 function ObservationRow({ ticketId, o }: { ticketId: number; o: DiscoveryObservation }) {

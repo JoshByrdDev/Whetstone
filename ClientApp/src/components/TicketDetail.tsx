@@ -352,7 +352,9 @@ export function TicketDetail({
               />
             </div>
 
-            {/* Pipeline options — which human checkpoints this ticket stops at, and how much QA it gets */}
+            {/* Pipeline options — which human checkpoints this ticket stops at, and how much QA it gets.
+                None of them applies to a discovery, whose one checkpoint is the verdict. */}
+            {t.track !== 'Discovery' && (
             <div>
               <SectionLabel>Pipeline options</SectionLabel>
               <TicketOptions
@@ -375,6 +377,7 @@ export function TicketDetail({
                 </div>
               )}
             </div>
+            )}
 
             {/* Implementation summary — maintained by the implement phase */}
             {t.implementationSummary?.trim() && (
@@ -490,7 +493,9 @@ export function TicketDetail({
 
             {/* QA. Two numbers, because they answer different questions: the ring is how far
                 through the list the run is, the label is how it is going. A single "N passed"
-                cannot tell a run stalled on item 3 from one that tested everything and failed. */}
+                cannot tell a run stalled on item 3 from one that tested everything and failed.
+                Absent on a discovery: it builds nothing, so there is nothing for QA to drive. */}
+            {t.track !== 'Discovery' && (
             <div>
               <div className="flex items-center gap-2.5 mb-3">
                 {/* "Has a current outcome", not "is not Todo" — a Passed that expired at the last
@@ -618,12 +623,13 @@ export function TicketDetail({
               </div>
               <AddInput placeholder="Add QA item…" onAdd={v => run(() => api.addQaItem(t.id, v))} />
             </div>
+            )}
 
             {/* The branch under review and what was staged against it. Above the blockers because on
                 a review ticket it is the whole point of the drawer, and absent entirely on a
                 delivery one - `review` is null there, and the panel draws nothing. */}
             {t.review && <ReviewPanel t={t} onChanged={reload} />}
-            {t.track === 'Discovery' && <DiscoveryPanel t={t} onChanged={reload} />}
+            {t.track === 'Discovery' && <DiscoveryPanel t={t} onChanged={() => { reload(); onChanged(); }} />}
 
             {/* What this ticket is waiting on. The tracker's blocking links, refreshed live, plus
                 anything found here - and the local verdict wins over the tracker either way. */}

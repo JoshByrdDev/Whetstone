@@ -316,7 +316,7 @@ this.) So retention is part of the video step, not a clean-up for later:
 ## Build order
 
 1. **The core loop.** Track, Chart (no gate), Scout without video, Sift, Verdict, Complete filing
-   linked tickets. The pilot, made real, and already useful.
+   linked tickets. The pilot, made real, and already useful. **Built** - see "Step 1 as built".
 2. **The long tail.** Awaiting work, Recheck and its rounds, and the route-approval gate.
 3. **Video.** Recording, chapters, clips on proposals, ffmpeg in setup, and the retention above -
    the video and its pruning ship together.
@@ -371,11 +371,33 @@ when the owner files it.
 - Opus 5.5 at high effort by default, configurable per project and per phase.
 - Scout runs on the project's showcase data, never the owner's database or QA's.
 
+## Step 1 as built
+
+What step 1 settled, and where it stopped short of the design above:
+
+- **Phases** are `NeedsCharting`, `Charting`, `NeedsScouting`, `Scouting`, `NeedsSifting`,
+  `Sifting`, `NeedsVerdict`; Complete moves the ticket to `NeedsReview` (shown as *Sign-off*), and
+  the owner moves it to Done. Awaiting work is step 2.
+- **Tools** are on the one `/mcp` server (`Mcp/DiscoveryTools.cs`) and refuse outside their phase,
+  as the delivery tools already do. There is no tool that approves, files or answers: the verdict
+  and Complete are REST routes (`Api/DiscoveryEndpoints.cs`).
+- **No shell on any discovery phase.** On claude every phase runs with `--tools Read,Grep,Glob`,
+  and the scout's browser also loses `browser_run_code_unsafe`. Because the scout cannot start the
+  product, the worker runs `discovery.prepare` before it and `discovery.teardown` after
+  (`data/worker-discovery.ps1`), under the project's `app-stack` lease.
+- **Configuration** is a `discovery` block in the project's config: `siteUrl` (required to file a
+  discovery), `prepare`, `teardown`, `maxProposals` (6), `areas`.
+- **Screenshots** are copied off the run's browser folder into `data/discovery/<id>/` as they are
+  logged, so the record does not depend on the run folder lasting.
+- **Each hand-off owes its record**, written on this pass: Chart a route with jobs, Scout an
+  observation, Sift a proposal or a dropped idea.
+- **A Slice proposal** becomes a briefing note on the discovery rather than a filed idea, and a
+  **Decide** proposal's answer is kept on the proposal, not written to the steward's register.
+  Both are for a later step to carry further.
+- **The worktree** is the walk-through's: detached on the base, never a branch.
+
 ## Open for whoever builds it
 
-- Final phase names, once they are seen in the drawer.
-- How a phase is shown only its tools on the one `/mcp` server: follow whatever already limits a
-  worker's tools by phase, or a second path as `/mcp/steward` is, whichever is the smaller change.
 - How a proposal's clip is cut: on demand when the Verdict page opens it, or once when Sift
   finishes.
 - What Recheck reads of the original observations: enough to know what was seen, not so much that
