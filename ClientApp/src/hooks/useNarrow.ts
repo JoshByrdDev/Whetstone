@@ -7,6 +7,10 @@ import { useSyncExternalStore } from 'react';
  * folds at 640 beside a header that folds at 720 is a strip of widths where the page is half of
  * each. Matches Tailwind's `sm`, so a class written `sm:` and a style chosen by {@link useNarrow}
  * change over on the same pixel.
+ *
+ * Also the split between a phone and a desk in the Recon marts (`recon_width_bucket` in
+ * `analytics/macros/recon.sql`), so a visit a scout logged at a width counts in the same bucket the
+ * page itself would fold at. The two are written twice and must agree.
  */
 export const NARROW_PX = 640;
 

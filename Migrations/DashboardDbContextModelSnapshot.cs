@@ -1847,6 +1847,44 @@ namespace Whetstone.Migrations
                     b.ToTable("RebaseReturns");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.ReconDismissalEvent", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("AreaHeadCommit")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SuggestionKey")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("Until")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "SuggestionKey");
+
+                    b.ToTable("ReconDismissalEvents");
+                });
+
             modelBuilder.Entity("Whetstone.Models.ResourceLease", b =>
                 {
                     b.Property<int>("Id")
@@ -2658,6 +2696,10 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("QaShotsWaiverAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReconFrom")
+                        .HasMaxLength(256)
                         .HasColumnType("TEXT");
 
                     b.Property<bool>("RequiresImplementationReview")

@@ -1680,6 +1680,14 @@ public partial class TicketGitService
         return remoteOnly > 0 && localOnly == 0 ? origin : baseBranch;
     }
 
+    /// <summary>
+    /// <see cref="BaseRefAsync"/> for a caller outside this class - the Recon marts' inputs
+    /// (<see cref="ReconInputs"/>), which measure staleness against the project's base - so the rule
+    /// stays written once here and once in <c>Resolve-BaseRef</c>, never a third time in the refresh.
+    /// </summary>
+    public Task<string?> ResolveBaseRefAsync(string repo, ProjectConfig cfg, string baseBranch, CancellationToken ct = default) =>
+        BaseRefAsync(repo, cfg, baseBranch, ct);
+
     private static bool IsGitRepo(string dir) =>
         !string.IsNullOrWhiteSpace(dir) && Directory.Exists(dir) && Path.Exists(Path.Combine(dir, ".git"));
 

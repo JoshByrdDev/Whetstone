@@ -57,6 +57,10 @@ unit_tests:
       - input: ref('stg_board__tickets')
         rows:
           - {ticket_id: 50, phase: Done, is_bug: true}
+      # Recon's area for a proposal; none here, so each keeps Sift's own (recon_tab_area tests it).
+      - input: ref('int_recon_proposal_area')
+        format: sql
+        rows: "select null::integer as proposal_id, null::varchar as area, null::varchar as area_source where false"
     expect:
       rows:
         - {proposal_id: 1, source: sift, recheck_kind: null, run_id: 4, model: opus, taste_version: v2, observations: 2, verdict_closed: true, is_goal: true, goal_first_outcome: NotMet, goal_last_outcome: Met, landed_first_time: false, filed_ticket_done: true, filed_bug_confirmed: true, is_repeat: false}

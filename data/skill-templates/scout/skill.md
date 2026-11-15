@@ -51,8 +51,9 @@ Most projects are one repo, and this section does not apply to them. When your p
   - `kind`: `Wall` (you tried and could not), `Judgement` (you could, but it should be different), `Idea` (it does not do this and would be better for it), `RoughEdge`, `Bug`.
   - `saw`: what you saw and why it matters to this person. `tried`: what you were doing.
   - `job`, `url`, `width`, `signedInAs`, `area` (when the project names its areas), `commit` (your prompt names it).
+  - **`signedInAs` is the route's, word for word**: the role Chart picked from the project's list (`get_discovery`'s `project.roles`). Coverage by kind of user is counted by that word, so do not paraphrase it. When a job has you use the product as someone else for a while - signed out to see the public page - log that role, from the same list.
   - **A screenshot first** (`browser_take_screenshot`, an absolute filename in the folder your prompt names), passed as `shotPath`. Add `focus` when the point is a small part of the frame.
-- **`log_visit` once per page per width, as you leave it**: the URL, its route pattern where you can tell, how long you spent, the showcase case it belongs to. This is how a later run knows what has been scouted.
+- **`log_visit` once per page per width, as you leave it**: the URL, its route pattern where you can tell, the width and `signedInAs` (the route's role, word for word, as on an observation), how long you spent, the showcase case it belongs to. This is how a later run knows what has been scouted.
 - **Obvious bugs are worth logging**, but you are not QA. The valuable part is the rest.
 
 ## What you cannot do

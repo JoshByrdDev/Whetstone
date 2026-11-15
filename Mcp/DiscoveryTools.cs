@@ -27,8 +27,10 @@ public class DiscoveryTools
         "tickets and earlier discoveries' proposals with the owner's verdicts (a rejection's reason, a snooze that is due). While Rechecking it returns " +
         "the goals to check (the approved proposals, with the tickets they became and what earlier rechecks found), which round this is and how many get a verdict, " +
         "and the earlier observations as one line each - enough to know what was seen, not a list to work through again. While Sifting or Rechecking it also returns " +
-        "the project's taste file (taste): what the owner's verdicts have taught about what they want proposed - read it before you cut and rank.")]
-    public static async Task<object> GetDiscovery(DiscoveryService svc, DiscoveryTaste taste, TicketService tickets, DashboardPaths paths,
+        "the project's taste file (taste): what the owner's verdicts have taught about what they want proposed - read it before you cut and rank. " +
+        "In every phase it returns the project's own names for its areas and roles (project.areas, project.roles): a route's signedInAs is one of those roles, word for word, " +
+        "and every visit and observation is logged as that same role.")]
+    public static async Task<object> GetDiscovery(DiscoveryService svc, DiscoveryTaste taste, TicketService tickets, DashboardPaths paths, ProjectRegistry registry,
         [Description("The local ticket id of the discovery.")] int ticketId)
     {
         var v = await svc.GetAsync(ticketId);
@@ -58,8 +60,13 @@ public class DiscoveryTools
                 earlier = v.GoalChecks.Where(g => g.ProposalId == p.Id).Select(g => new { g.Round, outcome = g.Outcome.ToString(), g.Note }),
             }),
         };
+        // The project's names for its areas and roles, so Chart picks signedInAs from the list and
+        // the scout logs the same word (docs/recon-tab-plan.md, R1). Names only: the page and code
+        // patterns are the board's, matched at refresh time, never the agent's to apply.
+        var discoveryCfg = registry.GetProjectConfig(await svc.ProjectOfAsync(ticketId)).Discovery;
         return new
         {
+            project = new { areas = discoveryCfg.Areas.Select(a => a.Name).ToArray(), roles = discoveryCfg.Roles },
             taste = tasteRead is null ? null : new { version = tasteRead.Version, text = tasteRead.Text, note = tasteRead.Note },
             recheck,
             route = v.Route is null ? null : new
@@ -95,7 +102,7 @@ public class DiscoveryTools
         [Description("The local ticket id of the discovery.")] int ticketId,
         [Description("Who the person is, in a sentence or two: where they are, what they want, what they already know about the product.")] string persona,
         [Description("Three to five jobs, each one line, written as what the person came to get done ('plan this weekend', 'come back a week later and see what changed') - never as a feature to look at.")] string[] jobs,
-        [Description("Which of the product's own roles they use it as - signed out, an ordinary member, an admin - as the product names them.")] string? signedInAs = null,
+        [Description("Which of the product's roles they use it as: one of get_discovery's project.roles, word for word. Only when the project lists none, the product's own word for it (signed out, a member, an admin).")] string? signedInAs = null,
         [Description("Showcase cases to start from, by the id the project's showcase index gives them. Empty when the project has none.")] string[]? startCases = null,
         [Description("Viewport widths, as WIDTHxHEIGHT: '1440x900', '390x844'. Most products want both a desk and a phone.")] string[]? widths = null,
         [Description("Anything else the scout should know before it starts, in prose. Never what the specs say - the scout reads nothing about the product.")] string? notes = null,
@@ -122,7 +129,7 @@ public class DiscoveryTools
         [Description("Which of the route's jobs you were on, 0-based.")] int? job = null,
         [Description("The page's URL.")] string? url = null,
         [Description("The viewport width you were at, e.g. '390x844'.")] string? width = null,
-        [Description("Who you were signed in as.")] string? signedInAs = null,
+        [Description("Who you were signed in as: the route's signedInAs, word for word - a role from get_discovery's project.roles.")] string? signedInAs = null,
         [Description("The project's area it belongs to, by name, when the project names its areas.")] string? area = null,
         [Description("Absolute path of the screenshot that shows it.")] string? shotPath = null,
         [Description("Optional: the rectangle in the screenshot's pixels that shows it, when it is a small part of the frame.")] QaFocusInput? focus = null,
@@ -162,7 +169,7 @@ public class DiscoveryTools
         [Description("The page's URL.")] string url,
         [Description("The route pattern it belongs to, where you can tell (/events/[slug]).")] string? routePattern = null,
         [Description("The viewport width, e.g. '1440x900'.")] string? width = null,
-        [Description("Who you were signed in as.")] string? signedInAs = null,
+        [Description("Who you were signed in as: the route's signedInAs, word for word - a role from get_discovery's project.roles.")] string? signedInAs = null,
         [Description("Roughly how many seconds you spent there.")] int? seconds = null,
         [Description("The project's area it belongs to, by name.")] string? area = null,
         [Description("The showcase case it belongs to, by id, when it does.")] string? showcaseCase = null,

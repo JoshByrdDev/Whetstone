@@ -53,7 +53,7 @@ Most projects are one repo, and this section does not apply to them. When your p
 ## Record - as you go, never at the end
 
 - **`log_observation` for what you notice**, each with a screenshot first (`browser_take_screenshot`, an absolute filename in the folder your prompt names) passed as `shotPath` - as the scout does, with the same kinds. A goal met is worth a shot that shows it; a goal not met needs one.
-- **`log_visit` once per page per width**, as you leave it.
+- **`log_visit` once per page per width**, as you leave it. On a visit and on an observation, **`signedInAs` is the route's, word for word** - a role from `get_discovery`'s `project.roles`, as the scout logs it - because coverage by kind of user is counted by that word.
 - **`check_goal` for every goal**: `Met`, `NotMet`, or `Unclear` (you could not tell - the page would not show it, the data was not there - and say why), with a `note` of what you did and saw and the `observationIds` that show it. Every goal needs one before you hand off.
 
 ## Propose - held to the sift's rules

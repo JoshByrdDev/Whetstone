@@ -155,6 +155,7 @@ builder.Services.AddScoped<BugTraceService>();
 builder.Services.AddSingleton<BugTraceQueue>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<BugTraceQueue>());
 // The Metrics page's analytics: reads the dbt marts, starts their refresh (docs/analytics.md).
+builder.Services.AddSingleton<ReconInputs>(sp => new ReconInputs(sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<TicketGitService>()));
 builder.Services.AddSingleton<AnalyticsService>();
 // What each ticket is waiting on: the tracker's blocking links, refreshed live, with local overrides
 // that outrank them. TicketService takes it so the claim can pass over a ticket that is blocked.

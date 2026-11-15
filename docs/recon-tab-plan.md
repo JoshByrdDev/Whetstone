@@ -302,10 +302,121 @@ beside them.
   whether the owner's rewrites are what makes a direction pay.
 - **Marking the marts stale** when a discovery reaches `NeedsVerdict`.
 
-## Open for whoever builds it
+## R1 and R2 as built
 
-- The `pages` pattern syntax `discovery.areas` uses is not written down yet. Settle it in R2
-  (`*` for one segment, `**` for any, `[param]` for one segment is the likely shape) and document
-  it beside `DiscoveryArea`.
-- Whether the gap stub is one sentence per cell or one per area. Lean towards per area, naming
-  the missing cells: "Nobody has used Billing as an admin, or as anyone on a phone."
+R1 and R2 are built (the record, the marts); R3 and R4 are not. Nothing below has a route or a
+page yet. What R3 and R4 can rely on:
+
+### The record (R1)
+
+- **`DiscoveryConfig.Roles`**: trimmed, blanks dropped, de-duplicated without regard to case, in
+  config order. **`DiscoveryConfig.Present`** is true when the project has a `discovery` block at
+  all - the test for "show the tab" and for "is this project in `recon-inputs.json`".
+- **`get_discovery`** returns `project = { areas, roles }`: area *names* only, never their page or
+  code patterns, which are for the marts and not for a worker to second-guess.
+- **The skill rule** is in the chart, scout and recheck templates and every project's copy:
+  `signedInAs` is one of `project.roles`, word for word, and the scout's `log_visit` passes its
+  width. Recheck got it too, because it logs visits the same way. Where a project has no roles
+  the text says to describe the session in a few words, as before.
+- **`Ticket.ReconFrom`** (max 256), set by `POST /api/tickets` only (`CreateTicketRequest.ReconFrom`;
+  `UpdateTicketRequest` has none, no MCP tool or ticket DTO carries it - `ReconTests` checks by
+  reflection). The route refuses it on anything but the Discovery track, refuses a key whose shape
+  is wrong, and refuses a `rerun:<id>` whose id is not a discovery of the same project.
+  `Services/ReconKey.cs` is the one place the shape is written: `gap:<area>`,
+  `gap:<area>:<role>:<width>`, `changed:<area>`, `rerun:<discovery id>`; `ReconKey.Clean`,
+  `Problem` and `RerunOf` are what R3's dismiss routes should use too.
+- **`ReconDismissalEvents`** (`Models/ReconEntities.cs`): `ProjectKey`, `SuggestionKey`, `Kind`
+  (`Dismissed` / `Undone`, stored as text), `AreaHeadCommit` (the area's head when set aside, so
+  R3 can bring a dismissed `changed:` back when the area moves again), `Until` (nullable), `At`.
+  Indexed on project and key. Nothing writes it yet: the dismiss and undismiss routes are R3's,
+  and like every owner action they get no tool.
+
+### The inputs and the loaders (R2)
+
+- `AnalyticsService.StartRefreshAsync` writes `<data root>/analytics/recon-inputs.json`
+  (`ReconInputs`) before every refresh it starts, then starts the refresh as before. The file covers
+  enabled projects with a `discovery` block: key, areas (name, pages, code), roles, and per repo
+  its `dir` (empty on a project of one), hub `path`, `readOnly`, and the project's base ref,
+  resolved by `TicketGitService.ResolveBaseRefAsync` - the same `BaseRefAsync` the board uses, so
+  the rule is not written a third time. A repo whose ref cannot be resolved gets `baseRef: null`
+  and loads no history. If the write fails, the file is deleted rather than left stale, and the
+  refresh goes on with the Recon marts empty.
+- `refresh.py` loads `raw.recon_*` from it: projects, areas, roles, repos, each base's
+  first-parent history (`fp_index` 0 is the tip; back to the oldest commit a visit recorded, or 90
+  days), the files each first-parent commit touched (`--diff-merges=first-parent`, so a merge
+  lists what it brought in), the commits each merge brought in (`recon_commit_members`, at most 500
+  merges a repo), and where each recorded visit commit sits (`recon_visit_commits.placement`:
+  `line`, `merged` - reached the line through a merge, placed at that merge - or `unknown`).
+  `ReconDismissalEvents` is loaded for history only. No inputs file: the Recon raw tables load
+  empty, and `status["recon"]` says so.
+- On a QA copy the git reads are of the copy's placeholder repos, and nothing reaches past the data
+  folder, so no route went into `QaIsolation`.
+
+### Settled syntax
+
+Written beside `DiscoveryArea` in `Services/DiscoveryConfig.cs`, and implemented once, in
+`analytics/macros/recon.sql`:
+
+- **`pages`**: a path pattern, matched against the URL's path only (no host, query or fragment),
+  case-insensitively, ignoring a trailing slash. `*` and `[name]` are exactly one segment; `**` is
+  any number of segments, none included (`/events/**` matches `/events`). Anything else is literal.
+  When several areas match, the **most specific** wins: more literal segments, then fewer `**`,
+  then more segments, then the area that comes first in config.
+- **`code`**: git pathspec globs relative to the repo, `**` across folders, a bare folder meaning
+  everything under it. On a project of several repos a path starts with its repo's folder.
+- **Width**: a `WxH` width under 640 is `phone`, otherwise `desk`; anything unparseable is
+  `unknown`. 640 is `NARROW_PX`, and each names the other; `ReconTests` checks they agree.
+
+### The marts
+
+All five carry `project_key` and are published (`PUBLISHED` in `refresh.py`, `AnalyticsService.Marts`).
+Lists inside a row are JSON text.
+
+| Mart | Key | Columns R3 and R4 will want |
+|---|---|---|
+| `mart_recon_projects` | `project_key` | `project_ordinal`, `area_count`, `role_count`, `inputs_at`, `repos` (JSON per repo: `repo`, `base_ref`, `tip`, `commits`, `error`), `history_ok`, `built_at`. A project absent here but present in config is "Recon has not been built yet" |
+| `mart_recon_coverage` | `project_key, area, role, width` | `*_ordinal` for sorting, `in_config` (a configured role and a phone or desk width; false for a role or width only the visits used), `has_code`, `visits`, `seconds`, `discoveries`, `last_visited_at`, `last_discovery_id`, `last_commit`, `last_placement`, `state` (`gap` / `fresh` / `changed` / `unknown`), `commits_since`, `files_since`, `tickets_since` (JSON ids), `shown`, `approved`, `area_head_commit`, `cooling` |
+| `mart_recon_patterns` | `project_key, area, route_pattern, role, width` | `visits`, `seconds`, `discoveries`, `last_visited_at` |
+| `mart_recon_yield` | `window_days, project_key, cut, cut_key` | `cut` is `area` or `direction` (`cut_key` the lineage's first discovery id), `label`, `discoveries`, `shown`, `approved`, `rejected` and by reason, `snoozed`, `new_to_me`, `filed`, `cost_usd`, `cost_complete`, `latest_discovery_id`, `latest_direction`, `latest_at` |
+| `mart_recon_suggestions` | `project_key, suggestion_key` | `kind` (`rerun` / `gap` / `changed`), `rule` (1-4), `rank`, `area`, `area_ordinal`, `cells` (JSON of `{role, width}`), `direction` (the stub, or the source's direction for a rerun), `source_discovery_id`, `source_lineage_id`, `reasons` (JSON list of short sentences), `cooling`, `area_head_commit`, `files_changed`, `commits_changed`, `tickets` (JSON ids), `last_scouted_at`, `last_commit`, `approved`, `new_to_me` |
+
+The suggestions mart applies **no live filter**: R3 removes suggestions with an open discovery
+carrying their `ReconFrom` and those whose latest `ReconDismissalEvents` row is `Dismissed` (and,
+for `changed:`, whose `AreaHeadCommit` is still the mart's).
+
+`fct_discovery_proposals.area` is replaced in place: the majority area of the proposal's
+observations' URLs, else its own `Area` when that names a configured area, else *(unmapped)*;
+`area_source` says which (`url`, `sift`, `none`; `own` on a project without areas, whose
+proposals keep the area Sift wrote).
+
+### Choices made where the plan left room
+
+- **The scout's own `Area`** is used for a visit only when its URL matches no area *and* that Area
+  is one of the configured names; otherwise the visit is *(unmapped)*. A free-text area would make
+  a column nobody configured.
+- **A role** not in `discovery.roles` is matched case-insensitively, else *other*; a project with no
+  roles has one *any role* column.
+- **Unknown is never fresh**: a visit commit that is not on the base's line and not reached by a
+  merge, or a repo whose base did not load, is `unknown`. A `merged` placement counts the merge
+  itself as a change after the visit - it is the first point on the line that contains the visit's
+  commit, so what else it brought in is after.
+- **Several repos**: a visit's staleness counts only its own repo's commits (the area's code
+  paths that start with that repo's folder).
+- **Tickets since** are matched by commit SHA, directly or as a commit a merge brought in
+  (`stg_board__ticket_commits`). Not by patch id: a squash merge on origin is not on a
+  `mergeInsteadOfPr` project's line, and on a pull-request project the board records the PR's
+  commits.
+- **Cooling** is the last three *judged* discoveries in the area (Done, or with any closed verdict) having no approval - not three visits, and not discoveries still running.
+- **The gap stub is per area**, naming the missing cells and collapsing a whole role or a whole
+  width: "Nobody has used Billing as an admin, or as anyone on a phone." An area visited only
+  outside its configured cells says "Nobody has used X as r1 or r2."
+- **A never-scouted area** is ranked among gaps by the files its code changed in the last 90 days.
+- **`mart_recon_projects`** was added: the plan's empty states need to tell "not built yet" from
+  "built, nothing scouted", and only the mart can say when it was built from which inputs.
+- **The tests** are dbt unit tests in the `_recon.yml` files rather than `analytics/tests`: they
+  are fixtures with expected rows, which is what the unit-test form is for. They cover the plan's
+  list (most specific pattern, off-line commit is unknown, no code is never changed, a gap goes
+  when covered, rule order, cooling needs discoveries) plus yield following a direction across
+  reruns.
+
+`wwwroot` is untouched: R2 changed one comment in `useNarrow.ts` and nothing a build would ship.

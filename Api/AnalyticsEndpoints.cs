@@ -15,9 +15,9 @@ public static class AnalyticsEndpoints
         app.MapGet("/api/analytics/status", (AnalyticsService a) =>
             Results.Ok(new { status = a.GetStatus(), log = a.GetStatus().LastOk == false ? a.LogTail() : null }));
 
-        app.MapPost("/api/analytics/refresh", (AnalyticsService a) =>
+        app.MapPost("/api/analytics/refresh", async (AnalyticsService a, CancellationToken ct) =>
         {
-            var (started, message) = a.StartRefresh();
+            var (started, message) = await a.StartRefreshAsync(ct);
             return Results.Ok(new { started, message, status = a.GetStatus() });
         });
 

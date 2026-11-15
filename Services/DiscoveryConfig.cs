@@ -2,7 +2,26 @@ using System.Text.Json;
 
 namespace Whetstone.Services;
 
-/// <summary>One area of a product, named once so every visit, observation and proposal can carry it.</summary>
+/// <summary>
+/// One area of a product, named once so every visit, observation and proposal can carry it.
+/// <para>
+/// <b>Pages</b> are URL path patterns, matched against a visit's path - no scheme, host, query or
+/// fragment, a trailing slash ignored, letters compared without case. A pattern is split on
+/// <c>/</c> and each segment is one of: a literal (<c>billing</c>), <c>*</c> or <c>[name]</c> for
+/// exactly one segment (<c>/events/[slug]</c>), or <c>**</c> for any number of segments, none
+/// included (<c>/admin/**</c> matches <c>/admin</c> and <c>/admin/users/7</c>). Nothing else is
+/// special. When two areas' patterns match one URL, the more specific wins: more literal segments,
+/// then fewer <c>**</c>, then more segments, then the area listed first. That rule is applied at
+/// refresh time by the Recon marts (<c>analytics/models/intermediate/int_recon_visit_area.sql</c>,
+/// docs/recon-tab-plan.md), so redefining an area re-maps every visit already recorded.
+/// </para>
+/// <para>
+/// <b>Code</b> are git pathspecs into the project's code, read against the project's base: a
+/// folder (<c>src/Billing</c>) or a glob (<c>src/**/billing*.ts</c>, <c>*</c> within a segment,
+/// <c>**</c> across them). On a project of several repos each starts with its repo's folder
+/// (<c>alpha-api/src/Billing</c>). An area with no code paths shows coverage but is never stale.
+/// </para>
+/// </summary>
 public sealed record DiscoveryArea(string Name, string[] Pages, string[] Code);
 
 /// <summary>
@@ -69,6 +88,17 @@ public sealed record DiscoveryConfig
     /// <summary>The product's areas, for coverage: each one's page patterns and code paths.</summary>
     public DiscoveryArea[] Areas { get; init; } = Array.Empty<DiscoveryArea>();
 
+    /// <summary>
+    /// The product's roles, in its own words (<c>"signed out"</c>, <c>"member"</c>, <c>"admin"</c>):
+    /// what Chart picks a route's <c>signedInAs</c> from, and the columns of Recon's coverage grid.
+    /// A visit's role is matched to this list without case; one that matches none is shown as
+    /// <i>other</i>, so the list (or the skill) can be fixed. Blank and repeated names are dropped.
+    /// </summary>
+    public string[] Roles { get; init; } = Array.Empty<string>();
+
+    /// <summary>Whether the project's config has a <c>discovery</c> block at all: what puts it on the Recon tab.</summary>
+    public bool Present { get; init; }
+
     /// <summary>Whether a scout can run here at all: a site to point the browser at.</summary>
     public bool CanScout => SiteUrl.Length > 0;
 
@@ -87,6 +117,7 @@ public sealed record DiscoveryConfig
         var budget = d.TryGetProperty("storageBudgetMb", out var sb) && sb.ValueKind == JsonValueKind.Number && sb.TryGetInt64(out var mb) ? mb : DefaultStorageBudgetMb;
         return new DiscoveryConfig
         {
+            Present = true,
             MaxProposals = Math.Clamp(max, 1, 20),
             RecheckRounds = Math.Clamp(rounds, 0, 10),
             ReviewRoute = review,
@@ -96,6 +127,7 @@ public sealed record DiscoveryConfig
             Prepare = Str(d, "prepare"),
             Teardown = Str(d, "teardown"),
             Areas = areas.ToArray(),
+            Roles = Strs(d, "roles").Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
         };
     }
 

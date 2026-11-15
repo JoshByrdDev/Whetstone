@@ -446,11 +446,11 @@ public class DiscoveryTasteTests : IDisposable
         var t = await tickets.CreateAsync("alpha", "d", "d", null, null, TicketPhase.Sifting, track: TicketTrack.Discovery);
 
         var (db, tk, dsc, ts) = New();
-        var got = JsonSerializer.SerializeToElement(await DiscoveryTools.GetDiscovery(dsc, ts, tk, _paths, t.Id));
+        var got = JsonSerializer.SerializeToElement(await DiscoveryTools.GetDiscovery(dsc, ts, tk, _paths, _registry, t.Id));
         var tasteJson = got.GetProperty("taste");
         Assert.Equal(1, tasteJson.GetProperty("version").GetInt32());
         Assert.Contains("Never dark mode", tasteJson.GetProperty("text").GetString());
-        await DiscoveryTools.GetDiscovery(dsc, ts, tk, _paths, t.Id);
+        await DiscoveryTools.GetDiscovery(dsc, ts, tk, _paths, _registry, t.Id);
         var read = Assert.Single(db.DiscoveryTasteReads.AsNoTracking());
         Assert.Equal(v.Id, read.VersionId);
         Assert.Equal(1, read.VersionNumber);
@@ -464,7 +464,7 @@ public class DiscoveryTasteTests : IDisposable
         await taste.OwnerEditAsync("alpha", DiscoveryTaste.Compose("- Never dark mode.", ""));
         var (db, tk, dsc, ts) = New();
         var t = await tk.CreateAsync("alpha", "d", "d", null, null, TicketPhase.Scouting, track: TicketTrack.Discovery);
-        var got = JsonSerializer.SerializeToElement(await DiscoveryTools.GetDiscovery(dsc, ts, tk, _paths, t.Id));
+        var got = JsonSerializer.SerializeToElement(await DiscoveryTools.GetDiscovery(dsc, ts, tk, _paths, _registry, t.Id));
         Assert.Equal(JsonValueKind.Null, got.GetProperty("taste").ValueKind);
         Assert.Empty(db.DiscoveryTasteReads.AsNoTracking());
     }
