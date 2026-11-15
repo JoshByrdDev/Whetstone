@@ -197,6 +197,25 @@ public class HandoffRequirementTests : IDisposable
     }
 
     /// <summary>
+    /// A ticket reopened long after it was done, whose shots capture retention has since removed:
+    /// the rows are still there, saying when, but there is nothing left for a reviewer to look at.
+    /// </summary>
+    [Fact]
+    public async Task Pruned_shots_do_not_satisfy_the_qa_hand_off()
+    {
+        var id = await Seed(TicketPhase.QaTesting);
+
+        await using var ctx = NewCtx();
+        var svc = new TicketService(ctx);
+        await svc.SetQaShotsAsync(id, new[] { ("0.png", "The Role dropdown now offers Enroller.") });
+        foreach (var s in ctx.QaShots.Where(s => s.TicketId == id)) s.PrunedAt = DateTime.UtcNow;
+        await ctx.SaveChangesAsync();
+
+        await Assert.ThrowsAsync<HandoffRequirementException>(() =>
+            svc.TransitionAsync(id, TicketPhase.NeedsRefinement, null, TransitionActor.Worker));
+    }
+
+    /// <summary>
     /// The 8025/8026 case: a stored-procedure ticket with no screen to photograph. It is let
     /// through — but only once it has said so, in writing, on the ticket.
     /// </summary>

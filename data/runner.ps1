@@ -455,6 +455,32 @@ function Update-OwnCheckout {
     return @{ ok = $true; state = 'moved' }
 }
 
+# A ticket's files on this machine, under the same paths as the board host's (HostDataMirror):
+# its QA captures, uploaded as they landed, and its attachments and owner files, fetched again
+# when a run starts. None of it is read once the run is over, so it goes - docs/capture-retention.md.
+# A folder is kept while a run here holds its ticket ($Keep) or while anything in it was written
+# in the last $QuietMinutes, which covers a run this runner does not know about yet. Returns the
+# folders removed, relative to the data root.
+function Remove-HostTicketCopies {
+    param([string]$DataRoot, [int[]]$Keep = @(), [int]$QuietMinutes = 60, [datetime]$Now = (Get-Date))
+    $removed = @()
+    foreach ($store in @('qa-captures', 'issue-attachments', 'ticket-files')) {
+        $dir = Join-Path $DataRoot $store
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($t in @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue)) {
+            $id = 0
+            if (-not [int]::TryParse($t.Name, [ref]$id)) { continue }
+            if ($Keep -contains $id) { continue }
+            $newest = @(Get-ChildItem -LiteralPath $t.FullName -Recurse -Force -ErrorAction SilentlyContinue) + @($t) |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+            if ($newest -and ($Now - $newest.LastWriteTime).TotalMinutes -lt $QuietMinutes) { continue }
+            Remove-Item -LiteralPath $t.FullName -Recurse -Force -ErrorAction SilentlyContinue
+            if (-not (Test-Path -LiteralPath $t.FullName)) { $removed += "$store/$($t.Name)" }
+        }
+    }
+    return $removed
+}
+
 # Keep the newest $Keep runner-backup branches; a rewrite now and then should not leave a pile.
 function Remove-OldBackups {
     param([string]$Repo, [int]$Keep = 10)
@@ -590,6 +616,9 @@ $MachineInventoryMinutes = 60
 $machineSentAt = $null
 $machineTriedAt = $null
 $machineLoadAt = $null
+# A ticket's copies here are removed once no run holds it - see Remove-HostTicketCopies.
+$CopiesSweepMinutes = 60
+$copiesSweptAt = $null
 while ($true) {
     # Finished runs are reported for a while and then forgotten; the orchestrator reads an absent
     # run as finished too, so dropping one never strands a slot.
@@ -604,6 +633,15 @@ while ($true) {
             }
         }
         elseif (((Get-Date) - $r.ExitedAt).TotalMinutes -ge $RunnerKeepExitedMinutes) { $Runs.Remove($slot) }
+    }
+
+    if (-not $copiesSweptAt -or ((Get-Date) - $copiesSweptAt).TotalMinutes -ge $CopiesSweepMinutes) {
+        $copiesSweptAt = Get-Date
+        try {
+            $gone = @(Remove-HostTicketCopies -DataRoot $DataRoot -Keep @($Runs.Values | ForEach-Object { [int]$_.TicketId }))
+            if ($gone.Count -gt 0) { Write-Log "Removed $($gone.Count) ticket folder(s) no run here holds any more: $($gone -join ', ')" }
+        }
+        catch { Write-Log "Could not remove old ticket copies: $($_.Exception.Message)" }
     }
 
     $live = @($Runs.Values | Where-Object { -not $_.ExitedAt }).Count

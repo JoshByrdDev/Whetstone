@@ -501,6 +501,32 @@ exit 3
         $shown = if ($got -like '*pwsh.exe') { 'a pwsh.exe' } else { $got }
         Check 'run on 5.1: 7 where it is installed, else pwsh by name' $shown $want
     }
+
+    # ---- A ticket's copies here go once no run holds it (docs/capture-retention.md) ----
+    $hd = Join-Path $root 'copies-data'
+    $old = (Get-Date).AddHours(-3)
+    function New-Copy { param([string]$Rel, [datetime]$At)
+        $f = Join-Path $hd $Rel
+        New-Item -ItemType Directory -Path (Split-Path -Parent $f) -Force | Out-Null
+        [IO.File]::WriteAllBytes($f, [byte[]](1, 2, 3))
+        (Get-Item -LiteralPath $f).LastWriteTime = $At
+        $d = Get-Item -LiteralPath (Split-Path -Parent $f)
+        while ($d.FullName.Length -gt $hd.Length) { $d.LastWriteTime = $At; $d = $d.Parent }
+    }
+    New-Copy 'qa-captures/12/shot.png' $old
+    New-Copy 'qa-captures/12/sub/page.md' $old
+    New-Copy 'issue-attachments/12/from-PROJ-1/mock.png' $old
+    New-Copy 'ticket-files/12/log.txt' $old
+    New-Copy 'qa-captures/13/shot.png' $old
+    New-Copy 'qa-captures/14/shot.png' (Get-Date)
+    New-Copy 'qa-captures/notes/readme.txt' $old
+    $gone = @(Remove-HostTicketCopies -DataRoot $hd -Keep @(13))
+    Check 'copies: an old ticket nobody holds goes from every store' (@($gone | Sort-Object) -join ',') 'issue-attachments/12,qa-captures/12,ticket-files/12'
+    Check 'copies: ... and is off the disk' (Test-Path (Join-Path $hd 'qa-captures/12')) $false
+    Check 'copies: a ticket a run here holds is kept' (Test-Path (Join-Path $hd 'qa-captures/13/shot.png')) $true
+    Check 'copies: one written to in the last hour is kept' (Test-Path (Join-Path $hd 'qa-captures/14/shot.png')) $true
+    Check 'copies: a folder not named by a ticket is not this sweep''s' (Test-Path (Join-Path $hd 'qa-captures/notes/readme.txt')) $true
+    Check 'copies: no data folders, nothing to do' (@(Remove-HostTicketCopies -DataRoot (Join-Path $root 'no-such-data')).Count) 0
 }
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.

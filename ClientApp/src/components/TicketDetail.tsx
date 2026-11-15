@@ -24,6 +24,7 @@ import { AgentMascot, agentAccent } from './AgentMascot';
 import { useShotLightbox } from './ShotLightbox';
 import { PrototypeCaptures } from './PrototypeCaptures';
 import { usePop } from '../hooks/usePop';
+import { RemovedShot } from './RemovedShot';
 
 const PROGRESS_LIMIT = 4;
 
@@ -1090,6 +1091,7 @@ function QaShotsSection({ shots }: { shots: TDetail['qaShots'] }) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {shots.map((s, i) => (
           <figure key={s.order} className="flex flex-col gap-1.5 min-w-0">
+            {s.removedOn ? <RemovedShot removedOn={s.removedOn} className="h-32" /> : (
             <button
               type="button"
               onClick={() => open(i)}
@@ -1103,6 +1105,7 @@ function QaShotsSection({ shots }: { shots: TDetail['qaShots'] }) {
                 className="w-full h-32 object-contain"
               />
             </button>
+            )}
             {s.caption && (
               <figcaption className="text-[12px] leading-snug text-gray-400">{s.caption}</figcaption>
             )}

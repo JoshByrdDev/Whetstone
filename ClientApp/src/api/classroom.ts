@@ -226,7 +226,7 @@ export interface ClassroomTicket {
   ideUrl: string;
   // The pipeline's own record of the work, shown alongside the analysis rather than restated by it.
   implementationSummary: string | null;
-  qaShots: { order: number; caption: string; imageUrl: string; focus?: { x: number; y: number; w: number; h: number } | null }[];
+  qaShots: { order: number; caption: string; imageUrl: string; focus?: { x: number; y: number; w: number; h: number } | null; removedOn?: string | null }[];
   /** Why there are no screenshots, when QA said so explicitly. */
   qaShotsWaiver: string | null;
   analyses: AnalysisMeta[];

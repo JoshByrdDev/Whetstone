@@ -131,11 +131,13 @@ public record CommentDto(int Id, string Author, string Body, string? Phase, Date
 // shots, the longer that window - so precisely when a re-run replaces a stale set, the reviewer is
 // most likely to read the new captions over the old screenshots and conclude QA photographed the
 // wrong thing. Minting a new URL whenever the shots are replaced is what makes that unable to happen.
-public record QaShotDto(int Order, string Caption, string ImageUrl, ImageRect? Focus = null)
+/// <param name="RemovedOn">When capture retention deleted the image (docs/capture-retention.md); its
+/// URL then answers with a picture saying so. Null while the image is kept.</param>
+public record QaShotDto(int Order, string Caption, string ImageUrl, ImageRect? Focus = null, DateTime? RemovedOn = null)
 {
     /// <summary>The DTO for one stored shot, with the cache-busting stamp its URL depends on.</summary>
     public static QaShotDto From(int ticketId, QaShot s) =>
-        new(s.Order, s.Caption, $"/api/tickets/{ticketId}/qa-shots/{s.Order}?v={s.CreatedAt.Ticks}", s.Focus());
+        new(s.Order, s.Caption, $"/api/tickets/{ticketId}/qa-shots/{s.Order}?v={s.CreatedAt.Ticks}", s.Focus(), s.PrunedAt);
 }
 
 /// <summary>

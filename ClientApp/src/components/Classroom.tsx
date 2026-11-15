@@ -17,6 +17,7 @@ import type {
 } from '../api/classroom';
 import { PHASE_LABEL } from '../types/tickets';
 import type { Comment, Phase, Track } from '../types/tickets';
+import { RemovedShot } from './RemovedShot';
 
 // The sidebar reads furthest-along first: the pipeline order, reversed. Done is the exception — it is
 // finished, not urgent, so it sinks below Backlog rather than topping the list. PHASE_LABEL's keys are
@@ -907,6 +908,7 @@ function QaEvidence({ shots, waiver }: {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {shots.map((s, i) => (
             <figure key={s.order} className="flex flex-col gap-2 min-w-0">
+              {s.removedOn ? <RemovedShot removedOn={s.removedOn} className="h-44" /> : (
               <button
                 type="button"
                 onClick={() => open(i)}
@@ -920,6 +922,7 @@ function QaEvidence({ shots, waiver }: {
                   className="w-full h-44 object-contain"
                 />
               </button>
+              )}
               {s.caption && (
                 <figcaption className="text-[12.5px] leading-snug text-gray-400">{s.caption}</figcaption>
               )}
