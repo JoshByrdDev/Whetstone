@@ -1108,6 +1108,9 @@ namespace Whetstone.Migrations
                     b.Property<int>("Order")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("PrunedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("TicketId")
                         .HasColumnType("INTEGER");
 

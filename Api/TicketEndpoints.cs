@@ -1088,6 +1088,12 @@ public static class TicketEndpoints
             var t = await svc.GetAsync(id);
             var shot = t?.QaShots.FirstOrDefault(s => s.Order == order);
             if (shot is null) return Results.NotFound();
+            // Pruned by capture retention: say so in the picture's place (docs/capture-retention.md).
+            if (shot.PrunedAt is { } prunedAt)
+            {
+                ctx.Response.Headers.CacheControl = "no-cache";
+                return Results.Text(CaptureRetention.RemovedPlaceholderSvg(prunedAt), "image/svg+xml");
+            }
             var disk = store.DiskPath(id, shot.ImageFile);
             if (disk is null) return Results.NotFound();
 

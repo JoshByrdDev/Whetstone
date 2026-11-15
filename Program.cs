@@ -183,6 +183,9 @@ builder.Services.AddSingleton<GitWorktreeService>();
 // Not in a QA copy, nor are the two probes below: nothing a copy runs by itself should be anything
 // but what a request asked for.
 if (!isolation.On) builder.Services.AddHostedService<WorktreeReaper>();
+// Prunes QA captures and shots of tickets Done long enough, with a size budget behind it
+// (docs/capture-retention.md). Only the data folder, so it runs in a QA copy too.
+builder.Services.AddHostedService<CaptureRetention>();
 // The human's own git moves on a ticket: check its branch out in the hub repo, and raise its PR.
 // Separate from the worktree service above because it targets the user's checkout, not the agents'.
 builder.Services.AddSingleton<ITicketBases, TicketBases>();

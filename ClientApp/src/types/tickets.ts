@@ -378,6 +378,8 @@ export interface QaShot {
   imageUrl: string;
   /** The part of the shot that proves the caption, when QA marked one. */
   focus?: ImageRect | null;
+  /** When capture retention removed the picture; the caption is kept. */
+  removedOn?: string | null;
 }
 
 /** One choice offered against a blocking question. */

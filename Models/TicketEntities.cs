@@ -674,6 +674,13 @@ public class QaShot
     public string ImageFile { get; set; } = "";
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// When capture retention deleted this shot's file (docs/capture-retention.md). The row stays,
+    /// so the drawer can say "removed on" in its place rather than show a broken image. Null while
+    /// the file is kept.
+    /// </summary>
+    public DateTime? PrunedAt { get; set; }
+
     // The part of the screenshot that proves the caption, in the image's own pixels. Optional: a
     // full-page shot of a small change leaves the reader hunting, and QA is the one phase that knows
     // where to look. A walkthrough zooms to it; all four are set together or not at all.

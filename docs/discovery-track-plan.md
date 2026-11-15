@@ -240,8 +240,8 @@ A full recording is the evidence for one verdict, not an archive. A run is five 
 mostly still UI, roughly 15-40MB of video, plus a few MB of shots; a discovery with a recheck is
 on the order of 50-100MB, and nothing about that stops growing on its own. (The stores that exist
 already do: on the board host today `data/qa-captures` is about 1.1GB and `data/qa-shots` about
-270MB, with no retention on either.) So retention is part of the video step, not a clean-up for
-later:
+270MB, with no retention on either, until `docs/capture-retention.md` gave them the same shape as
+this.) So retention is part of the video step, not a clean-up for later:
 
 | What | Kept until | Why |
 |---|---|---|

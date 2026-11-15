@@ -12,6 +12,7 @@
   "heartbeatWorkerStallMinutes": 30,
   "heartbeatWorkers": 3,
   "worktreeRetentionDays": 2,
+  "retention": { "qaCapturesDays": 7, "qaShotsDays": 90, "qaCapturesBudgetMb": 2048, "qaShotsBudgetMb": 1024 },
   "baseBranch": "main",
   "branchPrefix": ""
 }

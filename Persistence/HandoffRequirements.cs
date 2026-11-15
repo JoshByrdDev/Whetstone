@@ -326,7 +326,7 @@ public static class HandoffRequirements
             var unresolved = UnresolvedForReview(t, lastBackwardAt);
             if (unresolved is not null) return unresolved + req.HowToSatisfy;
 
-            if (t.QaShots.Count > 0) return null;
+            if (t.QaShots.Any(s => s.PrunedAt == null)) return null;
             if (!string.IsNullOrWhiteSpace(t.QaShotsWaiver) && !IsStale(t.QaShotsWaiverAt, lastBackwardAt))
                 return null;
 
@@ -346,8 +346,9 @@ public static class HandoffRequirements
 
             // Real shots win outright, at any age: a ticket that carries screenshots is not the
             // failure this guards against, and re-photographing an unchanged screen on every bounce
-            // would be busywork the skill already asks for by other means.
-            if (t.QaShots.Count > 0) return null;
+            // would be busywork the skill already asks for by other means. A shot capture retention
+            // has pruned (a ticket reopened long after it was done) is no longer one to look at.
+            if (t.QaShots.Any(s => s.PrunedAt == null)) return null;
 
             if (!string.IsNullOrWhiteSpace(t.QaShotsWaiver) && !IsStale(t.QaShotsWaiverAt, lastBackwardAt))
                 return null;
