@@ -49,6 +49,15 @@ public sealed record DiscoveryConfig
     /// </summary>
     public bool ReviewRoute { get; init; }
 
+    public const long DefaultStorageBudgetMb = 2048;
+
+    /// <summary>
+    /// A backstop over the project's discovery media - recordings, clips, shots - in MB. Past it the
+    /// retention pass removes the media of the discoveries Done longest, never an open one's and
+    /// never the record. 0 or less turns it off.
+    /// </summary>
+    public long StorageBudgetMb { get; init; } = DefaultStorageBudgetMb;
+
     /// <summary>The product's areas, for coverage: each one's page patterns and code paths.</summary>
     public DiscoveryArea[] Areas { get; init; } = Array.Empty<DiscoveryArea>();
 
@@ -66,11 +75,13 @@ public sealed record DiscoveryConfig
         var max = d.TryGetProperty("maxProposals", out var m) && m.ValueKind == JsonValueKind.Number ? m.GetInt32() : 6;
         var rounds = d.TryGetProperty("recheckRounds", out var rr) && rr.ValueKind == JsonValueKind.Number ? rr.GetInt32() : DefaultRecheckRounds;
         var review = d.TryGetProperty("reviewRoute", out var rv) && rv.ValueKind == JsonValueKind.True;
+        var budget = d.TryGetProperty("storageBudgetMb", out var sb) && sb.ValueKind == JsonValueKind.Number && sb.TryGetInt64(out var mb) ? mb : DefaultStorageBudgetMb;
         return new DiscoveryConfig
         {
             MaxProposals = Math.Clamp(max, 1, 20),
             RecheckRounds = Math.Clamp(rounds, 0, 10),
             ReviewRoute = review,
+            StorageBudgetMb = budget,
             SiteUrl = Str(d, "siteUrl").TrimEnd('/'),
             Prepare = Str(d, "prepare"),
             Teardown = Str(d, "teardown"),

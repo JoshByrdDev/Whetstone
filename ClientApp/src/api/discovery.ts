@@ -37,6 +37,26 @@ export interface DiscoveryObservation {
   createdAt: string;
   /** 0 for the scout, N for the Nth recheck. */
   round?: number;
+  /** When retention removed its screenshot; the text stays. */
+  shotPrunedAt?: string | null;
+  /** The recording it was seen in, and how far into it. */
+  recordingId?: number | null;
+  videoAt?: number | null;
+}
+
+/** A proposal's clip: cut and ready, cut when played, removed, or not to be had and why. */
+export type ClipState = 'Ready' | 'Cuttable' | 'Removed' | 'RecordingRemoved' | 'None' | 'NoFfmpeg';
+
+/** One run's video, with the chapters it marked. A pruned one keeps its row. */
+export interface DiscoveryRecording {
+  id: number;
+  round: number;
+  startedAt: string;
+  seconds: number;
+  bytes: number;
+  verdictAt?: string | null;
+  prunedAt?: string | null;
+  chapters: { id: number; title: string; job?: number | null; videoAt?: number | null }[];
 }
 
 export interface DiscoveryVisit {
@@ -80,6 +100,10 @@ export interface DiscoveryProposal {
   recheckKind?: RecheckKind | null;
   /** For a fix-up: the approved proposal it fixes up. */
   goalId?: number | null;
+  clip?: ClipState;
+  clipPrunedAt?: string | null;
+  /** The owner's pin: its clip and shots outlive every retention rule. */
+  pinned?: boolean;
 }
 
 /** One recheck's finding on one approved goal. */
@@ -103,6 +127,9 @@ export interface Discovery {
   goalChecks?: GoalCheck[];
   /** Which recheck it is on (0 before the first), how many get a verdict, and the goals the next (or current) one asks about. */
   recheck?: { round: number; roundsWithVerdict: number; goals: number[] };
+  recordings?: DiscoveryRecording[];
+  /** Whether this machine can cut clips (ffmpeg). */
+  media?: { ffmpeg: boolean };
 }
 
 /** The owner's edit of a route at its gate: each field absent is left as the chart wrote it. */
@@ -144,6 +171,17 @@ export const getDiscovery = (ticketId: number) =>
 
 export const shotUrl = (ticketId: number, name: string) =>
   `/api/tickets/${ticketId}/discovery/shots/${encodeURIComponent(name)}`;
+
+export const recordingUrl = (ticketId: number, recordingId: number) =>
+  `/api/tickets/${ticketId}/discovery/recordings/${recordingId}`;
+
+/** A proposal's clip. The first request cuts it from the run's recording. */
+export const clipUrl = (proposalId: number) => `/api/discovery/proposals/${proposalId}/clip`;
+
+/** The owner's pin on a proposal's clip and shots. No tool behind it. */
+export const pin = (proposalId: number, pinned: boolean) =>
+  fetch(`/api/discovery/proposals/${proposalId}/pin`, { method: 'PUT', headers, body: JSON.stringify({ pinned }) })
+    .then(json<{ id: number; pinned: boolean }>);
 
 export const decide = (proposalId: number, change: VerdictChange) =>
   fetch(`/api/discovery/proposals/${proposalId}`, { method: 'PUT', headers, body: JSON.stringify(change) })

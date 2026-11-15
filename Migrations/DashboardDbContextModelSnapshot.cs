@@ -433,6 +433,45 @@ namespace Whetstone.Migrations
                     b.ToTable("CycleRuns");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.DiscoveryChapter", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("Job")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RecordingId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<double?>("VideoAt")
+                        .HasColumnType("REAL");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("DiscoveryChapters");
+                });
+
             modelBuilder.Entity("Whetstone.Models.DiscoveryGoalCheck", b =>
                 {
                     b.Property<int>("Id")
@@ -520,6 +559,12 @@ namespace Whetstone.Migrations
                         .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime?>("ObservedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RecordingId")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("Round")
                         .HasColumnType("INTEGER");
 
@@ -532,6 +577,9 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("ShotPath")
                         .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ShotPrunedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("SignedInAs")
@@ -582,6 +630,12 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("Body")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClipFile")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ClipPrunedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Confidence")
@@ -641,6 +695,9 @@ namespace Whetstone.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("Pinned")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("Rank")
                         .HasColumnType("INTEGER");
 
@@ -693,6 +750,56 @@ namespace Whetstone.Migrations
                     b.HasIndex("TicketId");
 
                     b.ToTable("DiscoveryProposals");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryRecording", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("Bytes")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("File")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("PrunedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double>("Seconds")
+                        .HasColumnType("REAL");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("VerdictAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("DiscoveryRecordings");
                 });
 
             modelBuilder.Entity("Whetstone.Models.DiscoveryRoute", b =>
@@ -2852,6 +2959,17 @@ namespace Whetstone.Migrations
                     b.Navigation("Ticket");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.DiscoveryChapter", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
             modelBuilder.Entity("Whetstone.Models.DiscoveryGoalCheck", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
@@ -2875,6 +2993,17 @@ namespace Whetstone.Migrations
                 });
 
             modelBuilder.Entity("Whetstone.Models.DiscoveryProposal", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryRecording", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithMany()

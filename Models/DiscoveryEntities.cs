@@ -111,8 +111,24 @@ public class DiscoveryObservation
     /// </summary>
     public int? RunId { get; set; }
 
-    /// <summary>Seconds into the run's recording where this was seen. Null until runs are recorded (build step 3).</summary>
+    /// <summary>
+    /// Seconds into <see cref="RecordingId"/>'s video where this was seen. Set when the run's
+    /// recording is adopted (<c>DiscoveryMedia</c>), from <see cref="ObservedAt"/>; null for a run
+    /// that was not recorded.
+    /// </summary>
     public double? VideoAt { get; set; }
+
+    /// <summary>The recording this was seen in, once one is adopted that spans <see cref="ObservedAt"/>.</summary>
+    public int? RecordingId { get; set; }
+
+    /// <summary>
+    /// When it was seen: the screenshot's own write time when there is one (the moment the frame
+    /// shows), else when it was logged - a few seconds later, after the scout had thought about it.
+    /// </summary>
+    public DateTime? ObservedAt { get; set; }
+
+    /// <summary>When retention removed the screenshot. The text stays; the drawer says when it went.</summary>
+    public DateTime? ShotPrunedAt { get; set; }
 
     /// <summary>0 for the scout; N for what the Nth recheck saw.</summary>
     public int Round { get; set; }
@@ -258,6 +274,80 @@ public class DiscoveryProposal
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? DecidedAt { get; set; }
+
+    /// <summary>
+    /// The clip cut for it from its run's recording, under the discovery's folder (<c>p&lt;id&gt;.mp4</c>).
+    /// Cut on demand, the first time the drawer plays it, and before its recording is pruned.
+    /// </summary>
+    public string? ClipFile { get; set; }
+
+    /// <summary>
+    /// When its clip went: at Complete for a rejected or snoozed proposal (whether or not one was ever
+    /// cut - none will be after), or by retention later. Once set, no clip is cut again.
+    /// </summary>
+    public DateTime? ClipPrunedAt { get; set; }
+
+    /// <summary>The owner's pin: its clip and shots are kept, by every rule and the budget, until unpinned.</summary>
+    public bool Pinned { get; set; }
+}
+
+/// <summary>
+/// One video a Scout or Recheck run recorded (browser_start_video), adopted off the run's browser
+/// folder into the discovery's own (<c>rec&lt;id&gt;.webm</c>). Observations and chapters inside its
+/// span are stamped against it. The file is pruned 7 days after the verdict it fed; the row stays.
+/// </summary>
+public class DiscoveryRecording
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    /// <summary>0 for the scout, N for the Nth recheck - read off what was logged during it.</summary>
+    public int Round { get; set; }
+    /// <summary>The run that recorded it, read off what it logged. See <see cref="DiscoveryObservation.RunId"/>.</summary>
+    public int? RunId { get; set; }
+
+    /// <summary>The file under the discovery's folder.</summary>
+    public string File { get; set; } = "";
+    /// <summary>Where the browser wrote it, relative to the discovery's folder - so the same file is never adopted twice.</summary>
+    public string Source { get; set; } = "";
+
+    /// <summary>
+    /// The wall-clock moment that is second 0 of the video. From the name the browser gives it
+    /// (<c>video-&lt;start&gt;.webm</c>), else its write time less its length.
+    /// </summary>
+    public DateTime StartedAt { get; set; }
+    public double Seconds { get; set; }
+    public long Bytes { get; set; }
+
+    /// <summary>When the verdict this recording fed was completed: its 7 days count from here.</summary>
+    public DateTime? VerdictAt { get; set; }
+    /// <summary>When retention removed the file.</summary>
+    public DateTime? PrunedAt { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// A chapter a run marked in its recording - a job begun, a step within one. Chapter times are the
+/// boundaries a proposal's clip is cut on.
+/// </summary>
+public class DiscoveryChapter
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    public string Title { get; set; } = "";
+    /// <summary>Which of the route's jobs it begins or belongs to (0-based), when it does.</summary>
+    public int? Job { get; set; }
+    public int Round { get; set; }
+    public int? RunId { get; set; }
+
+    public DateTime At { get; set; } = DateTime.UtcNow;
+    /// <summary>Seconds into <see cref="RecordingId"/>'s video, once that recording is adopted.</summary>
+    public double? VideoAt { get; set; }
+    public int? RecordingId { get; set; }
 }
 
 /// <summary>What a verdict event records (<see cref="DiscoveryVerdictEvent.Kind"/>).</summary>

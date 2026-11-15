@@ -35,7 +35,10 @@ public class SetupCheckService
         // Where PowerShell 7 is, on PATH or in its install folder; null asks the fleet's PATH alone.
         Func<string?>? Pwsh = null,
         // The projects that capture prototype links, and why this machine cannot; null while none does.
-        Func<(IReadOnlyList<string> Projects, string? Unavailable)?>? PrototypeCapture = null);
+        Func<(IReadOnlyList<string> Projects, string? Unavailable)?>? PrototypeCapture = null,
+        // The projects that can be scouted, where this machine's ffmpeg is, and whether the browser
+        // has its own recorder; null while no project can be scouted.
+        Func<(IReadOnlyList<string> Projects, string? Ffmpeg, bool Recorder)?>? DiscoveryVideo = null);
 
     private static readonly Dictionary<string, (string Name, string Install)> Clis = new()
     {
@@ -67,6 +70,9 @@ public class SetupCheckService
                 : FindOnPath("pwsh", Environment.GetEnvironmentVariable("PATH")),
             () => registry.Projects.Where(k => SafeCapture(registry, k)).ToList() is { Count: > 0 } capturing
                 ? (capturing, NodePageCapturer.UnavailableAt(paths))
+                : null,
+            () => registry.Projects.Where(k => SafeScout(registry, k)).ToList() is { Count: > 0 } scouting
+                ? (scouting, Ffmpeg.Find(registry.GetGlobalConfig()), PlaywrightRecorderInstalled())
                 : null))
     { }
 
@@ -172,6 +178,10 @@ public class SetupCheckService
                     $"The board captures the prototype links {who} allow, so workers can read them as attachments.", null));
         }
 
+        // ---- a discovery's video, only once a project can be scouted ----
+        if (probe.DiscoveryVideo?.Invoke() is { } video)
+            items.Add(DiscoveryVideo(video.Projects, video.Ffmpeg, video.Recorder));
+
         // ---- the narrator ----
         var narrator = probe.NarratorUnavailable();
         items.Add(narrator is null
@@ -207,6 +217,49 @@ public class SetupCheckService
         if (layouts is { Count: > 0 }) items.Add(Layouts(layouts));
 
         return items;
+    }
+
+    /// <summary>
+    /// The Discovery track's video: the browser records a scout with Playwright's own ffmpeg, and the
+    /// board cuts each proposal's clip with this machine's. Without the first a run is not recorded;
+    /// without the second there are recordings but no clips. Either way the screenshots stand, so it
+    /// is a warning, never required.
+    /// </summary>
+    public static SetupItem DiscoveryVideo(IReadOnlyList<string> projects, string? ffmpeg, bool recorder)
+    {
+        const string label = "Discovery video (ffmpeg)";
+        var who = string.Join(", ", projects);
+        const string recorderFix = "Run node node_modules/playwright/cli.js install ffmpeg once in data/playwright-mcp.";
+        const string ffmpegFix = "Install ffmpeg (brew install ffmpeg, or winget install Gyan.FFmpeg), restart Whetstone, or set ffmpegPath in data/config.json.";
+        if (ffmpeg is not null && recorder)
+            return new SetupItem("ffmpeg", label, "ok", false,
+                $"Scouts on {who} are recorded, and each proposal gets a clip cut from the run. {ffmpeg}", null);
+        if (ffmpeg is null && !recorder)
+            return new SetupItem("ffmpeg", label, "warn", false,
+                $"Scouts on {who} are not recorded and nothing can cut clips: proposals show screenshots only, and the drawer says so.",
+                recorderFix + " " + ffmpegFix);
+        if (!recorder)
+            return new SetupItem("ffmpeg", label, "warn", false,
+                $"The browser has no recorder, so scouts on {who} run without video: proposals show screenshots only.", recorderFix);
+        return new SetupItem("ffmpeg", label, "warn", false,
+            $"Scouts on {who} are recorded, but there is no ffmpeg to cut clips with: the drawer plays the whole recording and says clips are not set up.", ffmpegFix);
+    }
+
+    /// <summary>
+    /// Whether Playwright's own ffmpeg - the one its browsers record video with - is installed where
+    /// Playwright looks: PLAYWRIGHT_BROWSERS_PATH, else the per-user cache.
+    /// </summary>
+    public static bool PlaywrightRecorderInstalled()
+    {
+        var root = Environment.GetEnvironmentVariable("PLAYWRIGHT_BROWSERS_PATH") is { Length: > 0 } custom && custom != "0"
+            ? custom
+            : OperatingSystem.IsWindows()
+                ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ms-playwright")
+                : OperatingSystem.IsMacOS()
+                    ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Library", "Caches", "ms-playwright")
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".cache", "ms-playwright");
+        try { return Directory.Exists(root) && Directory.EnumerateDirectories(root, "ffmpeg-*").Any(); }
+        catch { return false; }
     }
 
     /// <summary>
@@ -306,6 +359,12 @@ public class SetupCheckService
     private static bool SafeCapture(ProjectRegistry registry, string key)
     {
         try { return registry.GetProjectConfig(key).PrototypeCapture.IsOn; }
+        catch { return false; }
+    }
+
+    private static bool SafeScout(ProjectRegistry registry, string key)
+    {
+        try { return registry.GetProjectConfig(key).Discovery.CanScout; }
         catch { return false; }
     }
 

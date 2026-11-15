@@ -456,15 +456,16 @@ function Update-OwnCheckout {
 }
 
 # A ticket's files on this machine, under the same paths as the board host's (HostDataMirror):
-# its QA captures, uploaded as they landed, and its attachments and owner files, fetched again
-# when a run starts. None of it is read once the run is over, so it goes - docs/capture-retention.md.
+# its QA captures, uploaded as they landed, its attachments and owner files, fetched again when a
+# run starts, and a discovery run's browser folder - its shots and recording, which only the board
+# host keeps (docs/discovery-track-plan.md, "Every machine prunes its own copies"). None of it is read once the run is over, so it goes - docs/capture-retention.md.
 # A folder is kept while a run here holds its ticket ($Keep) or while anything in it was written
 # in the last $QuietMinutes, which covers a run this runner does not know about yet. Returns the
 # folders removed, relative to the data root.
 function Remove-HostTicketCopies {
     param([string]$DataRoot, [int[]]$Keep = @(), [int]$QuietMinutes = 60, [datetime]$Now = (Get-Date))
     $removed = @()
-    foreach ($store in @('qa-captures', 'issue-attachments', 'ticket-files')) {
+    foreach ($store in @('qa-captures', 'issue-attachments', 'ticket-files', 'discovery')) {
         $dir = Join-Path $DataRoot $store
         if (-not (Test-Path -LiteralPath $dir)) { continue }
         foreach ($t in @(Get-ChildItem -LiteralPath $dir -Directory -ErrorAction SilentlyContinue)) {
