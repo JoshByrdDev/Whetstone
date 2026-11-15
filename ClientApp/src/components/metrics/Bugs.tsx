@@ -24,7 +24,7 @@ const BY: { key: string; label: string; filter?: string }[] = [
 ];
 
 const FOUND: Record<string, string> = {
-  Owner: 'the owner', LaterTicketQa: "a later ticket's QA", Production: 'production', Steward: 'the steward',
+  Owner: 'the owner', LaterTicketQa: "a later ticket's QA", Production: 'production', Steward: 'the steward', Discovery: 'a discovery',
 };
 const STAGE: Record<string, string> = {
   speculate: 'Speculate', implement: 'Implement', 'qa-test': 'QA', refine: 'Refine', review: 'Review',

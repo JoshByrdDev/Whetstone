@@ -180,3 +180,62 @@ export interface ExperimentRow {
   escapedP: number; escapedBreaks: boolean; guardrailBroken: boolean;
   suggestion: string | null; suggestionWhy: string; arms: ArmRow[];
 }
+
+/**
+ * mart_discovery_funnel: one cut of the Discovery track's funnel. Counts are null where a cut has
+ * no row of that grain (an area has proposals but no discovery-wide cost). Rates are null below
+ * `minVerdicts` closed verdicts, with `enoughVerdicts` false - the page says so rather than show 0%.
+ */
+export interface DiscoveryFunnelRow {
+  dimension: string; dimValue: string; dimLabel: string | null;
+  discoveries: number | null; discoveriesDone: number | null;
+  proposalsWritten: number | null; shown: number | null; dropped: number | null; restored: number | null;
+  restoredApproved: number | null; decided: number | null; closed: number | null; approved: number | null;
+  rejected: number | null; rejectedGeneric: number | null; rejectedAlreadyDecided: number | null;
+  rejectedNotNow: number | null; rejectedWrong: number | null; snoozed: number | null; changedMind: number | null;
+  newToMe: number | null; newToMeAsked: number | null; edited: number | null; medianEditShare: number | null;
+  filed: number | null; filedTickets: number | null; filedTicketsDone: number | null;
+  goals: number | null; goalsChecked: number | null; landedFirstTime: number | null;
+  recheckShown: number | null; recheckClosed: number | null; recheckApproved: number | null;
+  fixupsClosed: number | null; fixupsApproved: number | null; recheckNewClosed: number | null; recheckNewApproved: number | null;
+  repeats: number | null; repeatsAcross: number | null;
+  bugsFiled: number | null; bugsConfirmed: number | null; bugsFixed: number | null;
+  runs: number | null; runsPriced: number | null; runMinutes: number | null; runTokens: number | null;
+  discoveriesPriced: number | null; costUsd: number | null; approvedPriced: number | null;
+  ownerMinutes: number | null; approvedTimed: number | null; ownerMinutesTimed: number | null;
+  observations: number | null; scoutObservations: number | null; siftOut: number | null; siftDropped: number | null;
+  visits: number | null; discoveriesWithVisits: number | null; medianPages: number | null; medianAreas: number | null;
+  medianRoles: number | null; medianWidths: number | null; visitMinutes: number | null;
+  offRouteVisits: number | null; routeJudgedVisits: number | null;
+  enoughVerdicts: boolean; minVerdicts: number;
+  approvalRate: number | null; rejectionRate: number | null; newToMeShare: number | null; editedShare: number | null;
+  repeatShare: number | null; approvedPerDollar: number | null; approvedPerOwnerMinute: number | null;
+  siftYield: number | null; siftCutShare: number | null; offRouteShare: number | null;
+  landedRate: number | null; recheckYield: number | null;
+  verdictRounds: number | null; verdictRoundsCompleted: number | null; medianHoursToVerdict: number | null;
+  p90HoursToVerdict: number | null; medianOwnerMinutesPerRound: number | null;
+}
+
+/** mart_discovery_rejections: one reason in one cut. */
+export interface DiscoveryRejectionRow {
+  dimension: string; dimValue: string; dimLabel: string | null; reason: string; rejections: number;
+  rejected: number; closed: number; enoughVerdicts: boolean; minVerdicts: number;
+  shareOfRejections: number; shareOfClosed: number; teaches: string;
+}
+
+/** mart_discovery_versions: one version of a discovery skill or of the taste file. */
+export interface DiscoveryVersionRow {
+  kind: 'sift_skill' | 'recheck_skill' | 'scout_skill' | 'chart_skill' | 'taste'; version: string;
+  label: string | null; versionAt: string | null; versionSeq: number; firstAt: string; lastAt: string;
+  discoveries: number; shown: number; closed: number; approved: number; rejected: number; rejectedTaste: number;
+  newToMe: number; edited: number; enoughVerdicts: boolean; minVerdicts: number;
+  approvalRate: number | null; tasteRejectionRate: number | null; newToMeShare: number | null;
+}
+
+/** GET /api/analytics/discovery */
+export interface DiscoveryView {
+  scope: { windowDays: number; project: string; track: string }; by: string;
+  summary: DiscoveryFunnelRow | null; split: DiscoveryFunnelRow[];
+  rejections: DiscoveryRejectionRow[]; rejectionsSplit: DiscoveryRejectionRow[];
+  versions: DiscoveryVersionRow[];
+}

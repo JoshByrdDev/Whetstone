@@ -63,6 +63,12 @@ public static class AnalyticsEndpoints
             });
         });
 
+        // The Discovery track: is it worth running, and did the last change to it help. Read like
+        // every route here - from the published marts, filtered, never aggregated - so it reaches
+        // nothing past the data folder and has no place in QaIsolation's table.
+        app.MapGet("/api/analytics/discovery", (AnalyticsService a, int? days, string? project, string? by) =>
+            Results.Ok(a.Discovery(days, project, by)));
+
         // Every experiment with its arms, read whole rather than by window.
         app.MapGet("/api/analytics/experiments", (AnalyticsService a, string? project) =>
             Results.Ok(a.Experiments(project)));

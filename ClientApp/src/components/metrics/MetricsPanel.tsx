@@ -11,6 +11,7 @@ import { PhaseTable, Rework, TimeSplit } from './Phases';
 import { DiffAndRebase, SplitBy, Tools, Versions, type RunFilter } from './PhaseDetail';
 import { Daily, FirstPassQa, QaRulings } from './Quality';
 import { Escapes } from './Escapes';
+import { Discovery } from './Discovery';
 import { RunList } from './Runs';
 import { Bugs } from './Bugs';
 import { ExperimentResults } from './ExperimentResults';
@@ -205,6 +206,8 @@ export function MetricsPanel() {
 
             <QaRulings rows={data.qaRulings ?? []} />
             <Escapes rows={data.escapes ?? []} project={scope.project} bump={bump} />
+            {/* Always the Discovery track, whichever track the chips above are on. */}
+            <Discovery days={days} project={scope.project} bump={bump} />
 
             <Bugs scope={scope} bump={bump} onPick={pick} />
             <ExperimentResults project={scope.project} bump={bump} onPick={pick} />

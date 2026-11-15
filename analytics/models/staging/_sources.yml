@@ -44,6 +44,23 @@ sources:
       - name: Experiments
       - name: ExperimentArms
       - name: ExperimentAssignments
+      # The Discovery track's record (docs/discovery-track-plan.md). Empty on a database that
+      # predates its migrations. Read by the Discovery marts and, later, Recon's.
+      - name: DiscoveryRoutes
+      - name: DiscoveryVisits
+      - name: DiscoveryObservations
+      - name: DiscoveryProposals
+        columns:
+          - name: Id
+            tests: [unique]
+      - name: DiscoveryVerdictEvents
+        description: Every owner action on a proposal, append-only. A changed mind is a second event.
+        columns:
+          - name: Id
+            tests: [unique]
+      - name: DiscoveryGoalChecks
+      - name: DiscoveryTasteVersions
+      - name: DiscoveryTasteReads
 
   - name: git
     schema: raw

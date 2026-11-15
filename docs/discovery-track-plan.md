@@ -324,7 +324,8 @@ this.) So retention is part of the video step, not a clean-up for later:
 4. **Taste.** The taste file and its fold, once there are verdicts to fold. **Built** - see
    "Step 4 as built".
 5. **Measuring.** The Discovery marts and their Metrics section, once step 1 has produced a few
-   weeks of verdicts. What they read is recorded from step 1 on ("What is measured").
+   weeks of verdicts. What they read is recorded from step 1 on ("What is measured"). **Built** -
+   see "Step 5 as built".
 
 Board host only at first; a worker host can run Scout once its stack leases and the data-root
 mirror cover the video.
@@ -615,6 +616,90 @@ What step 4 settled, and where it departed from or fell short of the design abov
   `DiscoveryTaste` tests. Already decided is shown, not offered as a decision to record. A fold reads
   verdicts only, not the owner's later edits to the filed tickets. The owner's edit is of the whole
   file in a textarea, with no diff view between versions beyond showing each one.
+
+## Step 5 as built
+
+What step 5 settled, and where it departed from or fell short of the design above. It was built
+before there were real verdicts to measure, so every choice below is one to revisit once there are.
+
+- **Where it is.** The loaders in `analytics/refresh.py` (eight Discovery tables, without their
+  long prose: bodies, notes and the taste text stay on the board); one staging model per table,
+  `stg_board__discovery_*`, plus `stg_board__discovery_tickets` for the tickets on the track; five
+  intermediate models, `int_discovery_*`; and four published marts - `fct_discovery_proposals`,
+  `mart_discovery_funnel`, `mart_discovery_rejections`, `mart_discovery_versions`. The board reads
+  them at `GET /api/analytics/discovery?days&project&by` (`AnalyticsService.Discovery`), which only
+  reads parquet and so needs no `QaIsolation` entry, and the Metrics page shows them as a
+  **Discovery** section after Escapes. The section always reads the Discovery track, whatever track
+  the page is filtered to; the window and the project still apply.
+- **Built for Recon, in the names its plan gives.** The `stg_board__discovery_*` models and
+  `fct_discovery_proposals` are the ones `docs/recon-tab-plan.md` lists as shared, and Recon's R2
+  builds on them rather than beside them. Two things are deliberately half-done for it:
+  `fct_discovery_proposals.area` is Sift's own `Area` on the proposal for now - the plan's rule,
+  the majority of its observations' URLs matched against `discovery.areas` page patterns, needs the
+  pattern syntax R2 is to settle, so R2 replaces that one column in place; and the direction lineage
+  (`direction`, `direction_lineage_id`, `direction_lineage_title`) follows `ReconFrom`'s `rerun:<id>`, which is
+  loaded and staged now. Recon's own marts, routes and tab are not built.
+- **A window is a cohort.** Every row is counted in the window by when its *discovery* was filed,
+  not when each verdict came, so a discovery's funnel is never split across two windows and a rate
+  never has a numerator from one week and a denominator from another.
+- **Rates are over closed verdicts, with a floor.** A verdict counts once it is closed - decided,
+  and the discovery past `NeedsVerdict` (Done, or a later Filed event or a later exit from the gate)
+  - the same rule step 4's fold counts by. Below `discovery_min_verdicts` (a dbt var, 10) closed
+  verdicts in a row, every rate on it is null and the mart says `enough_verdicts = false`; the page
+  says "Not enough verdicts yet" or "too few" rather than printing 0% or 100% from three verdicts.
+  Counts are always shown. Sift yield, landed and recheck yield are not gated: they are ratios of
+  counts the page shows beside them.
+- **Approved is the latest verdict, and filing counts.** The verdict is the latest Approved,
+  Rejected, Snoozed or Undone event; a Filed proposal is approved whatever came before. A second
+  decision or an undo marks `changed_mind`. *New to me* is the latest non-null answer. The edit is
+  read from the Filed event (else the last approval): edited, kind changed, and the share of the
+  draft changed (`edit_distance / draft_length`, at most 1). The median edit is of the edited
+  drafts only - over every approval it reads 0% whenever fewer than half were touched.
+- **Owner minutes are estimated from the verdict log.** There is no page timer. A sitting is a run of
+  verdict events at most five minutes apart; each event costs a minute for the first of a sitting
+  and the gap since the last otherwise (`int_discovery_verdict_rounds`). Time to verdict is from
+  entering `NeedsVerdict` to leaving it, per round. Approved per owner-minute divides by that.
+- **Approved per dollar** uses `fct_runs.list_cost_usd`, so it is shown only where *every* run of a
+  discovery has a list price (`cost_complete`); a run that shared its session has none. The QA copy
+  refreshes without transcripts and so has no prices, and the page says so.
+- **Repeats are by title.** Two proposals on the same project repeat when their titles' words of
+  three letters or more share at least two and a Jaccard similarity of 0.5 or more, the later one
+  counted (`int_discovery_repeats`), split into same-discovery and another-discovery. Crude, cheap
+  and explainable; a text embedding would be better and was not worth a dependency before there is
+  data to tune it on.
+- **Coverage** is pages (distinct URL paths, query and fragment dropped), areas, roles and widths per
+  discovery, and the share of visits that were off the route.
+- **Found by discovery.** A bug ticket filed from a discovery (`DiscoveryId` set, `IsBug`) now
+  counts as found by `Discovery` in `fct_bug_links` and the Bugs section, beside QA and the owner,
+  with how many were traced to a cause. The other half - bugs later traced to an area a run scouted
+  without seeing them - needs areas' code paths, which is Recon's (above); the page says it comes
+  with Recon.
+- **Which cut a row is.** Every measure is cut by week filed, model, effort, provider, the sift or
+  recheck skill version, the scout model and skill version, the chart skill version, the taste-file
+  version, the A/B arm, the direction (labelled by its lineage's first title) and, for proposal rows
+  only, the area. A proposal is cut by the run that *wrote* it (Sift or a Recheck round, matched by
+  lease, else by time); a discovery-wide number by its Sift run. The route takes one cut at a time
+  from an allowlist; anything else is the week.
+- **Before and after each version.** `mart_discovery_versions` lines up each version of the sift,
+  recheck, scout and chart skills and of the taste file in the order they came, with closed
+  verdicts, approval rate and the share rejected for a reason the taste file can teach. A taste
+  version is the one the writing run read (step 4's `DiscoveryTasteReads`, by lease, else the latest
+  read in the same round); 'no file' sorts first, and a run that recorded nothing is 'not recorded'.
+  The page shows each against the one before in points, only where both clear the floor.
+- **Rejections say what they teach.** Each reason is shown with its share of rejections and of
+  closed verdicts, and the fix the table above names for it.
+- **Proven** by dbt unit tests on seeded rows (five on the intermediate models, four on the marts,
+  besides schema tests), by `AnalyticsDiscoveryTests` for the route (scope, the floor passed through
+  as null, cut order and the allowlist, and that `refresh.py`'s `PUBLISHED` and
+  `AnalyticsService.Marts` name the same marts), and on the QA copy: five seeded discoveries on two
+  projects, refreshed through the board, with the funnel, rejections, quality, cuts and taste
+  versions checked by hand against the seeded rows, a project below the floor reading "too few",
+  and the section at 390px wide with the page's scroll width equal to the viewport's.
+- **Fell short / not done**: nothing has been measured on real verdicts yet - the live board had no
+  discoveries when this was built, and its refresh still builds clean on none. No experiment has
+  used approval rate as a guardrail; `mart_experiment_arms` is unchanged. Owner minutes are an
+  estimate from clicks, not time on the page. Area is Sift's, not Recon's. Bugs walked past wait
+  for Recon.
 
 ## Open for whoever builds it
 

@@ -49,6 +49,8 @@ PUBLISHED = [
     "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
     "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
     "mart_qa_rulings", "mart_escapes", "mart_rebase_returns",
+    # The Discovery track's measures (docs/discovery-track-plan.md, "What is measured"; step 5).
+    "fct_discovery_proposals", "mart_discovery_funnel", "mart_discovery_rejections", "mart_discovery_versions",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an
@@ -113,6 +115,62 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         "Title": "VARCHAR", "Priority": "VARCHAR", "CreatedAt": "VARCHAR", "UpdatedAt": "VARCHAR",
         "WorktreePath": "VARCHAR", "Branch": "VARCHAR", "PlanUnit": "VARCHAR",
         "MergedAt": "VARCHAR", "Walkthrough": "BOOLEAN", "IsBug": "BOOLEAN",
+        # A Delivery ticket filed from a discovery's proposal names it (AddDiscoveryTrack). The
+        # description is a discovery's direction; only stg_board__discovery_tickets reads it.
+        "DiscoveryId": "INTEGER", "Description": "VARCHAR", "RequiresRouteReview": "BOOLEAN",
+        # Recon's "Scout this" key (docs/recon-tab-plan.md, R1). NULL until that migration ships;
+        # read now so a rerun's results already count toward the direction it reran.
+        "ReconFrom": "VARCHAR",
+    },
+    # The Discovery track's record (docs/discovery-track-plan.md). Lists (Jobs, Areas, ObservationIds,
+    # EventIds...) are the JSON arrays EF writes; long prose (a proposal's body, a taste file's text)
+    # is left out - nothing here measures words. Shared with the Recon marts (docs/recon-tab-plan.md).
+    "DiscoveryRoutes": {
+        "TicketId": "INTEGER", "SignedInAs": "VARCHAR", "Jobs": "VARCHAR", "StartCases": "VARCHAR",
+        "Widths": "VARCHAR", "Areas": "VARCHAR", "RunId": "INTEGER", "WrittenAt": "VARCHAR",
+        "ApprovedAt": "VARCHAR", "OwnerEdited": "BOOLEAN",
+    },
+    "DiscoveryVisits": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "Url": "VARCHAR", "RoutePattern": "VARCHAR",
+        "Width": "VARCHAR", "SignedInAs": "VARCHAR", "Seconds": "INTEGER", "Area": "VARCHAR",
+        "Case": "VARCHAR", "Commit": "VARCHAR", "RunId": "INTEGER", "At": "VARCHAR",
+    },
+    "DiscoveryObservations": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "Kind": "VARCHAR", "Title": "VARCHAR", "Job": "INTEGER",
+        "Url": "VARCHAR", "Width": "VARCHAR", "SignedInAs": "VARCHAR", "Area": "VARCHAR",
+        "Commit": "VARCHAR", "RunId": "INTEGER", "VideoAt": "DOUBLE", "RecordingId": "INTEGER",
+        "ObservedAt": "VARCHAR", "Round": "INTEGER", "CreatedAt": "VARCHAR",
+    },
+    "DiscoveryProposals": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "Rank": "INTEGER", "Kind": "VARCHAR", "Status": "VARCHAR",
+        "Title": "VARCHAR", "Size": "VARCHAR", "Confidence": "VARCHAR", "Area": "VARCHAR",
+        "ObservationIds": "VARCHAR", "DropReason": "VARCHAR", "RejectReason": "VARCHAR",
+        "SnoozeUntil": "VARCHAR", "FiledTicketId": "INTEGER", "Edited": "BOOLEAN", "DraftKind": "VARCHAR",
+        "DraftTitle": "VARCHAR", "NewToMe": "BOOLEAN", "RunId": "INTEGER", "Round": "INTEGER",
+        "RecheckKind": "VARCHAR", "GoalId": "INTEGER", "CreatedAt": "VARCHAR", "DecidedAt": "VARCHAR",
+        "Pinned": "BOOLEAN",
+    },
+    # Every owner action on a proposal, append-only (DiscoveryMeasures): what the marts count.
+    "DiscoveryVerdictEvents": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "ProposalId": "INTEGER", "ProjectKey": "VARCHAR",
+        "Kind": "VARCHAR", "RejectReason": "VARCHAR", "NewToMe": "BOOLEAN", "Edited": "BOOLEAN",
+        "KindChanged": "BOOLEAN", "EditDistance": "INTEGER", "DraftLength": "INTEGER",
+        "FiledTicketId": "INTEGER", "At": "VARCHAR",
+    },
+    "DiscoveryGoalChecks": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "ProposalId": "INTEGER", "FiledTicketId": "INTEGER",
+        "Round": "INTEGER", "Outcome": "VARCHAR", "ObservationIds": "VARCHAR", "RunId": "INTEGER",
+        "Commit": "VARCHAR", "At": "VARCHAR",
+    },
+    # The taste file's versions and which one each sift or recheck run read (DiscoveryTaste).
+    "DiscoveryTasteVersions": {
+        "Id": "INTEGER", "ProjectKey": "VARCHAR", "Number": "INTEGER", "Hash": "VARCHAR", "Source": "VARCHAR",
+        "Commit": "VARCHAR", "Verdicts": "INTEGER", "RevertOf": "INTEGER", "RodeOnTicketId": "INTEGER",
+        "At": "VARCHAR",
+    },
+    "DiscoveryTasteReads": {
+        "Id": "INTEGER", "TicketId": "INTEGER", "RunId": "INTEGER", "Round": "INTEGER", "Phase": "VARCHAR",
+        "VersionId": "INTEGER", "VersionNumber": "INTEGER", "Hash": "VARCHAR", "At": "VARCHAR",
     },
     # Bug tracing: a bug ticket traced to the tickets whose commits wrote the lines it fixed.
     "BugLinks": {
