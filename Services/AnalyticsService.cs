@@ -320,6 +320,31 @@ public sealed class AnalyticsService
         return Query($"SELECT * EXCLUDE (window_days, project_scope, track_scope) FROM {Parquet(file)} WHERE {string.Join(" AND ", clauses)}{order}", args);
     }
 
+    /// <summary>
+    /// The rows of one per-project mart - one that carries <c>project_key</c> and is not cut by
+    /// <c>scoped()</c>, as Recon's are - for one project, narrowed by equality on further columns.
+    /// Empty when the mart has not been published.
+    /// </summary>
+    public List<Dictionary<string, object?>> ProjectMart(string mart, string project,
+        IReadOnlyDictionary<string, object?>? where = null, string? orderBy = null)
+    {
+        if (!Marts.Contains(mart)) throw new ArgumentException($"No mart named {mart}.");
+        var file = MartPath(mart);
+        if (!File.Exists(file)) return [];
+        var clauses = new List<string> { "project_key = $project" };
+        var args = new Dictionary<string, object?> { ["project"] = project };
+        var i = 0;
+        foreach (var (col, value) in where ?? new Dictionary<string, object?>())
+        {
+            if (!IsIdentifier(col)) throw new ArgumentException($"Not a column: {col}");
+            clauses.Add($"\"{col}\" = $w{i}");
+            args[$"w{i}"] = value;
+            i++;
+        }
+        var order = orderBy is null ? "" : $" ORDER BY {orderBy}";
+        return Query($"SELECT * FROM {Parquet(file)} WHERE {string.Join(" AND ", clauses)}{order}", args);
+    }
+
     /// <summary>What the run list may be asked for.</summary>
     public record RunQuery(int? Days, string? Project, string? Track, IReadOnlyDictionary<string, string> Filters,
         string? Sort, int Limit);
