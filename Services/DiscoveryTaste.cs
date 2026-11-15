@@ -51,10 +51,11 @@ public class DiscoveryTaste
     /// <summary>A fold's claim lapses after this long, so a run that died mid-fold does not hold the next one off.</summary>
     public static readonly TimeSpan ClaimFor = TimeSpan.FromMinutes(15);
 
+    // One paragraph, no hard breaks: the panel wraps it, and so does any editor.
     private const string Preamble =
         "# Taste\n\n" +
-        "What the owner's verdicts on discoveries have taught about what they want proposed. Sift and Recheck\n" +
-        "read this before they judge. Every few verdicts a fold rewrites \"Learned\" and commits it here, so a\n" +
+        "What the owner's verdicts on discoveries have taught about what they want proposed. Sift and Recheck " +
+        "read this before they judge. Every few verdicts a fold rewrites \"Learned\" and commits it here, so a " +
         "lesson can be found and reverted. \"The owner's\" is the owner's own: no fold changes it.\n";
 
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Gates = new(StringComparer.OrdinalIgnoreCase);
