@@ -36,8 +36,54 @@ models:
       - name: rule
         tests:
           - accepted_values: {values: [1, 2, 3, 4], quote: false}
+  - name: mart_recon_area_discoveries
+    tests:
+      - unique_combination: {columns: [project_key, area, discovery_id]}
+  - name: mart_recon_area_commits
+    tests:
+      - unique_combination: {columns: [project_key, area, repo, sha]}
+    columns:
+      - name: since
+        tests:
+          - accepted_values: {values: [after, recent, by_date]}
 
 unit_tests:
+  # The drill-down's commits. Events was last scouted on the line at fp_index 2: the two commits
+  # above it are listed as after, the one below is not. Billing was never scouted: only its commit
+  # from the last 90 days is listed, as recent. Search's last visit is off the base: what came after
+  # it by the clock is listed as by_date, never as after.
+  - name: recon_area_commits_are_the_ones_since_the_last_scout
+    model: mart_recon_area_commits
+    overrides:
+      macros:
+        as_of: "timestamp '2026-11-15 00:00:00'"
+    given:
+      - input: ref('int_recon_area_state')
+        rows:
+          - {project_key: alpha, area: Events, last_visit_id: 1, last_visited_at: '2026-10-10 00:00:00'}
+          - {project_key: alpha, area: Billing, last_visit_id: null, last_visited_at: null}
+          - {project_key: alpha, area: Search, last_visit_id: 2, last_visited_at: '2026-10-10 00:00:00'}
+      - input: ref('int_recon_visit_area')
+        rows:
+          - {visit_id: 1, commit_repo: '', fp_index: 2, placement: line}
+          - {visit_id: 2, commit_repo: '', fp_index: null, placement: unknown}
+      - input: ref('int_recon_area_commits')
+        rows:
+          - {project_key: alpha, area: Events, repo: '', sha: e0, fp_index: 0, committed_at: '2026-11-01 00:00:00', subject: tip, path: src/events/a.ts, ticket_ids: [30]}
+          - {project_key: alpha, area: Events, repo: '', sha: e0, fp_index: 0, committed_at: '2026-11-01 00:00:00', subject: tip, path: src/events/b.ts, ticket_ids: [30]}
+          - {project_key: alpha, area: Events, repo: '', sha: e1, fp_index: 1, committed_at: '2026-10-20 00:00:00', subject: one, path: src/events/a.ts, ticket_ids: []}
+          - {project_key: alpha, area: Events, repo: '', sha: e3, fp_index: 3, committed_at: '2026-10-01 00:00:00', subject: before, path: src/events/a.ts, ticket_ids: []}
+          - {project_key: alpha, area: Billing, repo: '', sha: b1, fp_index: 1, committed_at: '2026-11-10 00:00:00', subject: new, path: src/billing/a.ts, ticket_ids: []}
+          - {project_key: alpha, area: Billing, repo: '', sha: b9, fp_index: 9, committed_at: '2026-01-01 00:00:00', subject: old, path: src/billing/a.ts, ticket_ids: []}
+          - {project_key: alpha, area: Search, repo: '', sha: s1, fp_index: 1, committed_at: '2026-10-20 00:00:00', subject: later, path: src/search/a.ts, ticket_ids: []}
+          - {project_key: alpha, area: Search, repo: '', sha: s5, fp_index: 5, committed_at: '2026-09-20 00:00:00', subject: earlier, path: src/search/a.ts, ticket_ids: []}
+    expect:
+      rows:
+        - {project_key: alpha, area: Events, sha: e0, files: 2, tickets: '[30]', since: after}
+        - {project_key: alpha, area: Events, sha: e1, files: 1, tickets: '[]', since: after}
+        - {project_key: alpha, area: Billing, sha: b1, files: 1, tickets: '[]', since: recent}
+        - {project_key: alpha, area: Search, sha: s1, files: 1, tickets: '[]', since: by_date}
+
   # alpha lists one role. Events' member-at-a-desk cell was last scouted on a commit off the base:
   # unknown, not fresh. A visit as a role the list does not have fills an 'other' cell outside the
   # config, and its changes since count. bravo lists no roles: one 'any role' column, and its Help

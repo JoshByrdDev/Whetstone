@@ -157,6 +157,8 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<BugTraceQueue>());
 // The Metrics page's analytics: reads the dbt marts, starts their refresh (docs/analytics.md).
 builder.Services.AddSingleton<ReconInputs>(sp => new ReconInputs(sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<TicketGitService>()));
 builder.Services.AddSingleton<AnalyticsService>();
+// The Recon tab: reads the Recon marts with its live filters, and the owner's Not now.
+builder.Services.AddScoped<ReconService>();
 // What each ticket is waiting on: the tracker's blocking links, refreshed live, with local overrides
 // that outrank them. TicketService takes it so the claim can pass over a ticket that is blocked.
 builder.Services.AddScoped<TicketDependencyService>();
@@ -652,6 +654,7 @@ app.MapGitEndpoints();
 // Subscription rate-limit headroom (session + weekly windows) for the app bar.
 app.MapUsageEndpoints();
 app.MapAnalyticsEndpoints();
+app.MapReconEndpoints();
 
 // === Improvement Suggestions (per-project, scoped via ?project=) ===
 

@@ -304,8 +304,8 @@ beside them.
 
 ## R1 and R2 as built
 
-R1 and R2 are built (the record, the marts); R3 and R4 are not. Nothing below has a route or a
-page yet. What R3 and R4 can rely on:
+R1 and R2 are built (the record, the marts). R3 and R4 are built too: see "R3 and R4 as built"
+below. What R3 and R4 relied on:
 
 ### The record (R1)
 
@@ -420,3 +420,139 @@ proposals keep the area Sift wrote).
   reruns.
 
 `wwwroot` is untouched: R2 changed one comment in `useNarrow.ts` and nothing a build would ship.
+
+## R3 and R4 as built
+
+All four steps are built. What the routes and the tab do, and the choices made where the plan
+left room:
+
+### The routes (R3)
+
+- **`ReconService`** (`Services/ReconService.cs`) is the reader and the one write;
+  `Api/ReconEndpoints.cs` maps it. It reads the marts through `AnalyticsService.ProjectMart`, a
+  per-project reader for marts that carry `project_key` and are not cut by `scoped()`, and parses the
+  JSON list columns (`cells`, `reasons`, `tickets`, `ticketsSince`, `repos`) so the page reads a list
+  as a list. It filters and sorts; it never counts.
+- **`GET /api/recon/projects`**: enabled projects with a `discovery` block, each with its configured
+  areas (name, pages, code) and roles, whether the marts were built for it (`built`, from
+  `mart_recon_projects`), what they were built from (`builtAreas`, `builtRoles`, `builtAt`,
+  `historyOk`, `repos`), and **`cannotFile`**: why Scout this cannot file a discovery there -
+  Discovery not in the project's `tracks`, or no `siteUrl` - the create route's own refusals, said
+  before the form is filled in rather than after. It also returns the analytics status, so the page
+  needs one call to decide everything above its sections. An empty list hides the tab.
+- **`GET /api/recon/{project}/suggestions`** returns `{ suggestions, setAside, inFlight }`. The live
+  filters, in `ReconService.Filter`:
+  - **An open discovery** (Discovery track, not Done, same project) whose `ReconFrom` is a row's key
+    takes the row off and lists it under `inFlight`. A discovery filed from **one cell** of a
+    collapsed gap row (`gap:<area>:<role>:<width>`) takes that cell out of the row's `cells`; the
+    row goes when none is left.
+  - **Not now**: a row is set aside while its latest `ReconDismissalEvents` row is `Dismissed`, the
+    `Until` (if any) is still ahead, and the `AreaHeadCommit` recorded is still the mart's
+    `area_head_commit`. That is applied to **every kind of key**, not only `changed:` - the plan's
+    "until its area's code changes again" is the rule for all of them. An area with no code paths
+    has no head (null on both sides), so its set-aside lasts until its date or an Undo.
+  - The mart's `rank` is kept on each row; the page numbers rows by their position instead, because
+    the filters leave holes in the ranks.
+- **`GET /api/recon/{project}/coverage`**, **`/areas/{area}`**, **`/yield?days=`**. The drill-down
+  returns the area's config, its coverage cells, `mart_recon_patterns`, and two marts added for it
+  (below). Yield takes 7, 30, 90 or 0 and **defaults to 0, all of history**: a project starts with
+  a handful of discoveries, and a 30-day window would show nothing for most of its first months.
+- **`POST /api/recon/{project}/dismiss`** `{ key, until? }` and **`/undismiss`** `{ key }`, REST only.
+  Dismiss refuses a key that is not one of the project's suggestions as last built (the event has
+  to record that row's area head), a malformed key (`ReconKey.Problem`) and a date that is not in
+  the future. Undismiss refuses a key that is not set aside. A project without a `discovery` block,
+  or not enabled, is a 404 on every route.
+- **No MCP tool** reaches `ReconService` or `ReconDismissalEvent`; `ReconRoutesTests` checks by
+  reflection. **QA isolation**: nothing here reaches past the data folder, so nothing went into
+  `QaIsolation`'s table; the routes' comment says so.
+- **Two marts were added**, because the drill-down's lists are not in the five R2 published and the
+  board does not aggregate: `mart_recon_area_discoveries` (every discovery that went to an area, by a
+  visit or a shown proposal, with its direction and its yield there) and `mart_recon_area_commits`
+  (commits on the base touching the area's code since it was last scouted, one row per commit, with
+  `since` = `after` - the coverage's own ancestry rule - or `recent` for a never-scouted area's last
+  90 days, or `by_date` when the last visit is off the base). Both published; a dbt unit test pins
+  which commits are listed.
+
+### The tab (R4)
+
+`ClientApp/src/components/recon/`: `ReconPanel` (picker, freshness, states, the form, the drawer),
+`ScoutNext`, `Coverage` (grid, phone cards, drill-down), `Yield`; cell states are named in
+`src/theme/recon.ts`.
+
+- **The tab** sits between Steward and Classroom and shows only when `/api/recon/projects` is not
+  empty, asked once when the app loads - a block added later shows the tab on the next reload, as a
+  new project does. The picker remembers its project per machine, as the other tabs' do.
+- **Freshness** is the Metrics page's: on arrival a refresh starts if the marts are stale or
+  missing, the status is polled only while one runs, and the page reads everything again when it
+  ends. The heading says when Recon was built (`mart_recon_projects.built_at`).
+- **Scout next**: one row per suggestion with its kind (a mark and a word), area, cooling when it is,
+  the rule that put it there in words, the direction, and the reasons as small wells. A row opens to
+  list a gap's cells, each with **Scout just this** (files `gap:<area>:<role>:<width>`), the tickets
+  that changed the area, the discovery a rerun reruns, and a link into its area's drill-down.
+  **Scout this is `orbit-primary` on the first row only**; on the others it is a ghost button in the
+  done tier's colour - a page where every row wore the accent would have no primary action. **Not
+  now** swaps the row's buttons (`orbit-swap`) for *Until its code changes* (or *Until I undo it*
+  for an area without code), *A week*, *A month*, *Keep it*. Below the list: what is being scouted
+  now and so not suggested (each opening its ticket), and the set-aside list with **Undo**.
+- **Scout this** opens `CreateTicketModal` with a new `prefill` prop: the project, the Discovery
+  track, a title ("Scout Billing", "Scout Events again", "Scout what changed in Search"), the
+  direction, a one-line note under it ("From Recon: a gap in Billing - as admin on a phone"), and
+  the key. The key is sent as `reconFrom` only while the form is still on that project and the
+  Discovery track. Filing re-reads the page, so the row leaves at once, and opens the new ticket in
+  the board's drawer. A cell's stub direction ("Use Billing as admin on a phone: who are you, and
+  what did you come to do?") is a question for the owner to answer as a job, not a direction.
+- **Coverage** at a desk is a table inside its own horizontal scroller (many roles scroll the
+  table, never the page): config columns first in config order, then the `other` / unknown-width
+  columns marked *not in config*; `(unmapped)` last, saying it is there to fix the patterns. Area
+  names are `orbit-pick` with `aria-current`; cells are `orbit-tap` and open their area. The
+  drill-down is an `orbit-flank` grid (`minmax(0,1fr) 0rem` ↔ `minmax(0,1fr) 24rem`). On a phone each
+  area is a card with its cells as a wrap of chips, and the drill-down replaces the grid with a
+  Close. A legend under the grid says every state's mark and word.
+- **Yield**: window chips (`orbit-swap` keyed on the window), then By area and By direction as
+  tables at a desk and one card per row on a phone. Rejections are broken down by reason in words;
+  cost is shown only where the mart says every discovery is priced, else *not priced*. A direction
+  row has **Scout again** (`rerun:<its latest discovery>`).
+- **States said out loud**: no `discovery` block anywhere (no tab); a block with no areas (the
+  shape of an area, as JSON, and no grid); areas but no roles (the *any role* column and a line);
+  analytics unavailable (the status's reason, pointing at the System page's Setup check); not built
+  yet (Refresh); the areas or roles changed since the build (Refresh); a repo whose history did not
+  load or whose base did not resolve; and a project where a discovery cannot be filed (Scout this
+  and Scout again off, with the reason once above the list). A failed refresh says so and the page
+  shows the build before it.
+- **The look**: no literal colours, radii or transitions in the new files; corners are `chamfer()`,
+  colours are tokens or the themed Tailwind classes, cell states borrow tiers through
+  `RECON_STATE`, and each has a mark and a word. Nothing appears only on hover.
+
+### Checked
+
+- `dotnet test --filter Recon`: 34 (R1's tests plus `ReconRoutesTests`). dbt build 335/335 on a
+  snapshot of this machine's board, with the two new marts' schema and unit tests.
+- On the QA copy, alpha given four areas (one with no code paths), three roles, three commits around
+  a visit, and two judged discoveries with six visits (one off the base, one unmapped, one as a role
+  not in the list): the suggestions came out rerun, gap (rule 2) x2, gap (rule 3) x2, changed, in
+  that order; Scout this filed #3 with `ReconFrom = gap:Events`, and the row left the page at once
+  and showed under "being scouted"; Not now for a week and Undo round-tripped; the drill-down showed
+  the patterns, discovery #1 and the one commit since. bravo was taken through no areas, not built,
+  Refresh, built with no roles, and Scout this off for a missing track. Every state was checked at
+  desktop width and at 390px, where `document.documentElement.scrollWidth` was 390.
+
+### Left for later
+
+- The plan's "Later" list stands. Two small additions found while building: Recon's tab appears
+  only on a reload after the first `discovery` block is added; and the Not now choices are fixed
+  (code change, a week, a month) rather than a date picker.
+
+## What to look at first
+
+1. **The tab on a real project**: give one project's `discovery` block its `areas` and `roles`, add
+   `Discovery` to its `tracks` if it is not there, reload, open Recon. Does the first suggestion
+   look like where you would have pointed a scout?
+2. **The gap stubs.** A gap's direction is the marts' stub ("Nobody has used Billing as admin...")
+   and a single cell's is a question. They are meant to be rewritten as a job in the form before
+   filing; whether that is enough is the plan's open question about agent-drafted directions.
+3. **Scout this on the first row only wears the accent.** If every row should look the same, it is
+   one line in `ScoutNext.tsx`.
+4. **Yield defaults to all of history**, not 30 days. Say if you would rather it matched Metrics.
+5. **Not now applies the area-head rule to every key**, not just `changed:` (R2's notes read as if
+   only `changed:` would come back on new code). A gap set aside comes back when its code moves too.
+

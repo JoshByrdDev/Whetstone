@@ -56,6 +56,7 @@ PUBLISHED = [
     "fct_discovery_proposals", "mart_discovery_funnel", "mart_discovery_rejections", "mart_discovery_versions",
     # Recon: where to point the next scout (docs/recon-tab-plan.md, "The marts").
     "mart_recon_projects", "mart_recon_coverage", "mart_recon_patterns", "mart_recon_yield", "mart_recon_suggestions",
+    "mart_recon_area_discoveries", "mart_recon_area_commits",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an

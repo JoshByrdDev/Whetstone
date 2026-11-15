@@ -20,6 +20,7 @@ import { HistoryPanel } from './components/HistoryPanel';
 import { MetricsPanel } from './components/metrics/MetricsPanel';
 import { Classroom } from './components/Classroom';
 import { StewardPanel } from './components/StewardPanel';
+import { ReconPanel } from './components/recon/ReconPanel';
 import { Backdrop } from './components/Backdrop';
 import { PageHead, SectionRule } from './components/ui';
 import { chamfer, CAPS, DISPLAY, MONO } from './components/orbit';
@@ -29,7 +30,7 @@ import { useNarrow } from './hooks/useNarrow';
 import { useSkillDrift, driftTotal } from './hooks/useSkillDrift';
 import { confirmLeave } from './hooks/useUnsavedGuard';
 
-type Tab = 'board' | 'steward' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
+type Tab = 'board' | 'steward' | 'recon' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
 
 /**
  * The tabs, in the order they appear in the nav — which is also the order they sit in space.
@@ -41,6 +42,8 @@ type Tab = 'board' | 'steward' | 'classroom' | 'heartbeat' | 'metrics' | 'histor
 const TABS: { id: Tab; label: string }[] = [
   { id: 'board', label: 'Board' },
   { id: 'steward', label: 'Steward' },
+  // Shown only while some project has a discovery block (docs/recon-tab-plan.md).
+  { id: 'recon', label: 'Recon' },
   { id: 'classroom', label: 'Classroom' },
   { id: 'heartbeat', label: 'Heartbeat' },
   { id: 'metrics', label: 'Metrics' },
@@ -70,6 +73,15 @@ export default function App() {
   // every page, because nobody opens the Skills tab to check whether it has news.
   const skillDrift = driftTotal(useSkillDrift());
   const [tab, setTab] = useState<Tab>('board');
+  // Whether any project has a discovery block, which is what puts Recon in the strip. Asked once on
+  // load: a block added later shows the tab on the next reload, as a new project does.
+  const [recon, setRecon] = useState(false);
+  useEffect(() => {
+    fetch('/api/recon/projects')
+      .then(r => (r.ok ? r.json() : null))
+      .then((j: { projects?: unknown[] } | null) => setRecon((j?.projects?.length ?? 0) > 0))
+      .catch(() => { /* no tab is the safe answer */ });
+  }, []);
   const [classroomTicket, setClassroomTicket] = useState<number | null>(null);
   // The ticket open in the slide-over on the heartbeat page — the board's own drawer, not a lookalike.
   const [drawerTicket, setDrawerTicket] = useState<number | null>(null);
@@ -211,7 +223,7 @@ export default function App() {
               </div>
             </div>}
             <nav className={narrow ? 'tab-strip flex gap-1 order-last w-full' : 'flex gap-1 flex-wrap'}>
-              {TABS.map(t => (
+              {TABS.filter(t => t.id !== 'recon' || recon || tab === 'recon').map(t => (
                 <TabButton key={t.id} on={tab === t.id} onClick={() => go(t.id)}
                            badge={t.id === 'skills' && skillDrift > 0 ? skillDrift : undefined}
                            badgeTitle={`${skillDrift} skill file${skillDrift === 1 ? '' : 's'} behind the template`}>
@@ -243,6 +255,8 @@ export default function App() {
           {tab === 'board' && <Board state={state} wakeAt={wakeAt} events={events} />}
 
           {tab === 'steward' && <StewardPanel events={events} state={state} />}
+
+          {tab === 'recon' && <ReconPanel state={state} />}
 
           {tab === 'classroom' && <Classroom initialTicketId={classroomTicket} />}
 
