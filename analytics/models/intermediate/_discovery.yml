@@ -1,0 +1,189 @@
+version: 2
+
+# The Discovery track's intermediate models (docs/discovery-track-plan.md, "What is measured").
+# The unit tests are the rules the marts count by, on seeded rows.
+unit_tests:
+  # A verdict is the log's latest decision, never the proposal's columns: 1 was approved and then
+  # rejected (a changed mind), 2 was approved then taken back (undecided), 3 was a dropped line
+  # restored and then approved and filed - its edit is the one measured at filing - and 4 was
+  # dropped and left. New to me is the latest event that carried it.
+  - name: discovery_verdict_is_the_latest_event_and_a_restore_is_shown
+    model: int_discovery_proposal_verdicts
+    given:
+      - input: ref('stg_board__discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, drop_reason: null, filed_ticket_id: null}
+          - {proposal_id: 2, discovery_id: 10, drop_reason: null, filed_ticket_id: null}
+          - {proposal_id: 3, discovery_id: 10, drop_reason: 'too small', filed_ticket_id: 50}
+          - {proposal_id: 4, discovery_id: 10, drop_reason: 'generic', filed_ticket_id: null}
+      - input: ref('stg_board__discovery_verdict_events')
+        rows:
+          - {event_id: 1, proposal_id: 1, kind: Approved, new_to_me: true, edited: false, edit_distance: 0, draft_length: 100, acted_at: '2026-11-10 10:00:00'}
+          - {event_id: 2, proposal_id: 1, kind: Rejected, reject_reason: Wrong, new_to_me: true, edited: false, edit_distance: 0, draft_length: 100, acted_at: '2026-11-10 10:02:00'}
+          - {event_id: 3, proposal_id: 2, kind: Approved, new_to_me: null, edited: false, edit_distance: 0, draft_length: 80, acted_at: '2026-11-10 10:03:00'}
+          - {event_id: 4, proposal_id: 2, kind: Undone, new_to_me: null, edited: false, edit_distance: 0, draft_length: 80, acted_at: '2026-11-10 10:04:00'}
+          - {event_id: 5, proposal_id: 3, kind: Restored, new_to_me: null, edited: false, edit_distance: 0, draft_length: 20, acted_at: '2026-11-10 10:05:00'}
+          - {event_id: 6, proposal_id: 3, kind: Approved, new_to_me: false, edited: true, edit_distance: 10, draft_length: 20, acted_at: '2026-11-10 10:06:00'}
+          - {event_id: 7, proposal_id: 3, kind: NewToMe, new_to_me: true, edited: true, edit_distance: 10, draft_length: 20, acted_at: '2026-11-10 10:07:00'}
+          - {event_id: 8, proposal_id: 3, kind: Filed, new_to_me: true, edited: true, edit_distance: 15, draft_length: 20, filed_ticket_id: 50, acted_at: '2026-11-10 11:00:00'}
+    expect:
+      rows:
+        - {proposal_id: 1, shown: true, restored: false, verdict: rejected, reject_reason: Wrong, changed_mind: true, new_to_me: true, edited: false, filed: false}
+        - {proposal_id: 2, shown: true, restored: false, verdict: undecided, reject_reason: null, changed_mind: true, new_to_me: null, edited: false, filed: false}
+        - {proposal_id: 3, shown: true, restored: true, verdict: approved, reject_reason: null, changed_mind: false, new_to_me: true, edited: true, filed: true}
+        - {proposal_id: 4, shown: false, restored: false, verdict: undecided, reject_reason: null, changed_mind: false, new_to_me: null, edited: false, filed: false}
+
+  # The edit at filing is what became the ticket: 15 of the draft's 20 characters.
+  - name: discovery_edit_is_measured_at_filing
+    model: int_discovery_proposal_verdicts
+    given:
+      - input: ref('stg_board__discovery_proposals')
+        rows:
+          - {proposal_id: 3, discovery_id: 10, drop_reason: null}
+      - input: ref('stg_board__discovery_verdict_events')
+        rows:
+          - {event_id: 6, proposal_id: 3, kind: Approved, edited: true, kind_changed: false, edit_distance: 10, draft_length: 20, acted_at: '2026-11-10 10:06:00'}
+          - {event_id: 8, proposal_id: 3, kind: Filed, edited: true, kind_changed: true, edit_distance: 15, draft_length: 20, filed_ticket_id: 50, acted_at: '2026-11-10 11:00:00'}
+    expect:
+      rows:
+        - {proposal_id: 3, edit_distance: 15, draft_length: 20, edit_share: 0.75, kind_changed: true, filed_ticket_id: 50}
+
+  # Time to verdict runs from entering NeedsVerdict to leaving it. Active minutes: a minute for the
+  # first event of a sitting, the gaps within it, and a gap over five minutes starts a new sitting -
+  # here 1 + 2 + 3 for the first sitting and 1 for the second (the 40-minute gap is not work). The
+  # second round is still open, so it has no time to verdict yet.
+  - name: discovery_owner_minutes_cap_the_gaps_between_their_events
+    model: int_discovery_verdict_rounds
+    given:
+      - input: ref('stg_board__phase_transitions')
+        rows:
+          - {transition_id: 1, ticket_id: 10, track: Discovery, from_phase: Sifting, to_phase: NeedsVerdict, moved_at: '2026-11-10 09:00:00'}
+          - {transition_id: 2, ticket_id: 10, track: Discovery, from_phase: NeedsVerdict, to_phase: AwaitingWork, moved_at: '2026-11-10 11:00:00'}
+          - {transition_id: 3, ticket_id: 10, track: Discovery, from_phase: Rechecking, to_phase: NeedsVerdict, moved_at: '2026-11-12 09:00:00'}
+          - {transition_id: 4, ticket_id: 11, track: Delivery, from_phase: Refining, to_phase: NeedsReview, moved_at: '2026-11-10 09:00:00'}
+      - input: ref('stg_board__discovery_verdict_events')
+        rows:
+          - {event_id: 1, discovery_id: 10, acted_at: '2026-11-10 10:00:00'}
+          - {event_id: 2, discovery_id: 10, acted_at: '2026-11-10 10:02:00'}
+          - {event_id: 3, discovery_id: 10, acted_at: '2026-11-10 10:05:00'}
+          - {event_id: 4, discovery_id: 10, acted_at: '2026-11-10 10:45:00'}
+          - {event_id: 5, discovery_id: 10, acted_at: '2026-11-12 09:30:00'}
+    expect:
+      rows:
+        - {discovery_id: 10, verdict_round: 1, completed: true, left_to: AwaitingWork, hours_to_verdict: 2.0, owner_minutes: 7.0, owner_events: 4}
+        - {discovery_id: 10, verdict_round: 2, completed: false, left_to: null, hours_to_verdict: null, owner_minutes: 1.0, owner_events: 1}
+
+  # A repeat shares most of its words with something proposed earlier in the same project: 2 repeats
+  # 1 (same discovery), 3 repeats 1 in a later discovery, 4 is about something else, and 5 has the
+  # same words in another project, which is not a repeat.
+  - name: discovery_repeats_match_earlier_titles_in_the_same_project
+    model: int_discovery_repeats
+    given:
+      - input: ref('stg_board__discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, title: 'Keep the place filter when opening an event', draft_title: '', created_at: '2026-11-01 10:00:00'}
+          - {proposal_id: 2, discovery_id: 10, title: 'x', draft_title: 'Keep the place filter after opening an event', created_at: '2026-11-01 10:01:00'}
+          - {proposal_id: 3, discovery_id: 12, title: 'Opening an event keeps the place filter', draft_title: '', created_at: '2026-11-08 10:00:00'}
+          - {proposal_id: 4, discovery_id: 12, title: 'Show the organiser on the card', draft_title: '', created_at: '2026-11-08 10:01:00'}
+          - {proposal_id: 5, discovery_id: 20, title: 'Keep the place filter when opening an event', draft_title: '', created_at: '2026-11-09 10:00:00'}
+      - input: ref('stg_board__discovery_tickets')
+        rows:
+          - {discovery_id: 10, project_key: alpha}
+          - {discovery_id: 12, project_key: alpha}
+          - {discovery_id: 20, project_key: bravo}
+    expect:
+      rows:
+        - {proposal_id: 2, repeat_of_proposal_id: 1, repeat_of_discovery_id: 10}
+        - {proposal_id: 3, repeat_of_proposal_id: 1, repeat_of_discovery_id: 10}
+
+  # The runs behind a discovery are the ones whose lease its rows carry, not merely the last in the
+  # phase: scout run 2 wrote the observations though run 3 scouted later and logged nothing. A rerun
+  # of a rerun belongs to the first discovery's lineage. Cost is complete only when every run of the
+  # discovery has a list price. A visit in an area the route did not name is off the route.
+  - name: discovery_runs_lineage_cost_and_reach
+    model: int_discovery_tickets
+    given:
+      - input: ref('stg_board__discovery_tickets')
+        rows:
+          - {discovery_id: 10, project_key: alpha, track: Discovery, phase: Done, title: 'Plan a month', direction: 'Plan your month', recon_from: null, created_at: '2026-11-01 09:00:00'}
+          - {discovery_id: 11, project_key: alpha, track: Discovery, phase: NeedsVerdict, title: 'Plan a month again', direction: 'Plan your month', recon_from: 'rerun:10', created_at: '2026-11-08 09:00:00'}
+          - {discovery_id: 12, project_key: alpha, track: Discovery, phase: Backlog, title: 'And again', direction: 'Plan your month', recon_from: 'rerun:11', created_at: '2026-11-09 09:00:00'}
+      - input: ref('int_discovery_runs')
+        rows:
+          - {run_id: 1, lease_run_id: 101, discovery_id: 10, phase: Charting, started_at: '2026-11-01 09:01:00', model: cheap, skill_version: c1, list_cost_usd: 0.1, minutes: 1, tokens: 10, experiment_arm: none}
+          - {run_id: 2, lease_run_id: 102, discovery_id: 10, phase: Scouting, started_at: '2026-11-01 09:05:00', model: opus, skill_version: s1, list_cost_usd: 3.0, minutes: 5, tokens: 100, experiment_arm: none}
+          - {run_id: 3, lease_run_id: 103, discovery_id: 10, phase: Scouting, started_at: '2026-11-01 09:20:00', model: other, skill_version: s2, list_cost_usd: 0.9, minutes: 1, tokens: 10, experiment_arm: none}
+          - {run_id: 4, lease_run_id: 104, discovery_id: 10, phase: Sifting, started_at: '2026-11-01 09:30:00', model: opus, effort: high, provider: claude, skill_version: f1, list_cost_usd: 1.0, minutes: 2, tokens: 50, experiment_arm: terse}
+          - {run_id: 5, lease_run_id: 105, discovery_id: 11, phase: Scouting, started_at: '2026-11-08 09:05:00', model: opus, skill_version: s1, list_cost_usd: null, minutes: 5, tokens: 100, experiment_arm: none}
+      - input: ref('stg_board__discovery_observations')
+        rows:
+          - {observation_id: 1, discovery_id: 10, round: 0, lease_run_id: 102}
+          - {observation_id: 2, discovery_id: 10, round: 0, lease_run_id: 102}
+          - {observation_id: 3, discovery_id: 10, round: 1, lease_run_id: 109}
+      - input: ref('stg_board__discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, round: 0, lease_run_id: 104}
+      - input: ref('stg_board__discovery_routes')
+        rows:
+          - {discovery_id: 10, lease_run_id: 101, areas: ['Events', 'Places']}
+      - input: ref('stg_board__discovery_taste_reads')
+        rows:
+          - {taste_read_id: 1, discovery_id: 10, round: 0, lease_run_id: 104, taste_version_number: 2, read_at: '2026-11-01 09:31:00'}
+          - {taste_read_id: 2, discovery_id: 11, round: 0, lease_run_id: 106, taste_version_number: null, read_at: '2026-11-08 09:31:00'}
+      - input: ref('stg_board__discovery_visits')
+        rows:
+          - {visit_id: 1, discovery_id: 10, url_path: '/events', route_pattern: '/events', area: Events, signed_in_as: member, width: '390x844', seconds: 60, lease_run_id: 102}
+          - {visit_id: 2, discovery_id: 10, url_path: '/events/a', route_pattern: '/events/[slug]', area: events, signed_in_as: Member, width: '390x844', seconds: 30, lease_run_id: 102}
+          - {visit_id: 3, discovery_id: 10, url_path: '/events/b', route_pattern: '/events/[slug]', area: Billing, signed_in_as: member, width: '1440x900', seconds: 30, lease_run_id: 102}
+          - {visit_id: 4, discovery_id: 10, url_path: '/about', route_pattern: null, area: null, signed_in_as: null, width: '1440x900', seconds: 10, lease_run_id: 102}
+      - input: ref('int_discovery_verdict_rounds')
+        rows:
+          - {discovery_id: 10, verdict_round: 1, completed: true, owner_minutes: 6.5}
+    expect:
+      rows:
+        - {discovery_id: 10, direction_lineage_id: 10, chart_run_id: 1, scout_run_id: 2, scout_model: opus, sift_run_id: 4, sift_model: opus, sift_skill_version: f1, sift_taste_version: v2, experiment_arm: terse, runs: 4, runs_priced: 4, cost_usd: 5.0, cost_complete: true, observations: 3, scout_observations: 2, visits: 4, pages: 3, areas_reached: 2, roles_reached: 1, widths_reached: 2, off_route_visits: 1, route_judged_visits: 3, owner_minutes: 6.5}
+        - {discovery_id: 11, direction_lineage_id: 10, chart_run_id: null, scout_run_id: 5, scout_model: opus, sift_run_id: null, sift_model: null, sift_skill_version: null, sift_taste_version: 'no file', experiment_arm: none, runs: 1, runs_priced: 0, cost_usd: null, cost_complete: false, observations: 0, scout_observations: 0, visits: 0, pages: 0, areas_reached: 0, roles_reached: 0, widths_reached: 0, off_route_visits: 0, route_judged_visits: 0, owner_minutes: 0}
+        - {discovery_id: 12, direction_lineage_id: 10, chart_run_id: null, scout_run_id: null, scout_model: null, sift_run_id: null, sift_model: null, sift_skill_version: null, sift_taste_version: 'not recorded', experiment_arm: none, runs: 0, runs_priced: 0, cost_usd: null, cost_complete: false, observations: 0, scout_observations: 0, visits: 0, pages: 0, areas_reached: 0, roles_reached: 0, widths_reached: 0, off_route_visits: 0, route_judged_visits: 0, owner_minutes: 0}
+
+models:
+  - name: int_discovery_proposal_verdicts
+    description: Each proposal's verdict from the owner's append-only event log - the latest decision, a restore, the edit as filed, new to me, a changed mind.
+    columns:
+      - name: proposal_id
+        tests: [unique, not_null]
+      - name: verdict
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: ['approved', 'rejected', 'snoozed', 'undecided']
+      - name: edit_share
+        tests: [is_fraction]
+  - name: int_discovery_verdict_rounds
+    description: Each time a discovery waited for a verdict, how long it waited, and the owner's active minutes on it, estimated from their own events.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [discovery_id, verdict_round]
+    columns:
+      - name: owner_minutes
+        tests: [at_least]
+  - name: int_discovery_repeats
+    description: A proposal whose title shares most of its words with one written earlier in the same project.
+    columns:
+      - name: proposal_id
+        tests: [unique, not_null]
+      - name: similarity
+        tests: [is_fraction]
+  - name: int_discovery_runs
+    description: Every worker run on a discovery ticket, with the lease id its rows carry.
+    columns:
+      - name: run_id
+        tests: [unique, not_null]
+  - name: int_discovery_tickets
+    description: One discovery with its direction lineage, the runs behind its chart, scout and sift, its cost, its reach and the owner's time on its verdicts.
+    columns:
+      - name: discovery_id
+        tests: [unique, not_null]
+      - name: runs_priced
+        tests: [at_least]
