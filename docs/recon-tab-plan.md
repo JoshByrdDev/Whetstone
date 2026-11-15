@@ -1,0 +1,311 @@
+# Recon: where to point the next scout
+
+Implementation plan. A tab for the before and after of scouting on the Discovery track
+(`docs/discovery-track-plan.md`). The name is the tab's alone: **Scout** is the phase that drives
+the browser, **Recon** is the page that says where it has been and where it should go next. The two
+are never called by each other's name.
+
+Read the discovery plan first - especially "Set up for what comes next: the Recon tab" and "What is
+measured". This plan builds on what step 1 of that plan records, and adds only what Recon cannot
+work without.
+
+## What it is for
+
+**Choosing the next direction.** A pilot on Opus 5.5 found that the wording of a direction
+steers what a scout finds more than anything else the owner controls, so the choice of what to
+scout next is a lever, and Recon's job is to pull it well. Everything on the page is there as a
+reason for a suggestion: coverage says where nobody has looked, staleness says what has changed
+since someone did, yield says where looking has paid. None of it is a dashboard for its own sake.
+Cost and trend reporting by model, skill version and A/B arm belong to step 5's Metrics section.
+
+It has to be useful from the first day, when there are no runs at all. It is: with areas and roles
+configured and nothing scouted, every cell is a gap, and the suggestions say where to start.
+
+## Decided with the owner
+
+| Question | Decision |
+|---|---|
+| What it is for, first | Pointing the next scout. Coverage, staleness and yield are shown as the reasons for each suggestion |
+| The unit of the map | **Area × role × width.** Areas from `discovery.areas`, roles from a new `discovery.roles`, width in two buckets. Route patterns are the drill-down inside an area |
+| Which area a visit is in | Worked out by the board from the visit's URL against each area's `pages` patterns, at refresh time - not the scout's guess. History re-maps when areas are redefined |
+| Staleness | **The area's code changed since it was scouted**: commits on the ticket's base ref after the last-scouted commit that touch the area's `code` paths, with the Delivery tickets they belong to. An area nothing has touched stays fresh however old its visit is |
+| Where the numbers come from | **New marts, built first.** `refresh.py` loads the Discovery tables, the areas and roles, and each project's base history; dbt does the matching, staleness, yield and ranking under test. The board stays a reader that filters and never aggregates, as it is for Metrics |
+| What "Scout this" does | Opens the existing new-ticket form on the Discovery track with the direction filled in. The owner edits the wording and files. The ticket records which suggestion it came from |
+| Who writes a suggestion's words | **Reuse, else a stub.** A direction that paid off in this area is offered again word for word. A gap with no past direction gets a stub naming the gap, for the owner to rewrite as a job. No agent |
+| A rerun copies | The direction only, linked to the discovery it came from. Chart writes a fresh route against the product as it is now. Replaying the same route is Recheck's job |
+| Where it lives | A top-level **Recon** tab beside Steward, shown only when some project has a `discovery` block, with a project picker. Coverage does not add up across projects |
+| Roles | `discovery.roles` in the project's config. Chart picks from it; visits match it case-insensitively; anything unmatched is shown as *other* so the list can be fixed |
+| Widths | Two buckets, **phone** and **desk**, split at 640 - the board's own `NARROW_PX` |
+| Ranking | Plain rules in a fixed order, each item showing why it is where it is (below). No weighted score |
+| Setting one aside | **Not now** on a suggestion hides it until its area's code changes again, or until a date. An owner action: a REST route with no tool behind it, recorded as an event |
+| In v1 | Suggestions, the coverage grid with its area drill-down, yield by area and by direction |
+| Later | Before/after of an area; cold showcase cases; yield cut by model, skill version and arm |
+
+## The page
+
+Three parts, top to bottom, for one project at a time.
+
+### 1. Scout next
+
+A ranked list of suggestions. Each row has:
+
+- its **kind**: *rerun* (a direction that paid off, in an area that has changed since), *gap* (an
+  area × role × width cell nobody has scouted), or *changed* (an area scouted before, changed since,
+  with no direction worth rerunning);
+- **the direction**, either the past one's words or the gap stub;
+- **the reasons**, as short facts rather than a score: "scouted 3 Oct on a1b2c3d", "14 commits, 9
+  files in its code since, from 3 tickets", "last run: 2 approved, 1 new to me", "never as admin on
+  a phone";
+- **Scout this**, which opens the new-ticket form (below), and **Not now**.
+
+**The order is these rules, in this order**, computed in dbt (`mart_recon_suggestions.rank`), with
+each row's `reasons` saying which rule put it there:
+
+1. *Rerun*: an area whose code has changed since it was scouted, which has a past direction with at
+   least one approved proposal. The direction offered is the best of them by approved count, then
+   new-to-me count, then the most recent.
+2. *Gap* in an area whose code has changed in the last 30 days (by commit date on the base).
+3. *Gap* anywhere else.
+4. *Changed*: an area scouted before, changed since, whose past directions yielded nothing approved.
+
+Inside each rule: more files changed first, then the cell scouted longest ago (never before ever).
+**Cooling**: an area whose last three discoveries had no approved proposal sinks to the bottom
+of whatever rule it is under and is marked *cooling*, so the page says out loud that scouting there
+has stopped paying - the "Repeats" signal from the discovery plan's measures table, in the place it
+is acted on.
+
+Rows are collapsed per area: one area's six empty cells are one *gap* row listing the six, not six
+rows. Expanding it lists the cells.
+
+### 2. Coverage
+
+A grid: a row per area, a column per role × width (signed out on a phone, signed out at a desk, a
+member on a phone, ...). Each cell shows when it was last scouted, whether its area has changed
+since, and its yield (approved / shown). An empty cell is a gap. Areas with no `code` paths show
+coverage but no staleness, and say so once in the row. An *(unmapped)* row collects visits whose
+URL matches no area's patterns, and an *other* column collects roles that match none of
+`discovery.roles`. Both are there so the config can be fixed, not as coverage.
+
+Picking an area opens its drill-down in a side column (`orbit-flank`): the route patterns visited
+in it, each by role × width with the last visit and total seconds; the discoveries that went
+there, each with its direction and yield; and the commits and tickets since it was last scouted.
+
+### 3. Yield
+
+Two small tables. By **area**: discoveries, proposals shown, approved, rejected by reason, new to
+me, filed, and cost (the discoveries' runs, from `fct_runs`). By **direction**: the same, per
+direction *lineage* - a direction and every rerun of it (`Ticket.ReconFrom` = `rerun:<id>`) count
+together, so a direction's record carries across its reruns. A direction row has **Scout again**,
+which is a rerun suggestion by hand.
+
+## Scout this, and where a ticket came from
+
+"Scout this" opens `CreateTicketModal` on the Discovery track with the direction in the
+description, the suggestion's area, role and width in a one-line note under it ("From Recon: a gap
+in Billing as admin on a phone"), and the suggestion's **key** carried along. The owner edits and
+files through the existing create route. Nothing new can file a discovery.
+
+The key is stored on the ticket as **`Ticket.ReconFrom`** (nullable string), set only by the REST
+create route; no MCP tool takes it or shows it. Keys are stable strings:
+
+| Kind | Key |
+|---|---|
+| Gap | `gap:<area>:<role>:<width>` (a collapsed row's key is `gap:<area>`) |
+| Changed | `changed:<area>` |
+| Rerun | `rerun:<discovery ticket id>` |
+
+It does two things. The reader hides a suggestion while an open (not Done) discovery carries its
+key, which is a filter on the live tickets table, so filing takes the row off the page at once
+rather than at the next refresh. And yield follows it: a rerun's results count toward the direction
+it reran.
+
+## Not now
+
+`POST /api/recon/{project}/dismiss` with `{ key, until? }` and `POST .../undismiss` with `{ key }`
+- REST, no tool behind them, like the verdict. Each writes a row to **`ReconDismissalEvents`**
+(`ProjectKey`, `SuggestionKey`, `Kind` Dismissed / Undone, `AreaHeadCommit`, `Until`, `At`), append
+only. The `AreaHeadCommit` is the latest commit that touched the area's code when the owner pressed
+it, which each suggestion row carries (`area_head_commit`).
+
+The reader drops a suggestion whose latest event is *Dismissed* while its `area_head_commit` is still
+the one recorded and `Until` (if set) is in the future. That is filtering, not aggregating, so it
+belongs in the reader and takes effect without a refresh. A set-aside list at the foot of the
+section shows what is hidden and offers undo.
+
+## What the record needs that step 1 does not have
+
+Small, and all of it in step R1 below:
+
+- **`discovery.roles`** in `DiscoveryConfig`: an array of role names (`"signed out"`, `"member"`,
+  `"admin"` - the project's own words). `get_discovery` returns the project's roles and area names,
+  so Chart picks `SignedInAs` from the list and the scout logs the same word.
+- **Chart and scout skills**: Chart's `signedInAs` is one of the project's roles; the scout's
+  `signedInAs` on `log_visit` and `log_observation` is the route's. A **pipeline rule**: it goes into
+  the templates and every project's copy word for word (CLAUDE.md, "A skill exists more than once").
+- **`Ticket.ReconFrom`**, and `ReconDismissalEvents`, with their migration.
+- Nothing else. Area and route pattern are derived from the URL at refresh time; the scout's own
+  `Area` and `RoutePattern` stay recorded and are used only where the URL matches no area.
+
+## The marts
+
+### Loading
+
+`refresh.py` adds to `BOARD_TABLES`: `DiscoveryRoutes`, `DiscoveryVisits`, `DiscoveryObservations`,
+`DiscoveryProposals`, `DiscoveryVerdictEvents`, `ReconDismissalEvents` (the last for history only;
+the reader applies dismissals live), and `Tickets.ReconFrom`. A table the database does not have yet
+loads empty, as the loader already does.
+
+Two inputs it cannot read for itself, because the rules for them live in C#:
+
+- **Each project's areas and roles**, from the merged project config.
+- **Each project's base ref and repos.** Which ref is "the base" is written twice already
+  (`Resolve-BaseRef`, `BaseRefAsync`), and is per ticket on a project with slice branches or a
+  ticket base of its own (CLAUDE.md, "The base is not always origin's"). Recon's staleness is
+  measured against the **project's** base, the ref the product is shown from, and it must not
+  become a third copy of that rule.
+
+So `AnalyticsService` writes **`<data root>/analytics/recon-inputs.json`** before it starts a refresh:
+per project with a `discovery` block, its key, its areas (name, pages, code), roles, and per repo
+the folder and the resolved base ref (asked of `TicketGitService.BaseRefAsync` the way the board
+already does). `refresh.py` reads that file. It does not open `project.json` itself. A refresh
+started by hand without the file loads no Recon inputs, logs that, and the Recon marts build empty.
+
+From that file, `refresh.py` loads per project and repo:
+
+- **`raw.recon_commits`**: `git log --first-parent --name-only` on the base ref, from the oldest
+  commit any visit recorded (or 90 days back when there are none) to the tip, one row per commit
+  and file, with each commit's first-parent position so that "after" is ancestry, not clock time.
+  A visit's commit that is not on the base's first-parent line is placed by
+  `git merge-base --is-ancestor`, and if it is not an ancestor at all (a rewritten base), staleness
+  for that visit is *unknown* and is shown as such, never as fresh.
+- **`raw.recon_areas`** and **`raw.recon_roles`**, as given.
+
+On a project of several repos an area's `code` path starts with its repo's folder
+(`alpha-api/src/Billing/**`), the rule for any path that stands on its own; commits are loaded per
+repo and matched to the code paths of that repo.
+
+### Models
+
+| Model | Grain | What it says |
+|---|---|---|
+| `stg_board__discovery_*` | one per table | The Discovery tables, typed. Step 5's funnel builds on these too, so they are written once, here |
+| `int_recon_visit_area` | visit | The visit's area (most specific `pages` match on the URL's path; the scout's own `Area` when none matches; *(unmapped)* when neither), route pattern (the matching pattern, else the scout's), role (matched to `discovery.roles`, else *other*), width bucket |
+| `fct_discovery_proposals` | proposal | Its discovery, area (from its observations' URLs, majority; else its own `Area` matched to an area name), latest verdict from the event log, new to me, filed ticket, the discovery's direction lineage. Shared with step 5 |
+| `mart_recon_coverage` | project × area × role × width | Last scouted at and on which commit, discoveries, visits, seconds, commits and files changed in the area's code since, the tickets those commits belong to (`stg_board__ticket_commits`), approved / shown |
+| `mart_recon_patterns` | project × area × route pattern × role × width | The drill-down: visits, seconds, last at |
+| `mart_recon_yield` | project × area, and project × direction lineage, per `window_days` | Discoveries, shown, approved, rejected by reason, new to me, filed, cost |
+| `mart_recon_suggestions` | project × suggestion key | Kind, area, the cells it covers, direction text, source discovery for a rerun, `rank`, `rule`, `reasons` (a JSON list of short facts), `cooling`, `area_head_commit` |
+
+**Scoping.** Recon is per project and never shows "all projects", so the coverage, patterns and
+suggestions marts carry `project_key` and are not run through `scoped()`: coverage is all of
+history by definition. `mart_recon_yield` is cut by `window_days` with the same `scoped()` macro as
+every other mart, keeping only its own project rows and the Discovery track.
+
+**The width split is written twice and the two must agree**: 640 in the dbt model and `NARROW_PX`
+in `ClientApp/src/hooks/useNarrow.ts`. Each names the other in a comment.
+
+**Published**: the new marts go into `PUBLISHED` in `refresh.py` and `AnalyticsService.Marts`,
+which are already a pair that must agree.
+
+**Tests** (dbt, in `analytics/tests`): a URL matched by two areas' patterns lands in the more
+specific one; a visit on a commit off the base's line is *unknown*, not fresh; an area with no code
+paths is never stale and never a *changed* suggestion; a gap disappears from the suggestions when a
+visit covers it; the rule order holds; cooling needs three discoveries, not three visits. Fixtures
+use `alpha` and `bravo` as project keys and placeholder routes.
+
+**Freshness**, as on Metrics: opening the tab refreshes marts older than `StaleAfter` (15 minutes),
+the page shows when they were built, and there is the same Refresh. A discovery reaching
+`NeedsVerdict` is what usually makes the page out of date; marking the marts stale then is a
+refinement for later, not v1.
+
+## Routes
+
+All reads go through `AnalyticsService`, which filters and sorts and never aggregates:
+
+| Route | Reads |
+|---|---|
+| `GET /api/recon/projects` | Projects with a `discovery` block, and whether each has areas and roles. Shows or hides the tab |
+| `GET /api/recon/{project}/suggestions` | `mart_recon_suggestions`, minus those with an open discovery carrying their key and those set aside (live tables) |
+| `GET /api/recon/{project}/coverage` | `mart_recon_coverage` |
+| `GET /api/recon/{project}/areas/{area}` | `mart_recon_patterns`, the area's discoveries and its commits since |
+| `GET /api/recon/{project}/yield?days=` | `mart_recon_yield` |
+| `POST /api/recon/{project}/dismiss`, `.../undismiss` | Writes `ReconDismissalEvents`. No tool |
+
+**No MCP tool reads or writes any of it** in v1. A worker has no use for it, and the steward
+takes no part in Discovery.
+
+**QA isolation**: none of these reach past the data folder - they read the copy's own marts and
+database and write one local table - so none belongs in `QaIsolation`'s table. The refresh's git
+reads on a QA copy are of its placeholder projects. Say so in the routes' comment, so the next
+person does not wonder.
+
+## Look and phone
+
+Built from the system (CLAUDE.md, "The look is a system"); nothing picks its own colour or timing.
+
+- Suggestion rows and area rows are `orbit-pick`, with the open area `aria-current="true"`; *Not
+  now*, *Scout again* and the cell chips are `orbit-tap`; *Scout this* is the page's one
+  `orbit-primary`. The area drill-down is an `orbit-flank` grid. Switching project or yield window
+  is `orbit-swap` keyed on it. The new-ticket form is already an `orbit-veil`.
+- Cell states (gap, fresh, changed, unknown, cooling) are named tokens in `src/theme/`, not
+  literal colours, and each one also has a word or a mark, not colour alone.
+- **On a phone** (below `NARROW_PX`): Scout next first and full width; the grid folds to one card
+  per area with its role × width cells as a wrap of chips; the drill-down replaces the list rather
+  than flanking it; yield's tables become one card per row. Nothing appears only on hover - a
+  reason that would be a tooltip at a desk is written on the row. Check at 390px with
+  `document.documentElement.scrollWidth` equal to the viewport's.
+
+## Empty and broken states, said out loud
+
+| State | The page says |
+|---|---|
+| No project has a `discovery` block | The tab is not shown |
+| A `discovery` block with no `areas` | "Name this product's areas first", with the shape of an area (name, pages, code), and no grid |
+| Areas but no `roles` | The grid has one *any role* column, with a line saying gaps by role need `discovery.roles` |
+| Analytics cannot run here (no uv) | The analytics status's own reason, as on Metrics, linking the Setup check |
+| Marts built before the inputs file existed | "Recon has not been built yet - Refresh" |
+| Nothing scouted yet | Every cell a gap; the suggestions are gaps, in rule order |
+
+No new dependency: Recon needs what Metrics needs, which `docs/setup.md` and the Setup check
+already list.
+
+## Build order
+
+1. **R1 - the record.** `discovery.roles` in `DiscoveryConfig`; `get_discovery` returns roles and
+   area names; the Chart and Scout skill rule, in the templates and every project's copy;
+   `Ticket.ReconFrom` and `ReconDismissalEvents` with their migration; `ReconFrom` on the create
+   route only. Tests: `ReconFrom` cannot be set through MCP; roles parse.
+2. **R2 - the marts.** `recon-inputs.json` from `AnalyticsService`; the loaders; the staging,
+   intermediate and mart models above with their dbt tests; published.
+3. **R3 - the routes.** Readers, the live filters (open discovery, dismissals), the dismiss routes.
+   C# tests under `Recon` (`dotnet test Whetstone.Tests -c Release --filter "FullyQualifiedName~Recon"`).
+4. **R4 - the tab.** Picker, Scout next, coverage and drill-down, yield, the prefilled form, empty
+   states, phone layout. Rebuild and commit `wwwroot`. Verified on the QA copy with a placeholder
+   project given a `discovery` block, areas, roles and a few seeded visits - never against 5338.
+
+Recon does not wait for the discovery plan's steps 2 to 5. It does take two pieces of step 5 early
+(the Discovery staging models and `fct_discovery_proposals`), and step 5 builds on those rather than
+beside them.
+
+## Later
+
+- **Before and after of an area**: its timeline of discoveries, proposals filed, tickets done, and
+  shots then and now. Bounded by retention: past Complete only approved proposals keep clips and
+  shots, for 90 days, and a rejected one keeps one still. Recheck (discovery step 2) is what gives
+  an "after".
+- **Cold showcase cases**: `discovery.casesIndex`, a path in the project to a JSON list of case ids
+  with their areas, loaded by `refresh.py`, so cases no run has touched show in the drill-down and
+  become a kind of suggestion.
+- **Yield cut by model, effort, skill version and A/B arm**, once step 5's marts carry them.
+- **Snoozed proposals that have come due**, offered as a suggestion in their area.
+- **Agent-drafted directions** for gaps, written as jobs. Not before the stub-and-rewrite has shown
+  whether the owner's rewrites are what makes a direction pay.
+- **Marking the marts stale** when a discovery reaches `NeedsVerdict`.
+
+## Open for whoever builds it
+
+- The `pages` pattern syntax `discovery.areas` uses is not written down yet. Settle it in R2
+  (`*` for one segment, `**` for any, `[param]` for one segment is the likely shape) and document
+  it beside `DiscoveryArea`.
+- Whether the gap stub is one sentence per cell or one per area. Lean towards per area, naming
+  the missing cells: "Nobody has used Billing as an admin, or as anyone on a phone."
