@@ -70,7 +70,7 @@ props as (
         count(*) filter (where approved and verdict_closed and new_to_me)           as new_to_me,
         count(*) filter (where approved and verdict_closed and new_to_me is not null) as new_to_me_asked,
         count(*) filter (where approved and verdict_closed and edited)              as edited,
-        median(edit_share) filter (where approved and verdict_closed)               as median_edit_share,
+        median(edit_share) filter (where approved and verdict_closed and edited)    as median_edit_share,
         count(*) filter (where filed)                                               as filed,
         count(*) filter (where filed_ticket_id is not null)                         as filed_tickets,
         count(*) filter (where filed_ticket_done)                                   as filed_tickets_done,
