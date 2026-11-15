@@ -132,6 +132,7 @@ builder.Services.AddDbContext<DashboardDbContext>((sp, options) =>
 });
 builder.Services.AddScoped<TicketService>();
 builder.Services.AddScoped<DiscoveryService>();
+builder.Services.AddScoped<DiscoveryTaste>();
 // A project's steward: what it may do and every limit on it. Its git is the ticket git service,
 // reached through an interface so the rules can be tested without a repository.
 builder.Services.AddSingleton<IStewardGit>(sp => sp.GetRequiredService<TicketGitService>());

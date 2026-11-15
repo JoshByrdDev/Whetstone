@@ -18,6 +18,18 @@ public record DiscoveryPinRequest(bool Pinned);
 public record DiscoveryRouteEditRequest(string? Persona = null, IReadOnlyList<string>? Jobs = null, string? SignedInAs = null,
     IReadOnlyList<string>? StartCases = null, IReadOnlyList<string>? Widths = null, string? Notes = null, IReadOnlyList<string>? Areas = null);
 
+/// <summary>The owner's taste file, written whole.</summary>
+public record DiscoveryTasteEditRequest(string Text);
+
+/// <summary>The owner's "fold at the next run", or taking it back.</summary>
+public record DiscoveryTasteFoldAsk(bool Requested);
+
+/// <summary>A worker run asking whether a fold is due, and on which ticket's run it rides.</summary>
+public record DiscoveryTasteFoldBeginRequest(int? TicketId = null);
+
+/// <summary>The fold's answer from the run that holds the claim, or the error it got instead of one.</summary>
+public record DiscoveryTasteFoldFinishRequest(string Claim, string? Reply = null, string? Error = null, int? TicketId = null);
+
 /// <summary>
 /// The owner's side of a discovery (docs/discovery-track-plan.md). Reading the record, and the
 /// verdict and Complete - which have no MCP tool behind them, so only a person approves, files or
@@ -30,7 +42,7 @@ public static class DiscoveryEndpoints
 
     public static void MapDiscoveryEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/tickets/{id:int}/discovery", async (int id, DiscoveryService svc, DashboardPaths paths) =>
+        app.MapGet("/api/tickets/{id:int}/discovery", async (int id, DiscoveryService svc, DashboardPaths paths, DashboardDbContext db) =>
         {
             // A discovery waiting on work that settled while nothing was watching moves on now.
             await svc.SettleAsync(id);
@@ -77,6 +89,9 @@ public static class DiscoveryEndpoints
                 // Which recheck it is on (0 before the first), how many get a verdict, and the goals
                 // the next (or current) recheck asks about.
                 recheck = new { round = v.Round, roundsWithVerdict = v.RecheckRounds, goals = v.Goals },
+                // Which taste version each Sift and Recheck run of this discovery read (step 4).
+                tasteReads = await db.DiscoveryTasteReads.AsNoTracking().Where(r => r.TicketId == id).OrderBy(r => r.Id)
+                    .Select(r => new { r.Id, r.RunId, r.Round, r.Phase, r.VersionId, r.VersionNumber, r.At }).ToListAsync(),
             });
         });
 
@@ -162,6 +177,64 @@ public static class DiscoveryEndpoints
         {
             try { return Results.Ok(new { phase = (await svc.ApproveRouteAsync(id)).ToString() }); }
             catch (DiscoveryService.Refused e) { return Results.BadRequest(new { error = e.Message }); }
+        });
+
+        // ---- the taste file (step 4) -----------------------------------------------------------
+        // The owner's routes - reading, editing, reverting, asking for a fold - have no tool behind
+        // them. The fold's begin and finish are called by the worker's script around the model call
+        // it makes, not by an agent: the board writes, commits and versions the file either way. None
+        // reaches past the data folder - the commit is in the project's own folder - and the board
+        // starts no model here, so none needs QaIsolation's table.
+        static object Line(DiscoveryTasteVersion v) => new
+        {
+            v.Id, v.Number, source = v.Source.ToString(), v.Hash, v.Commit, v.CommitNote, v.Verdicts, events = v.EventIds.Count,
+            v.Suggestions, v.RevertOf, v.RodeOnTicketId, v.At,
+        };
+
+        app.MapGet("/api/discovery/projects/{key}/taste", async (string key, DiscoveryTaste taste) =>
+        {
+            try { return Results.Ok(await taste.StatusAsync(key)); }
+            catch (DiscoveryTaste.Refused e) { return Results.NotFound(new { error = e.Message }); }
+        });
+
+        app.MapGet("/api/discovery/projects/{key}/taste/versions/{vid:int}", async (string key, int vid, DiscoveryTaste taste) =>
+        {
+            try
+            {
+                var v = await taste.VersionAsync(key, vid);
+                return Results.Ok(new { v.Id, v.Number, source = v.Source.ToString(), v.Text, v.Hash, v.Commit, v.Suggestions, v.At });
+            }
+            catch (DiscoveryTaste.Refused e) { return Results.NotFound(new { error = e.Message }); }
+        });
+
+        app.MapPut("/api/discovery/projects/{key}/taste", async (string key, DiscoveryTasteEditRequest req, DiscoveryTaste taste) =>
+        {
+            try { return Results.Ok(Line(await taste.OwnerEditAsync(key, req.Text))); }
+            catch (DiscoveryTaste.Refused e) { return Results.BadRequest(new { error = e.Message }); }
+        });
+
+        app.MapPost("/api/discovery/projects/{key}/taste/versions/{vid:int}/restore", async (string key, int vid, DiscoveryTaste taste) =>
+        {
+            try { return Results.Ok(Line(await taste.RevertAsync(key, vid))); }
+            catch (DiscoveryTaste.Refused e) { return Results.BadRequest(new { error = e.Message }); }
+        });
+
+        app.MapPut("/api/discovery/projects/{key}/taste/fold-request", async (string key, DiscoveryTasteFoldAsk req, DiscoveryTaste taste) =>
+        {
+            try { return Results.Ok(new { requested = await taste.RequestFoldAsync(key, req.Requested) }); }
+            catch (DiscoveryTaste.Refused e) { return Results.BadRequest(new { error = e.Message }); }
+        });
+
+        app.MapPost("/api/discovery/projects/{key}/taste/fold/begin", async (string key, DiscoveryTasteFoldBeginRequest? req, DiscoveryTaste taste) =>
+        {
+            try { return Results.Ok(await taste.BeginFoldAsync(key, req?.TicketId)); }
+            catch (DiscoveryTaste.Refused e) { return Results.BadRequest(new { error = e.Message }); }
+        });
+
+        app.MapPost("/api/discovery/projects/{key}/taste/fold/finish", async (string key, DiscoveryTasteFoldFinishRequest req, DiscoveryTaste taste) =>
+        {
+            try { return Results.Ok(Line(await taste.FinishFoldAsync(key, req.Claim, req.Reply, req.Error, req.TicketId))); }
+            catch (DiscoveryTaste.Refused e) { return Results.BadRequest(new { error = e.Message }); }
         });
 
         app.MapPost("/api/tickets/{id:int}/discovery/complete", async (int id, DiscoveryService svc) =>

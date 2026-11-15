@@ -74,6 +74,7 @@ function Format-DiscoveryNote {
     }
     if ($Skill -eq 'sift') { [void]$lines.Add("Keep at most $MaxProposals proposals; everything else goes on the dropped list with its reason.") }
     if ($Skill -eq 'recheck') { [void]$lines.Add("Check every goal get_discovery lists (check_goal), and propose at most $MaxProposals things - fix-ups and new - held to the sift's rules.") }
+    if ($Skill -eq 'sift' -or $Skill -eq 'recheck') { [void]$lines.Add("Read get_discovery's taste before you cut and rank: it is what this owner's verdicts have taught about what they want proposed.") }
     $named = @($Areas | Where-Object { $_ -and $_.name })
     if ($named.Count -gt 0) {
         [void]$lines.Add("The project names its areas; tag what you log with one of: " + (($named | ForEach-Object {
@@ -83,4 +84,52 @@ function Format-DiscoveryNote {
     }
     if ($lines.Count -eq 0) { return '' }
     return "`n" + (($lines | ForEach-Object { "- $_" }) -join "`n")
+}
+
+# ---- The taste fold (step 4) ---------------------------------------------------------------------
+
+# Fold the owner's verdicts into the project's taste file, when a fold is due. Rides on the back of a
+# worker run - any run of the project, on the board host - the way the notes store's maintenance rides
+# on reflection: the reflection command and the worktree are already set up, and it is outside the
+# run's measured window. The board decides whether one is due and what the model is told
+# (/taste/fold/begin), and it checks, writes, commits and versions what comes back (/taste/fold/finish);
+# this only runs the model between the two. A refusal or a failure folds nothing, and the verdicts wait
+# for the next run. Never throws.
+#
+#   -Board   { param($Path, $Body) ... } posting JSON to the board and returning the parsed answer -
+#            injectable, so the tests can answer for it.
+#   -Ask     { param($Prompt) ... } returning the model's reply - injectable likewise.
+# Returns the outcome in a word, for the log and the tests: 'not-due', 'folded', 'refused', 'failed'.
+function Invoke-DiscoveryTasteFold {
+    param([string]$ProjectKey, [int]$TicketId = 0, [scriptblock]$Board, [scriptblock]$Ask, [scriptblock]$Log = { param($m) })
+
+    if (-not $ProjectKey -or -not $Board -or -not $Ask) { return 'not-due' }
+    try {
+        $begin = & $Board "/api/discovery/projects/$ProjectKey/taste/fold/begin" @{ ticketId = $TicketId }
+    }
+    catch { & $Log "  Taste fold: could not ask the board - $($_.Exception.Message)"; return 'failed' }
+    if (-not $begin -or -not $begin.due) { return 'not-due' }
+
+    & $Log "--- Taste fold ($($begin.reason)) ---"
+    $reply = ''
+    $err = $null
+    try { $reply = "$(& $Ask ([string]$begin.prompt))".Trim() }
+    catch { $err = $_.Exception.Message }
+    if (-not $err -and -not $reply) { $err = 'the model answered nothing (timed out, or refused)' }
+
+    $body = @{ claim = [string]$begin.claim; ticketId = $TicketId }
+    if ($err) { $body.error = $err } else { $body.reply = $reply }
+    try {
+        $done = & $Board "/api/discovery/projects/$ProjectKey/taste/fold/finish" $body
+        if ($err) { & $Log "  Taste fold: $err - nothing folded"; return 'failed' }
+        & $Log "  Taste fold: version $($done.number) written ($($done.verdicts) verdicts)"
+        return 'folded'
+    }
+    catch {
+        $why = $_.Exception.Message
+        try { if ($_.ErrorDetails.Message) { $why = ($_.ErrorDetails.Message | ConvertFrom-Json).error } } catch { }
+        & $Log "  Taste fold: not written - $why"
+        if ($err) { return 'failed' }
+        return 'refused'
+    }
 }

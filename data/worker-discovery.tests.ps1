@@ -70,6 +70,61 @@ Check 'the recheck is told the cap' ($recheck -match 'at most 3 things') $true
 Check 'the recheck records too' ($recheck -match 'browser_start_video') $true
 Check 'nothing to say is empty' (Format-DiscoveryNote -Skill 'chart' -Commit '') ''
 
+Check 'the sift is told to read the taste' ($sift -match "get_discovery's taste") $true
+Check 'the recheck is told to read the taste' ($recheck -match "get_discovery's taste") $true
+Check 'the chart is not' ((Format-DiscoveryNote -Skill 'chart' -Commit 'abc') -match 'taste') $false
+
+# --- the taste fold ---------------------------------------------------------------------------
+# The board answers for itself here: what was posted where is kept, so each check can read it back.
+$global:posted = @()
+function New-Board {
+    param($Begin, [switch]$RefuseFinish)
+    return {
+        param($Path, $Body)
+        $global:posted += , @($Path, $Body)
+        if ($Path -like '*/fold/begin') { return $Begin }
+        if ($RefuseFinish) { throw 'The fold wrote 52 lines; Learned is kept to 40.' }
+        return [pscustomobject]@{ number = 3; verdicts = 10 }
+    }.GetNewClosure()
+}
+$global:asked = $null
+$ask = { param($Prompt) $global:asked = $Prompt; return "- Wants proposals at the scale of a real month (3 approved)" }
+
+$global:posted = @(); $global:asked = $null
+$r = Invoke-DiscoveryTasteFold -ProjectKey 'alpha' -TicketId 7 -Board (New-Board ([pscustomobject]@{ due = $false; reason = '3 of 10' })) -Ask $ask
+Check 'not due: nothing is asked of the model' $global:asked $null
+Check 'not due: the outcome says so' $r 'not-due'
+Check 'not due: only the begin is posted' $global:posted.Count 1
+Check 'the begin names the project' ($global:posted[0][0]) '/api/discovery/projects/alpha/taste/fold/begin'
+Check 'the begin names the run it rides on' ($global:posted[0][1].ticketId) 7
+
+$global:posted = @(); $global:asked = $null
+$due = [pscustomobject]@{ due = $true; reason = '10 verdicts to fold.'; claim = 'c1'; prompt = 'FOLD THESE' }
+$r = Invoke-DiscoveryTasteFold -ProjectKey 'alpha' -TicketId 7 -Board (New-Board $due) -Ask $ask
+Check 'due: the model is given the board''s prompt' $global:asked 'FOLD THESE'
+Check 'due: the reply goes back with the claim' ($global:posted[1][1].claim) 'c1'
+Check 'due: the reply is what the model said' ($global:posted[1][1].reply) '- Wants proposals at the scale of a real month (3 approved)'
+Check 'due: the finish goes to the finish route' ($global:posted[1][0]) '/api/discovery/projects/alpha/taste/fold/finish'
+Check 'due: folded' $r 'folded'
+
+$global:posted = @()
+$r = Invoke-DiscoveryTasteFold -ProjectKey 'alpha' -Board (New-Board $due) -Ask { param($Prompt) '' }
+Check 'an empty answer is reported as an error, not a reply' ([bool]$global:posted[1][1].error) $true
+Check 'and carries no reply' ($global:posted[1][1].ContainsKey('reply')) $false
+Check 'an empty answer folds nothing' $r 'failed'
+
+$global:posted = @()
+$r = Invoke-DiscoveryTasteFold -ProjectKey 'alpha' -Board (New-Board $due) -Ask { param($Prompt) throw 'login expired' }
+Check 'a failed model call lets the claim go with its reason' ($global:posted[1][1].error) 'login expired'
+Check 'and is failed' $r 'failed'
+
+$r = Invoke-DiscoveryTasteFold -ProjectKey 'alpha' -Board (New-Board $due -RefuseFinish) -Ask $ask
+Check 'an answer the board refuses is refused, and does not throw' $r 'refused'
+
+$r = Invoke-DiscoveryTasteFold -ProjectKey 'alpha' -Board { param($Path, $Body) throw 'connection refused' } -Ask $ask
+Check 'a board that cannot be reached is a failure, not a crash' $r 'failed'
+Check 'no project, nothing asked' (Invoke-DiscoveryTasteFold -ProjectKey '' -Board (New-Board $due) -Ask $ask) 'not-due'
+
 Write-Host ""
 if ($script:fail -eq 0) { Write-Host "ALL $($script:total) CHECKS PASSED" -ForegroundColor Green }
 else { Write-Host "$($script:fail) of $($script:total) FAILED" -ForegroundColor Red }

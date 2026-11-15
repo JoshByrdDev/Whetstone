@@ -58,6 +58,14 @@ public sealed record DiscoveryConfig
     /// </summary>
     public long StorageBudgetMb { get; init; } = DefaultStorageBudgetMb;
 
+    public const int DefaultTasteFoldEvery = 10;
+
+    /// <summary>
+    /// How many verdicts - proposals the owner approved, rejected as generic or wrong, or restored
+    /// from the dropped list - since the last fold make the next one due. 1..100.
+    /// </summary>
+    public int TasteFoldEvery { get; init; } = DefaultTasteFoldEvery;
+
     /// <summary>The product's areas, for coverage: each one's page patterns and code paths.</summary>
     public DiscoveryArea[] Areas { get; init; } = Array.Empty<DiscoveryArea>();
 
@@ -75,6 +83,7 @@ public sealed record DiscoveryConfig
         var max = d.TryGetProperty("maxProposals", out var m) && m.ValueKind == JsonValueKind.Number ? m.GetInt32() : 6;
         var rounds = d.TryGetProperty("recheckRounds", out var rr) && rr.ValueKind == JsonValueKind.Number ? rr.GetInt32() : DefaultRecheckRounds;
         var review = d.TryGetProperty("reviewRoute", out var rv) && rv.ValueKind == JsonValueKind.True;
+        var fold = d.TryGetProperty("tasteFoldEvery", out var tf) && tf.ValueKind == JsonValueKind.Number && tf.TryGetInt32(out var n) ? n : DefaultTasteFoldEvery;
         var budget = d.TryGetProperty("storageBudgetMb", out var sb) && sb.ValueKind == JsonValueKind.Number && sb.TryGetInt64(out var mb) ? mb : DefaultStorageBudgetMb;
         return new DiscoveryConfig
         {
@@ -82,6 +91,7 @@ public sealed record DiscoveryConfig
             RecheckRounds = Math.Clamp(rounds, 0, 10),
             ReviewRoute = review,
             StorageBudgetMb = budget,
+            TasteFoldEvery = Math.Clamp(fold, 1, 100),
             SiteUrl = Str(d, "siteUrl").TrimEnd('/'),
             Prepare = Str(d, "prepare"),
             Teardown = Str(d, "teardown"),

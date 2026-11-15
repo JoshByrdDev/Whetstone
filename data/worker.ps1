@@ -3898,6 +3898,20 @@ if (-not $limitReset -and -not $onHost) {
     Invoke-Reflection -ProjectDataDir $projectDataDir -RepoDir $workDir -RunLog $runLogLines `
         -MemoryDir $memoryDir -TicketId $ticketId -ProjectKey $projectKey `
         -IssueKey "$($Claim.ticket.issueKey)" -Branch "$($Claim.ticket.branch)" -NotesBudgetBytes $notesBudget
+
+    # The owner's verdicts folded into the project's taste file, when enough of them wait
+    # (docs/discovery-track-plan.md, step 4). Same command and the same place in the run as
+    # reflection; the board says whether one is due, and writes what comes back.
+    if ($DashboardUrl) {
+        $foldCmd = Get-AgentReflectionCommand -Provider $ReflectProvider -Model $ReflectionModel -ReasoningEffort $ReflectEffort
+        $foldDir = $workDir
+        $null = Invoke-DiscoveryTasteFold -ProjectKey $projectKey -TicketId ([int]$ticketId) `
+            -Board { param($Path, $Body)
+                Invoke-RestMethod -Uri "$DashboardUrl$Path" -Method Post -ContentType 'application/json' `
+                    -Body ([System.Text.Encoding]::UTF8.GetBytes(($Body | ConvertTo-Json -Depth 5 -Compress))) -TimeoutSec 15 } `
+            -Ask { param($Prompt) Invoke-AgentPrompt -Prompt $Prompt -Command $foldCmd -WorkDir $foldDir -TimeoutSec 180 -Tag 'taste-fold' } `
+            -Log { param($m) Write-Log $m }
+    }
 }
 
 # Last, because reflection is the final thing that runs the agent CLI and it needs the same setup.

@@ -450,3 +450,92 @@ public class DiscoveryGoalCheck
     public string? Commit { get; set; }
     public DateTime At { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>Who wrote a version of a project's taste file (<see cref="DiscoveryTasteVersion"/>).</summary>
+public enum TasteSource
+{
+    /// <summary>A fold: a model run rewrote the Learned section from verdicts since the last one.</summary>
+    Fold,
+    /// <summary>The owner, from the board.</summary>
+    Owner,
+    /// <summary>The owner put an earlier version back.</summary>
+    Revert,
+    /// <summary>Found changed on disk - edited in the folder, or put back with git - and recorded as it was found.</summary>
+    Outside,
+}
+
+/// <summary>
+/// One version of a project's taste file (<c>data/projects/&lt;key&gt;/discovery/taste.md</c>,
+/// docs/discovery-track-plan.md "The taste file"): what the owner's verdicts have taught about what
+/// they want proposed. The file is the thing Sift and Recheck read; this row is its lineage - the text
+/// as it was, by whom, from which verdicts, and the commit in the project folder that holds it - so a
+/// mart can compare approval rates before and after a fold, and a bad lesson can be put back.
+/// Appended, never rewritten.
+/// </summary>
+public class DiscoveryTasteVersion
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+    /// <summary>1 for the project's first version, and up from there. The number the owner sees.</summary>
+    public int Number { get; set; }
+    /// <summary>SHA-256 of the text with its line ends made LF and its end trimmed: the same file is the same version.</summary>
+    public string Hash { get; set; } = "";
+    /// <summary>The whole file as it was. Empty for a file that was found deleted.</summary>
+    public string Text { get; set; } = "";
+    public TasteSource Source { get; set; }
+    /// <summary>The commit in the project folder's own repo that holds it; null when none could be made, and <see cref="CommitNote"/> says why.</summary>
+    public string? Commit { get; set; }
+    public string? CommitNote { get; set; }
+    /// <summary>For a fold: every verdict event it took in, the teaching ones and the ones that teach nothing alike, so none is folded twice.</summary>
+    public List<int> EventIds { get; set; } = new();
+    /// <summary>For a fold: how many verdicts (proposals with a teaching event) it learned from.</summary>
+    public int Verdicts { get; set; }
+    /// <summary>For a fold: what it would change in the owner's own section, which it may not touch. The owner's to take or leave.</summary>
+    public string? Suggestions { get; set; }
+    /// <summary>For a revert: the version put back.</summary>
+    public int? RevertOf { get; set; }
+    /// <summary>For a fold: the ticket whose worker run it rode on, when there was one.</summary>
+    public int? RodeOnTicketId { get; set; }
+    public DateTime At { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// Which taste version a Sift or Recheck run read: the lineage step 1 left out. Written when the run
+/// asks for its discovery (get_discovery) while Sifting or Rechecking, once per run and round, so a
+/// proposal leads to the taste it was judged by through its <see cref="DiscoveryProposal.RunId"/>.
+/// </summary>
+public class DiscoveryTasteRead
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+    /// <summary>The run's ticket lease, as on every other discovery row. Null for a read with no live lease.</summary>
+    public int? RunId { get; set; }
+    public int Round { get; set; }
+    /// <summary>Sifting or Rechecking.</summary>
+    public string Phase { get; set; } = "";
+    /// <summary>The version read; null when the project had no taste file yet.</summary>
+    public int? VersionId { get; set; }
+    public int? VersionNumber { get; set; }
+    public string? Hash { get; set; }
+    public DateTime At { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// A project's fold bookkeeping, one row per project: the owner's "fold at the next run", and the
+/// claim a worker run holds while it folds, so two runs finishing together do not both fold.
+/// </summary>
+public class DiscoveryTasteState
+{
+    public string ProjectKey { get; set; } = "";
+    /// <summary>The owner asked for a fold at the next run, below the count.</summary>
+    public DateTime? FoldRequestedAt { get; set; }
+    public string? Claim { get; set; }
+    public DateTime? ClaimedAt { get; set; }
+    /// <summary>The version the claimed fold was given to rewrite, by hash; a file changed since is not overwritten.</summary>
+    public string? ClaimBasedOn { get; set; }
+    public string? ClaimEventIds { get; set; }
+    /// <summary>The last fold's outcome in a sentence, for the panel - including one that was refused.</summary>
+    public string? LastFoldNote { get; set; }
+    public DateTime? LastFoldAt { get; set; }
+}

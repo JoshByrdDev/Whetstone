@@ -851,6 +851,142 @@ namespace Whetstone.Migrations
                     b.ToTable("DiscoveryRoutes");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.DiscoveryTasteRead", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Hash")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Phase")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("VersionId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("VersionNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("DiscoveryTasteReads");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryTasteState", b =>
+                {
+                    b.Property<string>("ProjectKey")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Claim")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClaimBasedOn")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClaimEventIds")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("ClaimedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("FoldRequestedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastFoldAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastFoldNote")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("ProjectKey");
+
+                    b.ToTable("DiscoveryTasteStates");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryTasteVersion", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Commit")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CommitNote")
+                        .HasColumnType("TEXT");
+
+                    b.PrimitiveCollection<string>("EventIds")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Hash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Number")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RevertOf")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RodeOnTicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Suggestions")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Verdicts")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Number")
+                        .IsUnique();
+
+                    b.ToTable("DiscoveryTasteVersions");
+                });
+
             modelBuilder.Entity("Whetstone.Models.DiscoveryVerdictEvent", b =>
                 {
                     b.Property<int>("Id")
@@ -3019,6 +3155,17 @@ namespace Whetstone.Migrations
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithOne()
                         .HasForeignKey("Whetstone.Models.DiscoveryRoute", "TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryTasteRead", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
