@@ -491,12 +491,31 @@ function Resolve-BaseRef {
 # planning against code that has been replaced. Nothing is rewritten - a fast-forward only moves
 # the branch along commits the base already has - and a branch holding even one commit of its own
 # is left exactly where it is, for the rebase before hand-off to deal with.
+#
+# The other case is a ticket whose base changed after its branch was cut: a defect filed on the
+# project's base and then put in the slice whose code it is about. Its branch holds nothing but the
+# project's base, which a slice that has not taken the base's latest does not contain, so there is
+# nothing to fast-forward along - and the rebase would carry the project's newer commits into the
+# ticket. With -PriorBaseRef (the project's base), a branch with no commit outside both bases, in a
+# clean worktree, is reset to the new base instead: it loses nothing that was its own.
 # Returns how many commits the branch moved; 0 when there was nothing to do.
 function Update-MergedBranch {
-    param([string]$Path, [string]$BaseRef)
+    param([string]$Path, [string]$BaseRef, [string]$PriorBaseRef)
 
     $own = @(git -C $Path rev-list "$BaseRef..HEAD" 2>$null | Where-Object { $_ }).Count
-    if ($LASTEXITCODE -ne 0 -or $own -gt 0) { return 0 }
+    if ($LASTEXITCODE -ne 0) { return 0 }
+    if ($own -gt 0) {
+        if (-not $PriorBaseRef -or $PriorBaseRef -eq $BaseRef) { return 0 }
+        git -C $Path rev-parse --verify --quiet "$PriorBaseRef^{commit}" *> $null
+        if ($LASTEXITCODE -ne 0) { return 0 }
+        $mine = @(git -C $Path rev-list HEAD --not $BaseRef $PriorBaseRef 2>$null | Where-Object { $_ }).Count
+        if ($LASTEXITCODE -ne 0 -or $mine -gt 0) { return 0 }
+        if (@(git -C $Path status --porcelain 2>$null | Where-Object { $_ }).Count -gt 0) { return 0 }
+        $moved = @(git -C $Path rev-list "HEAD..$BaseRef" 2>$null | Where-Object { $_ }).Count
+        git -C $Path reset -q --hard $BaseRef *> $null
+        if ($LASTEXITCODE -ne 0) { return 0 }
+        return [Math]::Max($moved, 1)
+    }
     $behind = @(git -C $Path rev-list "HEAD..$BaseRef" 2>$null | Where-Object { $_ }).Count
     if ($behind -le 0) { return 0 }
 
@@ -880,7 +899,8 @@ function Resolve-Worktree {
         [string]$RepoDir, [string]$WorktreeRoot, [string]$Skill, [string]$TicketId,
         [string]$RecordedBranch, [string]$IssueBranchToken, [string]$BaseBranch, [string]$BranchPrefix, [string]$BoardBranch,
         [string[]]$CopyFiles, [string[]]$Setup, [string]$ReviewBranch, [bool]$MergeLocally, [bool]$OnBase,
-        [string]$WorktreeName, [switch]$MayCreate, [switch]$NoSetup, [switch]$BackgroundSetup
+        [string]$WorktreeName, [switch]$MayCreate, [switch]$NoSetup, [switch]$BackgroundSetup,
+        [string]$ProjectBaseBranch
     )
 
     # git writes normal progress to stderr; keep that from turning into a terminating error if the
@@ -1127,12 +1147,16 @@ function Resolve-Worktree {
     $moved = 0
     if ($MergeLocally -and $Skill -eq 'speculate') {
         $baseRef = Resolve-BaseRef -RepoDir $RepoDir -BaseBranch $BaseBranch -MergeLocally $true
-        if ($baseRef) { $moved = Update-MergedBranch -Path $res.path -BaseRef $baseRef }
+        # The project's own base, for a branch cut there before the ticket moved to another one.
+        $priorRef = if ($ProjectBaseBranch -and $ProjectBaseBranch -ne $BaseBranch) {
+            Resolve-BaseRef -RepoDir $RepoDir -BaseBranch $ProjectBaseBranch -MergeLocally $true
+        } else { $null }
+        if ($baseRef) { $moved = Update-MergedBranch -Path $res.path -BaseRef $baseRef -PriorBaseRef $priorRef }
     }
 
     if ($moved -gt 0) {
         # Setup runs again: $moved commits can move a lockfile as easily as anything else.
-        Write-Log "  Branch '$($res.branch)' had nothing of its own - fast-forwarded $moved commit(s) to $baseRef"
+        Write-Log "  Branch '$($res.branch)' had nothing of its own - moved it $moved commit(s) to $baseRef"
     }
     elseif (-not $res.created) {
         $marker = Get-SetupFailedMarker -Path $res.path
@@ -1958,7 +1982,12 @@ function New-DefectTicket {
     $body = @{
         projectKey = $ProjectKey; title = $title; description = $desc; phase = 'Backlog'
         isBug = $true; skipClassroomAnalysis = $true
-    } | ConvertTo-Json
+    }
+    # Based where the ticket it was seen on is - its own base, else its open slice - which the board
+    # works out (CreateTicketRequest.FoundOn). Filed on the project's base instead, a defect in a
+    # slice's code lands on a branch that has none of that code, and blocks there.
+    if ($FoundOn -match '^\d+$') { $body.foundOn = [int]$FoundOn }
+    $body = $body | ConvertTo-Json
     try {
         $t = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets" -Method Post -ContentType 'application/json' `
             -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 15
@@ -2655,6 +2684,7 @@ if ($repoDir) {
         Resolve-Worktree -RepoDir $repoDir -WorktreeRoot "$($Claim.project.worktreeRoot)".Trim() `
             -Skill $skill -TicketId $ticketId -RecordedBranch "$($Claim.ticket.branch)" -BoardBranch "$($Claim.branchName)" `
             -IssueBranchToken "$($Claim.issueBranchToken)" -BaseBranch $effectiveBase -BranchPrefix $effectivePrefix `
+            -ProjectBaseBranch $(Resolve-TicketBase -Claim @{ project = $Claim.project } -DefaultBase $BaseBranch) `
             -CopyFiles @($Claim.project.worktreeCopyFiles) -Setup @($Claim.project.worktreeSetup) `
             -ReviewBranch $(if ($isReview) { $reviewBranch } else { "" }) -MergeLocally $mergeLocally -OnBase ($isWalkthrough -or $isDiscovery) `
             -BackgroundSetup:($skill -eq 'speculate')
