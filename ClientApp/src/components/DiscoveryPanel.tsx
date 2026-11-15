@@ -4,6 +4,7 @@ import type { TicketDetail } from '../types/tickets';
 import * as api from '../api/discovery';
 import type { Discovery, DiscoveryObservation, DiscoveryProposal, DiscoveryRecording, DiscoveryRoute, GoalCheck, GoalOutcome, ProposalKind, RejectReason } from '../api/discovery';
 import { RemovedShot } from './RemovedShot';
+import { DiscoveryTaste } from './DiscoveryTaste';
 import { transitionTicket, updateTicket } from '../api/tickets';
 
 /**
@@ -19,6 +20,9 @@ import { transitionTicket, updateTicket } from '../api/tickets';
  * tickets the discovery waits for them, and says which one holds it; then a recheck drives the
  * product again and says, goal by goal, whether what was approved landed - and its own proposals
  * come back here for a verdict, a round.
+ *
+ * Taste (step 4): the project's taste file, which version this discovery's runs read, and how near
+ * the next fold is - in a section of its own (DiscoveryTaste).
  *
  * Video (step 3): a recorded run's whole video plays here with its chapters, each observation can
  * jump to where it was seen, and each proposal plays a clip cut around what it cites - cut the first
@@ -267,6 +271,15 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
           </ul>
         </details>
       )}
+
+      <details>
+        <summary className="cursor-pointer text-[11px] text-gray-500 hover:text-gray-300 transition-colors">
+          Taste · what your verdicts have taught{(d.tasteReads ?? []).length > 0 ? ` (read by this discovery's ${(d.tasteReads ?? []).some(r => r.phase === 'Rechecking') ? 'runs' : 'sift'})` : ''}
+        </summary>
+        <div className="mt-2">
+          <DiscoveryTaste project={t.projectKey} reads={d.tasteReads ?? []} />
+        </div>
+      </details>
 
       {d.observations.length > 0 && (
         <details>

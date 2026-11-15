@@ -33,6 +33,9 @@ public class DashboardDbContext : DbContext
     public DbSet<DiscoveryProposal> DiscoveryProposals => Set<DiscoveryProposal>();
     public DbSet<DiscoveryVerdictEvent> DiscoveryVerdictEvents => Set<DiscoveryVerdictEvent>();
     public DbSet<DiscoveryGoalCheck> DiscoveryGoalChecks => Set<DiscoveryGoalCheck>();
+    public DbSet<DiscoveryTasteVersion> DiscoveryTasteVersions => Set<DiscoveryTasteVersion>();
+    public DbSet<DiscoveryTasteRead> DiscoveryTasteReads => Set<DiscoveryTasteRead>();
+    public DbSet<DiscoveryTasteState> DiscoveryTasteStates => Set<DiscoveryTasteState>();
     public DbSet<DiscoveryRecording> DiscoveryRecordings => Set<DiscoveryRecording>();
     public DbSet<DiscoveryChapter> DiscoveryChapters => Set<DiscoveryChapter>();
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
@@ -408,6 +411,30 @@ public class DashboardDbContext : DbContext
             e.Property(r => r.Source).HasMaxLength(1024);
             e.HasOne(r => r.Ticket).WithMany().HasForeignKey(r => r.TicketId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(r => r.TicketId);
+        });
+        // The taste file's lineage (step 4). Per project, not per ticket: a version outlives every
+        // discovery that read it. The reads cascade with their discovery like the rest of its record.
+        b.Entity<DiscoveryTasteVersion>(e =>
+        {
+            e.Property(v => v.ProjectKey).HasMaxLength(64);
+            e.Property(v => v.Hash).HasMaxLength(64);
+            e.Property(v => v.Source).HasConversion<string>().HasMaxLength(16);
+            e.Property(v => v.Commit).HasMaxLength(64);
+            e.HasIndex(v => new { v.ProjectKey, v.Number }).IsUnique();
+        });
+        b.Entity<DiscoveryTasteRead>(e =>
+        {
+            e.Property(r => r.Phase).HasMaxLength(32);
+            e.Property(r => r.Hash).HasMaxLength(64);
+            e.HasOne(r => r.Ticket).WithMany().HasForeignKey(r => r.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(r => r.TicketId);
+        });
+        b.Entity<DiscoveryTasteState>(e =>
+        {
+            e.HasKey(s => s.ProjectKey);
+            e.Property(s => s.ProjectKey).HasMaxLength(64);
+            e.Property(s => s.Claim).HasMaxLength(64);
+            e.Property(s => s.ClaimBasedOn).HasMaxLength(64);
         });
         b.Entity<DiscoveryChapter>(e =>
         {

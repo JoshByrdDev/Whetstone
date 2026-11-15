@@ -34,6 +34,7 @@ Most projects are one repo, and this section does not apply to them. When your p
 - The route: the persona, who they are signed in as, the jobs, the widths. You walk it again, **focused on the goals**.
 - `earlierObservations` are a line each - what the scout and any earlier recheck already saw. Enough to know it was seen; not a list to work through again.
 - `proposals` shows what the owner already decided, with each rejection's reason. Do not propose again what the owner rejected unless what you saw is new, and say why.
+- **`taste`**: the project's taste file - what this owner's verdicts have taught about what they want proposed. Apply it to what you propose the way the sift does: what it says they do not want is dropped against it, unless this case is different and `why` says how. **The owner's** section outranks **Learned**; empty means nothing is folded yet. Which version you read is recorded with your run.
 
 ## Use it - the goal is judged by the product, never by the ticket
 

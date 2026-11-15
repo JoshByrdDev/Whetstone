@@ -108,6 +108,53 @@ public static class ProjectRepo
         }
     }
 
+    /// <summary>What committing one file in a project folder came to: the commit, or why there is none.</summary>
+    public sealed record FileCommit(string? Sha, string? Note);
+
+    /// <summary>
+    /// Commit one file of a project folder, and only that file: a person's other uncommitted edits in
+    /// the folder stay theirs. A folder that is not a repo, or a file unchanged since its last commit,
+    /// is a note rather than an error - the file is written either way. Never throws.
+    /// </summary>
+    /// <param name="relPath">The file, relative to the folder, with forward slashes.</param>
+    public static FileCommit CommitFile(string projectDir, string relPath, string message)
+    {
+        try
+        {
+            if (!Directory.Exists(Path.Combine(projectDir, ".git")) && !File.Exists(Path.Combine(projectDir, ".git")))
+                return new FileCommit(null, "The project folder is not a git repo, so this version is not committed.");
+            if (Git(projectDir, "add", "--", relPath) is { } addError) return new FileCommit(null, addError);
+            if (Output(projectDir, "diff", "--cached", "--name-only", "--", relPath) is not { Length: > 0 })
+                return new FileCommit(Output(projectDir, "log", "-1", "--format=%H", "--", relPath) is { Length: > 0 } sha ? sha : null,
+                    "Unchanged since its last commit.");
+            var who = Output(projectDir, "config", "user.email") is { Length: > 0 }
+                ? Array.Empty<string>()
+                : new[] { "-c", "user.name=Whetstone", "-c", "user.email=whetstone@localhost" };
+            var commit = who.Concat(new[] { "commit", "--quiet", "-m", message, "--", relPath }).ToArray();
+            if (Git(projectDir, commit) is { } commitError) return new FileCommit(null, commitError);
+            return new FileCommit(Output(projectDir, "rev-parse", "HEAD"), null);
+        }
+        catch (Exception ex)
+        {
+            return new FileCommit(null, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The last commit of one file, when the file on disk is that commit's - nothing staged or
+    /// changed over it. Null for a folder that is not a repo, a file never committed, or one edited since.
+    /// </summary>
+    public static string? CommittedAs(string projectDir, string relPath)
+    {
+        try
+        {
+            if (!Directory.Exists(Path.Combine(projectDir, ".git")) && !File.Exists(Path.Combine(projectDir, ".git"))) return null;
+            if (Output(projectDir, "status", "--porcelain", "--", relPath) is not { Length: 0 }) return null;
+            return Output(projectDir, "log", "-1", "--format=%H", "--", relPath) is { Length: > 0 } sha ? sha : null;
+        }
+        catch { return null; }
+    }
+
     /// <summary>Run git in the folder; null on success, else what it said.</summary>
     private static string? Git(string dir, params string[] args)
     {

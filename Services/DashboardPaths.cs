@@ -217,6 +217,13 @@ public class DashboardPaths
     public string ImprovementsFile(string project) => Path.Combine(ProjectDir(project), "improvement-suggestions.md");
     public string ReflectPromptFile(string project) => Path.Combine(ProjectDir(project), "reflect-prompt.md");
 
+    /// <summary>
+    /// A project's taste file (docs/discovery-track-plan.md, "The taste file"): what the owner's
+    /// verdicts have taught Discovery about what to propose. In the project's folder and its own repo,
+    /// never in this one; relative to that folder it is <see cref="DiscoveryTaste.RelativePath"/>.
+    /// </summary>
+    public string DiscoveryTasteFile(string project) => Path.Combine(ProjectDir(project), "discovery", "taste.md");
+
     /// <summary>Marker file that unregisters a project without deleting its data (reversible).</summary>
     public string DisabledMarker(string project) => Path.Combine(ProjectDir(project), ".disabled");
     public bool IsDisabled(string project) => File.Exists(DisabledMarker(project));

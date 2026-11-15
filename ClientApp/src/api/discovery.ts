@@ -130,6 +130,44 @@ export interface Discovery {
   recordings?: DiscoveryRecording[];
   /** Whether this machine can cut clips (ffmpeg). */
   media?: { ffmpeg: boolean };
+  /** Which taste version each Sift and Recheck run of this discovery read; versionNumber null = no taste file yet. */
+  tasteReads?: { id: number; runId?: number | null; round: number; phase: string; versionId?: number | null; versionNumber?: number | null; at: string }[];
+}
+
+/** One version of a project's taste file (Services/DiscoveryTaste.cs). */
+export interface TasteVersion {
+  id: number;
+  number: number;
+  source: 'Fold' | 'Owner' | 'Revert' | 'Outside';
+  hash: string;
+  commit?: string | null;
+  commitNote?: string | null;
+  verdicts: number;
+  events: number;
+  hasSuggestions: boolean;
+  revertOf?: number | null;
+  rodeOnTicketId?: number | null;
+  at: string;
+  /** How many Sift and Recheck runs read it. */
+  reads: number;
+}
+
+/** A project's taste file as the owner's panel shows it. */
+export interface TasteStatus {
+  path: string;
+  exists: boolean;
+  text: string;
+  owner: string;
+  learned: string;
+  current: TasteVersion | null;
+  /** The latest fold's suggestions for the owner's section, which no fold changes. */
+  suggestions?: string | null;
+  versions: TasteVersion[];
+  fold: { every: number; verdicts: number; due: boolean; requested: boolean; lastNote?: string | null; lastAt?: string | null; claimedAt?: string | null; teachNothing: number };
+  /** Rejected as already decided since the last fold: a decision the register may be missing. */
+  alreadyDecided: { proposalId: number; discovery: number; title: string; note?: string | null }[];
+  verdictsEver: number;
+  versioned: boolean;
 }
 
 /** The owner's edit of a route at its gate: each field absent is left as the chart wrote it. */
@@ -205,3 +243,27 @@ export const editRoute = (ticketId: number, edit: RouteEdit) =>
 export const approveRoute = (ticketId: number) =>
   fetch(`/api/tickets/${ticketId}/discovery/route/approve`, { method: 'POST' })
     .then(json<{ phase: string }>);
+
+// ---- the taste file (step 4): the owner's routes, none with a tool behind it ------------------
+
+export const getTaste = (project: string) =>
+  fetch(`/api/discovery/projects/${encodeURIComponent(project)}/taste`).then(json<TasteStatus>);
+
+export const getTasteVersion = (project: string, id: number) =>
+  fetch(`/api/discovery/projects/${encodeURIComponent(project)}/taste/versions/${id}`)
+    .then(json<{ id: number; number: number; source: string; text: string; suggestions?: string | null }>);
+
+/** The owner writes the whole file. Committed in the project folder as their edit. */
+export const saveTaste = (project: string, text: string) =>
+  fetch(`/api/discovery/projects/${encodeURIComponent(project)}/taste`, { method: 'PUT', headers, body: JSON.stringify({ text }) })
+    .then(json<{ number: number }>);
+
+/** Puts an earlier version back, as a new version. */
+export const restoreTaste = (project: string, versionId: number) =>
+  fetch(`/api/discovery/projects/${encodeURIComponent(project)}/taste/versions/${versionId}/restore`, { method: 'POST' })
+    .then(json<{ number: number }>);
+
+/** Asks the next worker run on the project to fold now, below the count - or takes the ask back. */
+export const requestFold = (project: string, requested: boolean) =>
+  fetch(`/api/discovery/projects/${encodeURIComponent(project)}/taste/fold-request`, { method: 'PUT', headers, body: JSON.stringify({ requested }) })
+    .then(json<{ requested: boolean }>);

@@ -26,8 +26,9 @@ public class DiscoveryTools
         "and its proposals and dropped list. While Sifting it also returns what the proposals have to be checked against: the project's open " +
         "tickets and earlier discoveries' proposals with the owner's verdicts (a rejection's reason, a snooze that is due). While Rechecking it returns " +
         "the goals to check (the approved proposals, with the tickets they became and what earlier rechecks found), which round this is and how many get a verdict, " +
-        "and the earlier observations as one line each - enough to know what was seen, not a list to work through again.")]
-    public static async Task<object> GetDiscovery(DiscoveryService svc, DashboardPaths paths,
+        "and the earlier observations as one line each - enough to know what was seen, not a list to work through again. While Sifting or Rechecking it also returns " +
+        "the project's taste file (taste): what the owner's verdicts have taught about what they want proposed - read it before you cut and rank.")]
+    public static async Task<object> GetDiscovery(DiscoveryService svc, DiscoveryTaste taste, TicketService tickets, DashboardPaths paths,
         [Description("The local ticket id of the discovery.")] int ticketId)
     {
         var v = await svc.GetAsync(ticketId);
@@ -38,6 +39,11 @@ public class DiscoveryTools
         if (phase is TicketPhase.Sifting or TicketPhase.Rechecking) known = await svc.KnownAsync(await svc.ProjectOfAsync(ticketId), ticketId);
         var rechecking = phase == TicketPhase.Rechecking;
         var round = rechecking ? v.Round : 0;
+        // The taste file, for the two phases that judge what to propose - and the record of which
+        // version this run read, so a proposal leads to the taste it was judged by.
+        DiscoveryTaste.ForRun? tasteRead = null;
+        if (phase is TicketPhase.Sifting or TicketPhase.Rechecking)
+            tasteRead = await taste.ReadForRunAsync(ticketId, await svc.ProjectOfAsync(ticketId), phase, round, await tickets.LiveRunIdAsync(ticketId));
         object? recheck = !rechecking ? null : new
         {
             round,
@@ -54,6 +60,7 @@ public class DiscoveryTools
         };
         return new
         {
+            taste = tasteRead is null ? null : new { version = tasteRead.Version, text = tasteRead.Text, note = tasteRead.Note },
             recheck,
             route = v.Route is null ? null : new
             {
