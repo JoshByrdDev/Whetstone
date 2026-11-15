@@ -234,12 +234,39 @@ after a slice is released is a later idea, not this plan.
   `docs/setup.md` and in `Services/SetupCheck.cs`, and a missing ffmpeg means shots only, said
   out loud - the same shape as the narrator's "not set up".
 
+## What is kept, and for how long
+
+A full recording is the evidence for one verdict, not an archive. A run is five to ten minutes of
+mostly still UI, roughly 15-40MB of video, plus a few MB of shots; a discovery with a recheck is
+on the order of 50-100MB, and nothing about that stops growing on its own. (The stores that exist
+already do: on the board host today `data/qa-captures` is about 1.1GB and `data/qa-shots` about
+270MB, with no retention on either.) So retention is part of the video step, not a clean-up for
+later:
+
+| What | Kept until | Why |
+|---|---|---|
+| The structured record: route, visits, observations' text, proposals, verdicts, links | never pruned | It is small, and it is what Recon maps |
+| A run's full recording | 7 days after the verdict it fed is completed | The owner scrubs it while deciding; once decided, the clips carry the evidence |
+| Clips and shots of **approved** proposals | 90 days after the discovery reaches `Done` | Evidence on the tickets they became, and the "before" a recheck is judged against |
+| Clips of **rejected** or **snoozed** proposals | deleted at Complete; one still kept per proposal | The still is enough for history and the taste file; a snoozed one gets a fresh run when it is due |
+| Shots no proposal used | deleted at Complete | Nothing points at them |
+
+- **A budget as a backstop.** `discovery.storageBudgetMb` per project (default 2048): past it, the
+  oldest prunable files go first, never the structured record, never a discovery still open.
+- **The owner can keep one.** A pin on a proposal keeps its clip until unpinned.
+- **Pruned is said, not broken.** Deleting a file records that it was pruned and when, so the
+  drawer shows "recording removed 12 Dec" rather than a player that fails.
+- **Every machine prunes its own copies.** Files sit at the same path under each machine's data
+  root (`HostDataMirror`), so a worker host deletes what it holds once its run's files are handed
+  back, and the board host's policy governs from there.
+
 ## Build order
 
 1. **The core loop.** Track, Chart (no gate), Scout without video, Sift, Verdict, Complete filing
    linked tickets. The pilot, made real, and already useful.
 2. **The long tail.** Awaiting work, Recheck and its rounds, and the route-approval gate.
-3. **Video.** Recording, chapters, clips on proposals, ffmpeg in setup.
+3. **Video.** Recording, chapters, clips on proposals, ffmpeg in setup, and the retention above -
+   the video and its pruning ship together.
 4. **Taste.** The taste file and its fold, once there are verdicts to fold.
 
 Board host only at first; a worker host can run Scout once its stack leases and the data-root
