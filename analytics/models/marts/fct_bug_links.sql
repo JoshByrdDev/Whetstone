@@ -36,7 +36,10 @@ select
     l.share,
     l.neighbours,
     l.escaped,
-    coalesce(l.found_by, 'unknown')                                 as found_by,
+    -- A bug filed from a discovery's proposal was found by the discovery (docs/discovery-track-plan.md,
+    -- "Bug lineage"), whoever the owner named when confirming its cause: it counts beside QA and the owner.
+    case when b.discovery_id is not null and b.is_bug then 'Discovery'
+         else coalesce(l.found_by, 'unknown') end                   as found_by,
     coalesce(l.missed_by, 'unknown')                                as missed_by,
     l.traced_at,
     l.decided_at,

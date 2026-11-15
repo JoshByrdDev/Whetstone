@@ -49,6 +49,8 @@ PUBLISHED = [
     "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
     "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
     "mart_qa_rulings", "mart_escapes", "mart_rebase_returns",
+    # The Discovery track's measures (docs/discovery-track-plan.md, "What is measured"; step 5).
+    "fct_discovery_proposals", "mart_discovery_funnel", "mart_discovery_rejections", "mart_discovery_versions",
 ]
 
 # The board tables read, and the columns of each. A column the database does not have yet (an

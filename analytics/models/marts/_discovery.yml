@@ -1,0 +1,247 @@
+version: 2
+
+# The Discovery marts (docs/discovery-track-plan.md, "What is measured"). The unit tests are the
+# numbers the Metrics page's Discovery section shows, worked out by hand on seeded rows. The mart
+# tests build only the 'all' cut over all history (windows [0]), so every expected row is listed.
+unit_tests:
+  # Proposal 1 was written by sift run 4 (by its lease), read taste v2, was filed as a bug that was
+  # confirmed and fixed, missed its first recheck and was met at the second. Proposal 2 is a recheck
+  # fix-up whose run is found by time (its lease names no run), decided but in a verdict round still
+  # open, so not closed. Proposal 3 is undecided. Proposal 4 repeats proposal 1.
+  - name: discovery_proposal_run_taste_goal_and_closed
+    model: fct_discovery_proposals
+    given:
+      - input: ref('stg_board__discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, round: 0, kind: Bug, draft_title: '', title: 'Keep the filter', lease_run_id: 104, observation_ids: [1, 2], created_at: '2026-11-10 09:30:00'}
+          - {proposal_id: 2, discovery_id: 10, round: 1, kind: Ticket, recheck_kind: FixUp, draft_title: 'Fix it up', title: 'Fix it up', lease_run_id: 109, observation_ids: [], created_at: '2026-11-12 09:30:00'}
+          - {proposal_id: 3, discovery_id: 10, round: 0, kind: Ticket, draft_title: 'Third', title: 'Third', lease_run_id: 104, observation_ids: [], created_at: '2026-11-10 09:31:00'}
+          - {proposal_id: 4, discovery_id: 10, round: 1, kind: Ticket, recheck_kind: New, draft_title: 'Keep that filter', title: 'Keep that filter', lease_run_id: 109, observation_ids: [], created_at: '2026-11-12 09:40:00'}
+      - input: ref('int_discovery_proposal_verdicts')
+        rows:
+          - {proposal_id: 1, was_dropped: false, restored: false, shown: true, verdict: approved, filed: true, filed_ticket_id: 50}
+          - {proposal_id: 2, was_dropped: false, restored: false, shown: true, verdict: rejected, reject_reason: Generic, filed: false}
+          - {proposal_id: 3, was_dropped: false, restored: false, shown: true, verdict: undecided, filed: false}
+          - {proposal_id: 4, was_dropped: false, restored: false, shown: true, verdict: undecided, filed: false}
+      - input: ref('int_discovery_tickets')
+        rows:
+          - {discovery_id: 10, project_key: alpha, track: Discovery, is_done: false, direction: 'Plan your month', direction_lineage_id: 10}
+      - input: ref('int_discovery_runs')
+        rows:
+          - {run_id: 4, lease_run_id: 104, discovery_id: 10, phase: Sifting, started_at: '2026-11-10 09:00:00', ended_at: '2026-11-10 09:40:00', model: opus, skill_version: f1}
+          - {run_id: 9, lease_run_id: 999, discovery_id: 10, phase: Rechecking, started_at: '2026-11-12 09:00:00', ended_at: '2026-11-12 10:00:00', model: fable, skill_version: r1}
+      - input: ref('stg_board__discovery_taste_reads')
+        rows:
+          - {taste_read_id: 1, discovery_id: 10, round: 0, lease_run_id: 104, taste_version_id: 7, taste_version_number: 2, read_at: '2026-11-10 09:01:00'}
+      - input: ref('stg_board__discovery_goal_checks')
+        rows:
+          - {goal_check_id: 1, discovery_id: 10, proposal_id: 1, round: 1, outcome: NotMet}
+          - {goal_check_id: 2, discovery_id: 10, proposal_id: 1, round: 2, outcome: Met}
+      - input: ref('stg_board__discovery_observations')
+        rows:
+          - {observation_id: 1, discovery_id: 10}
+          - {observation_id: 2, discovery_id: 10}
+          - {observation_id: 3, discovery_id: 10}
+      - input: ref('stg_board__phase_transitions')
+        rows:
+          - {transition_id: 1, ticket_id: 10, from_phase: NeedsVerdict, to_phase: AwaitingWork, moved_at: '2026-11-10 11:00:00'}
+      - input: ref('stg_board__discovery_verdict_events')
+        rows:
+          - {event_id: 1, discovery_id: 10, proposal_id: 1, kind: Filed, acted_at: '2026-11-10 10:59:00'}
+      - input: ref('stg_board__bug_links')
+        rows:
+          - {link_id: 1, bug_ticket_id: 50, status: Confirmed}
+      - input: ref('int_discovery_repeats')
+        rows:
+          - {proposal_id: 4, repeat_of_proposal_id: 1, repeat_of_discovery_id: 10}
+      - input: ref('stg_board__tickets')
+        rows:
+          - {ticket_id: 50, phase: Done, is_bug: true}
+    expect:
+      rows:
+        - {proposal_id: 1, source: sift, recheck_kind: null, run_id: 4, model: opus, taste_version: v2, observations: 2, verdict_closed: true, is_goal: true, goal_first_outcome: NotMet, goal_last_outcome: Met, landed_first_time: false, filed_ticket_done: true, filed_bug_confirmed: true, is_repeat: false}
+        - {proposal_id: 2, source: recheck, recheck_kind: fixup, run_id: 9, model: fable, taste_version: 'not recorded', observations: 0, verdict_closed: false, is_goal: false, goal_first_outcome: null, goal_last_outcome: null, landed_first_time: null, filed_ticket_done: null, filed_bug_confirmed: false, is_repeat: false}
+        - {proposal_id: 3, source: sift, recheck_kind: null, run_id: 4, model: opus, taste_version: v2, observations: 0, verdict_closed: false, is_goal: false, goal_first_outcome: null, goal_last_outcome: null, landed_first_time: null, filed_ticket_done: null, filed_bug_confirmed: false, is_repeat: false}
+        - {proposal_id: 4, source: recheck, recheck_kind: new, run_id: 9, model: fable, taste_version: 'not recorded', observations: 0, verdict_closed: false, is_goal: false, goal_first_outcome: null, goal_last_outcome: null, landed_first_time: null, filed_ticket_done: null, filed_bug_confirmed: false, is_repeat: true}
+
+  # The funnel, worked by hand. alpha's discovery: six shown and closed (three approved - one a line
+  # restored from the dropped list - a generic and a wrong rejection, a snooze), a seventh line left
+  # dropped; $2 of runs, all priced, and four owner-minutes; eight scout observations in, four sift
+  # proposals out. bravo's: two approved, unpriced, untimed - below the floor of three verdicts, so
+  # it has counts but no rates. Across both, the ratios use only what was priced and timed.
+  - name: discovery_funnel_rates_wait_for_enough_verdicts
+    model: mart_discovery_funnel
+    overrides:
+      vars:
+        windows: [0]
+        discovery_dims: ['all']
+        discovery_min_verdicts: 3
+    given:
+      - input: ref('int_discovery_tickets')
+        rows:
+          - {discovery_id: 10, project_key: alpha, track: Discovery, is_done: true, created_at: '2026-11-01 09:00:00', created_week: '2026-10-26', runs: 4, runs_priced: 4, cost_usd: 2.0, cost_complete: true, run_minutes: 10, run_tokens: 1000, owner_minutes: 4.0, observations: 9, scout_observations: 8, visits: 10, pages: 5, areas_reached: 2, roles_reached: 1, widths_reached: 2, off_route_visits: 1, route_judged_visits: 8}
+          - {discovery_id: 20, project_key: bravo, track: Discovery, is_done: false, created_at: '2026-11-05 09:00:00', created_week: '2026-11-02', runs: 3, runs_priced: 0, cost_usd: null, cost_complete: false, run_minutes: 8, run_tokens: 900, owner_minutes: 0.0, observations: 2, scout_observations: 2, visits: 0, pages: 0, areas_reached: 0, roles_reached: 0, widths_reached: 0, off_route_visits: 0, route_judged_visits: 0}
+      - input: ref('fct_discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, kind: Ticket, was_dropped: false, shown: true, restored: false, decided: true, verdict_closed: true, approved: true, verdict: approved, new_to_me: true, edited: false, filed: true, filed_ticket_id: 50, is_goal: true, goal_checks: 1, landed_first_time: true, is_repeat: false, filed_bug_confirmed: false, filed_ticket_done: false}
+          - {proposal_id: 2, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, kind: Bug, was_dropped: false, shown: true, restored: false, decided: true, verdict_closed: true, approved: true, verdict: approved, new_to_me: false, edited: true, edit_share: 0.5, filed: true, filed_ticket_id: 51, is_goal: true, goal_checks: 0, is_repeat: false, filed_bug_confirmed: true, filed_ticket_done: true}
+          - {proposal_id: 3, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, kind: Ticket, was_dropped: false, shown: true, restored: false, decided: true, verdict_closed: true, approved: false, verdict: rejected, reject_reason: Generic, filed: false, is_goal: false, is_repeat: false, filed_bug_confirmed: false}
+          - {proposal_id: 4, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, kind: Ticket, was_dropped: false, shown: true, restored: false, decided: true, verdict_closed: true, approved: false, verdict: snoozed, filed: false, is_goal: false, is_repeat: false, filed_bug_confirmed: false}
+          - {proposal_id: 5, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, kind: Ticket, was_dropped: true, shown: false, restored: false, decided: false, verdict_closed: false, approved: false, verdict: undecided, filed: false, is_goal: false, is_repeat: false, filed_bug_confirmed: false}
+          - {proposal_id: 6, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, kind: Ticket, was_dropped: true, shown: true, restored: true, decided: true, verdict_closed: true, approved: true, verdict: approved, filed: false, is_goal: false, is_repeat: true, repeat_in_same_discovery: false, filed_bug_confirmed: false}
+          - {proposal_id: 7, discovery_id: 10, project_key: alpha, track: Discovery, round: 1, source: recheck, recheck_kind: fixup, kind: Ticket, was_dropped: false, shown: true, restored: false, decided: true, verdict_closed: true, approved: false, verdict: rejected, reject_reason: Wrong, filed: false, is_goal: false, is_repeat: false, filed_bug_confirmed: false}
+          - {proposal_id: 8, discovery_id: 20, project_key: bravo, track: Discovery, round: 0, source: sift, kind: Ticket, was_dropped: false, shown: true, restored: false, decided: true, verdict_closed: true, approved: true, verdict: approved, filed: false, is_goal: false, is_repeat: false, filed_bug_confirmed: false}
+          - {proposal_id: 9, discovery_id: 20, project_key: bravo, track: Discovery, round: 0, source: sift, kind: Ticket, was_dropped: false, shown: true, restored: false, decided: true, verdict_closed: true, approved: true, verdict: approved, filed: false, is_goal: false, is_repeat: false, filed_bug_confirmed: false}
+      - input: ref('int_discovery_verdict_rounds')
+        rows:
+          - {discovery_id: 10, verdict_round: 1, completed: true, hours_to_verdict: 2.0, owner_minutes: 4.0, owner_events: 3}
+          - {discovery_id: 20, verdict_round: 1, completed: false, hours_to_verdict: null, owner_minutes: 0.0, owner_events: 0}
+    expect:
+      rows:
+        - {project_scope: alpha, track_scope: Discovery, discoveries: 1, shown: 6, closed: 6, approved: 3, enough_verdicts: true, approval_rate: 0.5, rejected_generic: 1, rejected_wrong: 1, snoozed: 1, restored_approved: 1, repeats_across: 1, approved_per_dollar: 1.5, approved_per_owner_minute: 0.75, sift_yield: 0.5, landed_rate: 1.0, recheck_yield: 0.0, bugs_confirmed: 1, median_hours_to_verdict: 2.0}
+        - {project_scope: alpha, track_scope: '*', discoveries: 1, shown: 6, closed: 6, approved: 3, enough_verdicts: true, approval_rate: 0.5, rejected_generic: 1, rejected_wrong: 1, snoozed: 1, restored_approved: 1, repeats_across: 1, approved_per_dollar: 1.5, approved_per_owner_minute: 0.75, sift_yield: 0.5, landed_rate: 1.0, recheck_yield: 0.0, bugs_confirmed: 1, median_hours_to_verdict: 2.0}
+        - {project_scope: bravo, track_scope: Discovery, discoveries: 1, shown: 2, closed: 2, approved: 2, enough_verdicts: false, approval_rate: null, rejected_generic: 0, rejected_wrong: 0, snoozed: 0, restored_approved: 0, repeats_across: 0, approved_per_dollar: null, approved_per_owner_minute: null, sift_yield: 1.0, landed_rate: null, recheck_yield: null, bugs_confirmed: 0, median_hours_to_verdict: null}
+        - {project_scope: bravo, track_scope: '*', discoveries: 1, shown: 2, closed: 2, approved: 2, enough_verdicts: false, approval_rate: null, rejected_generic: 0, rejected_wrong: 0, snoozed: 0, restored_approved: 0, repeats_across: 0, approved_per_dollar: null, approved_per_owner_minute: null, sift_yield: 1.0, landed_rate: null, recheck_yield: null, bugs_confirmed: 0, median_hours_to_verdict: null}
+        - {project_scope: '*', track_scope: Discovery, discoveries: 2, shown: 8, closed: 8, approved: 5, enough_verdicts: true, approval_rate: 0.625, rejected_generic: 1, rejected_wrong: 1, snoozed: 1, restored_approved: 1, repeats_across: 1, approved_per_dollar: 1.5, approved_per_owner_minute: 0.75, sift_yield: 0.6, landed_rate: 1.0, recheck_yield: 0.0, bugs_confirmed: 1, median_hours_to_verdict: 2.0}
+        - {project_scope: '*', track_scope: '*', discoveries: 2, shown: 8, closed: 8, approved: 5, enough_verdicts: true, approval_rate: 0.625, rejected_generic: 1, rejected_wrong: 1, snoozed: 1, restored_approved: 1, repeats_across: 1, approved_per_dollar: 1.5, approved_per_owner_minute: 0.75, sift_yield: 0.6, landed_rate: 1.0, recheck_yield: 0.0, bugs_confirmed: 1, median_hours_to_verdict: 2.0}
+
+  # Rejections by reason, as shares of the rejections and of the closed verdicts: two rejected of
+  # four closed, one generic and one wrong. Both teach the taste file.
+  - name: discovery_rejections_are_shares_of_their_cut
+    model: mart_discovery_rejections
+    overrides:
+      vars:
+        windows: [0]
+        discovery_dims: ['all']
+        discovery_min_verdicts: 3
+    given:
+      - input: ref('fct_discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, project_key: alpha, track: Discovery, shown: true, verdict_closed: true, verdict: approved}
+          - {proposal_id: 2, discovery_id: 10, project_key: alpha, track: Discovery, shown: true, verdict_closed: true, verdict: snoozed}
+          - {proposal_id: 3, discovery_id: 10, project_key: alpha, track: Discovery, shown: true, verdict_closed: true, verdict: rejected, reject_reason: Generic}
+          - {proposal_id: 4, discovery_id: 10, project_key: alpha, track: Discovery, shown: true, verdict_closed: true, verdict: rejected, reject_reason: Wrong}
+          - {proposal_id: 5, discovery_id: 10, project_key: alpha, track: Discovery, shown: true, verdict_closed: false, verdict: rejected, reject_reason: Wrong}
+      - input: ref('int_discovery_tickets')
+        rows:
+          - {discovery_id: 10, project_key: alpha, created_at: '2026-11-01 09:00:00', created_week: '2026-10-26'}
+    expect:
+      rows:
+        - {project_scope: alpha, track_scope: Discovery, reason: Generic, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+        - {project_scope: alpha, track_scope: Discovery, reason: Wrong, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+        - {project_scope: alpha, track_scope: '*', reason: Generic, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+        - {project_scope: alpha, track_scope: '*', reason: Wrong, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+        - {project_scope: '*', track_scope: Discovery, reason: Generic, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+        - {project_scope: '*', track_scope: Discovery, reason: Wrong, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+        - {project_scope: '*', track_scope: '*', reason: Generic, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+        - {project_scope: '*', track_scope: '*', reason: Wrong, rejections: 1, closed: 4, enough_verdicts: true, share_of_rejections: 0.5, share_of_closed: 0.25, teaches: taste}
+
+  # Before and after the first fold: under no taste file one of four was approved (two of the
+  # rejections taught taste), under v1 three of four. 'no file' comes first.
+  - name: discovery_versions_compare_each_taste_version
+    model: mart_discovery_versions
+    overrides:
+      vars:
+        windows: [0]
+        discovery_min_verdicts: 2
+    given:
+      - input: ref('fct_discovery_proposals')
+        rows:
+          - {proposal_id: 1, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: true, verdict: approved, taste_version: 'no file', created_at: '2026-11-01 10:00:00'}
+          - {proposal_id: 2, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: false, verdict: rejected, reject_reason: Generic, taste_version: 'no file', created_at: '2026-11-01 10:00:00'}
+          - {proposal_id: 3, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: false, verdict: rejected, reject_reason: Wrong, taste_version: 'no file', created_at: '2026-11-01 10:00:00'}
+          - {proposal_id: 4, discovery_id: 10, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: false, verdict: rejected, reject_reason: NotNow, taste_version: 'no file', created_at: '2026-11-01 10:00:00'}
+          - {proposal_id: 5, discovery_id: 11, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: true, verdict: approved, taste_version: v1, created_at: '2026-11-08 10:00:00'}
+          - {proposal_id: 6, discovery_id: 11, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: true, verdict: approved, taste_version: v1, created_at: '2026-11-08 10:00:00'}
+          - {proposal_id: 7, discovery_id: 11, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: false, verdict: rejected, reject_reason: Generic, taste_version: v1, created_at: '2026-11-08 10:00:00'}
+          - {proposal_id: 8, discovery_id: 11, project_key: alpha, track: Discovery, round: 0, source: sift, shown: true, verdict_closed: true, approved: true, verdict: approved, taste_version: v1, created_at: '2026-11-08 10:00:00'}
+      - input: ref('int_discovery_tickets')
+        rows:
+          - {discovery_id: 10, created_at: '2026-11-01 09:00:00'}
+          - {discovery_id: 11, created_at: '2026-11-08 09:00:00'}
+      - input: ref('int_discovery_runs')
+        rows: []
+      - input: ref('stg_board__discovery_taste_versions')
+        rows:
+          - {taste_version_id: 1, project_key: alpha, number: 1, source: Fold, written_at: '2026-11-05 12:00:00'}
+    expect:
+      rows:
+        - {project_scope: alpha, track_scope: Discovery, kind: taste, version: 'no file', version_seq: 1, closed: 4, approved: 1, approval_rate: 0.25, taste_rejection_rate: 0.5, label: null}
+        - {project_scope: alpha, track_scope: Discovery, kind: taste, version: v1, version_seq: 2, closed: 4, approved: 3, approval_rate: 0.75, taste_rejection_rate: 0.25, label: Fold}
+        - {project_scope: alpha, track_scope: '*', kind: taste, version: 'no file', version_seq: 1, closed: 4, approved: 1, approval_rate: 0.25, taste_rejection_rate: 0.5, label: null}
+        - {project_scope: alpha, track_scope: '*', kind: taste, version: v1, version_seq: 2, closed: 4, approved: 3, approval_rate: 0.75, taste_rejection_rate: 0.25, label: Fold}
+        - {project_scope: '*', track_scope: Discovery, kind: taste, version: 'no file', version_seq: 1, closed: 4, approved: 1, approval_rate: 0.25, taste_rejection_rate: 0.5, label: null}
+        - {project_scope: '*', track_scope: Discovery, kind: taste, version: v1, version_seq: 2, closed: 4, approved: 3, approval_rate: 0.75, taste_rejection_rate: 0.25, label: Fold}
+        - {project_scope: '*', track_scope: '*', kind: taste, version: 'no file', version_seq: 1, closed: 4, approved: 1, approval_rate: 0.25, taste_rejection_rate: 0.5, label: null}
+        - {project_scope: '*', track_scope: '*', kind: taste, version: v1, version_seq: 2, closed: 4, approved: 3, approval_rate: 0.75, taste_rejection_rate: 0.25, label: Fold}
+
+models:
+  - name: fct_discovery_proposals
+    description: One proposal a discovery's sift or recheck wrote, or a line it dropped - the run that wrote it, the taste it read, the owner's verdict from the event log, what it became and whether it landed. Shared with Recon (docs/recon-tab-plan.md), which adds to it.
+    columns:
+      - name: proposal_id
+        tests: [unique, not_null]
+      - name: discovery_id
+        tests: [not_null]
+      - name: track
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['Discovery']
+      - name: verdict
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['approved', 'rejected', 'snoozed', 'undecided']
+      - name: source
+        tests:
+          - accepted_values:
+              arguments:
+                values: ['sift', 'recheck']
+  - name: mart_discovery_funnel
+    description: Observations to proposals to verdicts to tickets to landed, with cost and the owner's time, per scope and cut. Rates are over closed verdicts and null below discovery_min_verdicts.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, dimension, dim_value]
+    columns:
+      - name: approval_rate
+        tests: [is_fraction]
+      - name: rejection_rate
+        tests: [is_fraction]
+      - name: new_to_me_share
+        tests: [is_fraction]
+      - name: edited_share
+        tests: [is_fraction]
+      - name: repeat_share
+        tests: [is_fraction]
+      - name: sift_cut_share
+        tests: [is_fraction]
+      - name: off_route_share
+        tests: [is_fraction]
+      - name: landed_rate
+        tests: [is_fraction]
+      - name: recheck_yield
+        tests: [is_fraction]
+  - name: mart_discovery_rejections
+    description: Rejections by reason per scope and cut, with each reason's share of the cut's rejections and closed verdicts.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, dimension, dim_value, reason]
+    columns:
+      - name: share_of_rejections
+        tests: [is_fraction]
+      - name: share_of_closed
+        tests: [is_fraction]
+  - name: mart_discovery_versions
+    description: Each version of the chart, scout, sift and recheck skills and of the taste file, in order, with what the proposals under it came to.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, kind, version]
+    columns:
+      - name: approval_rate
+        tests: [is_fraction]
+      - name: taste_rejection_rate
+        tests: [is_fraction]
