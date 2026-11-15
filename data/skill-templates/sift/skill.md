@@ -31,6 +31,7 @@ Most projects are one repo, and this section does not apply to them. When your p
 ## Read
 
 - `get_discovery`: the route, every observation with its screenshot path, the pages visited, and `known` - the project's open tickets and earlier discoveries' proposals with what the owner said about them.
+- **`taste`** in `get_discovery`: the project's taste file - what this owner's verdicts have taught about what they want proposed, folded every few verdicts. **The owner's** section is their own words and outranks **Learned**. Empty means no verdicts are folded yet: judge by the rules here alone. Which version you read is recorded with your run.
 - **Look at the screenshots** (open each with Read). An observation whose shot does not show what it claims is weaker than it reads.
 - **What the product is meant to be**, in this worktree: the plan, the specs and each spec's "not in this slice" section, and **the decisions, including those made after a spec** - this project's copy of this skill says where each lives. The pilot's one wrong proposal in twenty was wrong for exactly this reason: it read a spec without the decision that came after it.
 - You may read the code to understand a behaviour. It does not replace what the scout saw.
@@ -42,6 +43,7 @@ Take every observation to an outcome - kept in a proposal (`observationIds`) or 
 - **Drop the generic.** "Add search", "add onboarding tooltips" - anything that could be said of any product is not a proposal.
 - **Drop the decided and the planned**, naming which: the decision's number, the slice that already has it, the open ticket that already asks for it. A snoozed proposal that is due (`known.earlierProposals`, `snoozeDue`) may come back if this run saw it again.
 - **Do not re-propose what the owner rejected**, unless what was seen is new and you say why.
+- **Apply the taste.** What it says this owner does not want is dropped - "against the taste file", and which line - unless this case is different, and then `why` says how. What it says they want ranks up. It is a guide to taste, not a check: it never excuses skipping the specs and decisions above, and never outranks a decision.
 - **Merge duplicates** - several observations of one problem are one proposal standing on all of them.
 - **Keep the bold one.** The scout's ceiling was boldness, not perception: it sees the problem a bigger idea solves and the cheapest fix inside the spec. Where the observations support it, propose the bigger idea as a `Slice` - and keep the small fix too if it stands on its own.
 
