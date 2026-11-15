@@ -40,7 +40,10 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     int? FoundOn = null,
     // A discovery's route gate (Ticket.RequiresRouteReview). Absent = the project's
     // discovery.reviewRoute, off unless it says so. Refused on any other track.
-    bool? RequiresRouteReview = null);
+    bool? RequiresRouteReview = null,
+    // The Recon suggestion a discovery is filed from (Ticket.ReconFrom, docs/recon-tab-plan.md).
+    // Here and nowhere else: the update route does not take it and no MCP tool does. Discovery only.
+    string? ReconFrom = null);
 
 /// <summary>The owner setting a ticket's own base before it has a branch. Blank is the project's base.</summary>
 public record SetBaseBranchRequest(string? BaseBranch);
@@ -979,6 +982,19 @@ public static class TicketEndpoints
             else if (req.RequiresRouteReview == true)
                 return Results.BadRequest(new { error = "Only a discovery has a route to review." });
 
+            // Where a discovery came from on the Recon tab. A rerun names a discovery of this project.
+            var reconFrom = ReconKey.Clean(req.ReconFrom);
+            if (reconFrom is not null)
+            {
+                if (track != TicketTrack.Discovery)
+                    return Results.BadRequest(new { error = "Only a discovery is filed from a Recon suggestion." });
+                if (ReconKey.Problem(reconFrom) is { } keyError)
+                    return Results.BadRequest(new { error = keyError });
+                if (ReconKey.RerunOf(reconFrom) is { } rerunOf
+                    && !await db.Tickets.AsNoTracking().AnyAsync(x => x.Id == rerunOf && x.ProjectKey == projectKey && x.Track == TicketTrack.Discovery))
+                    return Results.BadRequest(new { error = $"Ticket #{rerunOf} is not a discovery of {projectKey}, so there is no direction to rerun." });
+            }
+
             // Title required only for standalone tickets; a linked one pulls it from the tracker.
             if (issueKey is null && string.IsNullOrWhiteSpace(title))
                 return Results.BadRequest(new { error = "Title is required when no issue is linked." });
@@ -1019,7 +1035,8 @@ public static class TicketEndpoints
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,
                 ownBase, branch, planUnit,
-                requiresRouteReview: req.RequiresRouteReview ?? registry.GetProjectConfig(projectKey).Discovery.ReviewRoute);
+                requiresRouteReview: req.RequiresRouteReview ?? registry.GetProjectConfig(projectKey).Discovery.ReviewRoute,
+                reconFrom: reconFrom);
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             // Photographed now, while it waits in its queue, so the first run already has the pictures.
             captures.Enqueue(t.Id);

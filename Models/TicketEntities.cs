@@ -416,6 +416,15 @@ public class Ticket
     public bool RequiresRouteReview { get; set; }
 
     /// <summary>
+    /// The Recon suggestion a discovery was filed from (docs/recon-tab-plan.md, "Scout this"):
+    /// <c>gap:&lt;area&gt;[:&lt;role&gt;:&lt;width&gt;]</c>, <c>changed:&lt;area&gt;</c> or
+    /// <c>rerun:&lt;discovery id&gt;</c>. It hides that suggestion while the discovery is open, and a
+    /// rerun's results count toward the direction it reran. Set only by the REST create route, from
+    /// the owner's form; no MCP tool takes it or shows it, and nothing changes it after filing.
+    /// </summary>
+    public string? ReconFrom { get; set; }
+
+    /// <summary>
     /// Run QA as a code review only — no app, no browser, no QA checklist. For work small or
     /// mechanical enough that standing a stack up to click through it costs more than it proves.
     /// Off by default, so an untouched ticket behaves exactly as it always has.
