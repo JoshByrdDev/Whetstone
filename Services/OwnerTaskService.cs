@@ -328,18 +328,19 @@ public class OwnerTaskService
     /// </summary>
     public async Task<OwnerTaskReply> DoneAsync(int id, string? note, string by = "owner", CancellationToken ct = default)
     {
+        // The note is the owner's choice: what they did and where the result lives helps the ticket that
+        // asked, but a job that speaks for itself is marked done with a click.
         note = (note ?? "").Trim();
-        if (note.Length == 0) return Refuse("bad-request", "Say what you did and where the result lives (never a secret's value).");
         if (note.Length > NoteMax) return Refuse("bad-request", $"At most {NoteMax} characters.");
         var t = await _db.OwnerTasks.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (t is null) return Refuse("not-found", $"There is no OT-{id}.");
         if (t.Status == OwnerTaskStatus.Done) return new OwnerTaskReply("recorded", $"{t.Ref} was already done.", Summary(t));
         var now = DateTime.UtcNow;
-        (t.Status, t.DoneAt, t.DoneNote, t.DroppedAt, t.DroppedBecause) = (OwnerTaskStatus.Done, now, note, null, null);
+        (t.Status, t.DoneAt, t.DoneNote, t.DroppedAt, t.DroppedBecause) = (OwnerTaskStatus.Done, now, note.Length == 0 ? null : note, null, null);
         ClearSuggestion(t);
-        await AddNoteAsync(t, OwnerTaskNoteKind.Owner, by, null, $"Done: {note}", ct);
+        await AddNoteAsync(t, OwnerTaskNoteKind.Owner, by, null, note.Length == 0 ? "Done." : $"Done: {note}", ct);
         await _db.SaveChangesAsync(ct);
-        await TellAsync(t, $"The owner did {t.Ref} ({t.Title}): {note}", $"{t.Ref} done", ct);
+        await TellAsync(t, note.Length == 0 ? $"The owner did {t.Ref} ({t.Title})." : $"The owner did {t.Ref} ({t.Title}): {note}", $"{t.Ref} done", ct);
         return new OwnerTaskReply("recorded", null, Summary(t));
     }
 

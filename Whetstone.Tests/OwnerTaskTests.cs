@@ -153,14 +153,26 @@ public class OwnerTaskTests : IDisposable
     }
 
     [Fact]
-    public async Task Done_needs_a_note_and_tells_the_ticket_and_the_steward()
+    public async Task Done_takes_no_note_when_the_owner_gives_none()
+    {
+        var id = IdOf(await With(s => s.AddAsync(Draft(), "worker")));
+        Assert.Equal("recorded", (await With(s => s.DoneAsync(id, " "))).Answer);
+
+        await using var ctx = NewCtx();
+        var t = await ctx.OwnerTasks.Include(x => x.Notes).SingleAsync();
+        Assert.Equal(OwnerTaskStatus.Done, t.Status);
+        Assert.Null(t.DoneNote);
+        Assert.Contains(t.Notes, n => n.Text == "Done.");
+    }
+
+    [Fact]
+    public async Task Done_tells_the_ticket_and_the_steward()
     {
         var ticket = await Ticket(TicketPhase.Blocked);
         var finished = await Ticket(TicketPhase.Done);
         var id = IdOf(await With(s => s.AddAsync(Draft(ticket: ticket), "worker")));
         await With(s => s.AppendAsync(id, "The done ticket needed it too.", finished, "worker"));
 
-        Assert.Equal("bad-request", (await With(s => s.DoneAsync(id, " "))).Answer);
         Assert.Equal("recorded", (await With(s => s.DoneAsync(id, "Key is in .env as STRIPE_API_KEY.", "session"))).Answer);
 
         await using var ctx = NewCtx();

@@ -88,7 +88,7 @@ Sessions reach the board over REST already. For them:
 
 - `GET /api/owner-todos/text` - every open item as markdown, grouped by what it holds up.
 - `GET /api/owner-todos/{id}/text` - one item (`14` or `OT-14`), with its log, written to be acted on.
-- `POST /api/owner-todos/{id}/done` with `{ "note": "..." }` - the same as the page's button.
+- `POST /api/owner-todos/{id}/done` with `{ "note": "..." }`, the note optional - the same as the page's button.
 
 A `/todo` skill in `~/.claude/skills/todo/` wraps those: `/todo` lists, `/todo OT-14` reads the
 item, opens its Where in the browser, walks through the Steps, checks Done when, and marks it done

@@ -216,7 +216,7 @@ function Detail({ t, onChanged }: { t: OwnerTodo; onChanged: () => Promise<void>
   };
 
   const say: Record<Exclude<Act, null | 'edit'>, { hint: string; go: string; fn: () => Promise<unknown> }> = {
-    done: { hint: 'What you did, and where the result lives - the file and the key name. Never the secret itself.', go: 'Mark it done', fn: () => doneOwnerTodo(t.id, text) },
+    done: { hint: 'Optional: what you did, and where the result lives - the file and the key name. Never the secret itself.', go: 'Mark it done', fn: () => doneOwnerTodo(t.id, text) },
     wait: { hint: 'Who or what it is waiting on.', go: 'Waiting', fn: () => waitOwnerTodo(t.id, text, until) },
     drop: { hint: 'Why it is no longer needed.', go: 'Drop it', fn: () => dropOwnerTodo(t.id, text) },
     note: { hint: 'A note on it: a link, what you found, a correction.', go: 'Add the note', fn: () => noteOwnerTodo(t.id, text) },
@@ -278,7 +278,7 @@ function Detail({ t, onChanged }: { t: OwnerTodo; onChanged: () => Promise<void>
             </label>
           )}
           <div className="flex gap-2 flex-wrap">
-            <GhostButton tone={act === 'drop' ? 'danger' : 'go'} disabled={busy || !text.trim()} onClick={() => run(say[act].fn)}>
+            <GhostButton tone={act === 'drop' ? 'danger' : 'go'} disabled={busy || (act !== 'done' && !text.trim())} onClick={() => run(say[act].fn)}>
               {busy ? 'Saving' : say[act].go}
             </GhostButton>
             <GhostButton disabled={busy} onClick={() => setAct(null)}>Cancel</GhostButton>
