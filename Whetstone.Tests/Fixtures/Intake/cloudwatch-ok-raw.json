@@ -1,0 +1,39 @@
+{
+  "AlarmName": "alpha-api-5xx",
+  "AlarmDescription": "More than five 5xx responses from the API in a minute",
+  "AWSAccountId": "000000000000",
+  "AlarmConfigurationUpdatedTimestamp": "2026-11-01T10:00:00.000+0000",
+  "NewStateValue": "OK",
+  "NewStateReason": "Threshold Crossed: 1 out of the last 1 datapoints [0.0 (16/11/26 14:19:00)] was not greater than the threshold (5.0) (minimum 1 datapoint for ALARM -> OK transition).",
+  "StateChangeTime": "2026-11-16T14:20:12.000+0000",
+  "Region": "US East (N. Virginia)",
+  "AlarmArn": "arn:aws:cloudwatch:us-east-1:000000000000:alarm:alpha-api-5xx",
+  "OldStateValue": "ALARM",
+  "OKActions": [
+    "arn:aws:sns:us-east-1:000000000000:alpha-outbox-topic"
+  ],
+  "AlarmActions": [
+    "arn:aws:sns:us-east-1:000000000000:alpha-outbox-topic"
+  ],
+  "InsufficientDataActions": [],
+  "Trigger": {
+    "MetricName": "5XXError",
+    "Namespace": "AWS/ApiGateway",
+    "StatisticType": "Statistic",
+    "Statistic": "SUM",
+    "Unit": null,
+    "Dimensions": [
+      {
+        "value": "alpha-api",
+        "name": "ApiName"
+      }
+    ],
+    "Period": 60,
+    "EvaluationPeriods": 1,
+    "DatapointsToAlarm": 1,
+    "ComparisonOperator": "GreaterThanThreshold",
+    "Threshold": 5.0,
+    "TreatMissingData": "missing",
+    "EvaluateLowSampleCountPercentile": ""
+  }
+}

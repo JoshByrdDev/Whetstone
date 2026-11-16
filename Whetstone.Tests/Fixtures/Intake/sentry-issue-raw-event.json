@@ -1,0 +1,40 @@
+{
+  "issue": {
+    "id": "4510000002",
+    "title": "InvalidOperationException: Sequence contains no elements",
+    "culprit": "Alpha.Api.Billing.InvoiceService in Close",
+    "permalink": "https://example-org.sentry.io/issues/4510000002/",
+    "level": "fatal",
+    "status": "unresolved",
+    "substatus": "regressed",
+    "count": "3",
+    "firstSeen": "2026-10-01T09:00:00Z",
+    "lastSeen": "2026-11-16T15:00:00Z"
+  },
+  "event": {
+    "event_id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "timestamp": 1794842400.0,
+    "release": "alpha-api@9a8b7c6d",
+    "tags": [["environment", "production"], ["route", "POST /invoices/{id}/close"], ["test", "true"]],
+    "exception": {
+      "values": [
+        {
+          "type": "ArgumentNullException",
+          "value": "Value cannot be null. (Parameter 'source')",
+          "stacktrace": { "frames": [ { "filename": "Billing/InvoiceLines.cs", "function": "Sum", "lineno": 30, "in_app": true } ] }
+        },
+        {
+          "type": "InvalidOperationException",
+          "value": "Sequence contains no elements",
+          "stacktrace": {
+            "frames": [
+              { "filename": "Program.cs", "function": "Main", "lineno": 12, "in_app": true },
+              { "filename": "Billing/InvoiceService.cs", "function": "Close", "lineno": 77, "in_app": true },
+              { "module": "System.Linq.Enumerable", "function": "First", "in_app": false }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

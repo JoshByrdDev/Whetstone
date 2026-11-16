@@ -1,0 +1,58 @@
+{
+  "issue": {
+    "id": "4510000001",
+    "shortId": "ALPHA-WEB-1A",
+    "title": "TypeError: Cannot read properties of null (reading 'id')",
+    "culprit": "bookVisit(src/booking/visit.ts)",
+    "permalink": "https://example-org.sentry.io/issues/4510000001/",
+    "level": "error",
+    "status": "unresolved",
+    "substatus": "new",
+    "isUnhandled": true,
+    "count": "17",
+    "userCount": 9,
+    "firstSeen": "2026-11-16T13:02:11.000000Z",
+    "lastSeen": "2026-11-16T14:41:07.512000Z",
+    "project": { "id": "4500000001", "name": "alpha-web", "slug": "alpha-web" },
+    "metadata": { "type": "TypeError", "value": "Cannot read properties of null (reading 'id')", "filename": "src/booking/visit.ts", "function": "bookVisit" },
+    "type": "error"
+  },
+  "event": {
+    "id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "eventID": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+    "groupID": "4510000001",
+    "title": "TypeError: Cannot read properties of null (reading 'id')",
+    "platform": "javascript",
+    "dateCreated": "2026-11-16T14:41:07.512000Z",
+    "release": { "version": "3f9c2e1b7a6d5c4b3a291807f6e5d4c3b2a19087", "shortVersion": "3f9c2e1" },
+    "tags": [
+      { "key": "environment", "value": "production" },
+      { "key": "transaction", "value": "/visits/book" },
+      { "key": "step", "value": "confirm" },
+      { "key": "browser", "value": "Chrome 131" },
+      { "key": "level", "value": "error" }
+    ],
+    "entries": [
+      {
+        "type": "exception",
+        "data": {
+          "values": [
+            {
+              "type": "TypeError",
+              "value": "Cannot read properties of null (reading 'id')",
+              "mechanism": { "type": "onunhandledrejection", "handled": false },
+              "stacktrace": {
+                "frames": [
+                  { "filename": "node_modules/react-dom/cjs/react-dom.production.js", "function": "commitRoot", "lineNo": 8821, "colNo": 12, "inApp": false },
+                  { "filename": "src/booking/BookingPage.tsx", "function": "onConfirm", "lineNo": 118, "colNo": 9, "inApp": true },
+                  { "filename": "src/booking/visit.ts", "function": "bookVisit", "lineNo": 42, "colNo": 27, "inApp": true }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      { "type": "breadcrumbs", "data": { "values": [] } }
+    ]
+  }
+}
