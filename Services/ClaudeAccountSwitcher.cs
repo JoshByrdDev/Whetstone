@@ -20,7 +20,7 @@ public sealed record AccountSwitchEvent(string From, string To, string Reason, D
 /// <para>
 /// It remembers every account's last numbers, in <c>run/claude-accounts-usage.json</c>, because the
 /// meter only ever reads the account in force. Without them the switch could leave an account but
-/// never know when to go back. Accounts on the list that are not in force are peeked at, read-only,
+/// never know when to go back. Every signed-in account not in force is peeked at, read-only,
 /// every few minutes; when that is impossible (a login that aged out while nobody ran it) the reset
 /// times from the last reading stand in, which is all "go back" needs.
 /// </para>
@@ -80,23 +80,30 @@ public class ClaudeAccountSwitcher
 
             var config = _registry.GetGlobalConfig();
             var settings = ClaudeSmartSwitch.Read(config);
-            if (!settings.Enabled) return;
-
             var accounts = ClaudeAccounts.All(config);
             var active = ClaudeAccounts.Active(config);
             var now = DateTimeOffset.UtcNow;
 
             ReadPause(accounts, active);
 
-            foreach (var rung in settings.Chain)
+            // Every signed-in login is peeked, on the list or not and with the switch on or off:
+            // the headroom meters show each one (/api/usage/all), and a login worth switching to
+            // is one whose numbers are already known. The switch's own order goes first.
+            var order = settings.Chain
+                .Select(r => ClaudeAccounts.Find(accounts, r.Account))
+                .OfType<ClaudeAccount>()
+                .Concat(accounts)
+                .DistinctBy(a => a.Name, StringComparer.OrdinalIgnoreCase);
+            foreach (var account in order)
             {
-                if (ClaudeAccounts.Find(accounts, rung.Account) is not { } account) continue;
                 if (account.Name == active.Name || !ClaudeAccounts.HasLogin(account)) continue;
                 if (_peekedAt.TryGetValue(account.Name, out var at) && now - at < PeekEvery) continue;
                 _peekedAt[account.Name] = now;
                 if (await _usage.PeekAsync(account, ct) is { } limits)
                     Record(account.Name, limits, DateTimeOffset.UtcNow);
             }
+
+            if (!settings.Enabled) return;
 
             Dictionary<string, AccountReading> readings;
             lock (_gate) readings = new(Load(), StringComparer.OrdinalIgnoreCase);

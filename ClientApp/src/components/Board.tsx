@@ -235,61 +235,7 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
     return { waiting: w, flight: f, backlog: b, done: within, doneTotal: d.length };
   }, [tickets, kindOf, landing, doneWindow]);
 
-  // Which agent is on which ticket. Several at once now, so this is a lookup rather than a single
-  // id: a row asks "is anyone working me, and who", and the dock asks the mirror question of
-  // whether an agent's ticket is on screen at all (the project filter can hide it).
-  const agentByTicket = useMemo(() => {
-    const m = new Map<number, AgentState>();
-    if (state.status !== 'running') return m;
-    for (const a of state.agents) {
-      const id = a.ticketId ? Number(a.ticketId.replace(/\D/g, '')) : NaN;
-      if (!Number.isNaN(id)) m.set(id, a);
-    }
-    return m;
-  }, [state.status, state.agents]);
-
-  // What is parked at each station, for the arc. Every ticket on the board is a ship somewhere,
-  // including the ones folded away in Backlog and Done — the arc is the whole sector, not just
-  // the part currently scrolled into view.
-  //
-  // Each ship also carries whether an agent is holding it — the same question the rows answer by
-  // standing a mascot over one, asked of the header. It is what lets a station tell work in hand
-  // from cargo waiting at the dock without adding a second mark to read.
-  const load = useMemo<StationLoad[]>(() => {
-    const l: StationLoad[] = STATIONS.map(() => ({ tiers: [], claimed: [] }));
-    for (const t of tickets) {
-      const at = l[stationOf(t)];
-      at.tiers.push(tierOf(t.phase, kindOf.get(t.phase)));
-      at.claimed.push(agentByTicket.has(t.id));
-    }
-    return l;
-  }, [tickets, kindOf, agentByTicket]);
-
-  // The mirror of that: which station each agent is standing at. The berths quote an agent's last
-  // line by slot, and this is what lets the arc put the same event on the map.
-  //
-  // The agent's own phase is preferred over the ticket's: both come from the same heartbeat, but
-  // the ticket list is refetched a beat later, so during that gap the ticket still reads as the
-  // phase the agent has already moved on from. The ticket is the fallback, and the one that can
-  // answer for a blocked agent — Blocked is not a place on the arc, and only the ticket remembers
-  // which station it was blocked out of.
-  const stationByAgent = useMemo(() => {
-    const m = new Map<number, number>();
-    if (state.status !== 'running') return m;
-    const byId = new Map(tickets.map(t => [t.id, t]));
-    for (const a of state.agents) {
-      const id = a.ticketId ? Number(a.ticketId.replace(/D/g, '')) : NaN;
-      const t = Number.isNaN(id) ? undefined : byId.get(id);
-      const phase = a.phase as Phase | undefined;
-      const at = phase && phase !== 'Blocked' && phase in STATION_OF ? STATION_OF[phase]
-               : t ? stationOf(t)
-               : null;
-      if (at != null) m.set(a.slot, at);
-    }
-    return m;
-  }, [state.status, state.agents, tickets]);
-
-  const pulses = useStationPulse(events, stationByAgent);
+  const { agentByTicket, load, pulses } = useArcFeed(state, events, tickets, kindOf);
 
   const flightIds = useMemo(() => new Set(flight.map(t => t.id)), [flight]);
   // Berths on other machines, drawn after the board host's own (docs/worker-hosts-plan.md).
@@ -774,6 +720,76 @@ export function Board({ state, wakeAt, events }: { state: DashboardState; wakeAt
   );
 }
 
+// ---- The arc's feed ----
+
+/**
+ * What the arc draws from the fleet: which agent holds which ticket, what is parked at each station,
+ * and the latest line at each. The board and the Tower draw the same arc, so they ask this once.
+ */
+export function useArcFeed(
+  state: DashboardState,
+  events: HeartbeatEvent[],
+  tickets: TicketSummary[],
+  kindOf: ReadonlyMap<Phase, PhaseKind>,
+): { agentByTicket: ReadonlyMap<number, AgentState>; load: StationLoad[]; pulses: ReadonlyMap<number, StationPulse> } {
+  // Which agent is on which ticket. Several at once now, so this is a lookup rather than a single
+  // id: a row asks "is anyone working me, and who", and the dock asks the mirror question of
+  // whether an agent's ticket is on screen at all (the project filter can hide it).
+  const agentByTicket = useMemo(() => {
+    const m = new Map<number, AgentState>();
+    if (state.status !== 'running') return m;
+    for (const a of state.agents) {
+      const id = a.ticketId ? Number(a.ticketId.replace(/\D/g, '')) : NaN;
+      if (!Number.isNaN(id)) m.set(id, a);
+    }
+    return m;
+  }, [state.status, state.agents]);
+
+  // What is parked at each station, for the arc. Every ticket on the board is a ship somewhere,
+  // including the ones folded away in Backlog and Done — the arc is the whole sector, not just
+  // the part currently scrolled into view.
+  //
+  // Each ship also carries whether an agent is holding it — the same question the rows answer by
+  // standing a mascot over one, asked of the header. It is what lets a station tell work in hand
+  // from cargo waiting at the dock without adding a second mark to read.
+  const load = useMemo<StationLoad[]>(() => {
+    const l: StationLoad[] = STATIONS.map(() => ({ tiers: [], claimed: [] }));
+    for (const t of tickets) {
+      const at = l[stationOf(t)];
+      at.tiers.push(tierOf(t.phase, kindOf.get(t.phase)));
+      at.claimed.push(agentByTicket.has(t.id));
+    }
+    return l;
+  }, [tickets, kindOf, agentByTicket]);
+
+  // The mirror of that: which station each agent is standing at. The berths quote an agent's last
+  // line by slot, and this is what lets the arc put the same event on the map.
+  //
+  // The agent's own phase is preferred over the ticket's: both come from the same heartbeat, but
+  // the ticket list is refetched a beat later, so during that gap the ticket still reads as the
+  // phase the agent has already moved on from. The ticket is the fallback, and the one that can
+  // answer for a blocked agent — Blocked is not a place on the arc, and only the ticket remembers
+  // which station it was blocked out of.
+  const stationByAgent = useMemo(() => {
+    const m = new Map<number, number>();
+    if (state.status !== 'running') return m;
+    const byId = new Map(tickets.map(t => [t.id, t]));
+    for (const a of state.agents) {
+      const id = a.ticketId ? Number(a.ticketId.replace(/\D/g, '')) : NaN;
+      const t = Number.isNaN(id) ? undefined : byId.get(id);
+      const phase = a.phase as Phase | undefined;
+      const at = phase && phase !== 'Blocked' && phase in STATION_OF ? STATION_OF[phase]
+               : t ? stationOf(t)
+               : null;
+      if (at != null) m.set(a.slot, at);
+    }
+    return m;
+  }, [state.status, state.agents, tickets]);
+
+  const pulses = useStationPulse(events, stationByAgent);
+  return { agentByTicket, load, pulses };
+}
+
 // ---- Filter transitions ----
 
 type RowFx = 'in' | 'out' | 'file';
@@ -888,7 +904,7 @@ const LAND_MS_REDUCED = 300;
  * able to replay. A flag already standing at true has nothing to say to the second ticket to
  * finish within a second.
  */
-function useLanding(
+export function useLanding(
   tickets: TicketSummary[],
   kindOf: ReadonlyMap<Phase, PhaseKind>,
   ready: boolean,

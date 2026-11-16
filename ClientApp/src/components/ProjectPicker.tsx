@@ -19,6 +19,9 @@ function readRemembered(slot: string | undefined): string | null {
   }
 }
 
+/** Set the project a tab opens on - for a page that sends you to that tab about one project. */
+export function rememberProject(slot: string, key: string): void { writeRemembered(slot, key); }
+
 function writeRemembered(slot: string | undefined, key: string): void {
   if (!slot) return;
   try {

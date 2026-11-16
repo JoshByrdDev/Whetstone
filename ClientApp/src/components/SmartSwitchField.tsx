@@ -40,13 +40,15 @@ function when(iso: string): string {
   return d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
-export function SmartSwitchField({ value, accounts, onChange, dirty }: {
+export function SmartSwitchField({ value, accounts, onChange, dirty, compact = false }: {
   value: SmartSwitchSetting;
   /** Every account name on offer, Default first - including ones typed but not saved yet. */
   accounts: string[];
   onChange: (v: SmartSwitchSetting) => void;
   /** Unsaved edits on the form: the live numbers below describe what is saved, not what is typed. */
   dirty: boolean;
+  /** Leave out the explanations, for a page that has been read before (the Tower). */
+  compact?: boolean;
 }) {
   const [seen, setSeen] = useState<Seen | null>(null);
 
@@ -86,7 +88,7 @@ export function SmartSwitchField({ value, accounts, onChange, dirty }: {
   if (names.length < 2) {
     return (
       <p className="text-xs text-gray-500">
-        Add a second account above and save, and this can move the fleet onto it by itself as the first one fills.
+        {compact ? 'Add a second Claude account in Settings' : 'Add a second account above'} and save, and this can move the fleet onto it by itself as the first one fills.
       </p>
     );
   }
@@ -102,11 +104,11 @@ export function SmartSwitchField({ value, accounts, onChange, dirty }: {
         />
         <span className="min-w-0">
           <span className="block text-sm text-gray-300 group-hover:text-gray-100 transition-colors">Switch accounts by usage</span>
-          <span className="block text-xs text-gray-500 mt-1">
+          {!compact && <span className="block text-xs text-gray-500 mt-1">
             New runs start on the first account below that is under both of its limits, checked every minute. When one
             fills, the next takes over; when an earlier one's window resets, it comes back. Runs already going finish
             on the account they started with - nothing is stopped. Picking an account by hand in the header turns this off.
-          </span>
+          </span>}
         </span>
       </label>
 
@@ -160,9 +162,9 @@ export function SmartSwitchField({ value, accounts, onChange, dirty }: {
           >
             Add to list
           </button>
-          <span className="text-xs text-gray-600">
+          {!compact && <span className="text-xs text-gray-600">
             When every account is at its limit, the fleet stays where it is and waits for a reset as it does today.
-          </span>
+          </span>}
         </div>
       </div>
 
@@ -189,5 +191,68 @@ function AccountLine({ seen, active, dirty }: { seen: AccountSeen | undefined; a
       <span>{numbers}</span>
       {seen.over && <span className="text-amber-400">- {seen.over}</span>}
     </p>
+  );
+}
+
+/** A percent the switch can hold: 1 to 100, both limits on every rung. */
+export const smartSwitchValid = (v: SmartSwitchSetting) =>
+  v.chain.every(r => r.weekly >= 1 && r.weekly <= 100 && r.session >= 1 && r.session <= 100);
+
+/**
+ * The smart switch on its own, saving itself: the same field the Settings page draws inside its
+ * global form, for a page that has no form around it (the Tower). It writes only
+ * `claudeSmartSwitch` - the config route keeps every key a body leaves out - so it cannot put back
+ * an older value of anything else.
+ */
+export function SmartSwitchCard({ compact = true }: { compact?: boolean }) {
+  const [value, setValue] = useState<SmartSwitchSetting | null>(null);
+  const [saved, setSaved] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [failed, setFailed] = useState<string | null>(null);
+
+  const read = () =>
+    fetch('/api/config').then(r => r.json())
+      .then((d: { claudeSmartSwitch?: SmartSwitchSetting; claudeAccounts?: { name: string }[] }) => {
+        const v = d.claudeSmartSwitch ?? { enabled: false, chain: [] };
+        setValue(v); setSaved(JSON.stringify(v));
+        setAccounts(['Default', ...(d.claudeAccounts ?? []).map(a => a.name.trim())]);
+      })
+      .catch(() => setFailed('Could not read the settings.'));
+  useEffect(() => { void read(); }, []);
+
+  if (!value) return failed ? <p className="text-xs text-red-400">{failed}</p> : null;
+  const dirty = JSON.stringify(value) !== saved;
+  const ok = smartSwitchValid(value);
+  const save = async () => {
+    setSaving(true); setFailed(null);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ claudeSmartSwitch: value }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? 'Save failed');
+      await read();
+    } catch (e) {
+      setFailed(e instanceof Error ? e.message : 'Save failed');
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="space-y-2">
+      <SmartSwitchField value={value} accounts={accounts} onChange={setValue} dirty={dirty} compact={compact} />
+      {(dirty || failed) && (
+        <div className="flex flex-wrap items-center gap-3">
+          {dirty && (
+            <>
+              <button type="button" className={small} disabled={saving || !ok} onClick={save}>{saving ? 'Saving' : 'Save'}</button>
+              <button type="button" className={small} disabled={saving} onClick={() => saved && setValue(JSON.parse(saved))}>Discard</button>
+            </>
+          )}
+          {!ok && <span className="text-xs text-red-400">Each limit is a percent from 1 to 100</span>}
+          {failed && <span className="text-xs text-red-400">{failed}</span>}
+        </div>
+      )}
+    </div>
   );
 }

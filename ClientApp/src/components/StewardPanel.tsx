@@ -109,21 +109,8 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   }, [runningNow, load]);
 
   const off = page?.mode === 'off';
-  // A ticket in review whose merge waits on a flag only its owner can clear. Answering the
-  // question that asked about it lifts nothing, so the ticket stays here until the flag is
-  // cleared or the ticket leaves review; one an open question names is already shown under it.
-  const asked = new Set((page?.waiting ?? []).map(q => q.ticketId).filter((id): id is number => id != null));
-  const inReview = (status?.tickets ?? []).filter(t => t.phase === 'NeedsReview' && !asked.has(t.id));
-  const [held, setHeld] = useState<Record<number, boolean>>({});
-  const hear = useCallback((id: number, flags: StewardOwnerFlag[]) => {
-    const on = flags.some(f => !f.cleared);
-    setHeld(h => (h[id] === on ? h : { ...h, [id]: on }));
-  }, []);
-  const heldCount = inReview.filter(t => held[t.id]).length;
-  // Reading a ticket's flags takes git a few seconds; until each has answered, "nothing is
-  // waiting" is not yet known to be true.
-  const hearing = inReview.some(t => held[t.id] === undefined);
-  const waitingCount = (page?.waiting.length ?? 0) + heldCount;
+  // What is waiting on you is counted by the list itself (WaitingOnYou), which is what reads the flags.
+  const [waitingCount, setWaitingCount] = useState(0);
   // What a release still asks of its owner: the notes that are something to do, not only to know.
   const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && !e.gone && e.release !== 'Note').length;
   // Rulings the steward made that the owner has not yet seen: they apply already, so they count.
@@ -193,24 +180,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
 
                 <div className="min-w-0">
                   <SectionRule title="Waiting on you" colour={TIER.blocked.c} count={waitingCount} />
-                  {/* Mounted whatever the count, since reading their flags is what makes the count. */}
-                  <div className="flex flex-col gap-3">
-                    {page.waiting.map(q => (
-                      <QuestionCard key={q.key} project={page.project} q={q} onSettled={load}
-                        onAnswer={async (a, replaces, story) => {
-                          await answerStewardQuestion(page.project, q.key, a, replaces, story);
-                          // Recorded: the card goes now, and the rest of the page catches up behind it.
-                          // Re-reading the whole page is seconds on a busy machine, and "Answering..."
-                          // was waiting on that rather than on the answer.
-                          setPage(p => p && { ...p, waiting: p.waiting.filter(x => x.key !== q.key) });
-                          void load();
-                        }} />
-                    ))}
-                    {inReview.map(t => (
-                      <StewardTicketFlags key={t.id} framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
-                    ))}
-                  </div>
-                  {waitingCount === 0 && <NothingWaiting checking={hearing} />}
+                  <WaitingOnYou page={page} status={status} onChanged={load} onCount={setWaitingCount} />
                 </div>
               </div>
 
@@ -248,6 +218,72 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * Everything on a project that is waiting on its owner: the steward's questions, and the tickets in
+ * review whose merge waits on a flag only the owner can clear. The one list the Steward page's Now
+ * and the Tower both draw, so an answer given in either is the same answer.
+ *
+ * An answered question leaves at once and the rest catches up behind it: re-reading the whole page
+ * is seconds on a busy machine, and "Answering..." was waiting on that rather than on the answer.
+ */
+export function WaitingOnYou({ page, status, onChanged, onCount, tag, quietWhenEmpty = false }: {
+  page: StewardPage;
+  status: StewardStatus | null;
+  /** Re-read the page: something here was answered or settled. */
+  onChanged: () => Promise<void> | void;
+  /** How many things are waiting, and whether the flags are still being read. */
+  onCount?: (count: number, checking: boolean) => void;
+  /** Said above each card - the project's name, where several projects share one list. */
+  tag?: string;
+  /** Draw nothing when nothing is waiting, for a list that says so once for several projects. */
+  quietWhenEmpty?: boolean;
+}) {
+  const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
+  const waiting = page.waiting.filter(q => !gone.has(q.key));
+  // A ticket in review whose merge waits on a flag only its owner can clear. Answering the
+  // question that asked about it lifts nothing, so the ticket stays here until the flag is
+  // cleared or the ticket leaves review; one an open question names is already shown under it.
+  const asked = new Set(waiting.map(q => q.ticketId).filter((id): id is number => id != null));
+  const inReview = (status?.tickets ?? []).filter(t => t.phase === 'NeedsReview' && !asked.has(t.id));
+  const [held, setHeld] = useState<Record<number, boolean>>({});
+  const hear = useCallback((id: number, flags: StewardOwnerFlag[]) => {
+    const on = flags.some(f => !f.cleared);
+    setHeld(h => (h[id] === on ? h : { ...h, [id]: on }));
+  }, []);
+  // Reading a ticket's flags takes git a few seconds; until each has answered, "nothing is
+  // waiting" is not yet known to be true.
+  const hearing = inReview.some(t => held[t.id] === undefined);
+  const count = waiting.length + inReview.filter(t => held[t.id]).length;
+  useEffect(() => { onCount?.(count, hearing); }, [count, hearing, onCount]);
+
+  const said = tag ? <div style={{ ...label('var(--w-t400)'), marginBottom: 4 }}>{tag}</div> : null;
+  return (
+    <>
+      {/* Mounted whatever the count, since reading their flags is what makes the count. */}
+      <div className="flex flex-col gap-3">
+        {waiting.map(q => (
+          <div key={q.key} className="min-w-0">
+            {said}
+            <QuestionCard project={page.project} q={q} onSettled={async () => { await onChanged(); }}
+              onAnswer={async (a, replaces, story) => {
+                await answerStewardQuestion(page.project, q.key, a, replaces, story);
+                setGone(g => new Set(g).add(q.key));
+                void onChanged();
+              }} />
+          </div>
+        ))}
+        {inReview.map(t => (
+          <div key={t.id} className="min-w-0">
+            {held[t.id] && said}
+            <StewardTicketFlags framed project={page.project} ticketId={t.id} title={t.title} onFlags={f => hear(t.id, f)} />
+          </div>
+        ))}
+      </div>
+      {count === 0 && !quietWhenEmpty && <NothingWaiting checking={hearing} />}
+    </>
   );
 }
 
@@ -455,7 +491,7 @@ function OptionsCard({ project, q, onAnswer }: {
  * The mascot animates itself by mood, so a working steward bobs, one with a run due stands by,
  * and one with nothing to find sleeps.
  */
-function StewardCard({ page, running, fleet, live, onRan }: {
+export function StewardCard({ page, running, fleet, live, onRan }: {
   page: StewardPage; running: boolean; fleet: DashboardState['status']; live: HeartbeatEvent[]; onRan: () => void;
 }) {
   // Asking for a run: held while the request is out, then what the board said, until the next ask.
@@ -585,7 +621,7 @@ function LastRun({ summary }: { summary?: string | null }) {
 }
 
 /** The right column with nothing in it: the space stays, and says why it is empty. */
-function NothingWaiting({ checking }: { checking: boolean }) {
+export function NothingWaiting({ checking }: { checking: boolean }) {
   return (
     <div
       className="flex flex-col items-center justify-center text-center"

@@ -104,9 +104,9 @@ function Bar({ b }: { b: Bucket }) {
   );
 }
 
-export function CapacityStrip({ days }: { days: number }) {
+/** The capacity read for the window, re-read every minute. Null until it answers, and from a server without the route. */
+function useCapacity(days: number): Capacity | null {
   const [data, setData] = useState<Capacity | null>(null);
-
   useEffect(() => {
     let live = true;
     const load = () => fetch(`/api/metrics/capacity?days=${Math.min(days, 30)}`)
@@ -115,13 +115,41 @@ export function CapacityStrip({ days }: { days: number }) {
     const t = setInterval(load, 60_000);
     return () => { live = false; clearInterval(t); };
   }, [days]);
+  return data;
+}
+
+/** Slot time on duty, and the part of it spent working: off-duty minutes are not counted against the fleet. */
+function onDutyOf(data: Capacity) {
+  const total = data.summary.total;
+  const offMinutes = data.offDuty.reduce((s, r) => s + (total.idle[r] ?? 0), 0);
+  return { total, offMinutes, onDuty: total.slotMinutes - offMinutes };
+}
+
+/**
+ * The one number of the capacity strip, for the Tower: how busy the berths were while anyone was on
+ * duty. Always the last seven days, and it says so, so it is never read as the Metrics tab's window.
+ */
+export function BusyWhileOnDuty() {
+  const data = useCapacity(7);
+  if (!data) return null;
+  if (data.summary.samples === 0) return <p className="text-xs text-gray-500">Sampling has just started.</p>;
+  const { total, onDuty } = onDutyOf(data);
+  return (
+    <div title={`${hours(total.busy)} working of ${hours(onDuty)} slot time on duty`}>
+      <div className="text-3xl font-semibold text-gray-100">{pct(total.busy, onDuty)}</div>
+      <div className="text-xs text-gray-400 mt-1">busy while on duty</div>
+      <div className="text-xs text-gray-500">last 7 days</div>
+    </div>
+  );
+}
+
+export function CapacityStrip({ days }: { days: number }) {
+  const data = useCapacity(days);
 
   // A server without the route says nothing rather than something wrong.
   if (!data) return null;
   const { summary, now, offDuty } = data;
-  const total = summary.total;
-  const offMinutes = offDuty.reduce((s, r) => s + (total.idle[r] ?? 0), 0);
-  const onDuty = total.slotMinutes - offMinutes;
+  const { total, offMinutes, onDuty } = onDutyOf(data);
   const where = whereLine(data.lastNothingReady);
 
   // Every reason that has any time, biggest first, for the legend-as-table - off duty last.

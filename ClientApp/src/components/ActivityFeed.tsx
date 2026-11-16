@@ -20,6 +20,8 @@ interface Props {
   solo?: boolean;
   /** What to say when there is nothing to show, where the fleet's own wording would be wrong. */
   empty?: string;
+  /** Fill the height it is given rather than standing a fixed 500px: the Tower sizes its cells to the window. */
+  fill?: boolean;
 }
 
 const typeIcons: Record<string, string> = {
@@ -52,7 +54,7 @@ const typeColors: Record<string, string> = {
   ticket_skip:    'border-red-500',
 };
 
-export function ActivityFeed({ events, agentFilter, solo = false, empty }: Props) {
+export function ActivityFeed({ events, agentFilter, solo = false, empty, fill = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -84,7 +86,7 @@ export function ActivityFeed({ events, agentFilter, solo = false, empty }: Props
 
   if (feedEvents.length === 0) {
     return (
-      <div className={`${solo ? 'h-24' : 'h-[500px]'} flex items-center justify-center bg-gray-900 rounded-lg border border-hair text-gray-500 text-center px-6`}>
+      <div className={`${fill ? 'h-full' : solo ? 'h-24' : 'h-[500px]'} flex items-center justify-center bg-gray-900 rounded-lg border border-hair text-gray-500 text-center px-6`}>
         {empty ?? (filtering
           ? 'Nothing from the selected agents yet. Press Esc, or click the chip again, for the whole fleet.'
           : 'Waiting for heartbeat events...')}
@@ -93,7 +95,7 @@ export function ActivityFeed({ events, agentFilter, solo = false, empty }: Props
   }
 
   return (
-    <div className="relative">
+    <div className={fill ? 'relative h-full' : 'relative'}>
       {!autoScroll && (
         <button
           onClick={() => {
@@ -110,7 +112,7 @@ export function ActivityFeed({ events, agentFilter, solo = false, empty }: Props
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className={`${solo ? 'max-h-[500px]' : 'h-[500px]'} overflow-y-auto bg-gray-900 rounded-lg border border-hair p-3 dark-scrollbar`}
+        className={`${fill ? 'h-full' : solo ? 'max-h-[500px]' : 'h-[500px]'} overflow-y-auto bg-gray-900 rounded-lg border border-hair p-3 dark-scrollbar`}
       >
         {feedEvents.map((evt, i) => {
           // Where the steward takes up the telling, say so once, at the head of its stretch: its

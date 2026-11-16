@@ -21,6 +21,7 @@ import { MetricsPanel } from './components/metrics/MetricsPanel';
 import { Classroom } from './components/Classroom';
 import { StewardPanel } from './components/StewardPanel';
 import { ReconPanel } from './components/recon/ReconPanel';
+import { Tower } from './components/Tower';
 import { Backdrop } from './components/Backdrop';
 import { PageHead, SectionRule } from './components/ui';
 import { chamfer, CAPS, DISPLAY, MONO } from './components/orbit';
@@ -30,7 +31,7 @@ import { useNarrow } from './hooks/useNarrow';
 import { useSkillDrift, driftTotal } from './hooks/useSkillDrift';
 import { confirmLeave } from './hooks/useUnsavedGuard';
 
-type Tab = 'board' | 'steward' | 'recon' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
+type Tab = 'tower' | 'board' | 'steward' | 'recon' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
 
 /**
  * The tabs, in the order they appear in the nav — which is also the order they sit in space.
@@ -40,6 +41,8 @@ type Tab = 'board' | 'steward' | 'recon' | 'classroom' | 'heartbeat' | 'metrics'
  * becomes one strip you are moving along.
  */
 const TABS: { id: Tab; label: string }[] = [
+  // The whole system on one screen, to leave up and watch - borrowed from the tabs after it.
+  { id: 'tower', label: 'Tower' },
   { id: 'board', label: 'Board' },
   { id: 'steward', label: 'Steward' },
   // Shown only while some project has a discovery block (docs/recon-tab-plan.md).
@@ -252,6 +255,8 @@ export default function App() {
           {/* Keyed on the tab so React tears the old page down and the entrance animation restarts
               from its first frame rather than being skipped as an unchanged class. */}
           <div key={tab} className={stageClass} style={{ pointerEvents: leaving ? 'none' : undefined }}>
+          {tab === 'tower' && <Tower state={state} wakeAt={wakeAt} events={events} onGo={go} />}
+
           {tab === 'board' && <Board state={state} wakeAt={wakeAt} events={events} />}
 
           {tab === 'steward' && <StewardPanel events={events} state={state} />}

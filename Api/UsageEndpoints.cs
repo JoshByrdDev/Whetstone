@@ -109,6 +109,44 @@ public static class UsageEndpoints
             });
         });
 
+        // Every login's meters, the one in force first: its own live poll, and for the rest the
+        // last peek the switcher kept (ClaudeAccountSwitcher peeks every signed-in login). For the
+        // headroom card, which shows them all rather than only the one being spent.
+        app.MapGet("/api/usage/all", (ClaudeUsageService usage, ClaudeAccountSwitcher switcher) =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            var current = usage.Current;
+            var readings = switcher.Readings;
+            return Results.Ok(usage.Accounts
+                .OrderBy(a => a.Name == usage.AccountName ? 0 : 1)
+                .Select(a =>
+                {
+                    var active = a.Name == usage.AccountName;
+                    readings.TryGetValue(a.Name, out var r);
+                    var limits = active ? current.Limits : r?.Limits ?? [];
+                    return new
+                    {
+                        name = a.Name,
+                        active,
+                        signedIn = ClaudeAccounts.HasLogin(a),
+                        status = active ? current.Status : r?.FetchedAt is null ? "unknown" : "ok",
+                        message = active ? current.Message : null,
+                        fetchedAt = active ? current.FetchedAt : r?.FetchedAt,
+                        blockedUntil = r?.BlockedUntil > now ? r.BlockedUntil : null,
+                        limits = limits.Select(l => new
+                        {
+                            kind = l.Kind,
+                            group = l.Group,
+                            label = l.Label,
+                            percent = l.Percent,
+                            severity = l.Severity,
+                            resetsAt = l.ResetsAt,
+                            isActive = l.IsActive,
+                        }),
+                    };
+                }));
+        });
+
         // Which providers some role runs on - which meters the app bar and the Metrics tab draw. A
         // provider no role uses gets no meter; Gemini reports no usage at all, so a board running
         // only Gemini shows that its usage is unknown rather than showing nothing.

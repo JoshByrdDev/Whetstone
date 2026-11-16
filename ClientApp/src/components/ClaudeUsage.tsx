@@ -433,21 +433,94 @@ function MeterCard({ title, note, children }: { title: string; note: string | nu
   );
 }
 
-function ClaudeMeters() {
-  const { usage } = useClaudeUsage();
-  if (!usage || usage.status === 'unsupported') return null;
+/** One login's meters, from /api/usage/all: the one in force live, the rest as last peeked. */
+interface LoginUsage {
+  name: string;
+  active: boolean;
+  signedIn: boolean;
+  status: string;
+  message: string | null;
+  fetchedAt: string | null;
+  blockedUntil: string | null;
+  limits: UsageLimit[];
+}
+
+function useAllClaudeUsage() {
+  const [logins, setLogins] = useState<LoginUsage[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      fetch('/api/usage/all')
+        .then(r => (r.ok ? r.json() : null))
+        .then(d => { if (live && d) setLogins(d); })
+        .catch(() => { /* keeps its last value; the next tick is the retry */ });
+    load();
+    const timer = setInterval(load, POLL_MS);
+    return () => { live = false; clearInterval(timer); };
+  }, []);
+  return logins;
+}
+
+/**
+ * Every Claude login's headroom, the one being spent first. A login not in force is read by the
+ * switcher's peek every few minutes, so its numbers say when they were read.
+ */
+export function ClaudeMeters() {
+  const logins = useAllClaudeUsage();
+  if (!logins || logins.length === 0) return null;
+  if (logins.length === 1 && logins[0].status === 'unsupported') return null;
+  const head = logins[0];
   return (
     <MeterCard
       title="Claude headroom"
-      note={usage.status === 'ok' && usage.fetchedAt ? `updated ${formatWakeTime(new Date(usage.fetchedAt))}` : usage.message}
+      note={logins.length > 1 ? `${logins.length} logins`
+        : head.status === 'ok' && head.fetchedAt ? `updated ${formatWakeTime(new Date(head.fetchedAt))}` : head.message}
     >
-      {usage.limits.length === 0 ? (
-        <p className="text-xs text-gray-500">
-          No usage data yet. This reads Claude Code's own login, which only stays fresh while somebody is
-          running the CLI — run <code className="text-gray-400">claude</code> once if it stays empty.
-        </p>
-      ) : <MeterRows limits={usage.limits} />}
+      <LoginMeters logins={logins} />
     </MeterCard>
+  );
+}
+
+/** The same meters without their card, for a page that frames them itself (the Tower). */
+export function ClaudeLogins() {
+  const logins = useAllClaudeUsage();
+  if (!logins || logins.length === 0) return null;
+  return <LoginMeters logins={logins} />;
+}
+
+function LoginMeters({ logins }: { logins: LoginUsage[] }) {
+  const one = logins.length === 1;
+  return (
+    <div className="space-y-4">
+      {logins.map(l => (
+        <div key={l.name} className="min-w-0">
+          {!one && (
+            <div className="flex items-baseline justify-between gap-2 mb-1.5 text-xs min-w-0">
+              <span className="truncate">
+                <span className="font-medium text-gray-300">{l.name}</span>
+                {l.active && <span className="ml-2 text-emerald-400">in use</span>}
+              </span>
+              <span className="text-gray-600 flex-none">
+                {l.fetchedAt ? `read ${formatWakeTime(new Date(l.fetchedAt))}` : ''}
+              </span>
+            </div>
+          )}
+          {!l.signedIn ? (
+            <p className="text-xs text-amber-400">Not signed in.</p>
+          ) : l.limits.length === 0 ? (
+            <p className="text-xs text-gray-500">
+              {l.active
+                ? <>No usage data yet. This reads Claude Code's own login, which only stays fresh while somebody is
+                  running the CLI — run <code className="text-gray-400">claude</code> once if it stays empty.</>
+                : 'No reading yet - it is peeked every few minutes while its login is fresh.'}
+            </p>
+          ) : <MeterRows limits={l.limits} />}
+          {l.blockedUntil && (
+            <p className="text-[11px] text-amber-400 mt-1">Hit its limit - full until {formatWakeTime(new Date(l.blockedUntil))}.</p>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 

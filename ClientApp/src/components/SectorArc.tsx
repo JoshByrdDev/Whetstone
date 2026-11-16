@@ -78,6 +78,8 @@ const NODE_MAX = 34;
 /** The tallest thing a node paints above its centre is the ship row, at `size + 24` plus its glow;
     with Done at y=62 that leaves this much to find above the band for the largest node to clear. */
 const HEADROOM = 18;
+/** The height a squashed arc keeps whole: the room the ships above the highest node need. */
+const SQUASH_TOP = 48;
 
 /** Smooth cubic through the points, with horizontally-flat tangents at each station. */
 function smoothPath(pts: [number, number][]): string {
@@ -175,8 +177,19 @@ function NodeFlash({ pulse, size }: { pulse?: StationPulse; size: number }) {
   );
 }
 
-export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0, insetRight = 0, onHoverStation, selected, onToggleStation, burst }: {
+export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0, insetRight = 0, onHoverStation, selected, onToggleStation, burst, describe, squash = 1 }: {
   load: StationLoad[];
+  /**
+   * What a node says under the pointer, for an arc that only watches (the Tower). Without
+   * `onToggleStation` a node is not a control: it lights on hover and says this, and a click does
+   * nothing.
+   */
+  describe?: (station: number) => string;
+  /**
+   * How much of the arc's height to keep, 0..1: the Tower draws it flatter so the rest of the
+   * screen has room. The hand-tuned heights are pressed toward the top, never re-tuned.
+   */
+  squash?: number;
   /**
    * Which tracks this board runs, from the per-project setting. Decides which lanes and which nodes
    * get drawn — never how wide anything is, since the review stops borrow their positions from the
@@ -223,7 +236,10 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
   const reviewShown = STATIONS.some((s, i) => s.track === 'review' && shown.has(i));
   const deliveryShown = STATIONS.some((s, i) => s.track === 'delivery' && shown.has(i));
   const discoveryShown = STATIONS.some((s, i) => s.track === 'discovery' && shown.has(i));
-  const bandH = discoveryShown ? BAND_DISCOVERY : reviewShown ? BAND_FULL : BAND_DELIVERY_ONLY;
+  const fullH = discoveryShown ? BAND_DISCOVERY : reviewShown ? BAND_FULL : BAND_DELIVERY_ONLY;
+  const press = (y: number) => SQUASH_TOP + (y - SQUASH_TOP) * squash;
+  const bandH = Math.round(press(fullH));
+  const arcY = (i: number) => press(ARC_Y[i]);
 
   const probes = useRef<(HTMLSpanElement | null)[]>([]);
   const [xs, setXs] = useState<number[]>([]);
@@ -269,7 +285,7 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
     const at = STATIONS[i].at;
     return typeof at === 'number' ? xs[at] : (xs[at[0]] + xs[at[1]]) / 2;
   };
-  const trace = (stops: number[]) => smoothPath(stops.map(i => [nodeX(i), ARC_Y[i]] as [number, number]));
+  const trace = (stops: number[]) => smoothPath(stops.map(i => [nodeX(i), arcY(i)] as [number, number]));
   // The main lane is the delivery arc — unless this board does not run delivery at all, in which
   // case the review approach is the only route through and has to carry the crawl itself.
   const path = !measured ? ''
@@ -368,13 +384,17 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
         // Dimmed only while some *other* station is holding the filter. With nothing filtered the
         // arc is at rest and every node reads the same, which is what makes the first click legible.
         const off = !!selected?.size && !on;
+        const count = `${st.label} — ${tiers.length} ticket${tiers.length === 1 ? '' : 's'}`;
+        const toggles = !!onToggleStation;
 
         return (
           <div
             key={st.label}
             className="orbit-node"
-            style={{ position: 'absolute', left: x, top: ARC_Y[i], width: 0, height: 0, cursor: 'pointer' }}
-            title={`${st.label} — ${tiers.length} ticket${tiers.length === 1 ? '' : 's'} · ${on ? 'click to drop from the filter' : 'click to keep only this stage'}`}
+            style={{ position: 'absolute', left: x, top: arcY(i), width: 0, height: 0, cursor: toggles ? 'pointer' : 'default' }}
+            title={toggles
+              ? `${count} · ${on ? 'click to drop from the filter' : 'click to keep only this stage'}`
+              : describe?.(i) ?? count}
             data-on={on ? '1' : undefined}
             data-off={off ? '1' : undefined}
             // A node taking a delivery is lit the way a hovered one is, because it is making the
@@ -405,12 +425,12 @@ export function SectorArc({ load, tracks, status = 'idle', pulses, insetLeft = 0
                 reader's hit test and a focus ring all have to guess at. */}
             <button
               type="button"
-              aria-pressed={on}
+              aria-pressed={toggles ? on : undefined}
               aria-label={`${st.label}, ${tiers.length} ticket${tiers.length === 1 ? '' : 's'}`}
               style={{
                 position: 'absolute', left: -50, top: -(size + 30),
                 width: 100, height: size * 2 + 66, borderRadius: 8,
-                cursor: 'pointer',
+                cursor: toggles ? 'pointer' : 'default',
               }}
             />
             {/* A line from the agent working here. Below the ships and the core so it is painted

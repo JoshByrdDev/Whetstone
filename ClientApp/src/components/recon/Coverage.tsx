@@ -74,6 +74,31 @@ export function Coverage({ project, cells, error, area, onArea, onOpenTicket, bu
   );
 }
 
+/**
+ * The grid alone, to watch rather than work: no drill-down, nothing to press. The Tower's view of
+ * one project's coverage, the same table the Recon page draws.
+ */
+export function CoverageTable({ cells }: { cells: CoverageCell[] }) {
+  const narrow = useNarrow();
+  const { columns, rows } = useMemo(() => shape(cells), [cells]);
+  if (rows.length === 0) return <Notice>Recon has no coverage rows for this project yet.</Notice>;
+  return narrow
+    ? <AreaCards rows={rows} columns={columns} area={null} />
+    : <Grid rows={rows} columns={columns} area={null} />;
+}
+
+/** A row's or a cell's hit area: a button where picking opens something, plain text where nothing does. */
+function Hit({ pick, current, label, className, style, children }: {
+  pick?: () => void; current?: boolean; label?: string; className: string; style?: React.CSSProperties; children: React.ReactNode;
+}) {
+  if (!pick) return <div className={className.replace(/orbit-(pick|tap)\s*/, '')} style={style} aria-label={label}>{children}</div>;
+  return (
+    <button className={className} style={style} onClick={pick} aria-label={label} aria-current={current ? 'true' : undefined}>
+      {children}
+    </button>
+  );
+}
+
 /** The mart's cells as rows and columns, in config order; the extras the config did not name last. */
 function shape(cells: CoverageCell[]): { columns: Column[]; rows: AreaRow[] } {
   const cols = new Map<string, Column>();
@@ -117,7 +142,7 @@ function CellBody({ c }: { c: CoverageCell | undefined }) {
   );
 }
 
-function Grid({ rows, columns, area, onArea }: { rows: AreaRow[]; columns: Column[]; area: string | null; onArea: (a: string | null) => void }) {
+function Grid({ rows, columns, area, onArea }: { rows: AreaRow[]; columns: Column[]; area: string | null; onArea?: (a: string | null) => void }) {
   // Scrolls inside itself when a project has many roles: the page never does.
   return (
     <div className="min-w-0 overflow-x-auto border border-hair bg-panel" style={{ clipPath: chamfer(10) }}>
@@ -137,19 +162,19 @@ function Grid({ rows, columns, area, onArea }: { rows: AreaRow[]; columns: Colum
           {rows.map(r => (
             <tr key={r.area} className="border-b border-hair last:border-b-0 align-top">
               <td className="min-w-[9rem] px-1 py-1">
-                <button className="orbit-pick w-full px-2 py-1.5 text-left text-xs" aria-current={area === r.area ? 'true' : undefined}
-                  onClick={() => onArea(area === r.area ? null : r.area)}>
+                <Hit pick={onArea && (() => onArea(area === r.area ? null : r.area))} className="orbit-pick w-full px-2 py-1.5 text-left text-xs"
+                  current={area === r.area}>
                   <AreaName row={r} />
-                </button>
+                </Hit>
               </td>
               {columns.map(col => {
                 const c = r.cells.get(colKey(col.role, col.width));
                 return (
                   <td key={colKey(col.role, col.width)} className="px-1 py-1">
-                    <button className="orbit-tap w-full px-2 py-1.5 text-left" onClick={() => onArea(r.area)}
-                      aria-label={`${r.area} ${cellPhrase(col)}: ${c?.state ?? 'gap'}`}>
+                    <Hit pick={onArea && (() => onArea(r.area))} className="orbit-tap w-full px-2 py-1.5 text-left"
+                      label={`${r.area} ${cellPhrase(col)}: ${c?.state ?? 'gap'}`}>
                       <CellBody c={c} />
-                    </button>
+                    </Hit>
                   </td>
                 );
               })}
@@ -161,25 +186,24 @@ function Grid({ rows, columns, area, onArea }: { rows: AreaRow[]; columns: Colum
   );
 }
 
-function AreaCards({ rows, columns, area, onArea }: { rows: AreaRow[]; columns: Column[]; area: string | null; onArea: (a: string | null) => void }) {
+function AreaCards({ rows, columns, area, onArea }: { rows: AreaRow[]; columns: Column[]; area: string | null; onArea?: (a: string | null) => void }) {
   return (
     <div className="space-y-2">
       {rows.map(r => (
         <div key={r.area} className="min-w-0 border border-hair bg-panel" style={{ clipPath: chamfer(10) }}>
-          <button className="orbit-pick w-full px-3 py-2 text-left text-xs" aria-current={area === r.area ? 'true' : undefined}
-            onClick={() => onArea(r.area)}>
+          <Hit pick={onArea && (() => onArea(r.area))} className="orbit-pick w-full px-3 py-2 text-left text-xs" current={area === r.area}>
             <AreaName row={r} />
-          </button>
+          </Hit>
           <div className="flex min-w-0 flex-wrap gap-1.5 px-3 pb-3">
             {columns.map(col => {
               const c = r.cells.get(colKey(col.role, col.width));
               if (!c && !col.inConfig) return null;
               return (
-                <button key={colKey(col.role, col.width)} onClick={() => onArea(r.area)}
+                <Hit key={colKey(col.role, col.width)} pick={onArea && (() => onArea(r.area))}
                   className="orbit-tap min-w-0 border border-hair bg-sunk px-2 py-1 text-left text-[11px]" style={{ clipPath: chamfer(5) }}>
                   <span className="block text-gray-300">{col.role} · {widthShort(col.width)}</span>
                   <CellBody c={c} />
-                </button>
+                </Hit>
               );
             })}
           </div>

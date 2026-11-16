@@ -76,14 +76,14 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
 }) {
   const current = view?.plan?.current;
   const narrow = useNarrow();
-  // A server from before units had stages says only agreed, draft and done: read the stage off those.
-  // An agreed slice with work done or moving is being built, whichever one the board counts as current:
-  // a slice held open by one last outcome must not hide the one actually being worked.
-  const units = (view?.plan?.units ?? []).map(u => {
-    const stage: UnitStage = u.stage ?? (u.done ? 'built' : u.agreed ? (u.unit === current ? 'building' : 'agreed') : u.draft ? 'draft' : 'notAgreed');
-    return { ...u, stage: stage === 'agreed' && u.progress.done + u.progress.inProgress > 0 ? 'building' as UnitStage : stage };
+  const units = unitsOf(view);
+  // A slice picked on another page (the Tower's lanes) opens here once, then the page is its own.
+  const [picked, setPicked] = useState<Selected | null>(() => {
+    const p = Number(remembered('pick'));
+    return Number.isFinite(p) && p > 0 ? p : null;
   });
-  const [picked, setPicked] = useState<Selected | null>(null);
+  // Spent once read: cleared after mount rather than in the initializer, which may run twice.
+  useEffect(() => { remember('pick', ''); }, []);
 
   // Until somebody picks, the page is on the slice being worked - the latest one being built - and
   // then on one that wants something of you. A release waits in its own lane, so it no longer
@@ -132,6 +132,23 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
 type Unit = StewardPlanUnitView;
 
 /**
+ * The slices with their stages settled. A server from before units had stages says only agreed,
+ * draft and done: read the stage off those. An agreed slice with work done or moving is being built,
+ * whichever one the board counts as current: a slice held open by one last outcome must not hide
+ * the one actually being worked.
+ */
+export function unitsOf(view: StewardPlanView | null): Unit[] {
+  const current = view?.plan?.current;
+  return (view?.plan?.units ?? []).map(u => {
+    const stage: UnitStage = u.stage ?? (u.done ? 'built' : u.agreed ? (u.unit === current ? 'building' : 'agreed') : u.draft ? 'draft' : 'notAgreed');
+    return { ...u, stage: stage === 'agreed' && u.progress.done + u.progress.inProgress > 0 ? 'building' as UnitStage : stage };
+  });
+}
+
+/** How many cards a lane shows before "show more": one long lane would otherwise set the height of all six. */
+const LANE_SHOWS = 5;
+
+/**
  * The slices' stages as lanes, so where they stand reads at once: what is still an idea, what is yours to
  * agree, what is waiting, what is moving, what is yours to release, what has gone out. Left to right,
  * the way a ticket crosses the board - so each of the owner's two steps sits where it falls.
@@ -145,12 +162,24 @@ const LANES: { title: string; stages: UnitStage[]; c: string; empty: string }[] 
   { title: 'Released', stages: ['released', 'abandoned'], c: TIER.done.c, empty: 'Nothing released yet.' },
 ];
 
-function Lanes({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
+export function Lanes({ units, selected, onPick, shows = LANE_SHOWS, className = 'mb-3' }: {
+  units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void;
+  /** Cards per lane before "show more". */
+  shows?: number;
+  className?: string;
+}) {
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
   return (
-    <Panel pad={false} className="mb-3">
+    <Panel pad={false} className={className}>
       <div className="grid" style={{ gridTemplateColumns: `repeat(${LANES.length}, minmax(0, 1fr))` }}>
         {LANES.map((l, i) => {
-          const here = units.filter(u => l.stages.includes(u.stage));
+          // The newest first in the lanes that only grow, so the five shown are the latest.
+          const all = units.filter(u => l.stages.includes(u.stage));
+          const here = l.stages.includes('released') ? [...all].sort((a, b) => b.unit - a.unit) : all;
+          const whole = open.has(l.title) || here.length <= shows;
+          // The slice being read stays on screen even when it is past the fold.
+          const shown = whole ? here : here.filter((u, n) => n < shows || u.unit === selected);
+          const hidden = here.length - shown.length;
           return (
             <div key={l.title} className="min-w-0 flex flex-col" style={{ padding: '10px 10px 12px', gap: 7, borderLeft: i ? '1px solid rgb(var(--w-line-rgb) / .08)' : undefined }}>
               <div className="flex justify-between" style={label(l.c)}>
@@ -158,7 +187,20 @@ function Lanes({ units, selected, onPick }: { units: Unit[]; selected: Selected 
               </div>
               {here.length === 0
                 ? <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t600)' }}>{l.empty}</div>
-                : here.map(u => <SliceCard key={u.unit} u={u} on={selected === u.unit} onClick={() => onPick(u.unit)} />)}
+                : shown.map(u => <SliceCard key={u.unit} u={u} on={selected === u.unit} onClick={() => onPick(u.unit)} />)}
+              {(hidden > 0 || (open.has(l.title) && here.length > shows)) && (
+                <button
+                  className="orbit-tap self-start transition-colors"
+                  style={{ font: `500 11px ${BODY}`, color: 'var(--w-accent-text)', padding: '2px 0' }}
+                  onClick={() => setOpen(prev => {
+                    const next = new Set(prev);
+                    if (next.has(l.title)) next.delete(l.title); else next.add(l.title);
+                    return next;
+                  })}
+                >
+                  {hidden > 0 ? `Show ${hidden} more` : 'Show fewer'}
+                </button>
+              )}
             </div>
           );
         })}
@@ -168,7 +210,7 @@ function Lanes({ units, selected, onPick }: { units: Unit[]; selected: Selected 
 }
 
 /** On a phone, the slices in their order as one strip that scrolls sideways, opened at the one being read. */
-function SliceStrip({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
+export function SliceStrip({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = box.current?.querySelector<HTMLElement>('[aria-current="true"]');
