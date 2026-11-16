@@ -683,8 +683,24 @@ public enum GateRuling
 {
     /// <summary>Real, and it goes back to implementation.</summary>
     Defect,
-    /// <summary>Checked, and not a defect in this change - with the reason recorded.</summary>
+    /// <summary>
+    /// Checked, and the claim does not hold: the code already handles it, or no requirement asks for
+    /// it - with the evidence recorded. Not "real, but not this ticket's": that is
+    /// <see cref="OwnerDecides"/>.
+    /// </summary>
     NotADefect,
+    /// <summary>
+    /// Real, and whether this ticket answers it is a call only the owner can make - a scope line, an
+    /// access rule, a product choice. The ticket blocks with the question, and the finding cannot be
+    /// ruled anything else until the owner has answered (<see cref="GateFinding.OwnerAnsweredAt"/>).
+    /// <para>
+    /// It exists because the run that owns a ticket is the wrong judge of what its ticket may leave
+    /// out. One ruled a real access gap "not this ticket's defect - flagging it for the reviewer",
+    /// the flag sat in a ruling note nobody read before the pull request, and the reviewer found it
+    /// there two days later. A flag is a question, and a question stops the ticket.
+    /// </para>
+    /// </summary>
+    OwnerDecides,
 }
 
 /// <summary>
@@ -716,6 +732,14 @@ public class GateFinding
     public GateRuling? Ruling { get; set; }
     public string? RulingNote { get; set; }
     public DateTime? RuledAt { get; set; }
+
+    /// <summary>
+    /// When the owner answered the block an <see cref="GateRuling.OwnerDecides"/> ruling stopped the
+    /// ticket with: stamped when a person (or the steward, in their place) takes the ticket out of
+    /// Blocked. Until then the ruling stands and the only move a worker can make is the block; after
+    /// it, refinement re-rules the finding on the owner's answer. Null for every other ruling.
+    /// </summary>
+    public DateTime? OwnerAnsweredAt { get; set; }
 }
 
 /// <summary>
@@ -860,6 +884,28 @@ public class QaItem
     /// </para>
     /// </summary>
     public bool PassedByInspection { get; set; }
+
+    /// <summary>
+    /// Who this item has to be driven as: the role and how they stand to the data - "a Trustee signer
+    /// from an organization other than the one that created the agreement", not a login. Null for an
+    /// item where it makes no difference who drives it.
+    /// <para>
+    /// Written when the item is, by the phase that knows who the feature is for, because QA otherwise
+    /// drives everything as whichever login is to hand. One QA pass played every signer on a ticket by
+    /// pointing their sessions at the admin's email; the admin belonged to the organization that owned
+    /// every agreement, so the one case the feature was for - a signer from somewhere else - was never
+    /// run, and the reviewer found it broken.
+    /// </para>
+    /// </summary>
+    public string? Persona { get; set; }
+
+    /// <summary>
+    /// Who QA actually drove the Passed as, in its own words: the login, and what makes it the
+    /// <see cref="Persona"/> - its organization, its roles, its own session rather than one pointed at
+    /// it. Required for a driven pass of an item with a persona; a pass driven as a stand-in is refused,
+    /// since it is a pass for somebody else. Cleared with the outcome, like <see cref="VerifiedOn"/>.
+    /// </summary>
+    public string? DrivenAs { get; set; }
 
     /// <summary>
     /// The build this item's pass was taken on: the ticket's branch head in each repo it had touched

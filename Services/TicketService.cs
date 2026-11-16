@@ -1237,6 +1237,16 @@ public class TicketService
             // happened to move the progress mark in the meantime. Whatever the block was about, a
             // person has now looked at it, and the run after a human intervention is attempt one.
             t.HeartbeatAttempts = 0;
+
+            // A finding refinement put to the owner is answered by the owner taking the ticket out of
+            // the block it raised - or the steward, in their place. A worker cannot answer its own question.
+            if (actor is TransitionActor.Human or TransitionActor.Steward)
+            {
+                var waiting = await _db.GateFindings
+                    .Where(f => f.TicketId == id && f.Ruling == GateRuling.OwnerDecides && f.OwnerAnsweredAt == null)
+                    .ToListAsync();
+                foreach (var f in waiting) f.OwnerAnsweredAt = DateTime.UtcNow;
+            }
         }
 
         // The short loop is one trip, not a setting: it is spent the moment the work is back in front
@@ -1705,6 +1715,18 @@ public class TicketService
         if (string.IsNullOrWhiteSpace(note))
             return (null, "Say why. A ruling with no reason is a vote, and the reviewer cannot weigh a vote.");
 
+        // An OwnerDecides ruling is a question put to the owner, and the run that asked it is not the
+        // one that gets to answer it. Withdrawing it as NotADefect stays open - the claim turning out
+        // false is a finding about the code, not a decision about scope - but ruling it a Defect would
+        // be the run deciding the question by doing the work, so that waits for the answer.
+        if (f.Ruling == GateRuling.OwnerDecides && f.OwnerAnsweredAt is null && ruling == GateRuling.Defect)
+            return (null, $"Finding {findingId} is waiting on the owner's answer (you ruled it OwnerDecides). "
+                        + "Block the ticket with the question; it is re-ruled once they have answered. If the "
+                        + "claim does not hold after all, NotADefect with the evidence withdraws the question.");
+
+        if (ruling == GateRuling.OwnerDecides && f.Ruling != GateRuling.OwnerDecides)
+            f.OwnerAnsweredAt = null;
+
         f.Ruling = ruling;
         f.RulingNote = note.Trim();
         f.RuledAt = DateTime.UtcNow;
@@ -1784,12 +1806,16 @@ public class TicketService
 
     // ---- QA items ----
 
-    public async Task<QaItem?> AddQaItemAsync(int ticketId, string text)
+    public async Task<QaItem?> AddQaItemAsync(int ticketId, string text, string? persona = null)
     {
         var t = await _db.Tickets.Include(x => x.QaItems).FirstOrDefaultAsync(x => x.Id == ticketId);
         if (t is null) return null;
         var order = t.QaItems.Count == 0 ? 0 : t.QaItems.Max(q => q.Order) + 1;
-        var qi = new QaItem { TicketId = ticketId, Text = text.Trim(), Order = order };
+        var qi = new QaItem
+        {
+            TicketId = ticketId, Text = text.Trim(), Order = order,
+            Persona = string.IsNullOrWhiteSpace(persona) ? null : persona.Trim(),
+        };
         _db.QaItems.Add(qi);
         t.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
@@ -1809,7 +1835,8 @@ public class TicketService
     /// <param name="actor">Who made the ruling, for the log: a worker run (whose live ticket lease
     /// names it) or a person at the drawer.</param>
     public async Task<QaItem?> UpdateQaItemAsync(int id, string? text, QaStatus? status, string? note, int? order,
-        bool? passedByInspection = null, string? verifiedOn = null, TransitionActor actor = TransitionActor.Human)
+        bool? passedByInspection = null, string? verifiedOn = null, TransitionActor actor = TransitionActor.Human,
+        string? drivenAs = null)
     {
         var qi = await _db.QaItems.FindAsync(id);
         if (qi is null) return null;
@@ -1835,6 +1862,7 @@ public class TicketService
             // a date behind that nothing is true of any more.
             qi.VerifiedAt = qi.Status == QaStatus.Todo ? null : DateTime.UtcNow;
             qi.VerifiedOn = qi.Status == QaStatus.Passed ? verifiedOn : null;
+            qi.DrivenAs = qi.Status == QaStatus.Passed && !string.IsNullOrWhiteSpace(drivenAs) ? drivenAs.Trim() : null;
             if (qi.Status != QaStatus.Passed) qi.PassedByInspection = false;
             ClearRulings(qi);
         }
@@ -2200,6 +2228,10 @@ public class TicketService
     /// <summary>The ticket a QA item is on, untracked - what the callers read its branch from.</summary>
     public Task<Ticket?> TicketOfQaItemAsync(int qaItemId) =>
         _db.QaItems.AsNoTracking().Where(q => q.Id == qaItemId).Select(q => q.Ticket).FirstOrDefaultAsync();
+
+    /// <summary>One QA item, untracked.</summary>
+    public Task<QaItem?> QaItemAsync(int qaItemId) =>
+        _db.QaItems.AsNoTracking().FirstOrDefaultAsync(q => q.Id == qaItemId);
 
     /// <summary>A new verdict on an item ends whatever was ruled about the old one.</summary>
     private static void ClearRulings(QaItem qi)

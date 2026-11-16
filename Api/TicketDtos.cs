@@ -87,10 +87,13 @@ public record WorkItemDto(int Id, string Text, bool Done, int Order, DateTime? S
 /// <c>Stale</c> (passed before the last rework and neither re-run nor carried). Null when not Passed.</param>
 /// <param name="VerifiedOn">The build the pass was driven on - the branch head per touched repo. A
 /// carry-over keeps it, so it is always the build that was actually tested.</param>
+/// <param name="Persona">Who the item has to be driven as, when that matters (<see cref="QaItem.Persona"/>).</param>
+/// <param name="DrivenAs">Who QA drove the pass as, in its own words.</param>
 public record QaItemDto(int Id, string Text, string Status, string? Note, int Order, DateTime? StartedAt = null,
     DateTime? VerifiedAt = null, bool Verified = false, bool PassedByInspection = false,
     string? Verdict = null, string? VerifiedOn = null, DateTime? CarriedOverAt = null, string? CarryOverNote = null,
-    DateTime? ExpiredAt = null, string? ExpiryNote = null)
+    DateTime? ExpiredAt = null, string? ExpiryNote = null,
+    string? Persona = null, string? DrivenAs = null)
 {
     public static QaItemDto From(QaItem q, DateTime? lastBackwardAt, bool allowCarry = true)
     {
@@ -98,7 +101,7 @@ public record QaItemDto(int Id, string Text, string Status, string? Note, int Or
         var verdict = HandoffRequirements.VerdictOf(q, lastBackwardAt, allowCarry);
         return new QaItemDto(q.Id, q.Text, q.Status.ToString(), q.Note, q.Order, q.StartedAt, q.VerifiedAt,
             verified, q.PassedByInspection, verdict, q.VerifiedOn, q.CarriedOverAt, q.CarryOverNote,
-            q.ExpiredAt, q.ExpiryNote);
+            q.ExpiredAt, q.ExpiryNote, q.Persona, q.DrivenAs);
     }
 }
 /// <summary>
@@ -280,7 +283,7 @@ public record TicketPlanDto(int Unit, IReadOnlyList<string> Outcomes);
 
 /// <summary>One finding of the independent analysis, and refinement's ruling on it.</summary>
 public record GateFindingDto(int Id, string Kind, string Title, string Text,
-    string? Ruling, string? RulingNote, DateTime? RuledAt);
+    string? Ruling, string? RulingNote, DateTime? RuledAt, DateTime? OwnerAnsweredAt = null);
 
 /// <summary>
 /// What an independent Classroom analysis raised about the commit refinement is working on. The
@@ -436,12 +439,14 @@ public static class TicketMapper
         var note = findings.Count == 0
             ? "An independent Classroom analysis read this commit and raised no risks or coverage gaps. Nothing to rule on."
             : "An independent Classroom analysis read this commit from the system's side rather than the plan's. "
-            + "Rule on every finding below with rule_on_finding - Defect or NotADefect, with the reason. Check each "
-            + "claim against the code yourself: the analysis can be wrong, and so can the plan it is checking. A "
-            + "Defect goes back to NeedsImplementation; the hand-off to NeedsReview is refused while any finding is "
-            + "unruled or ruled Defect.";
+            + "Rule on every finding below with rule_on_finding - Defect, NotADefect or OwnerDecides, with the reason. "
+            + "Check each claim against the code yourself: the analysis can be wrong, and so can the plan it is "
+            + "checking. A Defect goes back to NeedsImplementation. A finding that is real but that you think is not "
+            + "this ticket's is OwnerDecides, never NotADefect: it blocks the ticket with the question for the owner, "
+            + "and is re-ruled on their answer. The hand-off to NeedsReview is refused while any finding is unruled, "
+            + "ruled Defect or ruled OwnerDecides.";
         return new IndependentReviewDto(id, note, findings.Select(f => new GateFindingDto(
-            f.Id, f.Kind.ToString(), f.Title, f.Text, f.Ruling?.ToString(), f.RulingNote, f.RuledAt)).ToList());
+            f.Id, f.Kind.ToString(), f.Title, f.Text, f.Ruling?.ToString(), f.RulingNote, f.RuledAt, f.OwnerAnsweredAt)).ToList());
     }
 
     private static ReviewTargetDto? ToReviewTarget(ReviewTarget? r) => r is null ? null : new(

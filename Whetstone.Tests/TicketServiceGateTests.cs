@@ -33,6 +33,85 @@ public class TicketServiceGateTests : IDisposable
 
     private DashboardDbContext NewCtx() => new(_options);
 
+    // ---- QA personas ----
+
+    private static string? ErrorOf(object result) => result.GetType().GetProperty("error")?.GetValue(result) as string;
+
+    private async Task<int> PersonaItem(int ticketId)
+    {
+        await using var ctx = NewCtx();
+        await TicketTools.AddQaItems(new TicketService(ctx), ticketId,
+            new[] { "Open the status page and see the preview", "The page title reads Agreement Status" },
+            new[] { "Trustee signer from an organization other than the creator's", "" });
+        return ctx.QaItems.Where(q => q.TicketId == ticketId).OrderBy(q => q.Order).First().Id;
+    }
+
+    [Fact]
+    public async Task Add_qa_items_records_a_persona_per_item_and_none_for_a_blank()
+    {
+        var id = await Seed(TicketPhase.QaTesting);
+        await PersonaItem(id);
+
+        await using var ctx = NewCtx();
+        var items = ctx.QaItems.Where(q => q.TicketId == id).OrderBy(q => q.Order).ToList();
+        Assert.Equal("Trustee signer from an organization other than the creator's", items[0].Persona);
+        Assert.Null(items[1].Persona);
+    }
+
+    [Fact]
+    public async Task Add_qa_items_refuses_personas_that_do_not_line_up_with_the_items()
+    {
+        var id = await Seed(TicketPhase.QaTesting);
+        await using var ctx = NewCtx();
+        var result = await TicketTools.AddQaItems(new TicketService(ctx), id, new[] { "a", "b" }, new[] { "only one" });
+
+        Assert.Contains("one per item", ErrorOf(result));
+        Assert.Empty(ctx.QaItems.Where(q => q.TicketId == id));
+    }
+
+    [Fact]
+    public async Task A_pass_driven_as_a_stand_in_for_the_persona_is_refused()
+    {
+        var id = await Seed(TicketPhase.QaTesting);
+        var item = await PersonaItem(id);
+
+        await using var ctx = NewCtx();
+        var result = await TicketTools.SetQaStatus(new TicketService(ctx), null!, item, "Passed",
+            drivenAs: "admin, with the Trustee's session pointed at its email", standIn: true);
+
+        Assert.Contains("stand-in is somebody else", ErrorOf(result));
+        Assert.Equal(QaStatus.Todo, ctx.QaItems.Single(q => q.Id == item).Status);
+    }
+
+    [Fact]
+    public async Task A_pass_on_a_persona_item_has_to_say_who_it_was_driven_as()
+    {
+        var id = await Seed(TicketPhase.QaTesting);
+        var item = await PersonaItem(id);
+
+        await using var ctx = NewCtx();
+        var result = await TicketTools.SetQaStatus(new TicketService(ctx), null!, item, "Passed");
+
+        Assert.Contains("drivenAs", ErrorOf(result));
+        Assert.Equal(QaStatus.Todo, ctx.QaItems.Single(q => q.Id == item).Status);
+    }
+
+    [Fact]
+    public async Task Driven_as_is_kept_with_the_pass_and_goes_with_it()
+    {
+        var id = await Seed(TicketPhase.QaTesting);
+        var item = await PersonaItem(id);
+
+        await using var ctx = NewCtx();
+        var svc = new TicketService(ctx);
+        var passed = await svc.UpdateQaItemAsync(item, null, QaStatus.Passed, null, null,
+            actor: TransitionActor.Worker, drivenAs: "ivy@harbor.test, Harbor IM, her own Trustee session");
+        Assert.Equal("ivy@harbor.test, Harbor IM, her own Trustee session", passed!.DrivenAs);
+
+        var failed = await svc.UpdateQaItemAsync(item, null, QaStatus.Failed, "no documents", null, actor: TransitionActor.Worker);
+        Assert.Null(failed!.DrivenAs);
+    }
+
     private async Task<int> Seed(TicketPhase phase, bool spec = false, bool impl = false)
     {
         await using var ctx = NewCtx();

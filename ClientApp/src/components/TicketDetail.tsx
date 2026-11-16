@@ -600,6 +600,16 @@ export function TicketDetail({
                         ✕
                       </button>
                     </div>
+                    {/* Who the item is for, and who it was driven as: in the open, because a pass for
+                        the wrong person is the one a green tick hides best. */}
+                    {q.persona && (
+                      <p className="pl-[66px] text-[11.5px] leading-snug text-gray-500 break-words min-w-0">
+                        <span className="text-gray-400">As </span>{q.persona}
+                        {q.drivenAs && q.status === 'Passed' && (
+                          <><span className="text-gray-600"> · driven as </span>{q.drivenAs}</>
+                        )}
+                      </p>
+                    )}
                     {/* The ruling itself, in the open rather than in a tooltip: there is no hover on a
                         phone, and this sentence is the whole case for not re-running the item. */}
                     {ruling && (

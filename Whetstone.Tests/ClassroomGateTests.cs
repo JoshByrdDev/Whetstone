@@ -287,6 +287,110 @@ public class ClassroomGateTests : IDisposable
         Assert.Equal(TicketPhase.NeedsReview, t!.Phase);
     }
 
+    // ---- owner decides -------------------------------------------------------
+
+    private async Task RuleRestNotADefect(TicketService svc, int id, IEnumerable<GateFinding> rest)
+    {
+        foreach (var f in rest)
+            await svc.RuleOnFindingAsync(id, f.Id, GateRuling.NotADefect, "checked against the code");
+    }
+
+    private static readonly BlockPayload ScopeQuestion = new(null,
+    [
+        new BlockQuestion("Should this ticket give outside signers read access, or leave it to a follow-up?",
+            "The status page reads a route that refuses them.",
+            [new BlockOption("Leave it to a follow-up", "hide the preview when it 404s", Recommended: true),
+             new BlockOption("Handle it here", "a signer-aware read path")]),
+    ]);
+
+    [Fact]
+    public async Task A_finding_the_owner_decides_leaves_the_block_as_the_only_move()
+    {
+        var (svc, ctx, id, findings) = await Refining();
+        await using var _ = ctx;
+        await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.OwnerDecides,
+            "Real: signers outside the creating org get no documents. Fix here, or follow-up?");
+        await RuleRestNotADefect(svc, id, findings.Skip(1));
+
+        var review = await Assert.ThrowsAsync<HandoffRequirementException>(() =>
+            svc.TransitionAsync(id, TicketPhase.NeedsReview, null, TransitionActor.Worker));
+        Assert.Contains("OwnerDecides", review.Message);
+        Assert.Contains("Blocked", review.Message);
+
+        // Sideways is the run answering the question by acting on it.
+        await Assert.ThrowsAsync<HandoffRequirementException>(() =>
+            svc.TransitionAsync(id, TicketPhase.NeedsImplementation, "do it here", TransitionActor.Worker));
+
+        var blocked = await svc.TransitionAsync(id, TicketPhase.Blocked, null, TransitionActor.Worker, ScopeQuestion);
+        Assert.Equal(TicketPhase.Blocked, blocked!.Phase);
+    }
+
+    [Fact]
+    public async Task The_guide_says_so_on_every_move_out_of_refinement()
+    {
+        var (svc, ctx, id, findings) = await Refining();
+        await using var _ = ctx;
+        await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.OwnerDecides, "real; scope is the owner's");
+        var t = (await svc.GetAsync(id))!;
+
+        Assert.Contains("owner's answer", HandoffRequirements.GuideSummary(t, TicketPhase.Refining, TicketPhase.NeedsImplementation));
+        Assert.DoesNotContain("OwnerDecides", HandoffRequirements.GuideSummary(t, TicketPhase.Refining, TicketPhase.Blocked) ?? "");
+    }
+
+    [Fact]
+    public async Task The_run_cannot_rule_its_own_question_a_defect_before_the_owner_answers()
+    {
+        var (svc, ctx, id, findings) = await Refining();
+        await using var _ = ctx;
+        await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.OwnerDecides, "real; scope is the owner's");
+
+        var (f, error) = await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.Defect, "I'll just do it");
+        Assert.Null(f);
+        Assert.Contains("waiting on the owner's answer", error);
+
+        // Withdrawing the question because the claim was false is a finding about the code, and stays open.
+        var (withdrawn, _) = await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.NotADefect, "Foo.cs:12 already checks it");
+        Assert.Equal(GateRuling.NotADefect, withdrawn!.Ruling);
+    }
+
+    [Fact]
+    public async Task The_owner_unblocking_answers_it_and_refinement_re_rules_on_the_answer()
+    {
+        var (svc, ctx, id, findings) = await Refining();
+        await using var _ = ctx;
+        await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.OwnerDecides, "real; scope is the owner's");
+        await RuleRestNotADefect(svc, id, findings.Skip(1));
+        await svc.TransitionAsync(id, TicketPhase.Blocked, null, TransitionActor.Worker, ScopeQuestion);
+
+        await svc.TransitionAsync(id, TicketPhase.NeedsRefinement, "Leave it to a follow-up", TransitionActor.Human);
+        await svc.ClaimNextAsync(null, AllSkillsExist);
+        var answered = HandoffRequirements.CurrentGateFindings((await svc.GetAsync(id))!).First();
+        Assert.NotNull(answered.OwnerAnsweredAt);
+
+        // Answered, but not yet re-ruled on the answer: still not ready for review.
+        var ex = await Assert.ThrowsAsync<HandoffRequirementException>(() =>
+            svc.TransitionAsync(id, TicketPhase.NeedsReview, null, TransitionActor.Worker));
+        Assert.Contains("has answered", ex.Message);
+
+        await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.NotADefect,
+            "Owner: leave it to a follow-up; the preview already hides on a 404.");
+        var t = await svc.TransitionAsync(id, TicketPhase.NeedsReview, null, TransitionActor.Worker);
+        Assert.Equal(TicketPhase.NeedsReview, t!.Phase);
+    }
+
+    [Fact]
+    public async Task A_worker_unblocking_does_not_answer_for_the_owner()
+    {
+        var (svc, ctx, id, findings) = await Refining();
+        await using var _ = ctx;
+        await svc.RuleOnFindingAsync(id, findings[0].Id, GateRuling.OwnerDecides, "real; scope is the owner's");
+        await svc.TransitionAsync(id, TicketPhase.Blocked, null, TransitionActor.Worker, ScopeQuestion);
+
+        // The System actor (the claim lock, a breaker) moving it is not the owner either.
+        await svc.TransitionAsync(id, TicketPhase.NeedsRefinement, null, TransitionActor.System);
+        Assert.Null(HandoffRequirements.CurrentGateFindings((await svc.GetAsync(id))!).First().OwnerAnsweredAt);
+    }
+
     [Fact]
     public async Task The_guide_publishes_the_requirement_before_the_move()
     {

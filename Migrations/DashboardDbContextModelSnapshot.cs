@@ -1335,6 +1335,9 @@ namespace Whetstone.Migrations
                     b.Property<int>("Order")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTime?>("OwnerAnsweredAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("RuledAt")
                         .HasColumnType("TEXT");
 
@@ -1632,6 +1635,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DrivenAs")
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime?>("ExpiredAt")
                         .HasColumnType("TEXT");
 
@@ -1646,6 +1652,9 @@ namespace Whetstone.Migrations
 
                     b.Property<bool>("PassedByInspection")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("Persona")
+                        .HasColumnType("TEXT");
 
                     b.Property<DateTime?>("StartedAt")
                         .HasColumnType("TEXT");

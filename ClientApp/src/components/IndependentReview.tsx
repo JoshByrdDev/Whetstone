@@ -16,6 +16,7 @@ export function IndependentReview({ review }: { review: Review }) {
   const { findings } = review;
   const defects = findings.filter(f => f.ruling === 'Defect').length;
   const open = findings.filter(f => !f.ruling).length;
+  const asking = findings.filter(f => f.ruling === 'OwnerDecides' && !f.ownerAnsweredAt).length;
 
   return (
     <div>
@@ -28,6 +29,7 @@ export function IndependentReview({ review }: { review: Review }) {
             ? 'no findings'
             : `${findings.length} finding${findings.length === 1 ? '' : 's'}`
               + (defects ? ` · ${defects} defect${defects === 1 ? '' : 's'}` : '')
+              + (asking ? ` · ${asking} for you to decide` : '')
               + (open ? ` · ${open} not yet ruled` : '')}
         </span>
       </div>
@@ -62,5 +64,11 @@ function Ruling({ finding }: { finding: GateFinding }) {
     return <span className="text-[11px] px-1.5 py-0.5 rounded bg-red-950/40 text-red-300">Defect</span>;
   if (finding.ruling === 'NotADefect')
     return <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-950/40 text-emerald-300">Not a defect</span>;
+  if (finding.ruling === 'OwnerDecides')
+    return (
+      <span className="text-[11px] px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300">
+        {finding.ownerAnsweredAt ? 'Answered - to re-rule' : 'Your call'}
+      </span>
+    );
   return <span className="text-[11px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-400">Not yet ruled</span>;
 }

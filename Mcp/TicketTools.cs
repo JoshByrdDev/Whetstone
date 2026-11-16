@@ -313,7 +313,8 @@ public class TicketTools
       + "Refused on a ticket marked code-review-only, which deliberately has no checklist at all — see the error text if it comes back.")]
     public static async Task<object> AddQaItems(TicketService svc,
         [Description("The local ticket id.")] int ticketId,
-        [Description("The QA item descriptions to add, in order.")] string[] items)
+        [Description("The QA item descriptions to add, in order.")] string[] items,
+        [Description("Optional, by position with items: who each item has to be driven as - the role and how they stand to the data, e.g. 'Trustee signer from an organization other than the agreement's creator'. Not a login. Name one whenever the outcome depends on who is looking (roles, organization, ownership, permissions); give an empty string for an item where it does not. QA must then drive that item as a user who really is that persona, and cannot pass it as a stand-in.")] string[]? personas = null)
     {
         // The one place the code-review-only setting is actually enforced, and it has to be here
         // rather than in the skills: authoring QA items was never something a skill file asked for.
@@ -333,13 +334,17 @@ public class TicketTools
                       + "'Skip QA testing' in the dashboard - you cannot clear it yourself.",
             };
 
+        if (personas is not null && personas.Length != items.Length)
+            return new { error = $"personas has {personas.Length} entries for {items.Length} items. Give one per item, in the same order - an empty string where the item has no particular persona." };
+
         var added = new List<object>();
-        foreach (var text in items)
+        for (var i = 0; i < items.Length; i++)
         {
+            var text = items[i];
             if (string.IsNullOrWhiteSpace(text)) continue;
-            var qi = await svc.AddQaItemAsync(ticketId, text);
+            var qi = await svc.AddQaItemAsync(ticketId, text, personas?[i]);
             if (qi is null) return new { error = $"Ticket {ticketId} not found" };
-            added.Add(new { qi.Id, qi.Text, status = qi.Status.ToString(), qi.Order });
+            added.Add(new { qi.Id, qi.Text, qi.Persona, status = qi.Status.ToString(), qi.Order });
         }
         return new { added };
     }
@@ -365,10 +370,36 @@ public class TicketTools
         [Description("Outcome: Todo, Passed, Failed, or Blocked.")] string status,
         [Description("Explanation for a Failed or Blocked outcome, for a pass settled by inspection, or for a carry-over.")] string? note = null,
         [Description("True when this Passed was argued from the code rather than driven through the app. Requires a note saying what you read. Ignored for any outcome other than Passed.")] bool passedByInspection = false,
-        [Description("True to carry an expired pass over instead of driving the item again, because the rework's diff cannot reach it. Requires status Passed and a note naming the diff from the item's verifiedOn commit to the branch and why it cannot reach the item's path. The item keeps its original verifiedOn.")] bool carriedOver = false)
+        [Description("True to carry an expired pass over instead of driving the item again, because the rework's diff cannot reach it. Requires status Passed and a note naming the diff from the item's verifiedOn commit to the branch and why it cannot reach the item's path. The item keeps its original verifiedOn.")] bool carriedOver = false,
+        [Description("For a driven Passed on an item that names a persona: who you drove it as - the login, and what makes it that persona (its organization, its roles, its own session or record rather than one re-pointed at it). Required there; ignored otherwise.")] string? drivenAs = null,
+        [Description("True when the user you drove this item as is NOT really the item's persona - another user given the persona's session, email or role for the test, or a user in a different organization than the persona's. A stand-in pass is refused: record the item Blocked instead, with a note saying which persona you need and what is missing to be it.")] bool standIn = false)
     {
         if (!Enum.TryParse<QaStatus>(status, true, out var st))
             return new { error = $"Unknown QA status '{status}'" };
+
+        // The persona is the point of the item, so a pass for somebody else is not a pass for it. Asked
+        // as a flag rather than inferred, because only the run knows who it signed in as - and refusing
+        // the honest answer would teach runs to stop giving it, so the refusal names the honest outcome.
+        if (st == QaStatus.Passed && !carriedOver && !passedByInspection
+            && await svc.QaItemAsync(qaItemId) is { Persona: { } persona })
+        {
+            if (standIn)
+                return new
+                {
+                    error = $"This item has to be driven as \"{persona}\", and a stand-in is somebody else: a pass for them "
+                          + "is not a pass for this item. Record it Blocked with a note naming the persona and what is "
+                          + "missing to be it (a user in that organization, a session of their own). If you can create "
+                          + "that user locally the way B3a describes, do that and drive it again; if you cannot, the "
+                          + "hand-off will need the owner - block the ticket asking for it.",
+                };
+            if (string.IsNullOrWhiteSpace(drivenAs))
+                return new
+                {
+                    error = $"This item names a persona - \"{persona}\" - so a pass has to say who you drove it as: pass "
+                          + "drivenAs with the login and what makes it that persona. If the user you drove it as is not "
+                          + "really that persona, it is not a pass: see standIn.",
+                };
+        }
 
         // A carry-over is a ruling about an existing pass, not a new outcome, so it never reaches the
         // update below: that would stamp the item with today's build and erase the one it was driven on.
@@ -396,10 +427,10 @@ public class TicketTools
         // Read for every outcome: a pass stores it on the item, and every ruling records it in the log.
         var verifiedOn = st != QaStatus.Todo ? await VerifiedOnAsync(svc, git, qaItemId) : null;
         var qi = await svc.UpdateQaItemAsync(qaItemId, null, st, note, null, passedByInspection, verifiedOn,
-            TransitionActor.Worker);
+            TransitionActor.Worker, drivenAs);
         return qi is null
             ? new { error = $"QA item {qaItemId} not found" }
-            : (object)new { qi.Id, status = qi.Status.ToString(), qi.Note, qi.PassedByInspection, qi.VerifiedAt, qi.VerifiedOn };
+            : (object)new { qi.Id, status = qi.Status.ToString(), qi.Note, qi.PassedByInspection, qi.VerifiedAt, qi.VerifiedOn, qi.Persona, qi.DrivenAs };
     }
 
     /// <summary>The build a pass on this item is being taken on: its ticket's branch head per touched repo.</summary>
@@ -573,17 +604,22 @@ public class TicketTools
     [McpServerTool, Description(
         "Rule on one finding of the independent Classroom analysis this refinement pass was handed (get_ticket's independentReview). REQUIRED for every finding before Refining can hand off to NeedsReview. " +
         "The analysis read the change from the system's side - how it worked before, the route a user takes, the requirements line by line - rather than against the plan every earlier phase checked it against, so its findings are exactly the ones those phases were positioned to miss. It can also be wrong. Your job is to check each claim against the code and decide. " +
-        "'Defect' = it is real and belongs to this change: send the ticket to NeedsImplementation with a comment saying what to fix. 'NotADefect' = you checked and it is not, or it is not this ticket's to fix; the reason must carry the evidence (the line that handles it, the requirement that does not ask for it) - 'the plan says so' is not evidence, because the plan is what the finding is questioning.")]
+        "'Defect' = it is real and belongs to this change: send the ticket to NeedsImplementation with a comment saying what to fix. 'NotADefect' = you checked and the claim does not hold; the reason must carry the evidence (the line that handles it, the requirement that does not ask for it) - 'the plan says so' is not evidence, because the plan is what the finding is questioning. " +
+        "'OwnerDecides' = it is real, and whether THIS ticket should answer it is a scope, access or product call - every case you would otherwise call 'not this ticket's to fix', 'another ticket owns it' or 'flagging it for the reviewer'. It stops the ticket: set_phase to Blocked with the question is then the only move, and you re-rule the finding on the owner's answer.")]
     public static async Task<object> RuleOnFinding(TicketService svc,
         [Description("The local ticket id.")] int ticketId,
         [Description("The finding's id, from get_ticket's independentReview.findings.")] int findingId,
-        [Description("'Defect' or 'NotADefect'.")] string ruling,
-        [Description("Why, in one to three sentences, with the file:line or requirement that settles it. Read by the person signing the ticket off.")] string reason)
+        [Description("'Defect', 'NotADefect' or 'OwnerDecides'.")] string ruling,
+        [Description("Why, in one to three sentences, with the file:line or requirement that settles it. Read by the person signing the ticket off. For OwnerDecides: what is real, and the options as you see them.")] string reason)
     {
-        if (!Enum.TryParse<GateRuling>(ruling, ignoreCase: true, out var r))
-            return new { error = $"Unknown ruling '{ruling}'. Use Defect or NotADefect." };
+        if (!Enum.TryParse<GateRuling>(ruling, ignoreCase: true, out var r) || !Enum.IsDefined(r))
+            return new { error = $"Unknown ruling '{ruling}'. Use Defect, NotADefect or OwnerDecides." };
         var (f, error) = await svc.RuleOnFindingAsync(ticketId, findingId, r, reason);
-        return f is null ? new { error } : new { f.Id, ruling = f.Ruling.ToString(), f.RuledAt };
+        return f is null ? new { error }
+            : r == GateRuling.OwnerDecides
+                ? new { f.Id, ruling = f.Ruling.ToString(), f.RuledAt,
+                        next = "Rule on the rest, then set_phase to Blocked with this finding as a question for the owner. No other move is open until they answer." }
+                : new { f.Id, ruling = f.Ruling.ToString(), f.RuledAt, next = (string?)null };
     }
 
     [McpServerTool, Description(

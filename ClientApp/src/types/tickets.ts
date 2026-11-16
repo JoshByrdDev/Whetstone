@@ -342,6 +342,10 @@ export interface QaItem {
   carryOverNote?: string | null;
   expiredAt?: string | null;
   expiryNote?: string | null;
+  // Who the item has to be driven as (a role and how they stand to the data), and who QA said it
+  // drove the pass as. A pass on an item with a persona always carries the second.
+  persona?: string | null;
+  drivenAs?: string | null;
 }
 
 export type QaVerdict = 'Driven' | 'ByInspection' | 'CarriedOver' | 'Expired' | 'Stale';
@@ -539,9 +543,11 @@ export interface GateFinding {
   kind: 'Risk' | 'Gap' | 'Partial';
   title: string;
   text: string;
-  ruling?: 'Defect' | 'NotADefect' | null;
+  ruling?: 'Defect' | 'NotADefect' | 'OwnerDecides' | null;
   rulingNote?: string | null;
   ruledAt?: string | null;
+  // When the owner answered the block an OwnerDecides ruling raised; refinement re-rules it after.
+  ownerAnsweredAt?: string | null;
 }
 
 export interface IndependentReview {

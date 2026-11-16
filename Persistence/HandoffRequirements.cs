@@ -112,33 +112,62 @@ public static class HandoffRequirements
     /// then handed off anyway.
     /// </para>
     /// </summary>
+    /// <para>
+    /// A finding ruled <see cref="GateRuling.OwnerDecides"/> is the one exception to "only the clean
+    /// hand-off": until the owner has answered it, the block is the only move refinement can make -
+    /// sideways to implementation included, because that would be the run deciding the question by
+    /// acting on it. Once answered, it still has to be re-ruled on the answer before review.
+    /// </para>
     public static Requirement? GateFindingRequirement(Ticket t, TicketPhase from, TicketPhase to)
     {
-        if (from != TicketPhase.Refining || to != TicketPhase.NeedsReview) return null;
+        if (from != TicketPhase.Refining || to == TicketPhase.Blocked) return null;
 
         var findings = CurrentGateFindings(t);
         if (findings.Count == 0) return null;
 
-        var unruled = findings.Where(f => f.Ruling is null).ToList();
-        var defects = findings.Where(f => f.Ruling == GateRuling.Defect).ToList();
-        if (unruled.Count == 0 && defects.Count == 0) return null;
-
         static string Names(IEnumerable<GateFinding> fs) =>
             string.Join("; ", fs.Select(f => $"#{f.Id} \"{f.Title}\""));
 
+        var waiting = findings.Where(f => f.Ruling == GateRuling.OwnerDecides && f.OwnerAnsweredAt is null).ToList();
+        if (waiting.Count > 0)
+            return new Requirement(
+                $"REQUIRES the owner's answer on {waiting.Count} finding(s) ruled OwnerDecides - set_phase to "
+                + "Blocked is the only move until they have answered.",
+                $"You ruled {Names(waiting)} OwnerDecides: real, and whether this ticket answers it is the "
+                + "owner's call. So this ticket stops here. set_phase to Blocked with one question per such "
+                + "finding: the question in one line, the finding and your evidence in 'why', and the options "
+                + "as you see them - typically 'handle it in this ticket' (say what that adds) and 'leave it to a "
+                + "follow-up' (say what this ticket must still do meanwhile, such as degrading cleanly), with "
+                + "the one you would take marked recommended. Do not hand the question to the reviewer in a "
+                + "comment instead, and do not send the ticket anywhere else first. If the ruling was wrong - "
+                + "the claim does not hold after all - rule_on_finding again with NotADefect and the evidence.");
+
+        if (to != TicketPhase.NeedsReview) return null;
+
+        var unruled = findings.Where(f => f.Ruling is null).ToList();
+        var defects = findings.Where(f => f.Ruling == GateRuling.Defect).ToList();
+        var answered = findings.Where(f => f.Ruling == GateRuling.OwnerDecides).ToList();
+        if (unruled.Count == 0 && defects.Count == 0 && answered.Count == 0) return null;
+
         var summary = $"REQUIRES a ruling on each of the {findings.Count} finding(s) the independent Classroom "
             + "analysis raised (rule_on_finding), and none ruled Defect - a Defect goes back to "
-            + "NeedsImplementation instead of forward.";
+            + "NeedsImplementation instead of forward - or OwnerDecides, which blocks the ticket for the owner.";
 
-        var how = defects.Count > 0
+        var how = answered.Count > 0 && defects.Count == 0 && unruled.Count == 0
+            ? $"The owner has answered {Names(answered)}. Read their answer in get_ticket's comments and "
+            + "rule_on_finding again on it: Defect when they want it handled in this ticket (then "
+            + "NeedsImplementation, with what to build), NotADefect when they left it to a follow-up and "
+            + "this ticket already does what they asked of it meanwhile - quote the answer as the reason."
+            : defects.Count > 0
             ? $"You ruled {Names(defects)} a Defect, so this ticket is not ready for review. Send it to "
             + "NeedsImplementation with an add_comment saying what is wrong, where, and what to change - and, "
             + "where the defect is something a QA item should have caught, add that QA item. If a ruling was "
             + "wrong, call rule_on_finding again with NotADefect and the reason."
             : $"Not yet ruled: {Names(unruled)}. For each, read what the finding claims, check it against the "
-            + "code yourself, then call rule_on_finding with Defect or NotADefect and the reason. NotADefect "
-            + "needs the evidence that settles it, not the plan's intent: the plan is what the finding is "
-            + "checking.";
+            + "code yourself, then call rule_on_finding with Defect, NotADefect or OwnerDecides and the reason. "
+            + "NotADefect needs the evidence that the claim does not hold, not the plan's intent: the plan is "
+            + "what the finding is checking. A finding that is real but that you think is not this ticket's is "
+            + "OwnerDecides, never NotADefect.";
 
         return new Requirement(summary, how);
     }
