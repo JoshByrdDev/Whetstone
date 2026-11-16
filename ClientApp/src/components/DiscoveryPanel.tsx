@@ -534,7 +534,9 @@ function useVoiceOver(video: React.MutableRefObject<HTMLVideoElement | null>, li
       if (s.speaking && !a.src && performance.now() >= s.until) finish();
       // A caption stays a moment past its line, then clears rather than hanging over a long silence.
       if (!s.speaking && s.shown && t > s.shown.at + s.shown.seconds + 2.5) show(null);
-      if (l && t >= l.at) {
+      // A line starts only while the video plays: a player sitting paused at a line's place - every
+      // one, as the drawer opens, when a line is at 0:00 - says nothing until someone presses play.
+      if (l && t >= l.at && (!v.paused || s.held)) {
         if (s.speaking && on.current && a.src) {
           // Still speaking: the video waits for the voice.
           if (!v.paused) { s.held = true; v.pause(); }
