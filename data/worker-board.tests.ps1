@@ -608,6 +608,14 @@ try {
     $script:PutFails = $false
     $script:Puts = @()
     Check 'mirror stop: one last full pass' (Stop-QaCaptureMirror -Job $null -DashboardUrl 'http://board.test:5338' -Dir $caps -TicketId '12' -HostName 'bravo-host' -RunId '812') 2
+    # An iPhone simulator's screenshot (simctl io booted screenshot <dir>/sim-home.png) is a PNG in
+    # the same folder, and goes the same way - also when the folder is named with a trailing separator.
+    $script:Puts = @()
+    [IO.File]::WriteAllBytes((Join-Path $caps 'sim-home.png'), [byte[]](0x89, 0x50, 0x4E, 0x47))
+    [IO.File]::WriteAllBytes((Join-Path $caps 'sim-flow.mp4'), [byte[]](0, 0, 0, 0x18))
+    $simSeen = @{ 'one.png' = 'x'; 'sub/two two.jpg' = 'x' }
+    $null = Send-QaCaptures -DashboardUrl 'http://board.test:5338' -Dir ($caps + [IO.Path]::DirectorySeparatorChar) -TicketId '12' -HostName 'bravo-host' -RunId '812' -Seen $simSeen
+    Check 'captures: a simulator screenshot goes by its own name, the recording does not' (@($script:Puts | ForEach-Object { $_.Uri }) -join ' ') 'http://board.test:5338/api/hosts/bravo-host/qa-captures/12/one.png?runId=812 http://board.test:5338/api/hosts/bravo-host/qa-captures/12/sim-home.png?runId=812 http://board.test:5338/api/hosts/bravo-host/qa-captures/12/sub/two%20two.jpg?runId=812'
     Check 'captures: no directory, nothing to do' (Send-QaCaptures -DashboardUrl 'http://board.test:5338' -Dir (Join-Path $root 'none') -TicketId '12' -HostName 'bravo-host' -RunId '812' -Seen @{}) 0
 }
 # An exception is a failure, not the end of the list: without this, everything after it

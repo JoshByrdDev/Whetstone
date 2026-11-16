@@ -1,0 +1,16 @@
+{
+  "devices" : {
+    "com.apple.CoreSimulator.SimRuntime.iOS-27-2" : [
+      {
+        "lastBootedAt" : "2026-11-16T09:12:44Z",
+        "dataPath" : "/Users/someone/Library/Developer/CoreSimulator/Devices/3F1C2B9A-6D7E-4A10-9B2C-0E5D8A7F6B41/data",
+        "udid" : "3F1C2B9A-6D7E-4A10-9B2C-0E5D8A7F6B41",
+        "isAvailable" : true,
+        "deviceTypeIdentifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro",
+        "state" : "Booted",
+        "name" : "iPhone 18 Pro"
+      }
+    ],
+    "com.apple.CoreSimulator.SimRuntime.watchOS-12-2" : [ ]
+  }
+}

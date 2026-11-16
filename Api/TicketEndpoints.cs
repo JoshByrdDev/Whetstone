@@ -267,7 +267,8 @@ public static class TicketEndpoints
         // Atomically claim the next ticket for the one global heartbeat: most-progressed
         // workable ticket across all projects (or the given subset). Locks it into its "-ing"
         // phase and returns everything the orchestrator needs to launch the worker.
-        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments, PrototypeCaptureQueue captures, DashboardDbContext db, TicketBranchNamer namer) =>
+        app.MapPost("/api/heartbeat/claim-next", async (ClaimNextRequest? req, TicketService svc, DashboardPaths paths, ProjectRegistry registry, LinkedIssueResolver resolver, IssueSnapshotService snapshots, TicketDependencyService deps, TicketFileStore ticketFiles, IssueTrackerFactory trackers, CapacityMonitor capacity, ResourcePathGate resourcePaths, ExperimentService experiments, PrototypeCaptureQueue captures, DashboardDbContext db, TicketBranchNamer namer,
+            WorkerHostService hosts, BoardDevices boardDevices, DeviceWaits deviceWaits) =>
         {
             bool SkillExists(string projectKey, string skill) => File.Exists(paths.SkillFile(projectKey, skill));
 
@@ -390,9 +391,14 @@ public static class TicketEndpoints
             // What this claim saw is kept for the capacity meter: why each waiting ticket was passed
             // over is the answer to "why was that berth free", and only the claim knows it.
             var trace = new ClaimTrace();
+            // The devices the machine claiming has: a worker host's from its check-in, this one's
+            // worked out here. A run needing one it lacks is passed over for a machine that has it.
+            var devicesHere = resourceHost is null ? boardDevices.Has() : hosts.DevicesOf(resourceHost);
             var result = await svc.ClaimNextAsync(filter, SkillExists, maxAttempts, ResourcesFor, leaseTtl, priorityFilter, skillFilter, trace,
-                resourcePaths.NeededAsync);
+                resourcePaths.NeededAsync, keys => MachineDevices.Lacking(keys, devicesHere));
             capacity.RecordClaim(req?.Host, result is not null, trace);
+            foreach (var (ticketId, device) in trace.DeviceTickets) deviceWaits.Note(ticketId, device);
+            if (result is not null) deviceWaits.Clear(result.Ticket.Id);
             if (result is null)
                 return Results.Ok(new { claimed = (object?)null });
 
@@ -630,7 +636,8 @@ public static class TicketEndpoints
         // ---- Tickets --------------------------------------------------------
 
         app.MapGet("/api/tickets", async (TicketService svc, LinkedIssueResolver resolver,
-            TicketDependencyService deps, AnalysisQueue analyses, string? project, string? phase) =>
+            TicketDependencyService deps, AnalysisQueue analyses, DeviceWaits deviceWaits, BoardDevices boardDevices,
+            WorkerHostService hosts, string? project, string? phase) =>
         {
             TicketPhase? ph = Enum.TryParse<TicketPhase>(phase, true, out var p) ? p : null;
             // Each card's fields only, and its notes counted rather than read: see ListForBoardAsync.
@@ -649,6 +656,11 @@ public static class TicketEndpoints
             var analysing = pending.Where(q => q.WalkthroughOf is null).Select(q => q.TicketId)
                 .Concat(running is { WalkthroughOf: null } c ? new[] { c.TicketId } : Array.Empty<int>())
                 .ToHashSet();
+            // Every device some machine that can take work has now: a ticket a claim passed over for
+            // one of these will be taken by that machine, so it is not said to be waiting for it.
+            var devicesAnywhere = boardDevices.Has()
+                .Concat(hosts.Snapshot().Where(h => h.Dispatchable).SelectMany(h => h.Devices ?? Array.Empty<string>()))
+                .ToHashSet(StringComparer.Ordinal);
             return Results.Ok(rows.Select(row =>
             {
                 var t = row.Ticket;
@@ -657,7 +669,8 @@ public static class TicketEndpoints
                 return TicketMapper.ToSummary(t, r.Title, r.Unavailable, b,
                     bounces.TryGetValue(t.Id, out var at) ? at : null,
                     awaitingAnalysis: ClassroomGate.Applies(t) && analysing.Contains(t.Id),
-                    notes: (row.Comments, row.UnansweredNotes));
+                    notes: (row.Comments, row.UnansweredNotes),
+                    waitingForDevice: deviceWaits.Why(t.Id, devicesAnywhere));
             }));
         });
 

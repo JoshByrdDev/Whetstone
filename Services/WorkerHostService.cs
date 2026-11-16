@@ -148,7 +148,8 @@ public record WorkerHostView(
     HostAccountChoice? Claude = null, IReadOnlyList<HostClaudeLogin>? ClaudeLogins = null,
     string? PsVersion = null, bool WindowsPowerShell = false,
     bool StopPending = false, int Out = 0,
-    IReadOnlyList<HostDisk>? Disks = null, string? DiskLow = null)
+    IReadOnlyList<HostDisk>? Disks = null, string? DiskLow = null,
+    IReadOnlyList<string>? Devices = null)
 {
     /// <summary>
     /// Whether the orchestrator may give it new work: remote work switched on, this host switched on
@@ -197,6 +198,8 @@ public class WorkerHostService
         public bool WindowsPowerShell;
         /// <summary>Free space on the drives holding its worktree roots, as its last check-in said. Null: never said.</summary>
         public List<HostDisk>? Disks;
+        /// <summary>The machine-wide devices it has (<see cref="MachineDevices"/>), as its last check-in said. Null: never said.</summary>
+        public List<string>? Devices;
         /// <summary>Start orders a check-in has carried away whose run the runner has not reported yet, by run id.</summary>
         public Dictionary<int, DateTime> Handed = new();
         public TaskCompletionSource Signal = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -274,7 +277,8 @@ public class WorkerHostService
         string name, string? commit, IReadOnlyList<HostRun> runs, DateTime? usageLimitUntil, TimeSpan wait,
         CancellationToken ct = default, string? dataRoot = null,
         IReadOnlyList<HostClaudeLogin>? logins = null, IReadOnlyList<HostUsageLimit>? limits = null,
-        string? psVersion = null, bool windowsPowerShell = false, IReadOnlyList<HostDisk>? disks = null)
+        string? psVersion = null, bool windowsPowerShell = false, IReadOnlyList<HostDisk>? disks = null,
+        IReadOnlyList<string>? devices = null)
     {
         if (Find(name) is null)
         {
@@ -307,6 +311,8 @@ public class WorkerHostService
             s.WindowsPowerShell = windowsPowerShell;
             // Kept when a check-in says nothing: a runner measures its drives on a slower clock than it checks in.
             if (disks is not null) s.Disks = disks.Where(d => !string.IsNullOrWhiteSpace(d.Root)).ToList();
+            // Kept the same way: a runner reads its toolchain every few minutes, not on every check-in.
+            if (devices is not null) s.Devices = MachineDevices.Clean(devices).ToList();
             foreach (var r in s.Runs) s.Handed.Remove(r.RunId);
             foreach (var id in s.Handed.Where(kv => _now() - kv.Value > HandedGrace).Select(kv => kv.Key).ToList()) s.Handed.Remove(id);
             if (s.Orders.Count > 0 || wait <= TimeSpan.Zero) return Drain(s);
@@ -357,6 +363,15 @@ public class WorkerHostService
                 if (_hosts.TryGetValue(h.Name, out var s) && s.LastCheckin is { } t && now - t < OfflineAfter && OutOf(s) == 0)
                     result.Add(h.Name);
         return result;
+    }
+
+    /// <summary>
+    /// The devices a host has, from what it last reported - what its claim may take that needs one
+    /// (<see cref="MachineDevices.Lacking"/>). Empty for a host that never said.
+    /// </summary>
+    public IReadOnlyList<string> DevicesOf(string name)
+    {
+        lock (_lock) return _hosts.TryGetValue(name, out var s) && s.Devices is { } d ? d.ToList() : new List<string>();
     }
 
     /// <summary>Which Claude account a host's next run spends, from what it last reported.</summary>
@@ -466,7 +481,7 @@ public class WorkerHostService
                     online, s?.LastCheckin, s?.Commit, matches,
                     s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.StackCopies, remoteOn,
                     claude, logins, s?.PsVersion, s?.WindowsPowerShell ?? false, h.StopPending, OutOf(s),
-                    s?.Disks?.ToList(), DiskFloor.Low(s?.Disks, floor)));
+                    s?.Disks?.ToList(), DiskFloor.Low(s?.Disks, floor), s?.Devices?.ToList() ?? new List<string>()));
             }
         }
         return result;

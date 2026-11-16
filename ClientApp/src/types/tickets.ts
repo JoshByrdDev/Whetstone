@@ -241,6 +241,9 @@ export interface TicketSummary {
   // itself when the blocker finishes, but the heartbeat passes over it until then.
   waiting?: boolean;
   waitingOn?: string[] | null;
+  // Passed over because its run needs a device no machine that can take work has: "waiting for an
+  // iPhone simulator, which only a Mac has" (MachineDevices on the server). Null otherwise.
+  waitingForDevice?: string | null;
   // The work item being implemented, or the QA item being tested — already scoped to the ticket's
   // phase by the server. Show it only for a row an agent is actually holding: it records what a run
   // said it was doing, and a run that died mid-item leaves it set behind.

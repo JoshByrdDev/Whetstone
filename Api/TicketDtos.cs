@@ -65,7 +65,10 @@ public record TicketSummaryDto(
     bool IsBug = false,
     // The base its owner filed it on (Ticket.BaseBranch), for the card's base chip. Null - almost
     // every ticket - is the project's base, or its slice's branch.
-    string? BaseBranch = null);
+    string? BaseBranch = null,
+    // Why the heartbeat passes it over when that is a device no machine that can take work has:
+    // "waiting for an iPhone simulator, which only a Mac has" (MachineDevices). Null otherwise.
+    string? WaitingForDevice = null);
 
 /// <summary>One thing a ticket is waiting on, resolved as far as it can be.</summary>
 public record BlockerDto(
@@ -314,7 +317,7 @@ public static class TicketMapper
     /// stop showing.</param>
     public static TicketSummaryDto ToSummary(Ticket t, string? effectiveTitle = null, bool issueUnavailable = false,
         IReadOnlyList<BlockerDto>? blockers = null, DateTime? lastBackwardAt = null, bool awaitingAnalysis = false,
-        (int All, int Unanswered)? notes = null) => new(
+        (int All, int Unanswered)? notes = null, string? waitingForDevice = null) => new(
         t.Id, t.ProjectKey, t.IssueKey != null ? (effectiveTitle ?? t.IssueKey) : (effectiveTitle ?? t.Title ?? ""), t.Phase.ToString(),
         t.IssueKey, t.IssueUrl, issueUnavailable, t.Branch, t.BoardOrder,
         t.WorkItems.Count, t.WorkItems.Count(w => w.Done),
@@ -337,7 +340,8 @@ public static class TicketMapper
         awaitingAnalysis,
         t.ReviewTarget?.Repo,
         t.IsBug,
-        SliceBranches.OwnBase(t));
+        SliceBranches.OwnBase(t),
+        waitingForDevice);
 
     private static int HeldForExpansion(Ticket t) =>
         WorkItemScopes.HeldForExpansion(t) ? WorkItemScopes.OpenExpansionCount(t) : 0;

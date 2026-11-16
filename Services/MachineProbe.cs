@@ -181,7 +181,7 @@ public class MachineProbe
         return (Math.Round((rx - p.Rx) * 8 / 1000.0 / secs, 1), Math.Round((tx - p.Tx) * 8 / 1000.0 / secs, 1));
     }
 
-    private static string? RunProcess(string file, string args)
+    internal static string? RunProcess(string file, string args)
     {
         try
         {
@@ -365,10 +365,12 @@ public class MachineProbeService : BackgroundService
     private readonly MachineProbe _probe;
     private readonly ILogger<MachineProbeService> _log;
 
+    private readonly BoardDevices? _devices;
+
     public MachineProbeService(IServiceScopeFactory scopes, MachineLoadBook book, DashboardPaths paths, QaIsolation isolation,
-        ILogger<MachineProbeService> log)
+        ILogger<MachineProbeService> log, BoardDevices? devices = null)
     {
-        (_scopes, _book, _log) = (scopes, book, log);
+        (_scopes, _book, _log, _devices) = (scopes, book, log, devices);
         _probe = new MachineProbe(paths.DataRoot, docker: !isolation.On);
     }
 
@@ -383,6 +385,8 @@ public class MachineProbeService : BackgroundService
                 // Off the request threads: a load reading can take a second, an inventory several.
                 var load = await Task.Run(() => _probe.Load(now), ct);
                 _book.Set(CapacityPlaces.Board, load, now);
+                // Kept fresh here, off the request threads, so a claim never waits on xcodebuild.
+                if (_devices is not null) await Task.Run(_devices.Has, ct);
                 if (now - inventoryAt >= InventoryEvery)
                 {
                     var inv = await Task.Run(_probe.Inventory, ct);

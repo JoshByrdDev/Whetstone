@@ -500,6 +500,15 @@ discoverable from the code:
   `qaLeases`, still read) and the
   project's `parallelStacks`, and what stack slot N means in ports is written in the project's
   folder, never here.
+- **A run that needs a device is claimed only by a machine that has one.** `ios:simulator` is leased
+  like any resource, but a lease is only ever waited for, and a Windows machine would wait forever:
+  so a claim from a machine without the device passes the run over, before anything is taken, and
+  the board says why it waits when no machine has one (docs/ios-simulator-plan.md). Which resources
+  are such devices, and what counts as having one, is written twice and the two must agree:
+  `MachineDevices` / `IosToolchain` (the board host, for itself) and `Get-MachineDevices` in
+  `data/machine-info.ps1` (a worker host, sent on its check-in), held to the same fixtures. A freed
+  simulator lease shuts down only what its run booted - on the board host `SimulatorReset`, on a
+  worker host its runner - because a Mac board host is also its owner's Mac.
 - **With the smart switch on, the board chooses a worker host's Claude account.** A usage limit is
   the account's, not the machine's, so the board's reading of an account already counts every
   machine spending it. A host reports who its logins are, by account id, never a folder or a token;

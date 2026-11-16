@@ -1,0 +1,32 @@
+{
+  "runtimes" : [
+    {
+      "isAvailable" : true,
+      "version" : "27.2",
+      "isInternal" : false,
+      "buildversion" : "24B8117",
+      "supportedArchitectures" : [ "arm64" ],
+      "supportedDeviceTypes" : [
+        { "name" : "iPhone 18 Pro", "productFamily" : "iPhone", "identifier" : "com.apple.CoreSimulator.SimDeviceType.iPhone-18-Pro" }
+      ],
+      "identifier" : "com.apple.CoreSimulator.SimRuntime.iOS-27-2",
+      "platform" : "iOS",
+      "name" : "iOS 27.2"
+    },
+    {
+      "isAvailable" : false,
+      "availabilityError" : "The runtime's disk image is not mounted.",
+      "version" : "26.4",
+      "identifier" : "com.apple.CoreSimulator.SimRuntime.iOS-26-4",
+      "platform" : "iOS",
+      "name" : "iOS 26.4"
+    },
+    {
+      "isAvailable" : true,
+      "version" : "12.2",
+      "identifier" : "com.apple.CoreSimulator.SimRuntime.watchOS-12-2",
+      "platform" : "watchOS",
+      "name" : "watchOS 12.2"
+    }
+  ]
+}

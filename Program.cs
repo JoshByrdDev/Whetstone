@@ -112,7 +112,7 @@ builder.Services.AddSingleton<DiscoveryVoicing>();
 builder.Services.AddSingleton<SetupCheckService>(sp => new SetupCheckService(
     sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<DashboardPaths>(),
     sp.GetRequiredService<Whetstone.Services.Walkthrough.Narrator>(),
-    sp.GetRequiredService<HeartbeatManager>()));
+    sp.GetRequiredService<HeartbeatManager>(), sp.GetRequiredService<BoardDevices>()));
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.WalkthroughService>();
 builder.Services.AddSingleton<AnalysisRunner>();
 builder.Services.AddSingleton<Whetstone.Services.UnitReports.UnitReportRunner>();
@@ -209,6 +209,10 @@ if (!isolation.On) builder.Services.AddHostedService<StackProbeService>();
 // Each machine's latest load: a worker host's from its check-in, this one's from MachineProbeService,
 // which reads only this machine (and leaves docker alone on a QA copy). docs/machine-limits-plan.md.
 builder.Services.AddSingleton<MachineLoadBook>();
+// The devices this machine has (an iPhone simulator), and the tickets a claim passed over for one it lacks.
+builder.Services.AddSingleton<BoardDevices>();
+builder.Services.AddSingleton<DeviceWaits>();
+builder.Services.AddSingleton<SimulatorReset>();
 builder.Services.AddHostedService<MachineProbeService>();
 builder.Services.AddScoped<MachineLimitsService>();
 builder.Services.AddSingleton(sp =>
