@@ -108,6 +108,29 @@ public partial class StewardServiceTests
     }
 
     [Fact]
+    public async Task A_slice_a_resting_run_left_behind_wakes_no_run_until_something_moves()
+    {
+        await OpenSlice(1, "slice/01-first");
+        _git.Heads["slice/01-first"] = "s1";
+        // Behind with a conflict: begin cannot bring it up, the owner is asked (or says leave it).
+        _git.SliceSync["slice/01-first"] = new SliceSyncResult("proposed", 1, Array.Empty<string>(), null);
+        await Begin();
+        await In(s => s.EndAsync("alpha", "nothing to do; slice 1's conflict already asked", true));
+
+        await using (var ctx = NewCtx())
+            Assert.Equal((false, "nothing has changed since a run that left nothing to do"), await Steward(ctx).DueAsync("alpha"));
+
+        _git.Heads["slice/01-first"] = "s2";   // a ticket merged into the slice
+        await using (var ctx = NewCtx())
+            Assert.Equal((true, "slice/01-first is behind the base"), await Steward(ctx).DueAsync("alpha"));
+
+        _git.Heads["slice/01-first"] = "s1";
+        _git.Head = "def";                       // the base moved
+        await using (var ctx = NewCtx())
+            Assert.True((await Steward(ctx).DueAsync("alpha")).Due);
+    }
+
+    [Fact]
     public async Task The_walk_through_of_an_open_slice_says_it_runs_on_the_slices_branch()
     {
         _git.First = WithWalkthrough;

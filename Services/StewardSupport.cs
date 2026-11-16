@@ -13,6 +13,8 @@ namespace Whetstone.Services;
 public interface IStewardGit
 {
     Task<string?> BaseHeadAsync(string projectKey, CancellationToken ct = default);
+    /// <summary>The hub's local heads of <paramref name="branches"/>, in their order; null for one that cannot be read.</summary>
+    Task<IReadOnlyList<string?>> BranchHeadsAsync(string projectKey, IReadOnlyList<string> branches, CancellationToken ct = default);
     Task<IReadOnlyList<PlanUnit>> PlanAsync(string projectKey, CancellationToken ct = default);
     Task<BranchChange?> BranchChangeAsync(string projectKey, string branch, CancellationToken ct = default);
     /// <summary><see cref="BranchChange.ChangeId"/> of the branch's diff limited to <paramref name="paths"/>, or null.</summary>

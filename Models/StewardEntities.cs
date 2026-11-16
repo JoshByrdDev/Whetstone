@@ -275,8 +275,9 @@ public class StewardState
     public string? RunDueReason { get; set; }
 
     /// <summary>
-    /// The base branch's head at the end of a run that left nothing to file. While the head is
-    /// still this and nothing is due, there is nothing for a run to find, and none is started.
+    /// What a run that left nothing to file saw: the base branch's head, or with open slices a hash
+    /// of it and their heads (StewardService.RestMarkAsync). While that is unchanged and nothing is
+    /// due, there is nothing for a run to find, and none is started - a slice it left behind included.
     /// </summary>
     public string? RestingAtSha { get; set; }
 

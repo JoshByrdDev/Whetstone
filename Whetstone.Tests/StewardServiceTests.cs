@@ -2173,6 +2173,11 @@ public partial class StewardServiceTests : IDisposable
 
         public Task<string?> BaseHeadAsync(string projectKey, CancellationToken ct = default) => Task.FromResult<string?>(Head);
 
+        /// <summary>Branch heads by name; a test moves one to say that branch has moved.</summary>
+        public Dictionary<string, string> Heads = new();
+        public Task<IReadOnlyList<string?>> BranchHeadsAsync(string projectKey, IReadOnlyList<string> branches, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<string?>>(branches.Select(b => Heads.TryGetValue(b, out var h) ? h : null).ToList());
+
         /// <summary>The second unit's spec, which a test may give decisions to leave open.</summary>
         public string Second = "> **Status: draft, awaiting the owner.**\n\n- **A1.** One.\n";
 

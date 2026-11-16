@@ -216,6 +216,25 @@ public partial class TicketGitService
     }
 
     /// <summary>
+    /// The hub's local heads of <paramref name="branches"/>, in their order, read by one git process -
+    /// asked on every heartbeat pass. Null for a branch that is not there or when the hub cannot be read.
+    /// </summary>
+    public async Task<IReadOnlyList<string?>> BranchHeadsAsync(string projectKey, IReadOnlyList<string> branches, CancellationToken ct = default)
+    {
+        var none = branches.Select(_ => (string?)null).ToList();
+        if (branches.Count == 0) return none;
+        var (_, repo, _) = HubOf(projectKey);
+        if (!IsGitRepo(repo)) return none;
+        var r = await GitAsync(repo, ct, new[] { "for-each-ref", "--format=%(refname) %(objectname)" }
+            .Concat(branches.Select(b => $"refs/heads/{b}")).ToArray());
+        if (!r.Ok) return none;
+        var heads = r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(l => l.Split(' ', 2)).Where(p => p.Length == 2)
+            .ToDictionary(p => p[0], p => p[1], StringComparer.Ordinal);
+        return branches.Select(b => heads.TryGetValue($"refs/heads/{b}", out var sha) ? sha : null).ToList();
+    }
+
+    /// <summary>
     /// The project's slices: every spec in the configured folder, read from the base branch's last
     /// commit. Empty when the project names no slices folder or the folder does not exist yet.
     /// </summary>

@@ -162,21 +162,45 @@ public partial class StewardService
         if (!string.IsNullOrEmpty(s?.DueReason)) return (true, s!.DueReason!);
         if (s?.LastRunEndedAt is null) return (true, "first run");
 
+        // A run that left nothing to do, with the base and every open slice still where it left
+        // them, has already seen whatever a slice behind is: begin brings every slice up it can, so
+        // one still behind at the end is a conflict put to the owner or one the owner chose to leave.
+        // Asked before the slices below, or such a slice woke a run every few minutes that found
+        // the same thing and rested again - one owner's "leave it behind" cost dozens of runs a day.
+        var mark = s.RestingAtSha is null ? null : await RestMarkAsync(cfg, ct);
+        if (mark is not null && mark == s.RestingAtSha)
+            return (false, "nothing has changed since a run that left nothing to do");
+
         // An open slice that has not taken the base's latest - or its parent's - is owed the merge.
         foreach (var slice in await OpenSlicesAsync(cfg, ct))
             if ((await _git.SyncSliceAsync(projectKey, slice.Branch, true, slice.From, ct)).Answer == "proposed")
                 return (true, $"{slice.Branch} is behind {slice.From ?? "the base"}");
 
-        if (s.RestingAtSha is not null)
-            return await _git.BaseHeadAsync(projectKey, ct) == s.RestingAtSha
-                ? (false, "nothing has changed since a run that left nothing to do")
-                : (true, "the base branch has moved");
+        if (s.RestingAtSha is not null) return (true, "the base branch has moved");
 
         return DateTime.UtcNow - s.LastRunEndedAt.Value >= IdleInterval
             ? (true, "work was left for a later run")
             : (false, "the last run was a moment ago");
     }
 
+
+    /// <summary>
+    /// What a run that left nothing to do saw, for <see cref="StewardState.RestingAtSha"/>: the base's
+    /// head on a project with no open slice, and otherwise a hash of it with every open slice's head
+    /// and its parent's, so a slice or a parent moving is news as the base moving is. Null when the
+    /// base cannot be read, which never rests.
+    /// </summary>
+    private async Task<string?> RestMarkAsync(ProjectConfig cfg, CancellationToken ct)
+    {
+        var head = await _git.BaseHeadAsync(cfg.Name, ct);
+        if (head is null) return null;
+        var branches = (await OpenSlicesAsync(cfg, ct))
+            .SelectMany(o => new[] { o.Branch, o.From }).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        if (branches.Count == 0) return head;
+        var heads = await _git.BranchHeadsAsync(cfg.Name, branches, ct);
+        var seen = head + "\n" + string.Join("\n", branches.Select((b, i) => $"{b} {heads.ElementAtOrDefault(i)}"));
+        return Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(seen))).ToLowerInvariant();
+    }
 
     /// <summary>Note that a run is owed, and make sure a sleeping heartbeat hears about it.</summary>
     public async Task MarkDueAsync(string projectKey, string reason)
@@ -352,7 +376,7 @@ public partial class StewardService
         });
         // A run that only proposed changed nothing, so it has not earned the board a rest.
         s.RestingAtSha = nothingToFile && cfg!.StewardMode != StewardMode.Propose
-            ? await _git.BaseHeadAsync(projectKey, ct) : null;
+            ? await RestMarkAsync(cfg, ct) : null;
         await _db.SaveChangesAsync(ct);
 
         await _leases.ReleaseHumanLeaseAsync(LeaseKey(projectKey), "run ended");
