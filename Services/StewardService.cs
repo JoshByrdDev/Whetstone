@@ -93,6 +93,10 @@ public partial class StewardService
     private readonly HeartbeatManager? _heartbeat;
     private readonly CapacitySnapshot? _capacity;
 
+    private OwnerTaskService? _ownerTasks;
+    /// <summary>The owner's to-do list, over this service's own context, so a note and its item save together.</summary>
+    private OwnerTaskService OwnerTasks => _ownerTasks ??= new OwnerTaskService(_db, _registry, _notify, _heartbeat);
+
     public StewardService(DashboardDbContext db, TicketService tickets, ProjectRegistry registry, IStewardGit git,
         ResourceLeaseService leases, TicketDependencyService? deps = null, IStewardProjectFlags? projectFlags = null,
         NotificationSender? notify = null, HeartbeatManager? heartbeat = null, CapacitySnapshot? capacity = null)
@@ -531,6 +535,7 @@ public partial class StewardService
         var learned = await UnplacedAsync(projectKey, ct);
         var flags = await RulingFlagsAsync(projectKey, ct);
         var instructions = await OpenInstructionsAsync(projectKey, ct);
+        var ownerTodos = await OwnerTasks.ListAsync(projectKey, "open", ct);
 
         return new StewardReply("status", null, new
         {
@@ -566,6 +571,13 @@ public partial class StewardService
                         .Select(t => $"#{t.Id} {t.Phase}"),
                 }),
             waitingOnOwner = waiting.Select(q => new { q.Key, q.Question, q.HeldUp, asked = q.AskedAt }),
+            // The owner's to-do list for this project, open and waiting: what only they can do. Read it
+            // before adding to it (owner_todo_add refuses a likely duplicate); closing one is theirs.
+            ownerTodos = ownerTodos.Select(t => new
+            {
+                @ref = t.Ref, t.Title, kind = t.Kind.ToString().ToLowerInvariant(), status = t.Status.ToString().ToLowerInvariant(),
+                ticket = t.TicketId, t.HoldsRelease, suggested = t.Suggestion,
+            }),
             done = all.Count - open.Count,
             tickets = rows,
             // What earlier runs meant to do, by ticket. Each stays until closed with steward_done_with.
@@ -1821,6 +1833,22 @@ public partial class StewardService
         if (t is null) return no!;
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"note for ticket {ticketId}: {Head(text, 200)}");
 
+        // Something to set up, or something the owner has to do, is a job and not reading: it goes on
+        // the owner's to-do list, holding this release (docs/owner-todo-plan.md).
+        if (releaseKind is StewardReleaseKind.Config or StewardReleaseKind.Action)
+        {
+            var r = await OwnerTasks.AddAsync(new OwnerTaskDraft(projectKey, Head(text, OwnerTaskService.TitleMax), text.Trim(),
+                releaseKind == StewardReleaseKind.Config ? "config" : "action", null, ticketId, t.PlanUnit, HoldsRelease: true), "steward", ct,
+                requireBody: false);
+            return r.Answer switch
+            {
+                "added" or "merged" => new StewardReply("noted", r.Why ?? "On the owner's to-do list, holding this release.", r.Data),
+                "possible-duplicate" => Refuse("possible-duplicate", r.Why + " For a release, add with owner_todo_add and holdsRelease true, "
+                    + "or append to the one it is and say it holds this release.", r.Data),
+                _ => Refuse(r.Answer, r.Why ?? "", r.Data),
+            };
+        }
+
         _db.StewardEntries.Add(new StewardEntry { ProjectKey = projectKey, Kind = kind, TicketId = ticketId, Text = text.Trim(), Release = releaseKind });
         await _db.SaveChangesAsync(ct);
         return new StewardReply("noted");
@@ -2292,6 +2320,12 @@ public partial class StewardService
             e.Release = rk;
         }
         if (handled is { } h) e.HandledAt = h ? e.HandledAt ?? DateTime.UtcNow : null;
+        // Sorted into a job: it is the to-do list's now, and the note row goes.
+        if (e.Kind == StewardEntryKind.BeforeRelease && e.Release is StewardReleaseKind.Config or StewardReleaseKind.Action)
+        {
+            var moved = await OwnerTasks.FromReleaseNoteAsync(e, "owner", ct);
+            return new StewardReply("recorded", $"Moved to the to-do list as {moved.Ref}.", new { ownerTodo = moved.Ref });
+        }
         await _db.SaveChangesAsync(ct);
         return new StewardReply("recorded");
     }
@@ -2328,6 +2362,8 @@ public partial class StewardService
             sorted++;
         }
         await _db.SaveChangesAsync(ct);
+        foreach (var e in rows.Where(e => e.Release is StewardReleaseKind.Config or StewardReleaseKind.Action).ToList())
+            await OwnerTasks.FromReleaseNoteAsync(e, "owner", ct);
         return new StewardReply("recorded", null, new { sorted, passedOver = kinds.Count - sorted });
     }
 
@@ -2335,9 +2371,15 @@ public partial class StewardService
         _db.StewardOutcomes.AsNoTracking().Where(o => o.ProjectKey == projectKey).ToListAsync(ct);
 
     /// <summary>One plan's notes for a release, each under the unit it will go out with.</summary>
-    private sealed record UnitNotes(Dictionary<int, List<StewardEntry>> ByUnit)
+    private sealed record UnitNotes(Dictionary<int, List<StewardEntry>> ByUnit, Dictionary<int, List<OwnerTask>> TasksByUnit)
     {
         public IReadOnlyList<StewardEntry> Of(int unit) => ByUnit.TryGetValue(unit, out var l) ? l : new List<StewardEntry>();
+
+        /// <summary>The to-do items that hold this slice's release, open or not.</summary>
+        public IReadOnlyList<OwnerTask> TasksOf(int unit) => TasksByUnit.TryGetValue(unit, out var l) ? l : new List<OwnerTask>();
+
+        /// <summary>What a release still waits on: unticked migrations, and open to-do items holding it.</summary>
+        public int OutstandingOf(int unit) => Of(unit).Count(Outstanding) + TasksOf(unit).Count(t => t.IsOpen);
     }
 
     /// <summary>
@@ -2362,7 +2404,16 @@ public partial class StewardService
             if (!by.TryGetValue(u, out var list)) by[u] = list = new();
             list.Add(n);
         }
-        return new UnitNotes(by);
+        // A to-do item that holds a release is placed the same way: its own slice, else its ticket's, else the next.
+        var tasks = new Dictionary<int, List<OwnerTask>>();
+        foreach (var t in await OwnerTasks.HoldingReleaseAsync(projectKey, ct))
+        {
+            int? unit = t.Unit ?? (t.TicketId is { } id && unitOf.TryGetValue(id, out var at) ? at : t.IsOpen ? next : null);
+            if (unit is not { } u) continue;
+            if (!tasks.TryGetValue(u, out var list)) tasks[u] = list = new();
+            list.Add(t);
+        }
+        return new UnitNotes(by, tasks);
     }
 
     /// <summary>
@@ -2426,7 +2477,8 @@ public partial class StewardService
                 var built = u.Agreed && p.Outcomes > 0 && p.Done == p.Outcomes;
                 var left = notes.Of(u.Number).Where(n => n.HandledAt is null).ToList();
                 int Left(StewardReleaseKind k) => left.Count(n => (n.Release ?? StewardReleaseKind.Note) == k);
-                var outstanding = left.Count(Outstanding);
+                var todo = notes.TasksOf(u.Number).Where(t => t.IsOpen).ToList();
+                var outstanding = notes.OutstandingOf(u.Number);
                 var sliceBranch = SliceBranches.BaseFor(cfg, u.Number, row);
                 return new
                 {
@@ -2472,8 +2524,10 @@ public partial class StewardService
                     release = !u.Agreed ? null : new
                     {
                         migrations = Left(StewardReleaseKind.Migration),
-                        config = Left(StewardReleaseKind.Config),
-                        actions = Left(StewardReleaseKind.Action),
+                        // On the owner's to-do list now: to set up (secrets, config, infra, accounts), and theirs to do.
+                        config = todo.Count(t => t.Kind is OwnerTaskKind.Secret or OwnerTaskKind.Config or OwnerTaskKind.Infra or OwnerTaskKind.Account),
+                        actions = todo.Count(t => t.Kind is OwnerTaskKind.Action or OwnerTaskKind.Deploy),
+                        todos = todo.Select(t => new { @ref = t.Ref, t.Id, t.Title, kind = t.Kind.ToString().ToLowerInvariant() }),
                         toKnow = Left(StewardReleaseKind.Note),
                         outstanding,
                     },
@@ -2733,10 +2787,16 @@ public partial class StewardService
             return Refuse("not-built", $"{progress.Outcomes - progress.Done} of slice {unit}'s {progress.Outcomes} outcomes are not done.");
 
         var rows = await _db.StewardUnits.Where(x => x.ProjectKey == projectKey).ToListAsync(ct);
-        var notes = (await UnitNotesAsync(projectKey, plan, rows, all, track: true, ct)).Of(unit);
+        var placed = await UnitNotesAsync(projectKey, plan, rows, all, track: true, ct);
+        var notes = placed.Of(unit);
         var outstanding = notes.Count(Outstanding);
-        if (outstanding > 0)
-            return Refuse("notes-outstanding", $"{outstanding} note{(outstanding == 1 ? "" : "s")} for this release - a migration, something to set up, something yours to do - {(outstanding == 1 ? "is" : "are")} not ticked off.");
+        var todos = placed.TasksOf(unit).Where(t => t.IsOpen).ToList();
+        if (outstanding > 0 || todos.Count > 0)
+            return Refuse("notes-outstanding", string.Join(" ", new[]
+            {
+                outstanding > 0 ? $"{outstanding} migration note{(outstanding == 1 ? "" : "s")} for this release {(outstanding == 1 ? "is" : "are")} not ticked off." : null,
+                todos.Count > 0 ? $"{string.Join(", ", todos.Select(t => t.Ref))} on your to-do list {(todos.Count == 1 ? "holds" : "hold")} this release." : null,
+            }.OfType<string>()), new { todos = todos.Select(t => new { @ref = t.Ref, t.Title }) });
 
         // A slice with a branch of its own is released by the board's merge of it into the local base.
         if (SliceBranches.BaseFor(cfg, unit, row) is { } slice)

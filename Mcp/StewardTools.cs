@@ -386,7 +386,10 @@ public class StewardTools
         "what it adds, a line a worker wrote for the owner's own documents (copy it as written, with the file and section it " +
         "names), a step to do by hand. A few lines, facts only. A ticket that leaves nothing gets no entry. One note is one " +
         "kind of thing, because the owner reads them by kind: a ticket that leaves a migration and wording to check gets two " +
-        "notes. Start with the one sentence that would do if it were all the owner read.")]
+        "notes. Start with the one sentence that would do if it were all the owner read. A 'config' or 'action' note is a job, not reading: it " +
+        "goes on the owner's to-do list as an item that holds this release (the same as owner_todo_add with holdsRelease), so write it " +
+        "the way owner_todo_add asks - why, where, steps, done when, where the result goes - and expect a likely-duplicate refusal to be " +
+        "answered with owner_todo_find and owner_todo_append.")]
     public static Task<StewardReply> NoteForRelease(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
         [Description("What the owner should read or do, in a few lines.")] string text,

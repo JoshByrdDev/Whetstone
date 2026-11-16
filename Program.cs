@@ -140,6 +140,7 @@ builder.Services.AddScoped<DiscoveryTaste>();
 builder.Services.AddSingleton<IStewardGit>(sp => sp.GetRequiredService<TicketGitService>());
 builder.Services.AddSingleton<IStewardProjectFlags, StewardFlagScript>();
 builder.Services.AddScoped<StewardService>();
+builder.Services.AddScoped<OwnerTaskService>();
 // A steward's merge outlives the call that asked for it: a project's checks run longer than a tool
 // call may, and a call that dropped used to take the merge down with it. See StewardMerges.
 builder.Services.AddSingleton<StewardMerges>();
@@ -251,15 +252,19 @@ builder.Services.AddMcpServer()
         if (mcp.ToolCollection is not { } all) return Task.CompletedTask;
         var steward = http.Request.Path.StartsWithSegments("/mcp/steward");
         var mine = new ModelContextProtocol.Server.McpServerPrimitiveCollection<ModelContextProtocol.Server.McpServerTool>();
+        // The owner's to-do list is on both doors: workers and stewards both find what only the owner can do.
         foreach (var tool in all)
-            if (tool.ProtocolTool.Name.StartsWith(StewardTools.Prefix, StringComparison.Ordinal) == steward)
+            if (tool.ProtocolTool.Name.StartsWith(OwnerTodoTools.Prefix, StringComparison.Ordinal)
+                || tool.ProtocolTool.Name.StartsWith(StewardTools.Prefix, StringComparison.Ordinal) == steward)
                 mine.Add(tool);
         mcp.ToolCollection = mine;
         return Task.CompletedTask;
     })
     .WithTools<TicketTools>()
     .WithTools<DiscoveryTools>()
-    .WithTools<StewardTools>();
+    .WithTools<StewardTools>()
+    .WithTools<OwnerTodoTools>();
+builder.Services.AddHttpContextAccessor();
 
 // Add SignalR
 builder.Services.AddSignalR();
@@ -399,6 +404,7 @@ app.MapExperimentEndpoints();
 // Whether a project's copies of the skill templates have fallen behind them (the Skills tab's badge).
 app.MapSkillDriftEndpoints();
 app.MapStewardEndpoints();
+app.MapOwnerTaskEndpoints();
 
 // A ticket's trip through the phases. Its own endpoint rather than a field on the ticket detail,
 // which is also what every worker receives through MCP — see TicketJourney.

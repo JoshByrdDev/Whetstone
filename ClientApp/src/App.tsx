@@ -20,6 +20,8 @@ import { HistoryPanel } from './components/HistoryPanel';
 import { MetricsPanel } from './components/metrics/MetricsPanel';
 import { Classroom } from './components/Classroom';
 import { StewardPanel } from './components/StewardPanel';
+import { OwnerTodos } from './components/OwnerTodos';
+import { ownerTodoCount } from './api/ownerTodos';
 import { ReconPanel } from './components/recon/ReconPanel';
 import { Tower } from './components/Tower';
 import { Backdrop } from './components/Backdrop';
@@ -31,7 +33,7 @@ import { useNarrow } from './hooks/useNarrow';
 import { useSkillDrift, driftTotal } from './hooks/useSkillDrift';
 import { confirmLeave } from './hooks/useUnsavedGuard';
 
-type Tab = 'tower' | 'board' | 'steward' | 'recon' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
+type Tab = 'tower' | 'board' | 'steward' | 'todo' | 'recon' | 'classroom' | 'heartbeat' | 'metrics' | 'history' | 'skills' | 'improvements' | 'settings';
 
 /**
  * The tabs, in the order they appear in the nav — which is also the order they sit in space.
@@ -45,6 +47,8 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'tower', label: 'Tower' },
   { id: 'board', label: 'Board' },
   { id: 'steward', label: 'Steward' },
+  // What only you can do, across every project (docs/owner-todo-plan.md).
+  { id: 'todo', label: 'To-Do' },
   // Shown only while some project has a discovery block (docs/recon-tab-plan.md).
   { id: 'recon', label: 'Recon' },
   { id: 'classroom', label: 'Classroom' },
@@ -86,6 +90,19 @@ export default function App() {
       .catch(() => { /* no tab is the safe answer */ });
   }, []);
   const [classroomTicket, setClassroomTicket] = useState<number | null>(null);
+  // What is yours to do, counted where every page can see it: an item an agent added overnight is
+  // exactly the kind of thing nobody opens a tab to look for.
+  const [todoCount, setTodoCount] = useState(0);
+  const [todoFocus, setTodoFocus] = useState<string | null>(null);
+  const clearTodoFocus = useCallback(() => setTodoFocus(null), []);
+  useEffect(() => {
+    const read = () => { ownerTodoCount().then(r => setTodoCount(r.open)).catch(() => { /* no badge is the safe answer */ }); };
+    read();
+    const t = setInterval(read, 60000);
+    window.addEventListener('owner-todos-changed', read);
+    window.addEventListener('focus', read);
+    return () => { clearInterval(t); window.removeEventListener('owner-todos-changed', read); window.removeEventListener('focus', read); };
+  }, []);
   // The ticket open in the slide-over on the heartbeat page — the board's own drawer, not a lookalike.
   const [drawerTicket, setDrawerTicket] = useState<number | null>(null);
   const closeDrawer = useCallback(() => setDrawerTicket(null), []);
@@ -173,6 +190,16 @@ export default function App() {
     return () => window.removeEventListener('open-classroom', open);
   }, [go]);
 
+  // "On your to-do list" from the Steward page's release view, which can name an item to open.
+  useEffect(() => {
+    const open = (e: Event) => {
+      setTodoFocus((e as CustomEvent<{ ref: string | null }>).detail?.ref ?? null);
+      go('todo');
+    };
+    window.addEventListener('open-owner-todo', open);
+    return () => window.removeEventListener('open-owner-todo', open);
+  }, [go]);
+
   // When sleeping, derive the wake time from the latest sleep event (timestamp + duration).
   const wakeAt = useMemo(() => {
     if (state.status !== 'sleeping') return null;
@@ -228,8 +255,9 @@ export default function App() {
             <nav className={narrow ? 'tab-strip flex gap-1 order-last w-full' : 'flex gap-1 flex-wrap'}>
               {TABS.filter(t => t.id !== 'recon' || recon || tab === 'recon').map(t => (
                 <TabButton key={t.id} on={tab === t.id} onClick={() => go(t.id)}
-                           badge={t.id === 'skills' && skillDrift > 0 ? skillDrift : undefined}
-                           badgeTitle={`${skillDrift} skill file${skillDrift === 1 ? '' : 's'} behind the template`}>
+                           badge={t.id === 'skills' && skillDrift > 0 ? skillDrift : t.id === 'todo' && todoCount > 0 ? todoCount : undefined}
+                           badgeTitle={t.id === 'todo' ? `${todoCount} thing${todoCount === 1 ? '' : 's'} only you can do`
+                             : `${skillDrift} skill file${skillDrift === 1 ? '' : 's'} behind the template`}>
                   {t.label}
                 </TabButton>
               ))}
@@ -260,6 +288,8 @@ export default function App() {
           {tab === 'board' && <Board state={state} wakeAt={wakeAt} events={events} />}
 
           {tab === 'steward' && <StewardPanel events={events} state={state} />}
+
+          {tab === 'todo' && <OwnerTodos focus={todoFocus} onFocused={clearTodoFocus} />}
 
           {tab === 'recon' && <ReconPanel state={state} />}
 

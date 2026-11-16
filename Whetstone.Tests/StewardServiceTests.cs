@@ -1153,13 +1153,15 @@ public partial class StewardServiceTests : IDisposable
         var id = await AtReview();
         await Begin();
         await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Words to check.", "note"));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "It rounds down.", "note"));
         await In(s => s.RecordAsync("alpha", StewardEntryKind.Call, id, "Kept the wording."));
-        var note = Entries().Single(e => e.Kind == StewardEntryKind.BeforeRelease).Id;
+        var notes = Entries().Where(e => e.Kind == StewardEntryKind.BeforeRelease).OrderBy(e => e.Id).Select(e => e.Id).ToList();
+        var (note, other) = (notes[0], notes[1]);
         var call = Entries().Single(e => e.Kind == StewardEntryKind.Call).Id;
 
-        Assert.Equal("recorded", (await In(s => s.OwnerMarksEntryAsync("alpha", note, true, "action"))).Answer);
+        Assert.Equal("recorded", (await In(s => s.OwnerMarksEntryAsync("alpha", note, true, "migration"))).Answer);
         var row = Entries().Single(e => e.Id == note);
-        Assert.Equal(StewardReleaseKind.Action, row.Release);
+        Assert.Equal(StewardReleaseKind.Migration, row.Release);
         Assert.NotNull(row.HandledAt);
 
         Assert.Equal("recorded", (await In(s => s.OwnerMarksEntryAsync("alpha", note, false, null))).Answer);
@@ -1169,9 +1171,38 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal("bad-request", (await In(s => s.OwnerMarksEntryAsync("alpha", call, null, "migration"))).Answer);
         Assert.Equal("no-entry", (await In(s => s.OwnerMarksEntryAsync("bravo", note, true, null))).Answer);
 
-        await In(s => s.OwnerSortsReleaseNotesAsync("alpha", new Dictionary<int, string> { [note] = "config", [call] = "config", [9999] = "note" }));
-        Assert.Equal(StewardReleaseKind.Config, Entries().Single(e => e.Id == note).Release);
+        // Sorted into a job, a note is the to-do list's: the row goes and an item holding the release takes its place.
+        await In(s => s.OwnerSortsReleaseNotesAsync("alpha", new Dictionary<int, string> { [other] = "config", [call] = "config", [9999] = "note" }));
+        Assert.DoesNotContain(Entries(), e => e.Id == other);
         Assert.Null(Entries().Single(e => e.Id == call).Release);
+        await using var ctx = NewCtx();
+        var task = await ctx.OwnerTasks.SingleAsync();
+        Assert.True(task.HoldsRelease);
+        Assert.Equal(OwnerTaskKind.Config, task.Kind);
+        Assert.Equal(OwnerTaskStatus.Open, task.Status);
+        Assert.Equal(id, task.TicketId);
+    }
+
+    [Fact]
+    public async Task A_config_note_for_a_release_goes_on_the_owners_list_and_holds_the_release()
+    {
+        var id = await Built(1, "A1, A2");
+        await Begin();
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
+        Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id,
+            "Set PAYMENTS_WEBHOOK_SECRET in the stack's .env before this goes out.", "config"))).Answer);
+        Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.BeforeRelease);
+
+        var refused = await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true));
+        Assert.Equal("notes-outstanding", refused.Answer);
+        Assert.Contains("OT-", refused.Why);
+
+        int taskId;
+        await using (var ctx = NewCtx()) taskId = (await ctx.OwnerTasks.SingleAsync()).Id;
+        await using (var ctx = NewCtx())
+            Assert.Equal("recorded", (await new OwnerTaskService(ctx).DoneAsync(taskId, "Set it in the stack's .env.")).Answer);
+        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
     }
 
     [Fact]

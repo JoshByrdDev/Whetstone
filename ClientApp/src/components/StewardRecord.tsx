@@ -4,6 +4,7 @@ import { BODY, MONO, TIER, chamfer } from './orbit';
 import { Markdown } from './Markdown';
 import { Fold, Quiet, ago, label, remember, remembered } from './stewardParts';
 import { unseenRuling } from '../api/steward';
+import { openOwnerTodo } from '../api/ownerTodos';
 import type { ReleaseKind, StewardEntry, StewardQuestion } from '../api/steward';
 
 /**
@@ -18,10 +19,14 @@ import type { ReleaseKind, StewardEntry, StewardQuestion } from '../api/steward'
 
 const KINDS: { id: ReleaseKind; title: string; says: string; tier: keyof typeof TIER }[] = [
   { id: 'Migration', title: 'Migrations', says: 'A change to the schema or the data that runs when this is released.', tier: 'blocked' },
-  { id: 'Config', title: 'To set up', says: 'Something outside the code: a variable, a secret, infrastructure, an account.', tier: 'gate' },
-  { id: 'Action', title: 'Yours to do', says: 'Something to do, check or approve: wording to read, a line for your own documents, a step by hand.', tier: 'active' },
+  // Filing a note under either of these moves it to the to-do list, where it holds the release instead.
+  { id: 'Config', title: 'To set up', says: 'Something outside the code: a variable, a secret, infrastructure, an account. Moves it to your to-do list.', tier: 'gate' },
+  { id: 'Action', title: 'Yours to do', says: 'Something to do, check or approve. Moves it to your to-do list.', tier: 'active' },
   { id: 'Note', title: 'To know', says: 'Nothing to do: how a thing behaves, a limit, a reading somebody took.', tier: 'queue' },
 ];
+
+/** What is read before a release, rather than done: the rest is on the owner's to-do list. */
+const READ = KINDS.filter(k => k.id === 'Migration' || k.id === 'Note');
 
 type Mark = (id: number, mark: { handled?: boolean; release?: ReleaseKind }) => Promise<void>;
 
@@ -131,15 +136,15 @@ function ReleaseNotes({ notes: all, onMark, unit, onUnit }: {
   const left = (k: ReleaseKind) => notes.filter(e => e.release === k && !e.handledAt).length;
   const [kind, setKind] = useState<ReleaseKind>(() => {
     const was = remembered('record.kind') as ReleaseKind | null;
-    if (was && KINDS.some(k => k.id === was)) return was;
+    if (was && READ.some(k => k.id === was)) return was;
     // Start on the first kind with anything outstanding: that is the order a release is read in.
-    return KINDS.find(k => left(k.id) > 0)?.id ?? 'Migration';
+    return READ.find(k => left(k.id) > 0)?.id ?? 'Migration';
   });
   const choose = (k: ReleaseKind) => { setKind(k); remember('record.kind', k); };
 
   const outstanding = every.filter(e => !e.handledAt).length;
   const ticked = every.length - outstanding;
-  const now = KINDS.find(k => k.id === kind)!;
+  const now = READ.find(k => k.id === kind) ?? READ[0];
   const rows = notes.filter(e => e.release === kind);
   const pickUnit = (u: number | null) => { setReleased(false); onUnit(u); };
 
@@ -165,12 +170,15 @@ function ReleaseNotes({ notes: all, onMark, unit, onUnit }: {
                 )}
               </div>
             )}
-            <div className="flex flex-wrap gap-2" style={{ marginBottom: 8 }}>
-              {KINDS.map(k => (
+            <div className="flex flex-wrap items-center gap-2" style={{ marginBottom: 8 }}>
+              {READ.map(k => (
                 <Chip key={k.id} on={kind === k.id} onClick={() => choose(k.id)} title={k.says}>
                   {k.title} {left(k.id)}
                 </Chip>
               ))}
+              <GhostButton onClick={() => openOwnerTodo()} title="What is to set up or yours to do is on the to-do list, where it holds the release">
+                To set up and yours to do: your to-do list
+              </GhostButton>
             </div>
             <div style={{ font: `400 11.5px ${BODY}`, color: 'var(--w-t500)', margin: '0 0 10px 2px' }}>{now.says}</div>
             <EntryList key={`${kind}.${released}`} id={`release.${kind}`} rows={rows} onMark={onMark} tickTitle="Dealt with" retag

@@ -221,7 +221,11 @@ export interface StewardPlanUnitView {
   /** Why a draft cannot be agreed from the board, when it cannot. */
   cannotAgree?: string | null;
   /** What its release still asks, by kind; null for a unit nobody has agreed. */
-  release?: { migrations: number; config: number; actions: number; toKnow: number; outstanding: number } | null;
+  release?: {
+    migrations: number; config: number; actions: number; toKnow: number; outstanding: number;
+    /** The open to-do items that hold this release (config and actions are counted from these). */
+    todos?: { ref: string; id: number; title: string; kind: string }[];
+  } | null;
   progress: { percent: number; done: number; inProgress: number; notStarted: number; outcomes: number };
   /** The numbers of the decisions its spec still leaves open. */
   openDecisions?: number[];

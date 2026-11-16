@@ -1605,6 +1605,139 @@ namespace Whetstone.Migrations
                     b.ToTable("NoteAttachments");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.OwnerTask", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DoneAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DoneNote")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("DroppedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DroppedBecause")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("HoldsRelease")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Key")
+                        .HasMaxLength(160)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notice")
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("SuggestedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Suggestion")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SuggestionBecause")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("Unit")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WaitingOn")
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("WaitingUntil")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("ProjectKey", "Key");
+
+                    b.HasIndex("Status", "ProjectKey");
+
+                    b.ToTable("OwnerTasks");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.OwnerTaskNote", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("By")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("OwnerTaskId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OwnerTaskId");
+
+                    b.ToTable("OwnerTaskNotes");
+                });
+
             modelBuilder.Entity("Whetstone.Models.PhaseTransition", b =>
                 {
                     b.Property<int>("Id")
@@ -3423,6 +3556,17 @@ namespace Whetstone.Migrations
                     b.Navigation("Comment");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.OwnerTaskNote", b =>
+                {
+                    b.HasOne("Whetstone.Models.OwnerTask", "Task")
+                        .WithMany("Notes")
+                        .HasForeignKey("OwnerTaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Task");
+                });
+
             modelBuilder.Entity("Whetstone.Models.PhaseTransition", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
@@ -3585,6 +3729,11 @@ namespace Whetstone.Migrations
             modelBuilder.Entity("Whetstone.Models.Label", b =>
                 {
                     b.Navigation("Assignments");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.OwnerTask", b =>
+                {
+                    b.Navigation("Notes");
                 });
 
             modelBuilder.Entity("Whetstone.Models.StewardDecision", b =>

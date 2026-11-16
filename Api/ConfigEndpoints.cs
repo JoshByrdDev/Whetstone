@@ -216,7 +216,7 @@ public static class ConfigEndpoints
             description = "Once, when the fleet finishes its work and the board goes quiet. Waking " +
                           "to an empty board and going straight back to sleep does not send another.",
         },
-        // The two below are sent by the dashboard (StewardService, through data/notify-send.ps1),
+        // The three below are sent by the dashboard (StewardService, through data/notify-send.ps1),
         // not by the heartbeat script - the same notifier, reached from the other side.
         new
         {
@@ -224,6 +224,13 @@ public static class ConfigEndpoints
             label = "A steward needs a decision",
             description = "Once per question, when a project's steward asks its owner something only " +
                           "they can decide. Carries the question, the steward's own pick, and what is held up.",
+        },
+        new
+        {
+            key = "owner_todo",
+            label = "Something is yours to do",
+            description = "When an agent puts something on your to-do list that holds a release or a ticket: " +
+                          "a secret to fetch, an account, infrastructure, a deploy. Carries its ref, so /todo OT-n picks it up.",
         },
         new
         {

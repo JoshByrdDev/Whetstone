@@ -12,6 +12,7 @@ import {
 import type { Standing } from './stewardSlice';
 import { useNarrow } from '../hooks/useNarrow';
 import { abandonStewardUnit, agreeStewardUnit, buildStewardUnitOn, setStewardUnitReleased } from '../api/steward';
+import { openOwnerTodo } from '../api/ownerTodos';
 import type {
   StewardMode, StewardPlanOutcome, StewardPlanUnitView, StewardPlanView, StewardQuestion, StewardRegister, StewardStatus, UnitStage,
 } from '../api/steward';
@@ -471,9 +472,12 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
   };
 
   const r = unit.release;
+  // Migrations are ticked off in the record; what is to set up or do is on the to-do list.
+  const todos = r?.todos ?? [];
   const counts = r ? [
-    [r.migrations, 'migration', 'migrations'], [r.config, 'thing to set up', 'things to set up'], [r.actions, 'thing yours to do', 'things yours to do'],
-  ].filter(([n]) => (n as number) > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`) : [];
+    [r.migrations, 'migration to tick off', 'migrations to tick off'],
+  ].filter(([n]) => (n as number) > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`)
+    .concat(todos.length > 0 ? [`${todos.map(t => t.ref).join(', ')} on your to-do list`] : []) : [];
   const box = (tone: string, children: ReactNode) => (
     <div
       style={{
@@ -552,8 +556,17 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
 
   if (!r) return null;
   const notes = counts.length > 0 || r.toKnow > 0;
-  const seeNotes = notes && (
-    <GhostButton onClick={() => onNotes(unit.unit)} title="This unit's notes, in the record">Read its notes</GhostButton>
+  const seeNotes = (
+    <>
+      {(r.migrations > 0 || r.toKnow > 0) && (
+        <GhostButton onClick={() => onNotes(unit.unit)} title="This unit's notes, in the record">Read its notes</GhostButton>
+      )}
+      {todos.length > 0 && (
+        <GhostButton onClick={() => openOwnerTodo(todos[0].ref)} title={todos.map(t => `${t.ref} ${t.title}`).join('\n')}>
+          Open your to-do list
+        </GhostButton>
+      )}
+    </>
   );
 
   if (unit.stage === 'built' && unit.sliceBranch) {
@@ -567,7 +580,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
     return box(r.outstanding > 0 ? TIER.gate.c : TIER.done.c, (
       <>
         {say(r.outstanding > 0
-          ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b> still to tick off{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
+          ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b>{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
           : <>Every outcome is done and nothing for its release is outstanding{r.toKnow > 0 ? ` (${r.toKnow} to know, which go out with it)` : ''}. Releasing merges <span style={{ font: `400 12px ${MONO}` }}>{unit.sliceBranch}</span> into the base here: it is brought up to the base first and the merge checks run on it, and nothing is pushed.</>)}
         {r.outstanding === 0 && unit.conventions && decisions.length > 0 && (
           <div style={{ marginTop: 10 }}>
@@ -610,7 +623,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
     return box(r.outstanding > 0 ? TIER.gate.c : TIER.done.c, (
       <>
         {say(r.outstanding > 0
-          ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b> still to tick off{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
+          ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b>{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
           : <>Every outcome is done and nothing for its release is outstanding{r.toKnow > 0 ? ` (${r.toKnow} to know, which go out with it)` : ''}. Releasing it is yours: merge and push by hand, then say so here.</>)}
         <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
           {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole slice">Read the report first</GhostButton>}

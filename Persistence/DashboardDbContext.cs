@@ -62,6 +62,8 @@ public class DashboardDbContext : DbContext
     public DbSet<Experiment> Experiments => Set<Experiment>();
     public DbSet<ExperimentArm> ExperimentArms => Set<ExperimentArm>();
     public DbSet<ExperimentAssignment> ExperimentAssignments => Set<ExperimentAssignment>();
+    public DbSet<OwnerTask> OwnerTasks => Set<OwnerTask>();
+    public DbSet<OwnerTaskNote> OwnerTaskNotes => Set<OwnerTaskNote>();
 
     /// <summary>
     /// Every <see cref="DateTime"/> in this database is UTC. This is what makes the type system agree.
@@ -556,6 +558,32 @@ public class DashboardDbContext : DbContext
             e.Property(i => i.Until).HasMaxLength(600);
             e.Property(i => i.ClosedBy).HasMaxLength(16);
             e.HasIndex(i => new { i.ProjectKey, i.ClosedAt });
+        });
+
+        b.Entity<OwnerTask>(e =>
+        {
+            e.Property(t => t.ProjectKey).HasMaxLength(128);
+            e.Property(t => t.Kind).HasConversion<string>().HasMaxLength(16);
+            e.Property(t => t.Status).HasConversion<string>().HasMaxLength(16);
+            e.Property(t => t.Title).HasMaxLength(200);
+            e.Property(t => t.Key).HasMaxLength(160);
+            e.Property(t => t.WaitingOn).HasMaxLength(300);
+            e.Property(t => t.CreatedBy).HasMaxLength(16);
+            e.Property(t => t.Suggestion).HasMaxLength(16);
+            e.Property(t => t.Notice).HasMaxLength(300);
+            e.Ignore(t => t.Ref);
+            e.Ignore(t => t.IsOpen);
+            e.HasIndex(t => new { t.Status, t.ProjectKey });
+            e.HasIndex(t => new { t.ProjectKey, t.Key });
+            e.HasIndex(t => t.TicketId);
+            e.HasMany(t => t.Notes).WithOne(n => n.Task).HasForeignKey(n => n.OwnerTaskId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<OwnerTaskNote>(e =>
+        {
+            e.Property(n => n.Kind).HasConversion<string>().HasMaxLength(16);
+            e.Property(n => n.By).HasMaxLength(16);
+            e.HasIndex(n => n.OwnerTaskId);
         });
 
         b.Entity<StewardFollowUp>(e =>
