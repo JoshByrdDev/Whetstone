@@ -390,7 +390,12 @@ What step 1 settled, and where it stopped short of the design above:
 - **No shell on any discovery phase.** On claude every phase runs with `--tools Read,Grep,Glob`,
   and the scout's browser also loses `browser_run_code_unsafe`. Because the scout cannot start the
   product, the worker runs `discovery.prepare` before it and `discovery.teardown` after
-  (`data/worker-discovery.ps1`), under the project's `app-stack` lease.
+  (`data/worker-discovery.ps1`), under the project's `app-stack` lease. Prepare saying the site is
+  up is not taken on trust: the worker asks the site's own address (`Test-DiscoverySiteUp`), and a
+  site that answers 5xx or nothing is torn down and prepared once more before the run blocks. A
+  scout once spent its run on a dev server whose every page failed to build while its health route,
+  which had no layout to break, answered 200. Such a block says nothing was scouted and that the next
+  run starts the site afresh, so the steward answers a site-down block with a retry the first time.
 - **Configuration** is a `discovery` block in the project's config: `siteUrl` (required to file a
   discovery), `prepare`, `teardown`, `maxProposals` (6), `areas`.
 - **Screenshots** are copied off the run's browser folder into `data/discovery/<id>/` as they are

@@ -3096,31 +3096,56 @@ function Get-SkillText {
 # A scout's product is brought up by the worker, before the session, because the scout has no shell
 # to do it with: the project's discovery.prepare, in the worktree, told its slot and its site. A
 # prepare that fails stops the run here - a scout pointed at a site that is not there would log
-# the outage as the product's fault.
+# the outage as the product's fault. So does a site that prepare called up and that is not: its
+# own address is asked (Test-DiscoverySiteUp), and a site that fails is prepared once more from
+# scratch before the run gives up, because a dev server that came up broken often comes up whole.
+# Either way nothing has been scouted, and the block says the next run starts the site afresh -
+# which is what tells whoever reads it (the steward, the owner) that a retry is a real answer.
 $discoveryPrepared = $false
 if ($isDiscovery -and (Test-DiscoveryDrives $skill)) {
     $prepareCmd = "$($Claim.project.discovery.prepare)".Trim()
+    $teardownCmd = "$($Claim.project.discovery.teardown)".Trim()
     $env:WHETSTONE_SITE_URL = $discoverySite
-    if ($prepareCmd -and $workDir) {
+    $stopBeforeScouting = {
+        param([string]$Reason, [string]$Short)
+        Write-Log "  $(($Reason -split "`n")[0]) - blocking ticket #$ticketId."
+        Block-Ticket -TicketId $ticketId -Reason $Reason
+        Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error $Short
+        $cycleTimer.Stop()
+        Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
+            -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
+            -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error" -Detail $runDetail
+        if ($teardownCmd) { $null = Invoke-SetupCommand -Command $teardownCmd -WorkDir $workDir -TimeoutMinutes 5 -StallMinutes 5 }
+        Send-LeaseRelease -TicketId $ticketId -Reason $Short
+        Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
+        exit 0
+    }
+    $retryNote = "`n`nNothing was scouted. Every run starts the site afresh with discovery.prepare, so once the cause is fixed - or if it was a passing fault - returning the ticket to its queue is the whole answer."
+    $prepare = {
         Write-Log "  Preparing the product for the scout: $prepareCmd"
-        $prep = Invoke-SetupCommand -Command $prepareCmd -WorkDir $workDir -TimeoutMinutes 20 -StallMinutes 10
+        Invoke-SetupCommand -Command $prepareCmd -WorkDir $workDir -TimeoutMinutes 20 -StallMinutes 10
+    }
+    if ($prepareCmd -and $workDir) {
+        $prep = & $prepare
         if ($prep.code -ne 0 -or $prep.timedOut -or $prep.stalled) {
             $why = if ($prep.timedOut) { "timed out" } elseif ($prep.stalled) { "printed nothing for 10 min" } else { "exited $($prep.code)" }
-            $reason = "The product could not be brought up for this scout: discovery.prepare ($prepareCmd) $why." + (Format-OutputTail -Lines $prep.output)
-            Write-Log "  $(($reason -split "`n")[0]) - blocking ticket #$ticketId."
-            Block-Ticket -TicketId $ticketId -Reason $reason
-            Send-DashboardEvent -Type "error" -TicketId $ticketId -Project $projectKey -Error "discovery.prepare failed"
-            $cycleTimer.Stop()
-            Send-CycleReport -TicketId $ticketId -Project $projectKey -Phase $phase -Skill $skill `
-                -Resumed ([bool]$Claim.resumed) -Model $phaseModel -StartedAt $cycleStartedAt `
-                -DurationSeconds $cycleTimer.Elapsed.TotalSeconds -Mutations 0 -Outcome "Error" -Detail $runDetail
-            $teardownCmd = "$($Claim.project.discovery.teardown)".Trim()
-            if ($teardownCmd) { $null = Invoke-SetupCommand -Command $teardownCmd -WorkDir $workDir -TimeoutMinutes 5 -StallMinutes 5 }
-            Send-LeaseRelease -TicketId $ticketId -Reason "discovery.prepare failed"
-            Send-DashboardEvent -Type "cycle_end" -TicketId $ticketId -Project $projectKey
-            exit 0
+            & $stopBeforeScouting ("The product could not be brought up for this scout: discovery.prepare ($prepareCmd) $why." + (Format-OutputTail -Lines $prep.output) + $retryNote) "discovery.prepare failed"
         }
         $discoveryPrepared = $true
+    }
+    if ($discoverySite) {
+        $up = Test-DiscoverySiteUp -Site $discoverySite
+        if (-not $up.ok -and $discoveryPrepared) {
+            Write-Log "  The site is not up after prepare ($($up.detail)); preparing it once more from scratch."
+            if ($teardownCmd) { $null = Invoke-SetupCommand -Command $teardownCmd -WorkDir $workDir -TimeoutMinutes 5 -StallMinutes 5 }
+            $prep = & $prepare
+            $up = if ($prep.code -eq 0 -and -not $prep.timedOut -and -not $prep.stalled) { Test-DiscoverySiteUp -Site $discoverySite } else { @{ ok = $false; detail = "the second discovery.prepare exited $($prep.code)" } }
+        }
+        if (-not $up.ok) {
+            $tail = if ($prep) { Format-OutputTail -Lines $prep.output } else { '' }
+            & $stopBeforeScouting ("The product is not up for this scout: $($up.detail)$(if ($discoveryPrepared) { ', after discovery.prepare said it was, twice' })." + $tail + $retryNote) "discovery site not up"
+        }
+        Write-Log "  Site checked: $($up.detail)."
     }
 }
 if ($isDiscovery) {

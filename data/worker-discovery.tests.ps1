@@ -27,6 +27,22 @@ Check 'no step means every slot shares the site' (Get-DiscoverySiteUrl -SiteUrl 
 Check 'a path survives the port move' (Get-DiscoverySiteUrl -SiteUrl 'http://localhost:3000/app' -Slot 1 -SlotStep 5) 'http://localhost:3005/app'
 Check 'no site is no site' (Get-DiscoverySiteUrl -SiteUrl '' -Slot 1 -SlotStep 5) ''
 
+# --- is the site really up --------------------------------------------------------------------
+$calls = 0
+$up = Test-DiscoverySiteUp -Site 'http://localhost:53590' -WaitSeconds 0 -Fetch { param($u) $script:calls++; 200 }
+Check 'a site that answers is up' $up.ok $true
+Check 'and is asked once' $calls 1
+$calls = 0
+$down = Test-DiscoverySiteUp -Site 'http://localhost:53590' -WaitSeconds 0 -Fetch { param($u) $script:calls++; 500 }
+Check 'a site whose page fails to build is not up' $down.ok $false
+Check 'and is asked every try before it is called down' $calls 3
+Check 'and says what it answered' ($down.detail -match 'answered 500') $true
+Check 'no answer is down too' (Test-DiscoverySiteUp -Site 'http://x' -WaitSeconds 0 -Fetch { param($u) 0 }).ok $false
+$script:n = 0
+Check 'a site that comes up on a later try is up' (Test-DiscoverySiteUp -Site 'http://x' -WaitSeconds 0 -Fetch { param($u) $script:n++; if ($script:n -lt 3) { 502 } else { 200 } }).ok $true
+Check 'a redirect or a sign-in page is up' (Test-DiscoverySiteUp -Site 'http://x' -WaitSeconds 0 -Fetch { param($u) 401 }).ok $true
+Check 'no site, nothing to ask' (Test-DiscoverySiteUp -Site '' -Fetch { param($u) throw 'asked' }).ok $true
+
 # --- the browser ------------------------------------------------------------------------------
 $pw = (Get-DiscoveryBrowserArgs -RunDir '/data/discovery/7/runs/x' -Site 'http://localhost:53590/events') -join ' '
 Check 'the scout''s browser records: devtools caps' ($pw -match '--caps devtools') $true

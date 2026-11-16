@@ -80,4 +80,4 @@ You have no shell and no editor. `browser_run_code_unsafe` is refused. The produ
    - **`NeedsVerdict`** when this pass proposed anything and `recheck.handOff` says this round still gets the owner's verdict.
    - **`NeedsReview`** when this pass proposed nothing - every goal met, or nothing worth the owner's time - **or** when the rounds are spent (`recheck.handOff` says so): then what you proposed waits at the sign-off, where the owner still sees it.
 
-`Blocked` is for a recheck you could not do at all - the site would not load, sign-in failed - never for goals that did not land, which is the finding.
+`Blocked` is for a recheck you could not do at all - the site would not load, sign-in failed - never for goals that did not land, which is the finding. Say what you saw - the address, what it answered, the error the page showed - and not who should restart what: the worker brings the site up from scratch at the start of every run, so a site that was down is answered by sending the ticket back to its queue, not by someone fixing a server by hand. If you wait and try again first, once is enough.

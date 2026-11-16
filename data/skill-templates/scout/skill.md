@@ -72,4 +72,4 @@ You have no shell and no editor. `browser_run_code_unsafe` is refused. The produ
 2. **`add_comment`** with **what you did**: the path you took through the product, job by job, in a few lines, so the owner can follow it, and anything you could not get to.
 3. **`set_phase` to `NeedsSifting`.** It is the only hand-off, and it is right however much or little you found.
 
-`Blocked` is for a route you could not walk at all - the site would not load, sign-in failed - never for a product that disappointed you, which is the finding.
+`Blocked` is for a route you could not walk at all - the site would not load, sign-in failed - never for a product that disappointed you, which is the finding. Say what you saw - the address, what it answered, the error the page showed - and not who should restart what: the worker brings the site up from scratch at the start of every run, so a site that was down is answered by sending the ticket back to its queue, not by someone fixing a server by hand. If you wait and try again first, once is enough.

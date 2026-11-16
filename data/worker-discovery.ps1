@@ -25,6 +25,31 @@ function Get-DiscoverySiteUrl {
     return $b.Uri.AbsoluteUri.TrimEnd('/')
 }
 
+# Whether the product a scout is about to use is really up: its site's own address, asked a few
+# times, answering below 500. A prepare that says the site is up is the project's word for it, and
+# one has said so of a site whose every page failed to build - its health route had no layout to
+# break - which the scout then spent a run discovering. This asks the page a person lands on.
+# $Fetch is how one request is made (status code, or 0 for no answer); the tests hand it a fake.
+function Test-DiscoverySiteUp {
+    param([string]$Site, [int]$Tries = 3, [int]$WaitSeconds = 5, [scriptblock]$Fetch)
+    if (-not $Site) { return @{ ok = $true; detail = '' } }
+    if (-not $Fetch) {
+        $Fetch = {
+            param($u)
+            try { return [int](Invoke-WebRequest -Uri $u -TimeoutSec 120 -SkipHttpErrorCheck -MaximumRedirection 5).StatusCode }
+            catch { return 0 }
+        }
+    }
+    $code = 0
+    for ($i = 1; $i -le $Tries; $i++) {
+        $code = [int](& $Fetch $Site)
+        if ($code -ge 200 -and $code -lt 500) { return @{ ok = $true; detail = "$Site answered $code" } }
+        if ($i -lt $Tries -and $WaitSeconds -gt 0) { Start-Sleep -Seconds $WaitSeconds }
+    }
+    $what = if ($code -gt 0) { "answered $code" } else { "did not answer" }
+    return @{ ok = $false; detail = "$Site $what, $Tries times over $(($Tries - 1) * $WaitSeconds)s" }
+}
+
 # The discovery phases that use the product in a browser: the scout, and the recheck that drives it
 # again once the approved work is built. Both get the run's own site, a capture folder, the stack
 # lease and the prepare/teardown around the session; chart and sift get none of it.
