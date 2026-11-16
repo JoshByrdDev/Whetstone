@@ -297,6 +297,62 @@ public class MultiRepoGitTests : IDisposable
         Assert.Equal(new[] { "feature.txt" }, files.Select(f => f.Path));
     }
 
+    // ---- a review comment's anchor ----------------------------------------------------------
+
+    [Fact]
+    public async Task A_review_comment_line_past_the_end_of_the_file_is_refused()
+    {
+        File.WriteAllText(Path.Combine(_solo, "Hashing.cs"), "one\ntwo\nthree\n");
+        Git(_solo, "add", "-A");
+        Git(_solo, "commit", "-q", "-m", "hashing");
+        var sha = Sha(_solo, "HEAD");
+
+        Assert.Null(await _svc.ReviewAnchorProblemAsync("solo", null, sha, "Hashing.cs", 3, DiffSide.Head));
+        Assert.Null(await _svc.ReviewAnchorProblemAsync("solo", null, sha, "Hashing.cs", null, DiffSide.Head));
+
+        var past = await _svc.ReviewAnchorProblemAsync("solo", null, sha, "Hashing.cs", 706, DiffSide.Head);
+        Assert.Contains("has 3 lines", past);
+        Assert.Contains("line 706 is past its end", past);
+
+        Assert.Contains("is not in the branch", await _svc.ReviewAnchorProblemAsync("solo", null, sha, "Nope.cs", 1, DiffSide.Head));
+        Assert.Contains("numbered from 1", await _svc.ReviewAnchorProblemAsync("solo", null, sha, "Hashing.cs", 0, DiffSide.Head));
+        Assert.Contains("needs a file", await _svc.ReviewAnchorProblemAsync("solo", null, sha, null, 4, DiffSide.Head));
+    }
+
+    [Fact]
+    public async Task A_review_anchor_this_machine_cannot_read_is_not_refused()
+    {
+        var sha = Sha(_solo, "HEAD");
+
+        // The base's copy of a file is not in the anchor commit, so a Base comment is not measured against it.
+        Assert.Null(await _svc.ReviewAnchorProblemAsync("solo", null, sha, "Removed.cs", 900, DiffSide.Base));
+        // No anchor yet, or a commit not fetched here: the comment is dated as before, not refused.
+        Assert.Null(await _svc.ReviewAnchorProblemAsync("solo", null, null, "README.md", 900, DiffSide.Head));
+        Assert.Null(await _svc.ReviewAnchorProblemAsync("solo", null, new string('a', 40), "README.md", 900, DiffSide.Head));
+    }
+
+    [Fact]
+    public async Task A_review_anchor_on_a_project_of_several_is_read_in_the_reviewed_repo()
+    {
+        var api = Path.Combine(_project, "alpha-api");
+        File.WriteAllText(Path.Combine(api, "Api.cs"), "a\nb");
+        Git(api, "add", "-A");
+        Git(api, "commit", "-q", "-m", "api");
+        var sha = Sha(api, "HEAD");
+
+        Assert.Null(await _svc.ReviewAnchorProblemAsync("alpha", "alpha-api", sha, "Api.cs", 2, DiffSide.Head));
+        Assert.Contains("has 2 lines", await _svc.ReviewAnchorProblemAsync("alpha", "alpha-api", sha, "Api.cs", 3, DiffSide.Head));
+    }
+
+    [Theory]
+    [InlineData("", 0)]
+    [InlineData("a", 1)]
+    [InlineData("a\n", 1)]
+    [InlineData("a\r\nb", 2)]
+    [InlineData("a\r\nb\r\n", 2)]
+    public void A_file_has_as_many_lines_as_an_editor_numbers(string text, int lines) =>
+        Assert.Equal(lines, TicketGitService.LineCount(text));
+
     // ---- refusals and the description -------------------------------------------------------
 
     [Fact]

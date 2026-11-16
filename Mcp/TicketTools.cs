@@ -679,12 +679,12 @@ public class TicketTools
         "Call it once per finding, as you find it, rather than batching at the end: an outcome you are holding in your head is invisible to anyone watching and lost outright if the run is cut short. " +
         "Anchor it to a file and line wherever you can - feedback a reader has to go hunting for is feedback that gets skimmed. Leave both out only for a point about the change as a whole (\"this needs a migration and there isn't one\"). " +
         "Be specific about the consequence, not just the observation: name the input or state that reaches the problem and what happens then.")]
-    public static async Task<object> AddReviewComment(TicketService svc,
+    public static async Task<object> AddReviewComment(TicketService svc, TicketGitService git,
         [Description("The local ticket id.")] int ticketId,
         [Description("The comment, as markdown. Say what is wrong and what happens because of it. Address the author, not the ticket - this text is going to be read by the person who wrote the code.")] string body,
         [Description("How much this is claiming. 'Blocking' = this is wrong and must change before merge. 'Question' = the author should answer; may or may not be a defect. 'Nit' = worth saying, not worth blocking on. 'Praise' = worth saying because it is good. Be honest with this: a review that marks everything Blocking is one the human has to re-triage by hand, which is most of the work you are here to save.")] string severity = "Question",
         [Description("Repo-relative path of the file this is about, e.g. 'backend/Core/Services/PlanService.cs' - relative to the repo under review, where the pull request is, even when your workspace holds several. Omit for a comment about the whole change.")] string? filePath = null,
-        [Description("1-based line number in that file. Omit for a comment about the file as a whole.")] int? line = null,
+        [Description("1-based line number in that file, as the file reads at the commit under review - not a position in the diff. Read the file to find it; a line past the file's end is refused. Omit for a comment about the file as a whole.")] int? line = null,
         [Description("Which side of the diff: 'Head' (the branch as proposed - nearly always this) or 'Base' for a comment about something the change removed.")] string side = "Head",
         [Description("The id of the QA item this came out of, when a drive-test found it. A failing check plus its screenshot is the most useful comment you can leave.")] int? qaItemId = null,
         [Description("Slot (0-5) of the QA shot that shows this, when one does.")] int? qaShotOrder = null)
@@ -705,6 +705,10 @@ public class TicketTools
             return new { error = $"Unknown severity '{severity}'. Use Blocking, Question, Nit or Praise." };
         if (!Enum.TryParse<DiffSide>(side, ignoreCase: true, out var diffSide))
             return new { error = $"Unknown side '{side}'. Use Head or Base." };
+        var reviewTarget = await svc.GetReviewTargetAsync(ticketId);
+        if (await git.ReviewAnchorProblemAsync(t.ProjectKey, reviewTarget?.Repo, reviewTarget?.ReviewedAtSha,
+                TicketService.ReviewFilePath(filePath, reviewTarget?.Repo), line, diffSide) is { } badAnchor)
+            return new { error = badAnchor };
 
         var c = await svc.AddReviewCommentAsync(ticketId, body, sev, AuthorKind.Claude,
             filePath, line, diffSide, qaItemId, qaShotOrder);

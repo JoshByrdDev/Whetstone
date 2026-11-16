@@ -1379,7 +1379,7 @@ public static class TicketEndpoints
         // whole safety story of this track: a worker stages drafts, and only a person sends them.
 
         app.MapPost("/api/tickets/{id:int}/review/comments", async (
-            int id, AddReviewCommentRequest req, TicketService svc) =>
+            int id, AddReviewCommentRequest req, TicketService svc, TicketGitService git) =>
         {
             if (string.IsNullOrWhiteSpace(req.Body))
                 return Results.BadRequest(new { error = "A review comment needs a body." });
@@ -1387,6 +1387,13 @@ public static class TicketEndpoints
                 return Results.BadRequest(new { error = $"Unknown severity '{req.Severity}'" });
             if (!TryParseEnum<DiffSide>(req.Side, DiffSide.Head, out var side))
                 return Results.BadRequest(new { error = $"Unknown side '{req.Side}'" });
+            if (await svc.GetAsync(id) is { } t)
+            {
+                var target = await svc.GetReviewTargetAsync(id);
+                if (await git.ReviewAnchorProblemAsync(t.ProjectKey, target?.Repo, target?.ReviewedAtSha,
+                        TicketService.ReviewFilePath(req.FilePath, target?.Repo), req.Line, side) is { } badAnchor)
+                    return Results.BadRequest(new { error = badAnchor });
+            }
 
             var c = await svc.AddReviewCommentAsync(id, req.Body, severity, AuthorKind.Human,
                 req.FilePath, req.Line, side);
