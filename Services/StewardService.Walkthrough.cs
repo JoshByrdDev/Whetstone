@@ -5,7 +5,7 @@ using Whetstone.Models;
 namespace Whetstone.Services;
 
 /// <summary>
-/// The walk-through driven (docs/plans-as-slices.md, section 4). A slice's walk-through is its Z
+/// The walk-through driven (docs/slice-branches.md, section 7). A slice's walk-through is its Z
 /// outcome that says so - Z1 in the template - and the board, not the steward, files it, so it
 /// cannot be forgotten: once every outcome outside the Z group is done, at the start of the next
 /// steward run. Its QA drives the story end to end on the base branch, and a pass is what calls the

@@ -250,9 +250,18 @@ public class StewardEntry
 /// <summary>
 /// What a project's steward carries from one run to the next, and what decides whether it runs.
 /// <para>
-/// A run starts from nothing but the plan, the board and the record. This row is not a note to
-/// the next run - there is none any more (docs/steward-without-memo.md) - only when runs happened,
-/// why one is owed, and the day's count of tickets filed.
+/// A run starts from nothing but its slices, the board and the record. This row is not a note to
+/// the next run - only when runs happened, why one is owed, and the day's count of tickets filed.
+/// </para>
+/// <para>
+/// There used to be such a note: a free-text memo each run rewrote whole for the next. It grew to
+/// most of its limit with repo facts, copies of the owner's answers and the steward's own unseen
+/// precedents; a killed run lost everything since its last save; and free text never learned that
+/// what it was about had finished. It was replaced by one rule: every piece of steward state
+/// belongs to an object, is written by the call that creates it, and ends with that object - a
+/// ticket note, an outcome's note, a ruling the owner can reverse, a learned fact folded into the
+/// notes store, or the run summary. The briefing is built from that live state, so a run killed at
+/// any point leaves the board as true as its last finished call. Do not bring the memo back.
 /// </para>
 /// </summary>
 public class StewardState
@@ -450,7 +459,7 @@ public enum StewardDecisionSource
 /// <summary>
 /// One decision in a project's register: what is true, what it applies to, and whether it still is.
 /// <para>
-/// The register is the one home of a decision's status (docs/plans-as-slices.md, section 3). Its
+/// The register is the one home of a decision's status (docs/slice-branches.md, section 6). Its
 /// text is written once, when it is made, and is never edited: a decision that changes is a newer
 /// one that replaces it, and the replacing is stored only on the newer one
 /// (<see cref="StewardDecisionReplace"/>), so "replaced" is never written twice and cannot

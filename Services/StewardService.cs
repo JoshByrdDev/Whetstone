@@ -1626,7 +1626,7 @@ public partial class StewardService
             return Refuse("bad-request", "Its status line must say it is a draft. Only the owner agrees a unit.");
         if (unit.Outcomes.Count == 0) return Refuse("bad-request", "The draft has no outcomes written the way the plan's other units write them.");
         // The story is the promise: every step cites the outcomes that make it true, and a story
-        // too long to read is a slice too big to build (docs/plans-as-slices.md, section 4).
+        // too long to read is a slice too big to build (docs/slice-branches.md, section 7).
         var story = SliceStory.Check(text ?? "", unit.Outcomes);
         if (story.Errors.Count > 0)
             return Refuse("story", string.Join(" ", story.Errors), new { words = story.Words, notes = story.Notes });

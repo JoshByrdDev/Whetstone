@@ -39,7 +39,7 @@ public record StewardPlan(string UnitsDir, string UnitFile, string Agreed, strin
 
     /// <summary>
     /// What a slice's status says while it is only an idea: a title and a paragraph, not yet drafted.
-    /// Nothing is filed against one, and only the owner writes one (docs/plans-as-slices.md, section 1).
+    /// Nothing is filed against one, and only the owner writes one (docs/slice-branches.md, section 5).
     /// </summary>
     public string Idea { get; init; } = DefaultIdea;
 

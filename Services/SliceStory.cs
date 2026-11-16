@@ -7,7 +7,7 @@ public record StoryCheck(int Words, IReadOnlyList<string> Errors, IReadOnlyList<
 
 /// <summary>
 /// A slice's story, read out of its spec: the walk-through a person makes with what the slice
-/// builds (docs/plans-as-slices.md, section 4). Each step cites the outcomes that make it true,
+/// builds (docs/slice-branches.md, section 7). Each step cites the outcomes that make it true,
 /// inline, so it still reads as a story - "...adds their two dogs (B1, B2)...". This reads the
 /// story, checks a draft's against its outcomes, and finds the paragraph an idea is.
 /// </summary>

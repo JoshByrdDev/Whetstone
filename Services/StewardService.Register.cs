@@ -15,7 +15,7 @@ public record StewardNewDecision(string? Rule, string? Title = null, int? Unit =
 public record StewardReplacing(int Number, string? Why);
 
 /// <summary>
-/// The register of decisions (docs/plans-as-slices.md, section 3): the one place a decision's status
+/// The register of decisions (docs/slice-branches.md, section 6): the one place a decision's status
 /// lives. Everything that used to count as decided - the plan document's decisions section, each
 /// spec's "Decided", the answers to questions, the owner's standing words - is taken into it once,
 /// and from then on each of those roads writes a row here as the decision is made. The decisions

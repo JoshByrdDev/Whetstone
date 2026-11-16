@@ -16,9 +16,10 @@
 > where `ProjectConfig.SliceBranchesOn` holds. The order of work below is kept as the record of
 > how it got here.
 
-This replaces parts of `docs/plans-as-slices.md`: its plan (section 1's "a plan is its slices"
-keeps, the plan around them does not), its charter as a structure, and section 3's register as a
-list that only grows. Its slice story (section 4) is unchanged.
+This replaced an earlier design (2026-10-24) in which a plan was its slices plus a charter. The
+parts of it that still stand - a slice's life from idea to released, the register of decisions,
+and the slice's story - are sections 5 to 7 below. The plan, the charter and the register as a list
+that only grows are gone.
 
 ## Why
 
@@ -71,8 +72,8 @@ The cause they share: **the board's unit of delivery is the plan, while the owne
 - The charter stops being structure. A project may keep any background document it likes, and a
   slice may cite it. It is not on the board, not in the steward's briefing as a rule, and not a
   source of decisions.
-- Ideas, drafts and agreement work as now (`plans-as-slices.md` sections 1 and 4). Agreeing a
-  slice is the moment its branch is cut (section 2).
+- Ideas, drafts and agreement work as before (sections 5 and 7). Agreeing a slice is the moment
+  its branch is cut (section 2).
 
 The configuration shrinks to match:
 
@@ -246,6 +247,135 @@ later from the page.
 - The register's "whole project" group, and the duplicates it held.
 - Replacing as routine upkeep. It stays for the rare case inside an open slice, where a later
   answer changes an earlier one in the same slice, through `touches` as today.
+
+## 5. A slice's life
+
+| Stage | What its file holds | Who writes it | Filed against |
+|---|---|---|---|
+| **idea** | A title, and one paragraph: who, what they can do at the end, what it builds on, what it is not | The owner (on the board, or in a session) | No |
+| **draft** | The spec in full: the story, what is fixed, outcomes, decisions to settle | The steward, by expanding the idea in place | No |
+| **agreed** | The same, with its status line committed as agreed; its branch is cut | The owner, on the board or by hand | Yes |
+| **building** | The same; the story and "Decided" change only through the owner's decisions (section 7) | The board, at the owner's answer | Yes |
+| **built** | Every outcome done, the walk-through driven | Nobody: it is history from here | - |
+| **released** | Unchanged; merged into the base, its decisions retired | Nobody | - |
+
+The status line has three readings - idea, draft, agreed - each configurable through
+`steward.sliceFormat` (`StewardPlan.Idea`, `Draft`, `Agreed`; the idea's default is
+`\*\*Status:\s*idea\b`). An idea has no outcomes and nothing is filed against it.
+
+**Expanding.** `steward_draft_unit` rewrites the next idea in place: the first idea after the last
+agreed slice. One draft ahead, never two, and a draft says it is a draft. The idea's paragraph stays
+at the top as the seed of the story, and git keeps the original. The steward drafts from the idea,
+the conventions, the decisions in force that apply to it (including those provisional until it),
+the slices before it, and the code as it now stands - never from a plan written weeks ago.
+
+**Numbers.** A slice's file is named number first (`NN-slug.md`). An idea's number can change
+freely, because nothing points to an idea: reordering, splitting or merging ideas is renaming
+files. A slice's number is fixed once it is agreed, because tickets, outcomes and its branch carry
+it. Ideas only ever come after agreed slices, so renumbering ideas never touches an agreed slice;
+the board flags an agreed slice whose number or file has changed rather than treating it as new.
+
+**Who changes ideas.** The owner only. The steward writes no idea. When it finds an idea too big to
+draft, or work that belongs in no idea, it asks (`steward_ask_owner` with the proposed text), and
+the board commits the change on a yes, the same way agreeing works.
+
+## 6. The register of decisions
+
+The board's database is the register's home (`StewardDecision`), and `decisionsFile` is written out
+from it. A status needs a structured field; files as the home would mean parsing "replaces #41" out
+of prose in a spec nobody may edit once it is built.
+
+### A decision
+
+| Field | |
+|---|---|
+| **Number** | `#n`, one sequence per project, never reused |
+| **Rule** | One or two sentences, present tense: what is true. Not the question and its answer |
+| **Applies to** | One slice (or some of its outcomes), or a convention (section 4) |
+| **Status** | In force; replaced by `#m`; provisional until a named slice or "the owner says"; withdrawn; retired, derived when its slice is released (section 4) |
+| **Replaces** | The numbers it overrides, each with one line on why. Stored only on the newer decision; the older one's status follows from it, so it is never written twice |
+| **Came from** | A question (its key, its options, what was picked and what was not), a slice's decisions, or a ruling the owner confirmed |
+| **Follow-ups** | Open items the owner left in an answer, until each becomes a question or an idea |
+
+When the slice a provisional decision waits on is built, the decision comes up for the owner to
+confirm, replace or let lapse, and the steward drafting the next idea is handed it.
+
+### How a decision is made
+
+- **The owner answers a question.** The answer becomes a decision applying to whatever the question
+  was about.
+- **The owner settles a slice's decisions** (the Decision Sheet, or agreeing a draft). Each answer
+  becomes a decision of that slice, and the board writes its text into the slice's "Decided"
+  section in the same commit. That copy is written once and never changes.
+- **The owner records one directly**, or changes one, from the register page. A change is a new
+  decision that replaces the old. Recording, replacing and withdrawing are REST routes with no tool
+  behind them.
+
+### Overrides are declared when they happen
+
+`steward_ask_owner` takes `touches`: the numbers of the decisions the question bears on, required
+(an empty list is allowed). The owner's card shows "this changes #41: ..." beside each one, and an
+answer that differs from a decision it touches replaces it - deliberately, and seen by the person
+making it. The tool's description tells the steward to search `steward_decisions` for the subject
+first, so a question that touches nothing is a claim that no decision bears on it.
+
+### What is not a decision
+
+- **Instructions.** "Hold merges until that test is fixed" is an instruction with an end: a record
+  of its own kind, with the condition that ends it. The steward closes it when the condition is met
+  and says so; the owner can close it any time. It is never in the register.
+- **Rulings.** A ruling stays the steward's reading of decisions already made, and `steward_rule`
+  takes `reads`, the numbers it reads. When one of those is replaced, the ruling is flagged on the
+  Record tab and in the next briefing rather than standing quietly on a dead decision.
+- **Follow-ups.** The steward records each caveat it reads in an answer (`steward_follow_up`,
+  against the decision). Each waits on the register page until a question or an idea cites it.
+
+### How it is read
+
+- **`steward_decisions`** returns what is in force by default, filtered by slice, outcome or a
+  search over rule, question and options. Replaced, withdrawn and retired decisions come back only
+  when asked for, each with what replaced it.
+- **The briefing** at `steward_begin` holds the decisions in force for the slice being worked, the
+  provisional ones coming due, flagged rulings and open follow-ups.
+- **The register page** on the Steward page shows what is in force, by slice and as conventions,
+  then provisional decisions, follow-ups and history.
+- **`decisionsFile`** holds what is in force only (section 4). A slice cites `(#68)`, and anyone
+  reading the repo looks it up there.
+
+## 7. The slice's story
+
+**Idea.** The idea's paragraph is the story's seed.
+
+**Draft.** The steward expands it into the walk-through: one paragraph, present tense, a person
+using what the slice builds from start to finish. Each step cites the outcomes that make it true,
+inline, so it still reads as a story:
+
+> ...signs in (A1), adds their two dogs and their yard (B1, B2), picks weekly and a day on a
+> calendar (C1)...
+
+`steward_draft_unit` checks the draft (`SliceStory`): every cited id is an outcome of the draft;
+every sentence cites at least one outcome; the story is at most 250 words, and past 180 the reply
+says the slice may be two. An outcome no step cites is allowed (an edge, a closing check), and the
+reply lists those so the steward can say why.
+
+**Agreed.** The story is the promise.
+
+**Building.** The story changes only with the owner's decisions. A question about a slice being
+built may carry `story`: the sentence the answer would change, and its rewording under each option.
+When the owner answers, the board commits the reworded sentence and the decision together, in the
+slice's file. A ruling never changes the story, and a sentence nobody's answer changed stays as
+agreed.
+
+**The walk-through is driven.** Z1 is always the walk-through. When every outcome outside the Z
+group is done, the board files the walk-through as a ticket of its own, linked to Z1, on the
+slice's branch (`Ticket.Walkthrough`, straight to NeedsQa). Its QA drives the story end to end and
+captures each step. Z1 is done when that ticket passes, and the slice is built when Z1 is. A failing
+step goes back like any QA failure, with the step it failed at. The slice's Classroom report tells
+the story with those captures.
+
+**Built.** Frozen. A later slice that changes the behaviour says so in its own story ("this changes
+slice 2's story: an invite now ..."), and the old story stays as what was delivered and proven on
+its date.
 
 ## Moving a project that already exists
 

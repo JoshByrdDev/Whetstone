@@ -9,7 +9,7 @@ namespace Whetstone.Services;
 public record StewardIdeaProposal(string File, string Text);
 
 /// <summary>
-/// A plan is its slices (docs/plans-as-slices.md, section 1): ideas the owner writes, drafted one
+/// A plan is its slices (docs/slice-branches.md, section 5): ideas the owner writes, drafted one
 /// at a time when their turn comes, agreed, built, released. This is the part of that the board
 /// keeps: the plan as read, generated rather than maintained; the idea a steward proposes and the
 /// owner commits; and the agreed slice whose number or file has moved.

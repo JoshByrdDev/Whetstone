@@ -485,7 +485,7 @@ public class Ticket
 
     /// <summary>
     /// A slice's walk-through, filed by the board once every other outcome of the slice is done
-    /// (docs/plans-as-slices.md, section 4). It changes no code: it is tested on the base branch
+    /// (docs/slice-branches.md, section 7). It changes no code: it is tested on the base branch
     /// as it stands, by a QA run that drives the slice's story end to end and captures each step.
     /// A pass goes to NeedsReview, where the next steward run closes it and calls Z1 done; a step
     /// that fails blocks it with the step, because there is no code of its own to send back.

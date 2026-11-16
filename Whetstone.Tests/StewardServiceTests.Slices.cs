@@ -6,7 +6,7 @@ using Xunit;
 namespace Whetstone.Tests;
 
 /// <summary>
-/// The rest of docs/plans-as-slices.md: overrides declared when they are asked about, what is not
+/// Sections 5 to 7 of docs/slice-branches.md: overrides declared when they are asked about, what is not
 /// a decision, ideas, and a slice's story checked, kept true and driven.
 /// </summary>
 public partial class StewardServiceTests

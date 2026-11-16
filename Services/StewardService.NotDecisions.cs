@@ -4,7 +4,7 @@ using Whetstone.Models;
 namespace Whetstone.Services;
 
 /// <summary>
-/// What is not a decision (docs/plans-as-slices.md, section 3): instructions with an end, the
+/// What is not a decision (docs/slice-branches.md, section 6): instructions with an end, the
 /// decisions a ruling reads, and the follow-ups an answer leaves open. None of them is in the
 /// register, and each points into it by number rather than restating it.
 /// </summary>
