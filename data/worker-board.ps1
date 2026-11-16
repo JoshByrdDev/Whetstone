@@ -510,16 +510,42 @@ function Save-WorktreeLeftovers {
     if ($files.Count -eq 0) { return @{ ok = $true; sha = ''; files = @() } }
 
     $message = "whetstone: left uncommitted on $Branch, set aside $Why"
-    git -C $Dir stash push --quiet --include-untracked -m $message *> $null
-    if ($LASTEXITCODE -ne 0) {
+    $out = @(git -C $Dir stash push --quiet --include-untracked -m $message 2>&1)
+    $code = $LASTEXITCODE
+    $lockCleared = $false
+    if ($code -ne 0) {
+        # A run killed mid-`git worktree add` or mid-commit leaves the worktree's index.lock behind.
+        # status still reads the tree, but every write of the index - the stash's - fails on it, so
+        # the ticket blocked on every retry with nobody able to clear it but a person at this
+        # machine. One older than any index write the fleet makes is stale: removed, and tried once
+        # more. A young one is left alone and said, so the answer is a retry rather than a cleanup.
+        $lock = "$(git -C $Dir rev-parse --path-format=absolute --git-path index.lock 2>$null)".Trim()
+        if ($lock -and (Test-Path -LiteralPath $lock)) {
+            $age = (Get-Date) - (Get-Item -LiteralPath $lock).LastWriteTime
+            if ($age.TotalMinutes -ge 5) {
+                Remove-Item -LiteralPath $lock -Force -ErrorAction SilentlyContinue
+                if (-not (Test-Path -LiteralPath $lock)) {
+                    $lockCleared = $true
+                    $out = @(git -C $Dir stash push --quiet --include-untracked -m $message 2>&1)
+                    $code = $LASTEXITCODE
+                }
+            }
+            else {
+                return @{ ok = $false; sha = ''; files = $files
+                          reason = "the worktree at $Dir has uncommitted changes, and setting them aside in a stash failed: its index is locked by $lock, written $([int]$age.TotalSeconds)s ago - another git may still be running there; retry once it has finished" }
+            }
+        }
+    }
+    if ($code -ne 0) {
+        $said = (@($out | ForEach-Object { "$_".Trim() } | Where-Object { $_ }) | Select-Object -First 2) -join ' '
         return @{ ok = $false; sha = ''; files = $files
-                  reason = "the worktree at $Dir has uncommitted changes, and setting them aside in a stash failed" }
+                  reason = "the worktree at $Dir has uncommitted changes, and setting them aside in a stash failed$(if ($said) { ": git said: $said" })" }
     }
     if (@(git -C $Dir status --porcelain 2>$null | Where-Object { $_ }).Count -gt 0) {
         return @{ ok = $false; sha = ''; files = $files
                   reason = "the worktree at $Dir still has uncommitted changes after setting them aside in a stash" }
     }
-    return @{ ok = $true; sha = (Get-RefSha -Dir $Dir -Ref 'refs/stash'); files = $files; message = $message }
+    return @{ ok = $true; sha = (Get-RefSha -Dir $Dir -Ref 'refs/stash'); files = $files; message = $message; lockCleared = $lockCleared }
 }
 
 # Push the worktree's HEAD to refs/whetstone/incoming/<RunId> on the board host.

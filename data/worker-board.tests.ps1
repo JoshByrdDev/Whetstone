@@ -260,6 +260,23 @@ try {
     Check 'dirty worktree, current: clean, so Resolve-Worktree will start' "$(git -C $cwt status --porcelain)" ''
     Check 'clean worktree: nothing set aside' ((Sync-Branch -Pair $u -Branch 't-1').stash) $null
 
+    # A run killed mid-index-write leaves index.lock: status still sees the edit, the stash cannot
+    # write. A young lock may be a live git - left alone and said; an old one is stale - cleared.
+    $lock = "$(git -C $cwt rev-parse --path-format=absolute --git-path index.lock)".Trim()
+    Add-Content -Path (Join-Path $cwt 'f.txt') -Value 'locked' -Encoding ascii
+    Set-Content -Path $lock -Value '' -Encoding ascii
+    $r = Sync-Branch -Pair $u -Branch 't-1'
+    Check 'young index.lock: refused' $r.ok $false
+    Check 'young index.lock: says the lock, so a retry is the answer' ("$($r.reason)" -match 'index is locked') $true
+    Check 'young index.lock: left in place' (Test-Path -LiteralPath $lock) $true
+    (Get-Item -LiteralPath $lock).LastWriteTime = (Get-Date).AddMinutes(-30)
+    $r = Sync-Branch -Pair $u -Branch 't-1'
+    Check 'stale index.lock: cleared and set aside' "$($r.ok) $($r.stash.lockCleared) $(@($r.stash.files) -join ',')" 'True True f.txt'
+    Check 'stale index.lock: gone' (Test-Path -LiteralPath $lock) $false
+    Check 'stale index.lock: worktree clean' "$(git -C $cwt status --porcelain)" ''
+    $s = Save-WorktreeLeftovers -Dir $cwt -Branch 't-1'
+    Check 'nothing left: no lock check needed' "$($s.ok) $($s.sha)" 'True '
+
     Add-Commit -Dir $cwt -File 'h.txt' -Subject 'T1: here, hand-back refused'
     $mine = Get-Sha $u.clone t-1
     $r = Sync-Branch -Pair $u -Branch 't-1'
