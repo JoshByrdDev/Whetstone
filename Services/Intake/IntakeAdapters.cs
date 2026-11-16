@@ -140,12 +140,12 @@ public sealed class SentryIssueAdapter : IIntakeAdapter
         var test = tags.TryGetValue("test", out var tv) && tv.Equals("true", StringComparison.OrdinalIgnoreCase);
 
         var b = new StringBuilder();
-        b.AppendLine($"**What happened:** {IntakeAdapters.OneLine(top is null ? title : $"{top.Type}: {top.Value}", 500)}");
-        if (!string.IsNullOrWhiteSpace(culprit)) b.AppendLine($"**Where:** `{IntakeAdapters.OneLine(culprit)}`");
-        if (release is not null) b.AppendLine($"**Release:** `{IntakeAdapters.OneLine(release, 120)}`");
+        b.AppendLine($"- **What happened:** {IntakeAdapters.OneLine(top is null ? title : $"{top.Type}: {top.Value}", 500)}");
+        if (!string.IsNullOrWhiteSpace(culprit)) b.AppendLine($"- **Where:** `{IntakeAdapters.OneLine(culprit)}`");
+        if (release is not null) b.AppendLine($"- **Release:** `{IntakeAdapters.OneLine(release, 120)}`");
         foreach (var k in new[] { "environment", "transaction", "route", "url", "step" })
-            if (tags.TryGetValue(k, out var v)) b.AppendLine($"**{char.ToUpperInvariant(k[0])}{k[1..]}:** `{IntakeAdapters.OneLine(v, 200)}`");
-        b.AppendLine($"**Seen:** {(count is null ? "" : $"{count} time{(count == 1 ? "" : "s")}, ")}first {Stamp(firstSeen)}, last {Stamp(lastSeen)}"
+            if (tags.TryGetValue(k, out var v)) b.AppendLine($"- **{char.ToUpperInvariant(k[0])}{k[1..]}:** `{IntakeAdapters.OneLine(v, 200)}`");
+        b.AppendLine($"- **Seen:** {(count is null ? "" : $"{count} time{(count == 1 ? "" : "s")}, ")}first {Stamp(firstSeen)}, last {Stamp(lastSeen)}"
             + (IntakeAdapters.Str(issue, "level") is { } lvl ? $" · level {lvl}" : ""));
 
         if (exceptions.Count > 0)
@@ -291,10 +291,10 @@ public sealed class CloudWatchAlarmAdapter : IIntakeAdapter
         var trigger = IntakeAdapters.Obj(a, "Trigger");
 
         var b = new StringBuilder();
-        b.AppendLine($"**What happened:** the alarm `{IntakeAdapters.OneLine(name, 255)}` went from {IntakeAdapters.Str(a, "OldStateValue") ?? "?"} to {value}"
+        b.AppendLine($"- **What happened:** the alarm `{IntakeAdapters.OneLine(name, 255)}` went from {IntakeAdapters.Str(a, "OldStateValue") ?? "?"} to {value}"
             + (at is null ? "." : $" at {at.Value.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)}."));
-        if (!string.IsNullOrWhiteSpace(description)) b.AppendLine($"**What it watches:** {IntakeAdapters.OneLine(description, 1000)}");
-        if (!string.IsNullOrWhiteSpace(reason)) b.AppendLine($"**Why:** {IntakeAdapters.OneLine(reason, 1000)}");
+        if (!string.IsNullOrWhiteSpace(description)) b.AppendLine($"- **What it watches:** {IntakeAdapters.OneLine(description, 1000)}");
+        if (!string.IsNullOrWhiteSpace(reason)) b.AppendLine($"- **Why:** {IntakeAdapters.OneLine(reason, 1000)}");
         if (trigger.ValueKind == JsonValueKind.Object)
         {
             var metric = IntakeAdapters.Str(trigger, "MetricName");
@@ -304,11 +304,11 @@ public sealed class CloudWatchAlarmAdapter : IIntakeAdapter
             var dimText = dims.ValueKind == JsonValueKind.Array
                 ? string.Join(", ", dims.EnumerateArray().Select(d => $"{IntakeAdapters.Str(d, "name")}={IntakeAdapters.Str(d, "value")}"))
                 : "";
-            b.AppendLine($"**Threshold:** {stat ?? "?"} of `{ns}/{metric}`{(dimText.Length > 0 ? $" ({dimText})" : "")} "
+            b.AppendLine($"- **Threshold:** {stat ?? "?"} of `{ns}/{metric}`{(dimText.Length > 0 ? $" ({dimText})" : "")} "
                 + $"{Comparison(IntakeAdapters.Str(trigger, "ComparisonOperator"))} {IntakeAdapters.Str(trigger, "Threshold") ?? "?"}, "
                 + $"over {IntakeAdapters.Str(trigger, "EvaluationPeriods") ?? "?"} period(s) of {IntakeAdapters.Str(trigger, "Period") ?? "?"}s");
         }
-        if (IntakeAdapters.Str(a, "Region") is { } region) b.AppendLine($"**Region:** {region}");
+        if (IntakeAdapters.Str(a, "Region") is { } region) b.AppendLine($"- **Region:** {region}");
 
         return new IntakeReport(Name, IntakeChannels.CloudWatchAlarm, name!, state,
             IntakeAdapters.OneLine($"Alarm {name}" + (string.IsNullOrWhiteSpace(description) ? "" : $": {description}"), 200),

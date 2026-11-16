@@ -493,6 +493,13 @@ export interface TicketDetail {
   branchStarted?: boolean;
   // The discovery this ticket was filed from, when an owner approved one of its proposals.
   discoveryId?: number | null;
+  // Where it came from (Ticket.Origin, docs/intake-plan.md section 6), written once at filing:
+  // owner, steward, found-in-run, regression or intake; for intake its channel and issue.
+  origin?: 'owner' | 'steward' | 'found-in-run' | 'regression' | 'intake';
+  intakeChannel?: string | null;
+  intakeIssueId?: number | null;
+  regressionOf?: number | null;
+  foundOn?: number | null;
   // A discovery's route gate: the owner reads the route before a scout walks it.
   requiresRouteReview?: boolean;
   blockedReason?: string | null;

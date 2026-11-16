@@ -11,6 +11,8 @@ import { SmartSwitchField } from './SmartSwitchField';
 import type { SmartSwitchSetting } from './SmartSwitchField';
 import { ApiCreditsField, API_CREDITS_OFF } from './ApiCreditsField';
 import type { ApiCreditsSetting } from './ApiCreditsField';
+import { getIntakeConfig, saveIntakeConfig, testIntakeSource } from '../api/intake';
+import type { IntakeSourceConfig } from '../api/intake';
 
 // ---------- Shared field primitives -----------------------------------------
 
@@ -1864,6 +1866,8 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
             </div>
           </div>
 
+          <IntakeSettings project={p.key} />
+
           <div>
             <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Heartbeat Skills</h4>
             <p className="text-xs text-gray-500 mb-3">
@@ -1893,6 +1897,126 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------- Intake ------------------------------------------------------------
+
+const NEW_SOURCE: IntakeSourceConfig = { name: 'prod', kind: 'sqs', queueUrl: '', region: '', accessKeyId: '', pollSeconds: 60, serviceUrl: '' };
+
+/**
+ * A project's intake sources (docs/intake-plan.md, section 2): the one queue the board may read in
+ * the project's own cloud account. Saved into its machine-local project.json, never the committed
+ * defaults. The secret is never sent back here: it shows masked, and a blank one keeps what is saved.
+ * Saved on its own, because it is a credential and not part of the project's other settings.
+ */
+function IntakeSettings({ project }: { project: string }) {
+  const [enabled, setEnabled] = useState(false);
+  const [sources, setSources] = useState<IntakeSourceConfig[]>([]);
+  const [perHour, setPerHour] = useState(5);
+  const [perDay, setPerDay] = useState(20);
+  const [runbook, setRunbook] = useState('');
+  const [problems, setProblems] = useState<string[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<Msg>(null);
+  const [tests, setTests] = useState<Record<string, string>>({});
+
+  const load = useCallback(() => {
+    getIntakeConfig(project).then(c => {
+      setEnabled(c.enabled); setSources(c.sources); setPerHour(c.newPerHour); setPerDay(c.newPerDay);
+      setRunbook(c.runbook ?? ''); setProblems(c.problems); setDirty(false);
+    }).catch(() => { /* a project the board cannot read: the section stays empty */ });
+  }, [project]);
+  useEffect(() => { load(); }, [load]);
+
+  const touch = () => { setDirty(true); setMsg(null); };
+  const edit = (i: number, patch: Partial<IntakeSourceConfig>) => {
+    setSources(prev => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+    touch();
+  };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await saveIntakeConfig(project, { enabled, sources, newPerHour: perHour, newPerDay: perDay, runbook: runbook || null });
+      setMsg({ type: 'success', text: 'Intake saved' });
+      load();
+    } catch (e) {
+      setMsg({ type: 'error', text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const test = async (name: string) => {
+    setTests(t => ({ ...t, [name]: 'Testing…' }));
+    const r = await testIntakeSource(project, name).catch(e => ({ ok: false, error: String(e) }) as { ok: boolean; error?: string; waiting?: number | null });
+    setTests(t => ({ ...t, [name]: r.ok ? `Answers: ${r.waiting ?? 0} waiting` : `Does not answer: ${r.error}` }));
+  };
+
+  return (
+    <div>
+      <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Intake</h4>
+      <p className="text-xs text-gray-500 mb-3">
+        Production's error reports and alarms, filed as tickets the fleet works. The board reads one queue in this project's own
+        cloud account, with a credential that can receive, delete and read that queue and nothing else. Saved in this machine's
+        <span className="font-mono text-gray-400"> project.json</span> only.
+      </p>
+      {problems.length > 0 && <p className="text-xs text-red-400 mb-2">{problems.join(' ')}</p>}
+      <div className="flex flex-col gap-4">
+        <CheckField label="Read this project's intake" checked={enabled} onChange={v => { setEnabled(v); touch(); }}
+          description="Off, nothing is read and nothing is filed, whatever the sources say." />
+        {sources.map((s, i) => (
+          <div key={i} className="flex flex-col gap-3 border border-hair p-3" style={{ clipPath: chamfer(9) }}>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <Field label="Name" value={s.name} onChange={v => edit(i, { name: v })} placeholder="prod" />
+              <SelectField label="Kind" value={s.kind} onChange={v => edit(i, { kind: v })}
+                options={[{ value: 'sqs', label: 'SQS queue' }, { value: 'standin', label: 'Stand-in (in memory)' }]} />
+              <Field label="Poll every (s)" type="number" value={s.pollSeconds} onChange={v => edit(i, { pollSeconds: Number(v) || 60 })} />
+            </div>
+            {s.kind === 'sqs' && (
+              <>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,3fr)_minmax(0,1fr)]">
+                  <Field label="Queue URL" value={s.queueUrl} onChange={v => edit(i, { queueUrl: v })}
+                    placeholder="https://sqs.us-east-1.amazonaws.com/000000000000/alpha-outbox" />
+                  <Field label="Region" value={s.region} onChange={v => edit(i, { region: v })} placeholder="us-east-1" />
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <Field label="Access key id" value={s.accessKeyId} onChange={v => edit(i, { accessKeyId: v })} />
+                  <Field label="Secret access key" isSecret value={s.secretAccessKey ?? ''}
+                    onChange={v => edit(i, { secretAccessKey: v })}
+                    placeholder={s.secretSet ? `${s.secretMasked}  (saved)` : ''} />
+                </div>
+              </>
+            )}
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <button type="button" disabled={dirty} onClick={() => test(s.name)}
+                title={dirty ? 'Save first: the test reads the saved source' : "Read the queue's attributes, and nothing else"}
+                className="btn-act px-3 py-1.5 text-blue-300 bg-blue-500/10 disabled:opacity-50">Test connection</button>
+              <button type="button" onClick={() => { setSources(prev => prev.filter((_, j) => j !== i)); touch(); }}
+                className="btn-act px-3 py-1.5 text-red-300 bg-red-500/10">Remove</button>
+              {tests[s.name] && <span className="min-w-0 text-xs text-gray-400">{tests[s.name]}</span>}
+            </div>
+          </div>
+        ))}
+        <div>
+          <button type="button" onClick={() => { setSources(prev => [...prev, { ...NEW_SOURCE, name: prev.length ? `source-${prev.length + 1}` : 'prod' }]); touch(); }}
+            className="btn-act px-3 py-1.5 text-blue-300 bg-blue-500/10">Add a source</button>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <Field label="New tickets an hour" type="number" value={perHour} onChange={v => { setPerHour(Math.max(0, Number(v) || 0)); touch(); }}
+            description="Past it, reports are held on one storm ticket" />
+          <Field label="New tickets a day" type="number" value={perDay} onChange={v => { setPerDay(Math.max(0, Number(v) || 0)); touch(); }}
+            description="The day's limit outranks the hour's" />
+          <Field label="Runbook" value={runbook} onChange={v => { setRunbook(v); touch(); }} placeholder="docs/runbook.md"
+            description="Its heading named after an alarm is quoted on that alarm's ticket" />
+        </div>
+        <div className="flex justify-end">
+          <SaveBar msg={msg} saving={saving} disabled={!dirty} onSave={save} label="Save intake" />
+        </div>
+      </div>
     </div>
   );
 }

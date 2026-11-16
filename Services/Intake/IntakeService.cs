@@ -134,6 +134,7 @@ public sealed class IntakeService
             {
                 ProjectKey = project, Channel = r.Channel, Fingerprint = r.Fingerprint,
                 FirstSeen = r.FirstSeen ?? r.OccurredAt ?? now,
+                LastSeen = DateTime.MinValue,
             };
             _db.IntakeIssues.Add(issue);
             Count(issue, r, now);
@@ -185,7 +186,9 @@ public sealed class IntakeService
     {
         issue.Occurrences++;
         issue.UnnotedOccurrences++;
-        issue.LastSeen = r.OccurredAt is { } at && at > issue.LastSeen ? at : now > issue.LastSeen ? now : issue.LastSeen;
+        // When the report says it happened, else when it arrived; never earlier than what is already known.
+        var seen = r.OccurredAt ?? now;
+        if (seen > issue.LastSeen) issue.LastSeen = seen;
         issue.LastState = r.State;
         if (r.Count is { } c) issue.ReportedCount = c;
         if (r.State is not (IntakeStates.Cleared or IntakeStates.Unknown)) issue.Title = r.Title.Length > 300 ? r.Title[..300] : r.Title;
