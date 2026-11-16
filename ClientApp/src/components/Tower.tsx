@@ -216,12 +216,13 @@ function Arc({ state, events }: { state: DashboardState; events: HeartbeatEvent[
   }, [tickets]);
 
   return (
-    <div className="border border-hair bg-panel overflow-hidden" style={{ clipPath: chamfer(10), padding: '0 0 4px' }}>
+    <div className="border border-hair bg-panel overflow-hidden" style={{ clipPath: chamfer(10), padding: '0 0 14px' }}>
       {/* The arc is laid out on the board's row grid, whose first and last columns hold a row's
           title and actions. The Tower has no rows, so those two columns are pulled off the edges and
-          the stops spread across the whole width. */}
-      <div style={{ margin: '-16px -110px 0 -250px' }}>
-        <SectorArc squash={0.36}
+          the stops spread across the whole width. Squashed only as far as keeps the lower lane's
+          labels clear of the edge: the parts below have room to give, the journey does not. */}
+      <div style={{ margin: '-8px -110px 0 -250px' }}>
+        <SectorArc squash={0.6}
           load={load} tracks={tracks} status={state.status} pulses={pulses}
           burst={touchdown ? { station: STATIONS.length - 1, key: touchdown } : null}
           insetLeft={20} insetRight={16} describe={describe}
