@@ -76,6 +76,9 @@ public sealed class QaIsolation
         R("*", @"^/api/projects/[^/]+/tfvc/sync/?$", "syncing with TFVC"),
         R("POST", @"^/api/projects/[^/]+/stack/(start|stop)/?$", "starting or stopping a docker stack"),
         R("POST", @"^/api/projects/[^/]+/dependencies/refresh/?$", "reading the issue tracker"),
+        // Intake reads a queue in a project's own cloud account. The copy files intake tickets only
+        // from the stand-in transport (POST .../intake/standin), which is in this process's memory.
+        R("POST", @"^/api/projects/[^/]+/intake/(poll|sources/[^/]+/test)/?$", "reading a project's intake queue"),
         R("POST", @"^/api/usage/(check|nudge|signin|account)/?$", "reading, renewing or switching the Claude login"),
         R("POST", @"^/api/system/pick-folder/?$", "opening a dialog on the desktop"),
         // Worker hosts are other machines. Reading /api/hosts stays open - the copy has none, and the
