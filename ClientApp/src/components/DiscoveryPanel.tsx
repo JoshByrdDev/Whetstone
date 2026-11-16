@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TicketDetail } from '../types/tickets';
 import * as api from '../api/discovery';
@@ -143,6 +143,7 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
     : 'then this discovery moves to your sign-off.';
 
   return (
+    <VoicingNow.Provider value={!!d.voicing?.state?.running}>
     <div className="space-y-4">
       {d.route ? (
         <RouteBox ticketId={t.id} route={d.route} gate={t.phase === 'NeedsRouteApproval'} busy={busy} run={run} />
@@ -304,6 +305,7 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
         </details>
       )}
     </div>
+    </VoicingNow.Provider>
   );
 }
 
@@ -605,6 +607,9 @@ function Toggle({ on, label, title, onClick }: { on: boolean; label: string; tit
   );
 }
 
+/** Whether the narrator is voicing this discovery right now: every player on it says so. */
+const VoicingNow = createContext(false);
+
 /**
  * A video with its voice-over and its still stretches skipped: the whole recording and a proposal's
  * clip are the same player. The lines and skips are compared by content, not identity - the drawer
@@ -623,10 +628,12 @@ function NarratedVideo({ src, voiceOver, skips, seconds, label, register, onErro
   const jumps = useMemo(() => JSON.parse(skipsKey) as [number, number][], [skipsKey]);
   const line = useVoiceOver(ref, lines, voiceOn, jumps, skipOn);
   const voiced = lines.some(l => l.clip);
+  const allVoiced = lines.length > 0 && lines.every(l => l.clip);
+  const generating = useContext(VoicingNow);
   const skipped = jumps.reduce((n, [a, b]) => n + (b - a), 0);
   return (
     <div className={`space-y-1.5 ${className ?? ''}`}>
-      {(label || voiced || skipped >= 5) && (
+      {(label || lines.length > 0 || skipped >= 5) && (
         <div className="flex items-center gap-2 text-[11px] text-gray-500">
           <span className="min-w-0 truncate">
             {label}
@@ -635,6 +642,13 @@ function NarratedVideo({ src, voiceOver, skips, seconds, label, register, onErro
           <span className="ml-auto flex gap-1.5">
             {skipped >= 5 && <Toggle on={skipOn} label="Skip stills" onClick={() => setSkipOn(x => !x)}
               title={skipOn ? 'Play the stretches where the screen stands still (the agent thinking)' : 'Jump over the stretches where the screen stands still'} />}
+            {/* The voice is this, not the video's own speaker: a recording has no sound of its own. */}
+            {!allVoiced && lines.length > 0 && (
+              <span className="shrink-0 px-2 py-0.5 text-gray-500"
+                title="Its lines show as captions until they are voiced; voicing runs on this machine and lands as it goes">
+                {generating ? 'Voicing…' : voiced ? 'Partly voiced' : 'Not voiced yet'}
+              </span>
+            )}
             {voiced && <Toggle on={voiceOn} label="Voice" onClick={() => setVoiceOn(x => !x)}
               title={voiceOn ? 'Mute the voice-over; its lines stay as captions' : 'Play the voice-over'} />}
           </span>
@@ -642,7 +656,7 @@ function NarratedVideo({ src, voiceOver, skips, seconds, label, register, onErro
       )}
       <div className="relative">
         <video ref={el => { ref.current = el; register?.(el); }} src={src} controls preload="metadata" onError={onError}
-          className="w-full max-w-full rounded-lg border border-hair bg-black" />
+          className="voiced-video w-full max-w-full rounded-lg border border-hair bg-black" />
         <VoiceCaption line={line} />
       </div>
     </div>

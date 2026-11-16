@@ -56,6 +56,9 @@ public static class DiscoveryEndpoints
             // proposal's clip shows the part that falls in it.
             var voice = v.Recordings.Where(r => r.PrunedAt is null).ToDictionary(r => r.Id, r => voicing.Timed(v, r.Id, projectKey));
             var skips = v.Recordings.Where(r => r.PrunedAt is null).ToDictionary(r => r.Id, r => DiscoveryMedia.SkipsOf(v, r));
+            // Lines not voiced yet are voiced now, in the background: the drawer shows them as
+            // captions until their clips land, and picks the clips up as it reloads.
+            voicing.EnsureVoiced(id, voice.Values.Any(lines => lines.Any(x => x.Clip is null)));
             static object Line((DiscoveryVoiceOver.Line Line, string? Clip, double Seconds) x, double at) => new
             {
                 key = x.Line.Key, from = x.Line.From.ToString(), x.Line.Text, at, x.Line.Kind, x.Clip, x.Seconds,

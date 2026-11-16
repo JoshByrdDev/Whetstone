@@ -728,7 +728,10 @@ nothing showing where on the page anything was happening. Three changes, one per
 - **The voice.** A new tool, `say` (Scouting and Rechecking only, `DiscoveryNarration`), takes one
   or two spoken sentences, first person, before the action they describe. The board stamps it like
   a chapter and places it in the recording at adoption. Voicing is the Classroom's narrator
-  (Kokoro), on demand from the drawer's **Generate voice-over** (`DiscoveryVoicing`), and clips are
+  (Kokoro), started by the board the first time a discovery is read with lines not voiced yet
+  (`DiscoveryVoicing.EnsureVoiced`) - first built on demand like a Classroom deck, it left the first
+  real run's players silent behind a button nobody saw - and the drawer's **Generate voice-over**
+  tries again after a voicing that failed. Clips are
   found by content in the same folder as the Classroom's, so nothing about voicing is stored. A
   recording whose run never said anything - every run before `say` - is voiced from its chapter and
   observation titles instead; the two sources are never mixed in one recording. Over 400 characters

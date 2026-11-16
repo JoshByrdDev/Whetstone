@@ -103,6 +103,21 @@ public class DiscoveryVoicing
             Math.Round(voiced[i].Clip is not null ? voiced[i].Seconds : WalkthroughVoicing.ReadingSeconds(l.Text), 3))).ToList();
     }
 
+    /// <summary>
+    /// Voice a discovery's lines without being asked, the first time anyone reads it with lines not
+    /// voiced yet. A discovery's recording is watched to be followed, and a player whose voice waits
+    /// on a button nobody saw is a silent player - so unlike a Classroom deck, it is not on demand.
+    /// Runs nothing while a voicing is under way, or after one that failed (the drawer shows why,
+    /// and Generate tries again), or on a machine without the narrator.
+    /// </summary>
+    /// <returns>Whether a voicing was started.</returns>
+    public bool EnsureVoiced(int ticketId, bool anyUnvoiced)
+    {
+        if (!anyUnvoiced || _narrator.Unavailable() is not null) return false;
+        if (_jobs.TryGetValue(ticketId, out var j) && (j.Running || j.Error is not null)) return false;
+        return Start(ticketId).ok;
+    }
+
     /// <summary>Start voicing one discovery's unvoiced lines. Returns at once.</summary>
     public (bool ok, string message) Start(int ticketId)
     {

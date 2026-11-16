@@ -682,6 +682,14 @@ html {
   .tab-out-left, .tab-out-right, .tab-in-right, .tab-in-left { animation: none; }
 }
 
+/* ---- A narrated video ----
+   A discovery recording has no sound of its own - its voice-over plays beside it, under the
+   player's own Voice control - so the browser's speaker would only ever show greyed out, which
+   reads as the voice being broken. Hidden where the browser lets it be. */
+.voiced-video::-webkit-media-controls-mute-button,
+.voiced-video::-webkit-media-controls-volume-slider,
+.voiced-video::-webkit-media-controls-volume-control-container { display: none !important; }
+
 /* ---- Form controls ----
 
    Skinned globally rather than per page. Inputs are the one thing that appears on nearly every tab
