@@ -112,7 +112,9 @@ builder.Services.AddSingleton<DiscoveryVoicing>();
 builder.Services.AddSingleton<SetupCheckService>(sp => new SetupCheckService(
     sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<DashboardPaths>(),
     sp.GetRequiredService<Whetstone.Services.Walkthrough.Narrator>(),
-    sp.GetRequiredService<HeartbeatManager>()));
+    sp.GetRequiredService<HeartbeatManager>(),
+    sp.GetRequiredService<Whetstone.Services.Intake.IIntakeSettings>(),
+    sp.GetRequiredService<Whetstone.Services.Intake.IntakeStatus>()));
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.WalkthroughService>();
 builder.Services.AddSingleton<AnalysisRunner>();
 builder.Services.AddSingleton<Whetstone.Services.UnitReports.UnitReportRunner>();
@@ -137,6 +139,9 @@ builder.Services.AddScoped<TicketService>();
 // The stand-in queues live as long as the process; a QA copy is handed no real queue.
 builder.Services.AddSingleton<Whetstone.Services.Intake.IIntakeSettings, Whetstone.Services.Intake.IntakeSettings>();
 builder.Services.AddSingleton<Whetstone.Services.Intake.IntakeTransports>();
+builder.Services.AddSingleton<Whetstone.Services.Intake.IntakeStatus>();
+builder.Services.AddSingleton<Whetstone.Services.Intake.IntakePoller>();
+if (!isolation.On) builder.Services.AddHostedService(sp => sp.GetRequiredService<Whetstone.Services.Intake.IntakePoller>());
 builder.Services.AddScoped<Whetstone.Services.Intake.IIntakeRunbook, Whetstone.Services.Intake.GitIntakeRunbook>();
 builder.Services.AddScoped(sp => new Whetstone.Services.Intake.IntakeService(
     sp.GetRequiredService<DashboardDbContext>(), sp.GetRequiredService<TicketService>(),

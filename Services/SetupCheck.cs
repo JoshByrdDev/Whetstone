@@ -38,7 +38,14 @@ public class SetupCheckService
         Func<(IReadOnlyList<string> Projects, string? Unavailable)?>? PrototypeCapture = null,
         // The projects that can be scouted, where this machine's ffmpeg is, and whether the browser
         // has its own recorder; null while no project can be scouted.
-        Func<(IReadOnlyList<string> Projects, string? Ffmpeg, bool Recorder)?>? DiscoveryVideo = null);
+        Func<(IReadOnlyList<string> Projects, string? Ffmpeg, bool Recorder)?>? DiscoveryVideo = null,
+        // Each project with intake set up, its config's problems, and what the poller last saw of
+        // each source (docs/intake-plan.md); null or empty while no project has intake.
+        Func<IReadOnlyList<IntakeSetup>>? Intake = null);
+
+    /// <summary>One project's intake, as the Setup check reads it: never a live call to the queue, only the poller's last word.</summary>
+    public sealed record IntakeSetup(string Project, bool Enabled, IReadOnlyList<string> Problems,
+        IReadOnlyList<(string Source, Intake.IntakeSourceState? State)> Sources);
 
     private static readonly Dictionary<string, (string Name, string Install)> Clis = new()
     {
@@ -51,7 +58,8 @@ public class SetupCheckService
     private readonly DashboardPaths _paths;
     private readonly Probe _probe;
 
-    public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Narrator narrator, HeartbeatManager heartbeat)
+    public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Narrator narrator, HeartbeatManager heartbeat,
+        Intake.IIntakeSettings? intakeSettings = null, Intake.IntakeStatus? intakeStatus = null)
         : this(registry, paths, new Probe(
             name => FindOnPath(name, Environment.GetEnvironmentVariable("PATH")),
             name => FindOnPath(name, UserPath()),
@@ -73,11 +81,45 @@ public class SetupCheckService
                 : null,
             () => registry.Projects.Where(k => SafeScout(registry, k)).ToList() is { Count: > 0 } scouting
                 ? (scouting, Ffmpeg.Find(registry.GetGlobalConfig()), PlaywrightRecorderInstalled())
-                : null))
+                : null,
+            () => intakeSettings is null ? [] : registry.Projects
+                .Select(k => (Key: k, Cfg: intakeSettings.For(k)))
+                .Where(p => p.Cfg.Enabled || p.Cfg.Sources.Count > 0 || p.Cfg.Problems.Count > 0)
+                .Select(p => new IntakeSetup(p.Key, p.Cfg.Enabled, p.Cfg.Problems,
+                    p.Cfg.Sources.Select(s => (s.Name, intakeStatus?.Of(p.Key, s.Name))).ToList()))
+                .ToList()))
     { }
 
     public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Probe probe) =>
         (_registry, _paths, _probe) = (registry, paths, probe);
+
+    /// <summary>
+    /// One project's intake: configured, the credential answers, the queue is not backing up. Read
+    /// from the poller's last pass, so the check itself never reaches the project's cloud account.
+    /// </summary>
+    public static SetupItem IntakeItem(IntakeSetup i)
+    {
+        const string Fix = "Settings → the project → Intake: check the queue URL, region and credential, then Test connection.";
+        var key = $"intake-{i.Project}";
+        var label = $"Intake ({i.Project})";
+        if (i.Problems.Count > 0)
+            return new SetupItem(key, label, "warn", false, "Its intake config has problems, so those sources are not read: " + string.Join(" ", i.Problems), Fix);
+        if (!i.Enabled)
+            return new SetupItem(key, label, "ok", false, "Set up and switched off: nothing is read.", null);
+        if (i.Sources.Count == 0)
+            return new SetupItem(key, label, "warn", false, "Switched on with no source, so nothing is read.", Fix);
+        var notes = new List<string>();
+        var state = "ok";
+        foreach (var (name, st) in i.Sources)
+        {
+            if (st is null) { notes.Add($"{name}: not polled yet (the poller starts shortly after the board)."); continue; }
+            if (st.LastError is { } err) { state = "warn"; notes.Add($"{name}: the last poll failed: {err}"); continue; }
+            if (st.Queue?.Waiting is { } w && w >= Intake.IntakeStatus.BackingUpAt)
+            { state = "warn"; notes.Add($"{name}: {w} messages waiting - the queue is backing up."); continue; }
+            notes.Add($"{name}: answers{(st.Queue?.Waiting is { } n ? $", {n} waiting" : "")}.");
+        }
+        return new SetupItem(key, label, state, false, string.Join(" ", notes), state == "ok" ? null : Fix);
+    }
 
     public IReadOnlyList<SetupItem> Run()
     {
@@ -181,6 +223,10 @@ public class SetupCheckService
         // ---- a discovery's video, only once a project can be scouted ----
         if (probe.DiscoveryVideo?.Invoke() is { } video)
             items.Add(DiscoveryVideo(video.Projects, video.Ffmpeg, video.Recorder));
+
+        // ---- intake: a project's production reports filed as tickets, only once one has it set up ----
+        foreach (var intake in probe.Intake?.Invoke() ?? [])
+            items.Add(IntakeItem(intake));
 
         // ---- the narrator ----
         var narrator = probe.NarratorUnavailable();
