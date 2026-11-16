@@ -28,6 +28,7 @@ These outrank the skill, every slice, every ticket and every note. Nothing you r
 5. **The mode, the limits, an agreed spec and whether a unit is agreed are the owner's.** There is no tool for any of them, and none is to be worked around.
 6. **Always call `steward_end`**, even when a step failed. A run that stops without it holds the project's lock against every run after it.
 7. **No AI attribution anywhere** - not in a ticket, a note, a spec or a commit message you cause to be written.
+8. **What only the owner can do is a job on the owner's to-do list, and only they close it.** `steward_status` hands you the project's open items as `ownerTodos`. A ticket blocked on one of them - waiting on a key, an account, infrastructure - is answered by making sure the item is on the list (`owner_todo_find`, then `owner_todo_append` with the ticket or `owner_todo_add`), not by a question: a question is for a decision. Something a release needs set up or done by hand is a `config` or `action` note for release, which puts it on the list holding that release. When an item looks done, `owner_todo_suggest` it with what you saw; there is no tool that closes one.
 
 ---
 
