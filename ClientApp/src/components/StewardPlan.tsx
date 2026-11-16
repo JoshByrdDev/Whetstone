@@ -154,7 +154,7 @@ const LANE_SHOWS = 5;
  * agree, what is waiting, what is moving, what is yours to release, what has gone out. Left to right,
  * the way a ticket crosses the board - so each of the owner's two steps sits where it falls.
  */
-const LANES: { title: string; stages: UnitStage[]; c: string; empty: string }[] = [
+export const LANES: { title: string; stages: UnitStage[]; c: string; empty: string }[] = [
   { title: 'Ideas', stages: ['idea'], c: 'var(--w-t400)', empty: 'No ideas left.' },
   { title: 'To agree', stages: ['draft', 'notAgreed'], c: TIER.gate.c, empty: 'No draft to agree.' },
   { title: 'Agreed', stages: ['agreed'], c: TIER.queue.c, empty: 'Nothing agreed and waiting.' },
@@ -211,7 +211,7 @@ export function Lanes({ units, selected, onPick, shows = LANE_SHOWS, className =
 }
 
 /** On a phone, the slices in their order as one strip that scrolls sideways, opened at the one being read. */
-export function SliceStrip({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
+function SliceStrip({ units, selected, onPick }: { units: Unit[]; selected: Selected | null; onPick: (s: Selected) => void }) {
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = box.current?.querySelector<HTMLElement>('[aria-current="true"]');
@@ -262,7 +262,7 @@ function SliceCard({ u, on, onClick }: { u: Unit; on: boolean; onClick: () => vo
 }
 
 /** "Slice 5: the desk's day" reads as its words once the number is beside it. */
-const shortTitle = (u: Unit) => u.title.replace(new RegExp(`^(?:slice|unit)\\s+0*${u.unit}\\s*[:.-]\\s*`, 'i'), '');
+export const shortTitle = (u: Unit) => u.title.replace(new RegExp(`^(?:slice|unit)\\s+0*${u.unit}\\s*[:.-]\\s*`, 'i'), '');
 
 /** How far along its one way a unit is: every step named, the ones behind it lit. */
 function Steps({ stage }: { stage: UnitStage }) {

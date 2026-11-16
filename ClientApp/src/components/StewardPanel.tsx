@@ -229,7 +229,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
  * An answered question leaves at once and the rest catches up behind it: re-reading the whole page
  * is seconds on a busy machine, and "Answering..." was waiting on that rather than on the answer.
  */
-export function WaitingOnYou({ page, status, onChanged, onCount, tag, quietWhenEmpty = false }: {
+export function WaitingOnYou({ page, status, onChanged, onCount, tag, quietWhenEmpty = false, only }: {
   page: StewardPage;
   status: StewardStatus | null;
   /** Re-read the page: something here was answered or settled. */
@@ -240,14 +240,16 @@ export function WaitingOnYou({ page, status, onChanged, onCount, tag, quietWhenE
   tag?: string;
   /** Draw nothing when nothing is waiting, for a list that says so once for several projects. */
   quietWhenEmpty?: boolean;
+  /** Just one of them - a question's key, or `t:<id>` for a ticket's flags - for the Tower's overlay. */
+  only?: string;
 }) {
   const [gone, setGone] = useState<ReadonlySet<string>>(() => new Set());
-  const waiting = page.waiting.filter(q => !gone.has(q.key));
+  const waiting = page.waiting.filter(q => !gone.has(q.key) && (!only || only === q.key));
   // A ticket in review whose merge waits on a flag only its owner can clear. Answering the
   // question that asked about it lifts nothing, so the ticket stays here until the flag is
   // cleared or the ticket leaves review; one an open question names is already shown under it.
   const asked = new Set(waiting.map(q => q.ticketId).filter((id): id is number => id != null));
-  const inReview = (status?.tickets ?? []).filter(t => t.phase === 'NeedsReview' && !asked.has(t.id));
+  const inReview = (status?.tickets ?? []).filter(t => t.phase === 'NeedsReview' && !asked.has(t.id) && (!only || only === `t:${t.id}`));
   const [held, setHeld] = useState<Record<number, boolean>>({});
   const hear = useCallback((id: number, flags: StewardOwnerFlag[]) => {
     const on = flags.some(f => !f.cleared);

@@ -5,52 +5,50 @@ import { useNarrow } from '../hooks/useNarrow';
 import { useWorkerHosts } from '../hooks/useWorkerHosts';
 import type { Track } from '../types/tickets';
 import type { DashboardState, HeartbeatEvent } from '../types/events';
-import { isStewardEvent } from '../types/events';
 import { useArcFeed, useLanding } from './Board';
 import { SectorArc } from './SectorArc';
 import { STATIONS, stationOf } from './JourneyTrack';
-import { AgentDock } from './AgentMascot';
 import { ActivityFeed } from './ActivityFeed';
-import { ClaudeLogins } from './ClaudeUsage';
-import { BusyWhileOnDuty } from './CapacityStrip';
-import { SmartSwitchCard } from './SmartSwitchField';
-import { StewardCard, WaitingOnYou } from './StewardPanel';
-import { Lanes, SliceStrip, unitsOf } from './StewardPlan';
-import { CoverageTable } from './recon/Coverage';
+import { WaitingOnYou } from './StewardPanel';
+import { unitsOf } from './StewardPlan';
 import { useJson } from './metrics/parts';
 import { useProjectList, rememberProject } from './ProjectPicker';
 import type { ProjectOpt } from './ProjectPicker';
 import { remember } from './stewardParts';
 import { Chip, SectionRule } from './ui';
-import { BODY, DISPLAY, TIER, chamfer } from './orbit';
-import { track } from '../theme';
+import { BODY, TIER, chamfer } from './orbit';
 import { getSteward, getStewardPlan, getStewardStatus } from '../api/steward';
 import type { StewardPage, StewardPlanView, StewardStatus } from '../api/steward';
 import type { CoverageCell, ReconProjects } from './recon/types';
+import {
+  AgentTiles, ClaudeRows, CoverageHeat, SliceGlance, StewardStrip, SwitchLine, Veil, WaitingRows, useBusyShare, useWaitingItems,
+} from './tower/Glances';
+import type { WaitingItem } from './tower/Glances';
 
 /**
  * The Tower: the whole system on one screen, to leave up on a monitor and watch.
  *
- * Every other tab does its own thing well and is where that thing is worked. This one borrows the
- * part of each that says how things stand - the board's arc and berths, the steward's Now and its
- * slices, Recon's coverage, the heartbeat's feed, the Claude headroom and the fleet's busy share -
- * and draws them all at once, sized to the window so nothing needs scrolling to. Each part is the
- * same component its own tab draws, so the two never disagree.
+ * Every other tab does its own thing well and is where that thing is worked. This one says how each
+ * of them stands - the board's arc and berths, the steward and its slices, Recon's coverage, the
+ * heartbeat's feed, the Claude headroom and the fleet's busy share - and draws them all at once,
+ * sized to the window. Nothing on it scrolls: each part is a glance (tower/Glances.tsx) that says
+ * its tab's state in as few lines as still say it, read from the same endpoints and helpers.
  *
- * It is for watching. The only things here that write are the two whose whole point is to be acted
- * on while you watch: the questions waiting on you, and the smart switch. The arc lights on hover
- * and says what is parked where, and filters nothing.
+ * It is for watching. The two things that write - a question waiting on you, and the smart switch -
+ * open their full components over the page, the same ones the Steward and Settings tabs draw, so
+ * there is one way to answer and one way to switch. The arc lights on hover and says what is
+ * parked where, and filters nothing.
  *
  * The steward's questions are every project's, each tagged with its project, because a question
- * missed is the one thing on this page that costs anything. The steward card, the slices and the
- * coverage are per project, and follow the one picker at the top.
+ * missed is the one thing on this page that costs anything. The steward strip, the slices and the
+ * coverage are per project, and follow the picker in the arc's corner.
  */
 
 const POLL_MS = 15_000;
 
-export function Tower({ state, wakeAt, events, onGo }: {
+export function Tower({ state, events, onGo }: {
   state: DashboardState;
-  wakeAt: Date | null;
+  wakeAt?: Date | null;
   events: HeartbeatEvent[];
   /** Open the Steward tab, which the Tower has already pointed at the slice that was picked. */
   onGo: (tab: 'steward') => void;
@@ -59,6 +57,12 @@ export function Tower({ state, wakeAt, events, onGo }: {
   const [projects, project, setProject] = useProjectList('tower');
   const pages = useStewardPages(projects);
   const page = project ? pages.get(project) : undefined;
+  const hosts = useWorkerHosts();
+  const busy = useBusyShare();
+  const fill = useFillHeight(!narrow);
+  const { items, checking } = useWaitingItems(projects, pages);
+  const [open, setOpen] = useState<WaitingItem | null>(null);
+  const many = projects.filter(p => { const pg = pages.get(p.key)?.page; return pg && pg.mode !== 'off'; }).length > 1;
 
   const openSlice = (unit: number) => {
     if (!project) return;
@@ -68,99 +72,92 @@ export function Tower({ state, wakeAt, events, onGo }: {
     onGo('steward');
   };
 
-  const fill = useFillHeight(!narrow);
-  const hosts = useWorkerHosts();
-
   const picker = projects.length > 1 && (
     <div className="flex flex-wrap gap-1.5">
       {projects.map(p => <Chip key={p.key} on={project === p.key} onClick={() => setProject(p.key)}>{p.displayName}</Chip>)}
     </div>
   );
+  const name = projects.find(p => p.key === project)?.displayName;
 
-  const steward = (
-    <StewardNow page={page?.page} state={state} events={events} reload={page?.reload} />
-  );
-  const waiting = <WaitingAll projects={projects} pages={pages} />;
-  const agents = (
-    <AgentDock status={state.status} wakeAt={wakeAt} workers={state.workers} agents={state.agents}
-      visible={NONE} events={events} hosts={hosts} stacked />
-  );
-  const slices = project ? <Slices project={project} narrow={narrow} onPick={openSlice} /> : null;
+  const answering = open && (() => {
+    const s = pages.get(open.project);
+    if (!s?.page) return null;
+    return (
+      <Veil title={`${open.projectName} - waiting on you`} onClose={() => setOpen(null)}>
+        <WaitingOnYou page={s.page} status={s.status} only={open.key} quietWhenEmpty
+          onChanged={async () => { await s.reload(); if (!open.key.startsWith('t:')) setOpen(null); }} />
+      </Veil>
+    );
+  })();
+
+  const steward = <StewardStrip page={page?.page} state={state} />;
+  const waiting = <WaitingRows items={items} checking={checking} many={many} max={narrow ? 8 : 5} onOpen={setOpen} />;
+  const agents = <AgentTiles state={state} hosts={hosts} />;
+  const slices = project ? <Slices project={project} onPick={openSlice} /> : null;
   const coverage = project ? <ProjectCoverage project={project} /> : null;
-  const feed = <ActivityFeed events={events} fill />;
+  const claude = <ClaudeRows />;
+  const feed = <ActivityFeed events={events} fill clip />;
 
   if (narrow) {
     // A phone: one column, what needs you first. No arc - the board draws none on a phone either.
     return (
-      <div className="px-3 py-3 flex flex-col gap-4">
-        <Head picker={picker} />
-        <Cell title="Waiting on you" colour={TIER.blocked.c}>{waiting}</Cell>
+      <div className="px-3 py-3 flex flex-col gap-3">
+        {picker}
+        <Cell title="Waiting on you" colour={TIER.blocked.c} count={items.length}>{waiting}</Cell>
+        <Cell title="Steward" meta={name}>{steward}</Cell>
         <Cell title="Agents">{agents}</Cell>
-        <Cell title="Claude headroom"><ClaudeLogins /></Cell>
-        <Cell title="Capacity"><BusyWhileOnDuty /></Cell>
-        <Cell title="Activity"><div style={{ height: 360 }}>{feed}</div></Cell>
-        <Cell title="Steward">{steward}</Cell>
-        <Cell title="Slices">{slices}</Cell>
-        <Cell title="Coverage">{coverage}</Cell>
-        <Cell title="Smart switch"><SmartSwitchCard /></Cell>
+        <Cell title="Claude" meta={busy?.text}>{claude}</Cell>
+        <Cell title="Activity"><div style={{ height: 300 }}>{feed}</div></Cell>
+        <Cell title="Slices" meta={name}><div className="overflow-x-auto"><div style={{ minWidth: 640 }}>{slices}</div></div></Cell>
+        <Cell title="Coverage" meta={name}><div className="overflow-x-auto"><div style={{ minWidth: 520 }}>{coverage}</div></div></Cell>
+        <Cell title="Smart switch"><SwitchLine /></Cell>
+        {answering}
       </div>
     );
   }
 
   return (
-    <div ref={fill.ref} className="px-4 pt-2 pb-3 flex flex-col gap-3 min-h-0" style={{ height: fill.height }}>
-      <Head picker={picker} />
-      <Arc state={state} events={events} />
-
-      <div className="grid flex-1 min-h-0 gap-3" style={{
-        gridTemplateColumns: 'repeat(12, minmax(0, 1fr))',
-        gridTemplateRows: 'minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.1fr)',
-      }}>
-        <Cell title="Steward - now" colour={TIER.blocked.c} span={7}>
-          <div className="grid gap-3 h-full min-h-0" style={{ gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 3fr)' }}>
-            <div className="min-h-0 overflow-y-auto dark-scrollbar">{steward}</div>
-            <div className="min-h-0 overflow-y-auto dark-scrollbar pr-1">{waiting}</div>
-          </div>
-        </Cell>
-        <Cell title="Agents by machine" span={5} scroll>{agents}</Cell>
-
-        <Cell title="Slices" colour={TIER.gate.c} span={12} scroll>{slices}</Cell>
-
-        <Cell title="Claude headroom" colour={TIER.active.c} span={5} scroll><ClaudeLogins /></Cell>
-        <Cell title="Capacity" span={2}><BusyWhileOnDuty /></Cell>
-        <Cell title="Smart switch" span={5} scroll><SmartSwitchCard /></Cell>
-
-        <Cell title="Coverage" colour={TIER.queue.c} span={7} scroll>{coverage}</Cell>
-        <Cell title="Activity" colour={TIER.queue.c} span={5}>{feed}</Cell>
+    <div ref={fill.ref} className="px-4 pt-2 pb-3 flex flex-col gap-2.5 min-h-0" style={{ height: fill.height }}>
+      <div className="relative flex-none">
+        <Arc state={state} events={events} />
+        {picker && <div className="absolute" style={{ top: 8, right: 10 }}>{picker}</div>}
       </div>
-    </div>
-  );
-}
 
-const NONE: Set<number> = new Set();
-
-function Head({ picker }: { picker: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div style={{ font: `700 15px ${DISPLAY}`, letterSpacing: track(0.3), color: 'var(--w-t200)', textTransform: 'uppercase' }}>Tower</div>
-      {picker}
+      <div className="grid flex-1 min-h-0 gap-2.5" style={{ gridTemplateColumns: 'minmax(0, 4fr) minmax(0, 5.2fr) minmax(0, 3.6fr)' }}>
+        <div className="flex flex-col gap-2.5 min-h-0">
+          <Cell title="Steward" meta={name}>{steward}</Cell>
+          <Cell title="Waiting on you" colour={TIER.blocked.c} count={items.length} grow>{waiting}</Cell>
+        </div>
+        <div className="flex flex-col gap-2.5 min-h-0">
+          <Cell title="Agents">{agents}</Cell>
+          <Cell title="Slices" colour={TIER.gate.c} meta={name}>{slices}</Cell>
+          <Cell title="Coverage" colour={TIER.queue.c} meta={name} grow>{coverage}</Cell>
+        </div>
+        <div className="flex flex-col gap-2.5 min-h-0">
+          <Cell title="Claude" colour={TIER.active.c} meta={busy?.text} metaTitle={busy?.title}>{claude}</Cell>
+          <Cell title="Smart switch">{<SwitchLine />}</Cell>
+          <Cell title="Activity" colour={TIER.queue.c} grow>{feed}</Cell>
+        </div>
+      </div>
+      {answering}
     </div>
   );
 }
 
 /**
- * One part of the Tower: a rule naming it, and a body that keeps to the height its row was given.
- * `scroll` lets the body scroll inside itself when what it has to say is taller than the row; a part
- * that manages its own height (the feed, the steward's two columns) leaves it off.
+ * One part of the Tower: a rule naming it, and its glance under it. Nothing in it scrolls; `grow`
+ * gives a part the rest of its column, and what does not fit there is clipped, never scrolled.
  */
-function Cell({ title, colour, span, scroll = false, children }: {
-  title: string; colour?: string; span?: number; scroll?: boolean; children: ReactNode;
+function Cell({ title, colour, count, meta, metaTitle, grow = false, children }: {
+  title: string; colour?: string; count?: number; meta?: string; metaTitle?: string; grow?: boolean; children: ReactNode;
 }) {
   return (
-    <section className="min-w-0 min-h-0 flex flex-col border border-hair bg-panel"
-      style={{ gridColumn: span ? `span ${span} / span ${span}` : undefined, clipPath: chamfer(10), padding: '8px 12px 10px' }}>
-      <SectionRule title={title} colour={colour} />
-      <div className={`min-h-0 flex-1 min-w-0 ${scroll ? 'overflow-y-auto dark-scrollbar pr-1' : ''}`}>{children}</div>
+    <section className={`min-w-0 flex flex-col border border-hair bg-panel overflow-hidden ${grow ? 'flex-1 min-h-0' : 'flex-none'}`}
+      style={{ clipPath: chamfer(10), padding: '6px 12px 10px' }}>
+      <div title={metaTitle}>
+        <SectionRule title={title} colour={colour} count={count || undefined} meta={meta} />
+      </div>
+      <div className={`min-w-0 ${grow ? 'flex-1 min-h-0 overflow-hidden' : ''}`}>{children}</div>
     </section>
   );
 }
@@ -174,7 +171,7 @@ function useFillHeight(on: boolean) {
     const measure = () => {
       const top = ref.current?.getBoundingClientRect().top ?? 0;
       // A floor, so a short window scrolls the page rather than crushing every part to a sliver.
-      setHeight(Math.max(640, Math.floor(window.innerHeight - top - window.scrollY)));
+      setHeight(Math.max(600, Math.floor(window.innerHeight - top - window.scrollY)));
     };
     measure();
     // A banner arriving above the page moves its top without the window changing size.
@@ -219,16 +216,16 @@ function Arc({ state, events }: { state: DashboardState; events: HeartbeatEvent[
   }, [tickets]);
 
   return (
-    <div className="flex-none border border-hair bg-panel overflow-hidden" style={{ clipPath: chamfer(10), padding: '0 0 6px' }}>
+    <div className="border border-hair bg-panel overflow-hidden" style={{ clipPath: chamfer(10), padding: '0 0 4px' }}>
       {/* The arc is laid out on the board's row grid, whose first and last columns hold a row's
           title and actions. The Tower has no rows, so those two columns are pulled off the edges and
           the stops spread across the whole width. */}
-      <div style={{ margin: '-12px -110px 0 -250px' }}>
-      <SectorArc squash={0.55}
-        load={load} tracks={tracks} status={state.status} pulses={pulses}
-        burst={touchdown ? { station: STATIONS.length - 1, key: touchdown } : null}
-        insetLeft={20} insetRight={16} describe={describe}
-      />
+      <div style={{ margin: '-16px -110px 0 -250px' }}>
+        <SectorArc squash={0.36}
+          load={load} tracks={tracks} status={state.status} pulses={pulses}
+          burst={touchdown ? { station: STATIONS.length - 1, key: touchdown } : null}
+          insetLeft={20} insetRight={16} describe={describe}
+        />
       </div>
     </div>
   );
@@ -266,52 +263,8 @@ function useStewardPages(projects: ProjectOpt[]): Map<string, ProjectSteward> {
   }, [projects, read, loadOne]);
 }
 
-/** The picked project's steward, as the Steward page's Now draws it on its left. */
-function StewardNow({ page, state, events, reload }: {
-  page: StewardPage | null | undefined;
-  state: DashboardState; events: HeartbeatEvent[]; reload?: () => Promise<void>;
-}) {
-  const live = useMemo(() => events.filter(e => isStewardEvent(e) && e.project === page?.project), [events, page?.project]);
-  if (!page) return <Quiet>Reading the steward.</Quiet>;
-  if (page.mode === 'off') return <Quiet>No steward for this project.</Quiet>;
-  return (
-    <StewardCard page={page} running={state.steward?.project === page.project || page.running}
-      fleet={state.status} live={live} onRan={() => { void reload?.(); }} />
-  );
-}
-
-/** Every project's questions in one list, each said with its project when there is more than one. */
-function WaitingAll({ projects, pages }: { projects: ProjectOpt[]; pages: Map<string, ProjectSteward> }) {
-  const [counts, setCounts] = useState<Record<string, { n: number; checking: boolean }>>({});
-  const heard = useCallback((key: string) => (n: number, checking: boolean) =>
-    setCounts(c => (c[key]?.n === n && c[key]?.checking === checking ? c : { ...c, [key]: { n, checking } })), []);
-  const hearers = useMemo(() => new Map(projects.map(p => [p.key, heard(p.key)])), [projects, heard]);
-
-  const on = projects.filter(p => { const pg = pages.get(p.key)?.page; return pg && pg.mode !== 'off'; });
-  const total = on.reduce((s, p) => s + (counts[p.key]?.n ?? 0), 0);
-  const checking = on.some(p => counts[p.key]?.checking ?? true);
-  const many = on.length > 1;
-
-  return (
-    <div className="flex flex-col gap-3">
-      {on.map(p => {
-        const s = pages.get(p.key)!;
-        return (
-          <WaitingOnYou key={p.key} page={s.page!} status={s.status} onChanged={s.reload}
-            onCount={hearers.get(p.key)} tag={many ? p.displayName : undefined} quietWhenEmpty />
-        );
-      })}
-      {total === 0 && (
-        <Quiet>{on.length === 0 ? 'No project has a steward switched on.'
-          : checking ? 'Checking finished tickets for flags only you can clear.'
-          : 'Nothing is waiting on you.'}</Quiet>
-      )}
-    </div>
-  );
-}
-
-/** The picked project's slices in their lanes. Picking one opens it on the Steward tab, where it is worked. */
-function Slices({ project, narrow, onPick }: { project: string; narrow: boolean; onPick: (unit: number) => void }) {
+/** The picked project's slices. Picking one opens it on the Steward tab, where it is worked. */
+function Slices({ project, onPick }: { project: string; onPick: (unit: number) => void }) {
   const [view, setView] = useState<StewardPlanView | null>(null);
   useEffect(() => {
     let live = true;
@@ -327,12 +280,10 @@ function Slices({ project, narrow, onPick }: { project: string; narrow: boolean;
   if (!view) return <Quiet>Reading the slices.</Quiet>;
   const units = unitsOf(view);
   if (units.length === 0) return <Quiet>{view.why ?? 'There are no slices yet.'}</Quiet>;
-  return narrow
-    ? <SliceStrip units={units} selected={null} onPick={onPick} />
-    : <Lanes units={units} selected={null} onPick={onPick} className="" />;
+  return <SliceGlance units={units} onPick={onPick} />;
 }
 
-/** The picked project's coverage, read-only, re-read every minute. */
+/** The picked project's coverage as a heatmap, re-read every minute. */
 function ProjectCoverage({ project }: { project: string }) {
   const [bump, setBump] = useState(0);
   useEffect(() => { const t = setInterval(() => setBump(b => b + 1), 60_000); return () => clearInterval(t); }, []);
@@ -346,9 +297,9 @@ function ProjectCoverage({ project }: { project: string }) {
   if (!showable) return <Quiet>Recon has not built this project's coverage yet. The Recon tab builds it.</Quiet>;
   if (cov.error) return <Quiet>Could not read the coverage: {cov.error}</Quiet>;
   if (!cov.data) return <Quiet>Reading the coverage.</Quiet>;
-  return <CoverageTable cells={cov.data.cells} />;
+  return <CoverageHeat cells={cov.data.cells} />;
 }
 
 function Quiet({ children }: { children: ReactNode }) {
-  return <div style={{ font: `400 12px/1.5 ${BODY}`, color: 'var(--w-t500)' }}>{children}</div>;
+  return <div style={{ font: `400 11.5px/1.5 ${BODY}`, color: 'var(--w-t500)' }}>{children}</div>;
 }

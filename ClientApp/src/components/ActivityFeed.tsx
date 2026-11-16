@@ -22,6 +22,8 @@ interface Props {
   empty?: string;
   /** Fill the height it is given rather than standing a fixed 500px: the Tower sizes its cells to the window. */
   fill?: boolean;
+  /** Never scroll: show the latest lines that fit and let the rest go above the top edge. */
+  clip?: boolean;
 }
 
 const typeIcons: Record<string, string> = {
@@ -54,7 +56,7 @@ const typeColors: Record<string, string> = {
   ticket_skip:    'border-red-500',
 };
 
-export function ActivityFeed({ events, agentFilter, solo = false, empty, fill = false }: Props) {
+export function ActivityFeed({ events, agentFilter, solo = false, empty, fill = false, clip = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [autoScroll, setAutoScroll] = useState(true);
 
@@ -112,7 +114,7 @@ export function ActivityFeed({ events, agentFilter, solo = false, empty, fill = 
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className={`${fill ? 'h-full' : solo ? 'max-h-[500px]' : 'h-[500px]'} overflow-y-auto bg-gray-900 rounded-lg border border-hair p-3 dark-scrollbar`}
+        className={`${fill ? 'h-full' : solo ? 'max-h-[500px]' : 'h-[500px]'} ${clip ? 'overflow-hidden' : 'overflow-y-auto'} bg-gray-900 rounded-lg border border-hair p-3 dark-scrollbar`}
       >
         {feedEvents.map((evt, i) => {
           // Where the steward takes up the telling, say so once, at the head of its stretch: its

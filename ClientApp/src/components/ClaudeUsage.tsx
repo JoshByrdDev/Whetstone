@@ -12,7 +12,7 @@ import { formatWakeTime } from '../hooks/useTabStatus';
  * meters on the Metrics tab. Both read the dashboard's cached copy - no browser ever calls Anthropic.
  */
 
-interface UsageLimit {
+export interface UsageLimit {
   kind: string;
   group: string;
   label: string;
@@ -150,14 +150,14 @@ function nudgeable(status: string): boolean {
  * Colour by how close the window is to full, but let the API's own severity override it - the server
  * knows about warning bands we would otherwise have to guess at from the percentage alone.
  */
-function tone(l: UsageLimit) {
+export function tone(l: UsageLimit) {
   if (l.severity === 'critical' || l.percent >= 90) return { text: 'text-red-300', bar: 'bg-red-400' };
   if (l.severity === 'warning' || l.percent >= 70) return { text: 'text-amber-300', bar: 'bg-amber-400' };
   return { text: 'text-emerald-300', bar: 'bg-emerald-400' };
 }
 
 /** "resets 6:10pm" for today, "resets Thu 3:00pm" once it is far enough out to be ambiguous. */
-function formatReset(iso: string | null): string | null {
+export function formatReset(iso: string | null): string | null {
   if (!iso) return null;
   const when = new Date(iso);
   if (Number.isNaN(when.getTime())) return null;
@@ -434,7 +434,7 @@ function MeterCard({ title, note, children }: { title: string; note: string | nu
 }
 
 /** One login's meters, from /api/usage/all: the one in force live, the rest as last peeked. */
-interface LoginUsage {
+export interface LoginUsage {
   name: string;
   active: boolean;
   signedIn: boolean;
@@ -445,7 +445,7 @@ interface LoginUsage {
   limits: UsageLimit[];
 }
 
-function useAllClaudeUsage() {
+export function useAllClaudeUsage() {
   const [logins, setLogins] = useState<LoginUsage[] | null>(null);
   useEffect(() => {
     let live = true;
@@ -479,13 +479,6 @@ export function ClaudeMeters() {
       <LoginMeters logins={logins} />
     </MeterCard>
   );
-}
-
-/** The same meters without their card, for a page that frames them itself (the Tower). */
-export function ClaudeLogins() {
-  const logins = useAllClaudeUsage();
-  if (!logins || logins.length === 0) return null;
-  return <LoginMeters logins={logins} />;
 }
 
 function LoginMeters({ logins }: { logins: LoginUsage[] }) {

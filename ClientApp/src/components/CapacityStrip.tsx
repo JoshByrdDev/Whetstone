@@ -52,8 +52,8 @@ const FAMILIES: { key: string; label: string; swatch: string; reasons: string[] 
 ];
 const familyOf = (reason: string) => FAMILIES.find(f => f.reasons.includes(reason)) ?? FAMILIES[4];
 
-const hours = (m: number) => (m < 60 ? `${Math.round(m)}m` : `${(m / 60).toFixed(m < 600 ? 1 : 0)}h`);
-const pct = (n: number, d: number) => (d > 0 ? `${Math.round((100 * n) / d)}%` : '-');
+export const hours = (m: number) => (m < 60 ? `${Math.round(m)}m` : `${(m / 60).toFixed(m < 600 ? 1 : 0)}h`);
+export const pct = (n: number, d: number) => (d > 0 ? `${Math.round((100 * n) / d)}%` : '-');
 const placeName = (p: string) => (p === '@board' ? 'This machine' : p);
 
 const WHERE: Record<string, string> = {
@@ -105,7 +105,7 @@ function Bar({ b }: { b: Bucket }) {
 }
 
 /** The capacity read for the window, re-read every minute. Null until it answers, and from a server without the route. */
-function useCapacity(days: number): Capacity | null {
+export function useCapacity(days: number): Capacity | null {
   const [data, setData] = useState<Capacity | null>(null);
   useEffect(() => {
     let live = true;
@@ -119,28 +119,10 @@ function useCapacity(days: number): Capacity | null {
 }
 
 /** Slot time on duty, and the part of it spent working: off-duty minutes are not counted against the fleet. */
-function onDutyOf(data: Capacity) {
+export function onDutyOf(data: Capacity) {
   const total = data.summary.total;
   const offMinutes = data.offDuty.reduce((s, r) => s + (total.idle[r] ?? 0), 0);
   return { total, offMinutes, onDuty: total.slotMinutes - offMinutes };
-}
-
-/**
- * The one number of the capacity strip, for the Tower: how busy the berths were while anyone was on
- * duty. Always the last seven days, and it says so, so it is never read as the Metrics tab's window.
- */
-export function BusyWhileOnDuty() {
-  const data = useCapacity(7);
-  if (!data) return null;
-  if (data.summary.samples === 0) return <p className="text-xs text-gray-500">Sampling has just started.</p>;
-  const { total, onDuty } = onDutyOf(data);
-  return (
-    <div title={`${hours(total.busy)} working of ${hours(onDuty)} slot time on duty`}>
-      <div className="text-3xl font-semibold text-gray-100">{pct(total.busy, onDuty)}</div>
-      <div className="text-xs text-gray-400 mt-1">busy while on duty</div>
-      <div className="text-xs text-gray-500">last 7 days</div>
-    </div>
-  );
 }
 
 export function CapacityStrip({ days }: { days: number }) {

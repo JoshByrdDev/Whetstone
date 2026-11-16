@@ -20,7 +20,7 @@ const UNMAPPED = '(unmapped)';
 interface Column { role: string; width: string; roleOrdinal: number; widthOrdinal: number; inConfig: boolean }
 interface AreaRow { area: string; ordinal: number; hasCode: boolean; cooling: boolean; cells: Map<string, CoverageCell> }
 
-const colKey = (role: string, width: string) => `${role}\u0000${width}`;
+export const colKey = (role: string, width: string) => `${role}\u0000${width}`;
 
 export function Coverage({ project, cells, error, area, onArea, onOpenTicket, bump }: {
   project: ReconProject; cells: CoverageCell[] | null; error: string | null;
@@ -74,19 +74,6 @@ export function Coverage({ project, cells, error, area, onArea, onOpenTicket, bu
   );
 }
 
-/**
- * The grid alone, to watch rather than work: no drill-down, nothing to press. The Tower's view of
- * one project's coverage, the same table the Recon page draws.
- */
-export function CoverageTable({ cells }: { cells: CoverageCell[] }) {
-  const narrow = useNarrow();
-  const { columns, rows } = useMemo(() => shape(cells), [cells]);
-  if (rows.length === 0) return <Notice>Recon has no coverage rows for this project yet.</Notice>;
-  return narrow
-    ? <AreaCards rows={rows} columns={columns} area={null} />
-    : <Grid rows={rows} columns={columns} area={null} />;
-}
-
 /** A row's or a cell's hit area: a button where picking opens something, plain text where nothing does. */
 function Hit({ pick, current, label, className, style, children }: {
   pick?: () => void; current?: boolean; label?: string; className: string; style?: React.CSSProperties; children: React.ReactNode;
@@ -100,7 +87,7 @@ function Hit({ pick, current, label, className, style, children }: {
 }
 
 /** The mart's cells as rows and columns, in config order; the extras the config did not name last. */
-function shape(cells: CoverageCell[]): { columns: Column[]; rows: AreaRow[] } {
+export function shape(cells: CoverageCell[]): { columns: Column[]; rows: AreaRow[] } {
   const cols = new Map<string, Column>();
   const rows = new Map<string, AreaRow>();
   for (const c of cells) {

@@ -191,9 +191,7 @@ function BerthLog({ text, at, now }: { text: string; at: string; now: number }) 
  * the question you come to this header with. A parked berth shows nothing: an agent that has
  * stopped has no current line, only an old one, and an old line reads as activity.
  */
-export function AgentDock({ status, wakeAt, workers, agents, visible, events = [], hosts = [], stacked = false }: {
-  /** A line per machine, each wrapping, rather than one row: for a dock in a box (the Tower). */
-  stacked?: boolean;
+export function AgentDock({ status, wakeAt, workers, agents, visible, events = [], hosts = [] }: {
   status: Mood;
   wakeAt?: Date | null;
   /** How many berths to draw. */
@@ -289,31 +287,6 @@ export function AgentDock({ status, wakeAt, workers, agents, visible, events = [
       </div>
     );
   };
-
-  // One machine to a line, each line wrapping, for a dock that has a box of its own rather than the
-  // board header's single row (the Tower).
-  if (stacked) {
-    const line = 'text-[9px] font-semibold uppercase tracking-wider whitespace-nowrap';
-    return (
-      <div className="flex flex-col items-start gap-2.5 min-w-0 max-w-full">
-        <div className="min-w-0 max-w-full">
-          <div className={`${line} ${DOCK_TEXT.idle} mb-1`}>This machine</div>
-          <div className="flex flex-wrap items-center gap-1.5">{slots.map(slot => renderBerth(slot))}</div>
-        </div>
-        {remote.map(h => (
-          <div key={h.name} className="min-w-0 max-w-full">
-            <div className={`${line} mb-1 ${hostHold(h) ? DOCK_TEXT.stopped : DOCK_TEXT.idle}`}
-              title={`Worker host ${h.name}${hostHold(h) ? ` — ${hostHold(h)}` : ''}`}>
-              {h.name}{hostHold(h) ? ` - ${hostHold(h)}` : ''}
-            </div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {Array.from({ length: Math.max(0, h.slots) }, (_, i) => renderBerth(h.firstSlot + i, h))}
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
 
   return (
     <div className="flex items-center gap-1.5 max-sm:flex-wrap max-sm:max-w-full">
