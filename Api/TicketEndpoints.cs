@@ -38,6 +38,9 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     // slice while the slice is open (SliceBranches.InheritedFromAsync) - so it is based where the
     // code it is about exists, not on a project base that may have none of it.
     int? FoundOn = null,
+    // The Done ticket of the same project whose problem has come back as this one
+    // (Ticket.RegressionOf), which makes its origin a regression.
+    int? RegressionOf = null,
     // A discovery's route gate (Ticket.RequiresRouteReview). Absent = the project's
     // discovery.reviewRoute, off unless it says so. Refused on any other track.
     bool? RequiresRouteReview = null,
@@ -1046,6 +1049,14 @@ public static class TicketEndpoints
                 if (string.IsNullOrWhiteSpace(req.BaseBranch))
                     (inheritedBase, planUnit) = await SliceBranches.InheritedFromAsync(db, registry.GetProjectConfig(projectKey), source);
             }
+            if (req.RegressionOf is { } regressionOf)
+            {
+                var old = await db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == regressionOf);
+                if (old is null || old.ProjectKey != projectKey)
+                    return Results.BadRequest(new { error = $"Ticket #{regressionOf} is not a ticket of {projectKey}." });
+                if (old.Phase != TicketPhase.Done)
+                    return Results.BadRequest(new { error = $"Ticket #{regressionOf} is not Done, so its problem has not come back: it is still being worked." });
+            }
             var (ownBase, baseError) = await OwnBaseAsync(git, projectKey, req.BaseBranch ?? inheritedBase);
             if (baseError is not null) return Results.BadRequest(new { error = baseError });
 
@@ -1062,7 +1073,10 @@ public static class TicketEndpoints
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,
                 ownBase, branch, planUnit,
                 requiresRouteReview: req.RequiresRouteReview ?? registry.GetProjectConfig(projectKey).Discovery.ReviewRoute,
-                reconFrom: reconFrom, reconDraftId: draft?.Id, directionSource: directionSource);
+                reconFrom: reconFrom, reconDraftId: draft?.Id, directionSource: directionSource,
+                filing: new TicketFiling(
+                    FoundOn: track == TicketTrack.Delivery ? req.FoundOn : null,
+                    RegressionOf: req.RegressionOf));
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             // Photographed now, while it waits in its queue, so the first run already has the pictures.
             captures.Enqueue(t.Id);

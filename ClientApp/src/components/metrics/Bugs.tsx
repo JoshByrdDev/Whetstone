@@ -5,6 +5,7 @@ import type { BugLinkRow, BugsView, Scope } from './types';
 import { scopeQuery } from './types';
 import { Empty, Meter, NUM, Section, Sheet, Stat, TD, TH, day, mins, pct, phaseName, useJson } from './parts';
 import { RunDrawer } from './Runs';
+import { BugOrigins } from './BugOrigins';
 import type { RunFilter } from './PhaseDetail';
 
 /**
@@ -44,13 +45,18 @@ export function Bugs({ scope, bump, onPick }: { scope: Scope; bump: number; onPi
 
   if (data && !s?.bugs && links.length === 0) {
     return (
-      <Section title="Bugs traced">
-        <Empty>No bug has been traced in this window. Mark a ticket as a bug on the board and it is traced back to the tickets and runs that wrote it.</Empty>
-      </Section>
+      <>
+        <BugOrigins rows={data.origins} />
+        <Section title="Bugs traced">
+          <Empty>No bug has been traced in this window. Mark a ticket as a bug on the board and it is traced back to the tickets and runs that wrote it.</Empty>
+        </Section>
+      </>
     );
   }
 
   return (
+    <>
+    <BugOrigins rows={data?.origins} />
     <Section title="Bugs traced" meta="confirmed causes only · window is when the bug was filed">
       <div className="mb-3 flex flex-wrap gap-3">
         <Stat label="Bugs" value={s ? String(s.bugs) : '—'} muted={!s?.bugs}
@@ -99,6 +105,7 @@ export function Bugs({ scope, bump, onPick }: { scope: Scope; bump: number; onPi
       </div>
       {open !== null && <RunDrawer runId={open} onClose={() => setOpen(null)} />}
     </Section>
+    </>
   );
 }
 

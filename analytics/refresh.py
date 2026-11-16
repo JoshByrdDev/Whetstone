@@ -50,7 +50,7 @@ PUBLISHED = [
     "fct_runs", "fct_tool_calls", "fct_tickets",
     "mart_phase_breakdown", "mart_time_split", "mart_rework", "mart_tool_time",
     "mart_start_rebase", "mart_diff_size", "mart_first_pass_qa", "mart_version_trend", "mart_daily",
-    "fct_bug_links", "mart_bugs", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
+    "fct_bug_links", "mart_bugs", "mart_bugs_by_origin", "fct_experiment_tickets", "mart_experiment_arms", "mart_experiments",
     "mart_qa_rulings", "mart_escapes", "mart_rebase_returns",
     # The Discovery track's measures (docs/discovery-track-plan.md, "What is measured"; step 5).
     "fct_discovery_proposals", "mart_discovery_funnel", "mart_discovery_rejections", "mart_discovery_versions",
@@ -130,6 +130,9 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         # Where a discovery's direction came from (Ticket.DirectionSource): owner, draft,
         # draft-edited or rerun. NULL on a discovery filed before it was recorded, read as owner.
         "DirectionSource": "VARCHAR",
+        # Where the ticket came from (TicketOrigin, docs/intake-plan.md section 6), and for an intake
+        # ticket its channel. NULL on a database from before TicketOrigin, read as owner.
+        "Origin": "VARCHAR", "IntakeChannel": "VARCHAR", "RegressionOf": "INTEGER",
     },
     # The Discovery track's record (docs/discovery-track-plan.md). Lists (Jobs, Areas, ObservationIds,
     # EventIds...) are the JSON arrays EF writes; long prose (a proposal's body, a taste file's text)

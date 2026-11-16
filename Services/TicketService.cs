@@ -769,7 +769,8 @@ public class TicketService
         bool skipQaTesting = false, TicketPriority priority = TicketPriority.Normal,
         TicketTrack track = TicketTrack.Delivery, ReviewTarget? reviewTarget = null,
         bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null, int? planUnit = null,
-        bool requiresRouteReview = false, string? reconFrom = null, int? reconDraftId = null, string? directionSource = null)
+        bool requiresRouteReview = false, string? reconFrom = null, int? reconDraftId = null, string? directionSource = null,
+        TicketFiling? filing = null)
     {
         // A ticket's own base is a delivery ticket's: a review ticket is read against the target
         // its pull request names (ReviewTarget.TargetBranch).
@@ -810,6 +811,15 @@ public class TicketService
             // A name chosen at filing, which the first run creates. Not BranchMadeAt: nothing exists yet.
             Branch = track == TicketTrack.Review || string.IsNullOrWhiteSpace(branch) ? null : branch.Trim(),
         };
+        // Where it came from: the facts first, then the origin worked out from them, here and only
+        // here, so no filing path can spell it a way of its own.
+        filing ??= TicketFiling.ByOwner;
+        ticket.CreatedBy = filing.CreatedBy;
+        ticket.FoundOn = filing.FoundOn;
+        ticket.RegressionOf = filing.RegressionOf;
+        ticket.IntakeChannel = string.IsNullOrWhiteSpace(filing.IntakeChannel) ? null : filing.IntakeChannel;
+        ticket.IntakeIssueId = ticket.IntakeChannel is null ? null : filing.IntakeIssueId;
+        ticket.Origin = TicketOrigin.Of(ticket);
 
         // A Review ticket without a branch to review has nothing to work on, and the phase that
         // would claim it has no way to say so - it would fail deep in the worker, on a worktree

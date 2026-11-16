@@ -158,7 +158,13 @@ export interface BugLinkRow {
   attributedFixMinutes: number;
 }
 
-export interface BugsView { summary: BugRow | null; split: BugRow[]; links: BugLinkRow[] }
+/** mart_bugs_by_origin: bug tickets by where they came from, per week filed ('all' is the window). */
+export interface BugOriginRow {
+  week: string; origin: 'owner' | 'steward' | 'found-in-run' | 'regression' | 'intake'; channel: string;
+  filed: number; done: number; medianHoursToDone: number | null; regressions: number;
+}
+
+export interface BugsView { summary: BugRow | null; split: BugRow[]; links: BugLinkRow[]; origins?: BugOriginRow[] }
 
 /** mart_experiment_arms */
 export interface ArmRow {

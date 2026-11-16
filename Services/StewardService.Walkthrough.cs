@@ -93,10 +93,9 @@ public partial class StewardService
                 $"**Slice**\n\nSlice {u.Number}: {walk}.",
             });
             var made = await _tickets.CreateAsync(projectKey, $"Walk-through: {TicketGitService.UnitTitle(u)}", description, null, null,
-                TicketPhase.NeedsQa, skipClassroomAnalysis: true);
+                TicketPhase.NeedsQa, skipClassroomAnalysis: true, filing: new TicketFiling(CreatedBy: TransitionActor.System));
             var ticket = await _db.Tickets.FirstAsync(t => t.Id == made.Id, ct);
-            (ticket.Walkthrough, ticket.PlanUnit, ticket.PlanOutcomes, ticket.CreatedBy)
-                = (true, u.Number, walk, TransitionActor.System);
+            (ticket.Walkthrough, ticket.PlanUnit, ticket.PlanOutcomes) = (true, u.Number, walk);
             if (row is null) { _db.StewardUnits.Add(row = new StewardUnit { ProjectKey = projectKey, Unit = u.Number }); rows.Add(row); }
             row.WalkthroughTicketId = made.Id;
             var z = await OutcomeRowAsync(projectKey, u.Number, walk, ct);

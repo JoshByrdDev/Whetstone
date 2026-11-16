@@ -576,7 +576,9 @@ public class DiscoveryService
                     // owner approved it. A ticket waits in Backlog for the owner to put it in order.
                     var nt = await _tickets.CreateAsync(t.ProjectKey, p.Title, body, null, null,
                         p.Kind == ProposalKind.Bug ? TicketPhase.NeedsSpeculation : TicketPhase.Backlog,
-                        priority: t.Priority, skipClassroomAnalysis: cfg.SkipClassroomAnalysisByDefault);
+                        priority: t.Priority, skipClassroomAnalysis: cfg.SkipClassroomAnalysisByDefault,
+                        // A scout's run saw it; the owner's approval is what filed it, not where it came from.
+                        filing: new TicketFiling(FoundOn: ticketId));
                     if (p.Kind == ProposalKind.Bug) await _tickets.SetBugAsync(nt.Id, true);
                     foreach (var w in p.WorkItems) await _tickets.AddWorkItemAsync(nt.Id, w);
                     await _db.Tickets.Where(x => x.Id == nt.Id).ExecuteUpdateAsync(s => s.SetProperty(x => x.DiscoveryId, ticketId));

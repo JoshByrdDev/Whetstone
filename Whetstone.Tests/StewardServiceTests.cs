@@ -199,6 +199,7 @@ public partial class StewardServiceTests : IDisposable
         var t = await ctx.Tickets.SingleAsync();
         Assert.Equal(TicketPhase.NeedsSpeculation, t.Phase);
         Assert.Equal(TransitionActor.Steward, t.CreatedBy);
+        Assert.Equal(TicketOriginKind.Steward, t.Origin);
         Assert.Equal(1, t.PlanUnit);
         Assert.Equal("A1, A2", t.PlanOutcomes);
         Assert.Equal(TransitionActor.Steward, (await ctx.PhaseTransitions.SingleAsync()).Actor);

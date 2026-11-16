@@ -2865,6 +2865,9 @@ namespace Whetstone.Migrations
                     b.Property<int?>("DiscoveryId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("FoundOn")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("FullQaRequired")
                         .HasColumnType("INTEGER");
 
@@ -2879,6 +2882,13 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("ImplementationSummary")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("IntakeChannel")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("IntakeIssueId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<bool>("IsBug")
                         .HasColumnType("INTEGER");
@@ -2911,6 +2921,11 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("NeedsResources")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Phase")
@@ -2949,6 +2964,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("ReconFrom")
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("RegressionOf")
+                        .HasColumnType("INTEGER");
 
                     b.Property<bool>("RequiresImplementationReview")
                         .HasColumnType("INTEGER");
