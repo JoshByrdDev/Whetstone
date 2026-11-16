@@ -60,6 +60,18 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'settings', label: 'Settings' },
 ];
 
+const TAB_KEY = 'whetstone.tab';
+
+/** The tab this browser was last on, or the board when it has none or one that is no longer a tab. */
+function lastTab(): Tab {
+  try {
+    const saved = localStorage.getItem(TAB_KEY);
+    return TABS.find(t => t.id === saved)?.id ?? 'board';
+  } catch {
+    return 'board';
+  }
+}
+
 /** Out is quicker than in: the old page should already be leaving before you look for the new one. */
 const OUT_MS = 165;
 const IN_MS = 280;
@@ -79,7 +91,12 @@ export default function App() {
   // A template that moved on since a project's copy was written. Counted here, where it is seen from
   // every page, because nobody opens the Skills tab to check whether it has news.
   const skillDrift = driftTotal(useSkillDrift());
-  const [tab, setTab] = useState<Tab>('board');
+  // A reload opens where you were, not on the board: the Tower left up on a monitor has to come back
+  // as the Tower after a restart. This browser's own, so a phone and a desk each keep theirs.
+  const [tab, setTab] = useState<Tab>(lastTab);
+  useEffect(() => {
+    try { localStorage.setItem(TAB_KEY, tab); } catch { /* storage off: the board next time */ }
+  }, [tab]);
   // Whether any project has a discovery block, which is what puts Recon in the strip. Asked once on
   // load: a block added later shows the tab on the next reload, as a new project does.
   const [recon, setRecon] = useState(false);
