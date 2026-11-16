@@ -42,7 +42,8 @@ public static class DiscoveryEndpoints
 
     public static void MapDiscoveryEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/tickets/{id:int}/discovery", async (int id, DiscoveryService svc, DashboardPaths paths, DashboardDbContext db) =>
+        app.MapGet("/api/tickets/{id:int}/discovery", async (int id, DiscoveryService svc, DashboardPaths paths, DashboardDbContext db,
+            DiscoveryVoicing voicing, Whetstone.Services.Walkthrough.Narrator narrator) =>
         {
             // A discovery waiting on work that settled while nothing was watching moves on now.
             await svc.SettleAsync(id);
@@ -50,6 +51,7 @@ public static class DiscoveryEndpoints
             if (v is null) return Results.NotFound();
             var dir = paths.DiscoveryTicketDir(id);
             var ffmpeg = svc.FfmpegPath is not null;
+            var projectKey = await svc.ProjectOfAsync(id);
             return Results.Ok(new
             {
                 route = v.Route is null ? null : new
@@ -78,7 +80,15 @@ public static class DiscoveryEndpoints
                 {
                     r.Id, r.Round, r.StartedAt, r.Seconds, r.Bytes, r.VerdictAt, r.PrunedAt,
                     chapters = v.Chapters.Where(c => c.RecordingId == r.Id).Select(c => new { c.Id, c.Title, c.Job, c.VideoAt }),
+                    // Its voice-over, in the order it is heard: the run's own words where it narrated,
+                    // else its chapters and findings read aloud. A line with no clip yet plays as a caption.
+                    voiceOver = r.PrunedAt is not null ? null : voicing.Timed(v, r.Id, projectKey).Select(x => new
+                    {
+                        key = x.Line.Key, from = x.Line.From.ToString(), x.Line.Text, at = x.Line.At, x.Line.Kind, x.Clip, x.Seconds,
+                    }),
                 }),
+                // Whether the voice-over can be generated here, and how the last press is going.
+                voicing = new { unavailable = narrator.Unavailable(), state = voicing.StateOf(id) },
                 // Whether this machine can cut clips at all - the drawer says so rather than showing players that fail.
                 media = new { ffmpeg },
                 filed = v.Filed,
@@ -113,6 +123,15 @@ public static class DiscoveryEndpoints
             var (path, pruned) = await svc.RecordingAsync(id, rec);
             if (path is not null) return Results.File(path, VideoType(path), enableRangeProcessing: true);
             return pruned is null ? Results.NotFound() : Results.StatusCode(StatusCodes.Status410Gone);
+        });
+
+        // Voice every recording's lines that are not voiced yet - the drawer's Generate voice-over. No
+        // agent, nothing past this machine: the Classroom's narrator, one discovery at a time.
+        app.MapPost("/api/tickets/{id:int}/discovery/voice-over", async (int id, DiscoveryService svc, DiscoveryVoicing voicing) =>
+        {
+            if (await svc.PhaseAsync(id) is null) return Results.NotFound();
+            var (ok, message) = voicing.Start(id);
+            return ok ? Results.Accepted(value: new { message }) : Results.Conflict(new { message });
         });
 
         // A proposal's clip, cut from its recording the first time it is asked for. Nothing past the

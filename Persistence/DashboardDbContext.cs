@@ -38,6 +38,7 @@ public class DashboardDbContext : DbContext
     public DbSet<DiscoveryTasteState> DiscoveryTasteStates => Set<DiscoveryTasteState>();
     public DbSet<DiscoveryRecording> DiscoveryRecordings => Set<DiscoveryRecording>();
     public DbSet<DiscoveryChapter> DiscoveryChapters => Set<DiscoveryChapter>();
+    public DbSet<DiscoveryNarration> DiscoveryNarrations => Set<DiscoveryNarration>();
     public DbSet<ReconDismissalEvent> ReconDismissalEvents => Set<ReconDismissalEvent>();
     public DbSet<ReconDraft> ReconDrafts => Set<ReconDraft>();
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
@@ -461,6 +462,12 @@ public class DashboardDbContext : DbContext
             e.Property(c => c.Title).HasMaxLength(300);
             e.HasOne(c => c.Ticket).WithMany().HasForeignKey(c => c.TicketId).OnDelete(DeleteBehavior.Cascade);
             e.HasIndex(c => c.TicketId);
+        });
+        b.Entity<DiscoveryNarration>(e =>
+        {
+            e.Property(n => n.Text).HasMaxLength(Whetstone.Services.DiscoveryService.MaxSay);
+            e.HasOne(n => n.Ticket).WithMany().HasForeignKey(n => n.TicketId).OnDelete(DeleteBehavior.Cascade);
+            e.HasIndex(n => n.TicketId);
         });
 
         b.Entity<ReviewComment>(e =>

@@ -57,6 +57,24 @@ export interface DiscoveryRecording {
   verdictAt?: string | null;
   prunedAt?: string | null;
   chapters: { id: number; title: string; job?: number | null; videoAt?: number | null }[];
+  /** What is said over it, in the order it is heard. Null once the recording is removed. */
+  voiceOver?: VoiceLine[] | null;
+}
+
+/**
+ * One line of a recording's voice-over. `Say` is the run's own words; a run that said nothing has
+ * its chapters and observations read aloud instead (`Chapter`, `Observation`, with the
+ * observation's kind). `clip` is set once it is voiced; until then it plays as a caption for
+ * `seconds` at a reading pace.
+ */
+export interface VoiceLine {
+  key: string;
+  from: 'Say' | 'Chapter' | 'Observation';
+  text: string;
+  at: number;
+  kind?: DiscoveryObservation['kind'] | null;
+  clip?: string | null;
+  seconds: number;
 }
 
 export interface DiscoveryVisit {
@@ -130,6 +148,8 @@ export interface Discovery {
   recordings?: DiscoveryRecording[];
   /** Whether this machine can cut clips (ffmpeg). */
   media?: { ffmpeg: boolean };
+  /** Whether the voice-over can be generated here (why not, when not), and how the last press went. */
+  voicing?: { unavailable?: string | null; state?: { running: boolean; activity?: string | null; error?: string | null } | null };
   /** Which taste version each Sift and Recheck run of this discovery read; versionNumber null = no taste file yet. */
   tasteReads?: { id: number; runId?: number | null; round: number; phase: string; versionId?: number | null; versionNumber?: number | null; at: string }[];
 }
@@ -212,6 +232,13 @@ export const shotUrl = (ticketId: number, name: string) =>
 
 export const recordingUrl = (ticketId: number, recordingId: number) =>
   `/api/tickets/${ticketId}/discovery/recordings/${recordingId}`;
+
+/** Voice every recording's lines not voiced yet, with the Classroom's narrator. Returns at once. */
+export const generateVoiceOver = (ticketId: number) =>
+  fetch(`/api/tickets/${ticketId}/discovery/voice-over`, { method: 'POST' }).then(json<{ message: string }>);
+
+/** A voiced line, shared with the Classroom's: named by its content, so it never changes. */
+export const voiceClipUrl = (clip: string) => `/api/walkthrough-clips/${clip}.wav`;
 
 /** A proposal's clip. The first request cuts it from the run's recording. */
 export const clipUrl = (proposalId: number) => `/api/discovery/proposals/${proposalId}/clip`;

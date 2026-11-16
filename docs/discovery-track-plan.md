@@ -488,7 +488,7 @@ What step 3 settled, and where it departed from or fell short of the design abov
   (`p<id>.mp4`), from the recording holding most of what it cites. Around each cited moment: from
   the chapter it falls in, but at most 20s and at least 5s before it, to 4s after it or the next
   chapter, whichever comes first. Spans that overlap are joined, and the clip is capped at 90s
-  (`DiscoveryMedia.ClipSpans`). H.264 in MP4, at most 1280 wide, falling back to VP8 WebM for an
+  (`DiscoveryMedia.ClipSpans`). H.264 in MP4 at CRF 23, at most 1440 wide (was 1280 at CRF 30, which left UI text unreadable), falling back to VP8 WebM for an
   ffmpeg built without libx264. A clip of about ten seconds cut in under a second on the QA copy.
   Two cuts run at a time, one per proposal.
 - **Two ffmpegs.** The browser records with Playwright's own (`playwright install ffmpeg` in
@@ -529,8 +529,9 @@ What step 3 settled, and where it departed from or fell short of the design abov
   other ticket copies. Scout still runs on the board host only. `log_observation` copies a
   screenshot from a path on the board's own disk, and that would need the capture upload QA uses
   before a worker host could scout.
-- **Fell short / not done**: recording size is the browser's default (it scales a 1280x800
-  viewport down to 800x500), because the skill does not pass `size`. A run that stops and restarts
+- **Fell short / not done**: recording size was the browser's default (it scales the window down
+  to fit 800x800 before encoding) until the skill passed `size` - see "Voice-over and the pointer".
+  A run that stops and restarts
   its video gets a clip from only one of the recordings. Nothing re-adopts a video moved by hand.
   The verdict-time numbers ("Time to verdict", active minutes on the page) record no clip views.
 - **Proven on the QA copy**: a scout played through the board's own `/mcp` and the pinned
@@ -703,6 +704,43 @@ before there were real verdicts to measure, so every choice below is one to revi
   used approval rate as a guardrail; `mart_experiment_arms` is unchanged. Owner minutes are an
   estimate from clicks, not time on the page. Area is Sift's, not Recon's. Bugs walked past wait
   for Recon.
+
+## Voice-over and the pointer, as built
+
+The first real discovery's recording was hard to follow: 800x500 at about 0.3 Mbps, no sound, and
+nothing showing where on the page anything was happening. Three changes, one per complaint:
+
+- **Full size.** Without `size`, `browser_start_video` shrinks the capture itself to fit 800x800
+  before encoding, so nothing later can sharpen it. The run note now gives the exact arguments
+  (`Get-DiscoveryVideoArgs` in `data/worker-discovery.ps1`): the window's own size, which also makes
+  Playwright raise its bitrate to match (about 3.6 Mbps at 1440x900). The skills say "the arguments
+  your prompt gives" rather than spelling them out, so the values live in one place.
+- **The pointer.** The same call takes `cursor: true` (an animated pointer travelling to each
+  action point, pacing actions by 800ms), and `browser_video_show_actions` (`Get-DiscoveryActionArgs`)
+  names each action at the top of the frame and outlines the element it acts on, in the board's
+  amber. A hover is an action, so the skills tell the agent to `browser_hover` what it is about to
+  talk about or log: that is how it points.
+- **The voice.** A new tool, `say` (Scouting and Rechecking only, `DiscoveryNarration`), takes one
+  or two spoken sentences, first person, before the action they describe. The board stamps it like
+  a chapter and places it in the recording at adoption. Voicing is the Classroom's narrator
+  (Kokoro), on demand from the drawer's **Generate voice-over** (`DiscoveryVoicing`), and clips are
+  found by content in the same folder as the Classroom's, so nothing about voicing is stored. A
+  recording whose run never said anything - every run before `say` - is voiced from its chapter and
+  observation titles instead; the two sources are never mixed in one recording. Over 400 characters
+  is refused rather than cut, so the agent shortens it instead of being voiced mid-sentence.
+- **Playing it** (`RecordingPlayer`): a line starts when the video reaches its moment, as a caption
+  over the foot of the video (under it on a phone). When a voiced line is still speaking as the
+  video reaches the next one, the video waits for it - an agent says what it is doing faster than
+  it does it. A line not voiced yet is a caption only and holds nothing. *Voice on/off* mutes it and
+  keeps the captions.
+- **Not done**: proposal clips are silent and have no captions - the voice-over is the whole
+  recording's. The scout's thinking time is still dead air in the video; a cut that drops long
+  still stretches between lines would shorten a 9-minute run a lot.
+- **Proven on the QA copy**: a scripted run through the pinned browser server and the copy's own
+  `/mcp`, with the note's exact arguments, came out 1440x900 with pointer, outlines and action
+  titles. Its four `say` lines were placed at the right seconds and voiced from the drawer. Played
+  back, the video held at two lines until the voice finished and then went on. Checked at 375px
+  wide with no sideways scroll.
 
 ## Open for whoever builds it
 

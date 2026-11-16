@@ -350,6 +350,32 @@ public class DiscoveryChapter
     public int? RecordingId { get; set; }
 }
 
+/// <summary>
+/// One line of a run's voice-over: what the scout or a recheck said it was doing, through <c>say</c>,
+/// stamped by the board's clock as it was said - the same way a chapter is - and placed in the
+/// recording when that is adopted. The board voices it on demand with the Classroom's narrator; the
+/// clip is found by content (<see cref="Whetstone.Services.Walkthrough.Narrator.ClipId"/>), so
+/// nothing about the voicing is stored here.
+/// </summary>
+public class DiscoveryNarration
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public Ticket? Ticket { get; set; }
+
+    /// <summary>What was said, as the agent wrote it. Spoken through the project's pronunciation.</summary>
+    public string Text { get; set; } = "";
+    /// <summary>Which of the route's jobs it belongs to (0-based), when it says.</summary>
+    public int? Job { get; set; }
+    public int Round { get; set; }
+    public int? RunId { get; set; }
+
+    public DateTime At { get; set; } = DateTime.UtcNow;
+    /// <summary>Seconds into <see cref="RecordingId"/>'s video, once that recording is adopted.</summary>
+    public double? VideoAt { get; set; }
+    public int? RecordingId { get; set; }
+}
+
 /// <summary>What a verdict event records (<see cref="DiscoveryVerdictEvent.Kind"/>).</summary>
 public enum VerdictEventKind
 {

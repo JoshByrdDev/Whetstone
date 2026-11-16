@@ -39,7 +39,8 @@ public class DiscoveryService
         IReadOnlyList<int> Goals,
         int RecheckRounds,
         IReadOnlyList<DiscoveryRecording> Recordings,
-        IReadOnlyList<DiscoveryChapter> Chapters);
+        IReadOnlyList<DiscoveryChapter> Chapters,
+        IReadOnlyList<DiscoveryNarration> Narration);
 
     public sealed record FiledTicket(int Id, string? Title, string Phase, int? ProposalId, string? BlockedReason = null);
 
@@ -70,10 +71,11 @@ public class DiscoveryService
         var goals = await _tickets.RecheckGoalIdsAsync(ticketId, Math.Max(round, 1));
         var recordings = await _db.DiscoveryRecordings.AsNoTracking().Where(r => r.TicketId == ticketId).OrderBy(r => r.Id).ToListAsync();
         var chapters = await _db.DiscoveryChapters.AsNoTracking().Where(c => c.TicketId == ticketId).OrderBy(c => c.At).ToListAsync();
+        var narration = await _db.DiscoveryNarrations.AsNoTracking().Where(n => n.TicketId == ticketId).OrderBy(n => n.At).ThenBy(n => n.Id).ToListAsync();
         return new View(route, obs, visits, props,
             filed.Select(f => new FiledTicket(f.Id, f.Title, f.Phase.ToString(),
                 props.FirstOrDefault(p => p.FiledTicketId == f.Id)?.Id, f.BlockedReason)).ToList(),
-            checks, round, goals, _registry.GetProjectConfig(t.ProjectKey).Discovery.RecheckRounds, recordings, chapters);
+            checks, round, goals, _registry.GetProjectConfig(t.ProjectKey).Discovery.RecheckRounds, recordings, chapters, narration);
     }
 
     /// <summary>Catches a discovery up out of AwaitingWork if its filed tickets settled while nobody was looking.</summary>
@@ -228,6 +230,30 @@ public class DiscoveryService
         _db.DiscoveryChapters.Add(c);
         await _db.SaveChangesAsync();
         return c;
+    }
+
+    /// <summary>The longest line <c>say</c> takes: two short spoken sentences, not a paragraph.</summary>
+    public const int MaxSay = 400;
+
+    /// <summary>
+    /// One line of the run's voice-over, stamped now. Refused past <see cref="MaxSay"/> rather than cut,
+    /// so the agent says it shorter instead of being voiced mid-sentence.
+    /// </summary>
+    public async Task<DiscoveryNarration> SayAsync(int ticketId, string text, int? job)
+    {
+        var t = await InPhaseAsync(ticketId, Driving, "say");
+        text = (text ?? "").Trim();
+        if (text.Length == 0) throw new Refused("Say something: what you are about to do and why, in a sentence or two.");
+        if (text.Length > MaxSay)
+            throw new Refused($"That is {text.Length} characters; a line of voice-over is at most {MaxSay}. Say it in one or two short sentences, and put the detail in an observation's saw.");
+        var n = new DiscoveryNarration
+        {
+            TicketId = ticketId, Text = text, Job = job is >= 0 ? job : null, Round = await RoundOfAsync(t),
+            RunId = await _tickets.LiveRunIdAsync(ticketId), At = DateTime.UtcNow,
+        };
+        _db.DiscoveryNarrations.Add(n);
+        await _db.SaveChangesAsync();
+        return n;
     }
 
     public async Task<DiscoveryVisit> LogVisitAsync(int ticketId, string url, string? routePattern, string? width,

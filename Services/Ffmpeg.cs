@@ -43,14 +43,17 @@ public static partial class Ffmpeg
 
     /// <summary>
     /// The arguments that cut <paramref name="spans"/> (seconds) out of <paramref name="input"/> and join
-    /// them into one silent clip, no wider than 1280. H.264 in MP4 plays on every browser a phone has;
-    /// <paramref name="webm"/> is the fallback for an ffmpeg built without libx264.
+    /// them into one silent clip, no wider than 1440 - a recording is the browser window at its own
+    /// size, and what a clip shows is small text in a UI, so it is kept at a quality where that text
+    /// stays readable (CRF 23; most of a UI recording is still, which costs almost nothing). H.264 in
+    /// MP4 plays on every browser a phone has; <paramref name="webm"/> is the fallback for an ffmpeg
+    /// built without libx264.
     /// </summary>
     public static IReadOnlyList<string> CutArgs(string input, IReadOnlyList<(double From, double To)> spans, string output, bool webm = false)
     {
         if (spans.Count == 0) throw new ArgumentException("Nothing to cut.", nameof(spans));
         static string S(double x) => x.ToString("0.###", CultureInfo.InvariantCulture);
-        const string scale = "scale='trunc(min(1280,iw)/2)*2':-2";
+        const string scale = "scale='trunc(min(1440,iw)/2)*2':-2";
         var args = new List<string> { "-hide_banner", "-nostdin", "-y" };
         if (spans.Count == 1)
         {
@@ -63,8 +66,8 @@ public static partial class Ffmpeg
             args.AddRange(new[] { "-i", input, "-an", "-filter_complex", string.Join(";", parts) + ";" + joined, "-map", "[out]" });
         }
         args.AddRange(webm
-            ? new[] { "-c:v", "libvpx", "-b:v", "800k", "-deadline", "realtime", "-cpu-used", "8", "-f", "webm", output }
-            : new[] { "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", output });
+            ? new[] { "-c:v", "libvpx", "-b:v", "2500k", "-deadline", "realtime", "-cpu-used", "8", "-f", "webm", output }
+            : new[] { "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-f", "mp4", output });
         return args;
     }
 

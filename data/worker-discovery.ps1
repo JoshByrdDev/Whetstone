@@ -63,14 +63,31 @@ function Get-DiscoveryToolArgs {
 # What a discovery run is told on top of the track's standing rules: the commit it is on, and for a
 # scout or a recheck the one site it may use and where its screenshots go. Areas are listed when the project
 # names them, so every visit and observation can carry one.
+# The recording's own arguments, said once here and handed to the agent word for word. Left to its
+# default, the browser shrinks what it records to fit 800x800 before it encodes - 1440x900 came out
+# 800x500 and unreadable - so the size is the window's own. The cursor travels to each action point
+# (and paces actions so the eye can follow it). The overlays name each action and outline the
+# element it acts on, in the board's amber; a hover is an action, which is how the agent points.
+function Get-DiscoveryVideoArgs {
+    param([string]$Viewport = '1440x900')
+    $w = 1440; $h = 900
+    if ($Viewport -match '^(\d+)x(\d+)$') { $w = [int]$Matches[1]; $h = [int]$Matches[2] }
+    return '`{"size":{"width":' + $w + ',"height":' + $h + '},"cursor":true}`'
+}
+
+function Get-DiscoveryActionArgs {
+    return '`{"duration":1500,"position":"top","style":{"highlight":"outline:4px solid #f5a524;outline-offset:3px;border-radius:6px;background:rgba(245,165,36,0.14)","point":"width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;background:rgba(245,165,36,0.55)"}}`'
+}
+
 function Format-DiscoveryNote {
-    param([string]$Skill, [string]$Commit, [string]$Site = '', [string]$RunDir = '', [int]$MaxProposals = 6, $Areas = @())
+    param([string]$Skill, [string]$Commit, [string]$Site = '', [string]$RunDir = '', [int]$MaxProposals = 6, $Areas = @(),
+        [string]$Viewport = '1440x900')
     $lines = New-Object System.Collections.Generic.List[string]
     if ($Commit) { [void]$lines.Add("The product here is built from commit ``$Commit``: pass it as ``commit`` to every observation and visit you log.") }
     if (Test-DiscoveryDrives $Skill) {
         if ($Site) { [void]$lines.Add("The product is up at $Site, on this run's own copy of its showcase data. The browser reaches that site and nothing else.") }
         if ($RunDir) { [void]$lines.Add("Save every screenshot under ``$RunDir`` (an absolute filename there), and pass that path to ``log_observation``.") }
-        [void]$lines.Add("Record the run: ``browser_start_video`` with no filename before the first job, ``browser_video_chapter`` then ``mark_chapter`` at each job and each step worth jumping to, and ``browser_stop_video`` before you hand off. If recording will not start, carry on without it and say so in your hand-off comment.")
+        [void]$lines.Add("Record the run: before the first job, ``browser_start_video`` with no filename and exactly " + (Get-DiscoveryVideoArgs -Viewport $Viewport) + ", then ``browser_video_show_actions`` with exactly " + (Get-DiscoveryActionArgs) + ". ``browser_video_chapter`` then ``mark_chapter`` at each job and each step worth jumping to, ``say`` what you are doing as you do it, and ``browser_stop_video`` before you hand off. If recording will not start, carry on without it and say so in your hand-off comment.")
     }
     if ($Skill -eq 'sift') { [void]$lines.Add("Keep at most $MaxProposals proposals; everything else goes on the dropped list with its reason.") }
     if ($Skill -eq 'recheck') { [void]$lines.Add("Check every goal get_discovery lists (check_goal), and propose at most $MaxProposals things - fix-ups and new - held to the sift's rules.") }

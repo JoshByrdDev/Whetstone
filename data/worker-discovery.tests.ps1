@@ -58,6 +58,11 @@ Check 'the scout is not told a proposal cap' ($scout -match 'at most') $false
 Check 'the scout is told to record' ($scout -match 'browser_start_video') $true
 Check 'and to mark chapters on the board' ($scout -match 'mark_chapter') $true
 Check 'and to stop before it hands off' ($scout -match 'browser_stop_video') $true
+Check 'at the window size, not the 800px default' ($scout -match '"size":\{"width":1440,"height":900\}') $true
+Check 'with the cursor on' ($scout -match '"cursor":true') $true
+Check 'and the action overlays' ($scout -match 'browser_video_show_actions') $true
+Check 'and to say what it is doing' ($scout -match '`say`') $true
+Check 'a narrower window records at its own size' ((Format-DiscoveryNote -Skill 'scout' -Commit 'a' -Viewport '390x844') -match '"width":390,"height":844') $true
 $sift = Format-DiscoveryNote -Skill 'sift' -Commit 'abc123' -MaxProposals 4
 Check 'the sift is told the cap' ($sift -match 'at most 4 proposals') $true
 Check 'the sift is not told a site' ($sift -match 'up at') $false

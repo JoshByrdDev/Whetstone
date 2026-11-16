@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { TicketDetail } from '../types/tickets';
 import * as api from '../api/discovery';
-import type { Discovery, DiscoveryObservation, DiscoveryProposal, DiscoveryRecording, DiscoveryRoute, GoalCheck, GoalOutcome, ProposalKind, RejectReason } from '../api/discovery';
+import type { Discovery, DiscoveryObservation, DiscoveryProposal, DiscoveryRecording, DiscoveryRoute, GoalCheck, GoalOutcome, ProposalKind, RejectReason, VoiceLine } from '../api/discovery';
 import { RemovedShot } from './RemovedShot';
 import { DiscoveryTaste } from './DiscoveryTaste';
 import { transitionTicket, updateTicket } from '../api/tickets';
@@ -74,6 +74,13 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
   const load = () => api.getDiscovery(t.id).then(setD).catch(e => setError(e instanceof Error ? e.message : String(e)));
   // Reloaded whenever the ticket itself changes, so a run's new observations appear as it logs them.
   useEffect(() => { load(); }, [t.id, t.phase, t.updatedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  // While the narrator is voicing, look again every couple of seconds: each line's clip appears as it lands.
+  const voicingRunning = !!d?.voicing?.state?.running;
+  useEffect(() => {
+    if (!voicingRunning) return;
+    const timer = window.setInterval(() => { load(); }, 2000);
+    return () => window.clearInterval(timer);
+  }, [voicingRunning, t.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const obsById = useMemo(() => new Map((d?.observations ?? []).map(o => [o.id, o])), [d]);
   // The recordings' players, so an observation can jump to the moment it was seen.
@@ -229,6 +236,8 @@ export function DiscoveryPanel({ t, onChanged }: { t: TicketDetail; onChanged: (
               Clips are not set up on this machine (ffmpeg - see System, Setup check), so proposals show their screenshots and the whole recording plays here.
             </p>
           )}
+          <VoiceOverControl d={d} recordings={recordings} busy={busy}
+            onGenerate={() => run(() => api.generateVoiceOver(t.id))} />
           <div className="space-y-3">
             {recordings.map(r => (
               <RecordingPlayer key={r.id} ticketId={t.id} r={r}
@@ -436,9 +445,154 @@ function ObservationRow({ ticketId, o, onSeek }: { ticketId: number; o: Discover
   );
 }
 
-/** One run's whole recording, with its chapters as places to jump to. Removed is said, not broken. */
+/**
+ * Where a discovery's voice-over stands, and the press that generates it: voiced lines play over
+ * the recordings; lines not voiced yet play as captions until someone presses Generate - voicing
+ * runs Kokoro on this machine, so it waits to be asked, as the Classroom's does.
+ */
+function VoiceOverControl({ d, recordings, busy, onGenerate }: {
+  d: Discovery; recordings: DiscoveryRecording[]; busy: boolean; onGenerate: () => void;
+}) {
+  const lines = recordings.flatMap(r => r.voiceOver ?? []);
+  if (lines.length === 0) return null;
+  const unvoiced = lines.filter(l => !l.clip).length;
+  const state = d.voicing?.state;
+  const own = lines.some(l => l.from === 'Say');
+  const source = own ? 'in the run’s own words' : 'its chapters and findings read aloud - this run did not narrate itself';
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500 leading-snug">
+      <span className="min-w-0">
+        Voice-over, {source}{unvoiced === 0 ? '.' : ` - ${unvoiced} of ${lines.length} line${lines.length === 1 ? '' : 's'} not voiced yet, shown as captions.`}
+      </span>
+      {state?.running ? (
+        <span className="text-gray-400">{state.activity ?? 'Voicing'}…</span>
+      ) : unvoiced > 0 && (
+        d.voicing?.unavailable
+          ? <span title={d.voicing.unavailable}>Voice is not set up on this machine.</span>
+          : <button type="button" disabled={busy} onClick={onGenerate}
+              className="orbit-tap px-2 py-0.5 rounded border border-hair text-gray-300 hover:text-gray-100 disabled:opacity-50">
+              Generate voice-over
+            </button>
+      )}
+      {state?.error && !state.running && <span className="text-rose-300">{state.error}</span>}
+    </div>
+  );
+}
+
+/**
+ * Plays a recording's voice-over against its video. A line starts when the video reaches its
+ * moment; when a voiced line is still speaking as the video reaches the next one, the video waits
+ * for it - the scout says what it is doing faster than it does it, and a watcher needs both. A seek
+ * starts over from the first line after the new place. With the voice off the lines still show as
+ * captions and nothing waits.
+ */
+function useVoiceOver(video: React.MutableRefObject<HTMLVideoElement | null>, lines: VoiceLine[], voiceOn: boolean) {
+  const [current, setCurrent] = useState<VoiceLine | null>(null);
+  const st = useRef({ next: 0, speaking: false, held: false, until: 0, shown: null as VoiceLine | null });
+  const audio = useRef<HTMLAudioElement | null>(null);
+  const on = useRef(voiceOn);
+  on.current = voiceOn;
+
+  useEffect(() => {
+    const v = video.current;
+    if (!v || lines.length === 0) return;
+    const a = audio.current ?? (audio.current = new Audio());
+    const s = st.current;
+    let frame = 0;
+
+    const show = (l: VoiceLine | null) => { s.shown = l; setCurrent(l); };
+    const finish = () => {
+      s.speaking = false;
+      if (s.held) { s.held = false; void v.play().catch(() => { /* the user can press play */ }); }
+    };
+    const stopLine = () => { a.pause(); a.removeAttribute('src'); s.speaking = false; s.held = false; };
+    const restartFrom = (t: number) => {
+      stopLine();
+      s.next = lines.findIndex(l => l.at >= t - 0.25);
+      if (s.next < 0) s.next = lines.length;
+      // What was last said before here stays on screen until the next line, as a caption would.
+      const before = [...lines].reverse().find(l => l.at < t - 0.25 && t - l.at < l.seconds);
+      show(before ?? null);
+    };
+    a.onended = finish;
+
+    const tick = () => {
+      const t = v.currentTime;
+      const l = lines[s.next];
+      if (s.speaking && !a.src && performance.now() >= s.until) finish();
+      // A caption stays a moment past its line, then clears rather than hanging over a long silence.
+      if (!s.speaking && s.shown && t > s.shown.at + s.shown.seconds + 2.5) show(null);
+      if (l && t >= l.at) {
+        if (s.speaking && on.current && a.src) {
+          // Still speaking: the video waits for the voice.
+          if (!v.paused) { s.held = true; v.pause(); }
+        } else {
+          s.next++;
+          show(l);
+          s.speaking = true;
+          if (on.current && l.clip) {
+            a.src = api.voiceClipUrl(l.clip);
+            void a.play().catch(() => finish());
+          } else {
+            a.removeAttribute('src');
+            s.until = performance.now() + l.seconds * 1000;
+          }
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+
+    const onSeeked = () => restartFrom(v.currentTime);
+    const onPause = () => { if (!s.held) a.pause(); };
+    const onPlay = () => { if (s.speaking && a.src && a.paused) void a.play().catch(() => finish()); };
+    v.addEventListener('seeked', onSeeked);
+    v.addEventListener('pause', onPause);
+    v.addEventListener('play', onPlay);
+    restartFrom(v.currentTime);
+    frame = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(frame);
+      v.removeEventListener('seeked', onSeeked);
+      v.removeEventListener('pause', onPause);
+      v.removeEventListener('play', onPlay);
+      stopLine();
+    };
+  }, [video, lines]);
+
+  // Turning the voice off mid-line stops it and lets a waiting video go on.
+  useEffect(() => {
+    if (voiceOn) return;
+    const a = audio.current;
+    if (a?.src) { a.pause(); a.removeAttribute('src'); st.current.until = 0; }
+    if (st.current.held) { st.current.held = false; void video.current?.play().catch(() => { /* the user can press play */ }); }
+  }, [voiceOn, video]);
+
+  return current;
+}
+
+/** The line being said, over the foot of the video at a desk and under it on a phone. */
+function VoiceCaption({ line }: { line: VoiceLine | null }) {
+  if (!line) return null;
+  const tag = line.from === 'Observation' && line.kind ? `Noticed · ${OBS_LABEL[line.kind]}` : line.from === 'Chapter' ? 'Chapter' : null;
+  return (
+    <div className="sm:pointer-events-none sm:absolute sm:inset-x-3 sm:bottom-12 flex justify-center mt-1.5 sm:mt-0">
+      <div key={line.key} className="orbit-swap max-w-[46rem] min-w-0 rounded-lg bg-black/80 px-3 py-1.5 text-[13px] sm:text-[15px] leading-snug text-gray-100 text-center">
+        {tag && <span className="mr-1.5 text-[10px] uppercase tracking-wide text-amber-300/90">{tag}</span>}
+        {line.text}
+      </div>
+    </div>
+  );
+}
+
+/** One run's whole recording, with its chapters as places to jump to and its voice-over. Removed is said, not broken. */
 function RecordingPlayer({ ticketId, r, register }: { ticketId: number; r: DiscoveryRecording; register: (el: HTMLVideoElement | null) => void }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const [voiceOn, setVoiceOn] = useState(true);
+  // By content, not identity: the drawer reloads every couple of seconds while voicing, and a new
+  // array of the same lines must not restart the line being heard.
+  const linesKey = JSON.stringify(r.voiceOver ?? []);
+  const lines = useMemo(() => JSON.parse(linesKey) as VoiceLine[], [linesKey]);
+  const line = useVoiceOver(ref, lines, voiceOn);
   const who = r.round === 0 ? 'The scout' : `Recheck ${r.round}`;
   const length = r.seconds > 0 ? clock(r.seconds) : null;
   if (r.prunedAt) {
@@ -453,11 +607,24 @@ function RecordingPlayer({ ticketId, r, register }: { ticketId: number; r: Disco
     v.currentTime = at;
     void v.play().catch(() => { /* the user can press play */ });
   };
+  const voiced = lines.some(l => l.clip);
   return (
     <div className="space-y-1.5">
-      <div className="text-[11px] text-gray-500">{who}{length ? ` · ${length}` : ''}{r.verdictAt ? ' · kept a week after its verdict' : ''}</div>
-      <video ref={el => { ref.current = el; register(el); }} src={api.recordingUrl(ticketId, r.id)} controls preload="metadata"
-        className="w-full max-w-full rounded-lg border border-hair bg-black" />
+      <div className="flex items-center gap-2 text-[11px] text-gray-500">
+        <span className="min-w-0 truncate">{who}{length ? ` · ${length}` : ''}{r.verdictAt ? ' · kept a week after its verdict' : ''}</span>
+        {voiced && (
+          <button type="button" onClick={() => setVoiceOn(x => !x)} aria-pressed={voiceOn}
+            title={voiceOn ? 'Mute the voice-over; its lines stay as captions' : 'Play the voice-over'}
+            className="orbit-tap ml-auto shrink-0 px-2 py-0.5 rounded border border-hair text-gray-400 hover:text-gray-200">
+            Voice {voiceOn ? 'on' : 'off'}
+          </button>
+        )}
+      </div>
+      <div className="relative">
+        <video ref={el => { ref.current = el; register(el); }} src={api.recordingUrl(ticketId, r.id)} controls preload="metadata"
+          className="w-full max-w-full rounded-lg border border-hair bg-black" />
+        <VoiceCaption line={line} />
+      </div>
       {r.chapters.some(c => c.videoAt != null) && (
         <div className="flex flex-wrap gap-1.5">
           {r.chapters.filter(c => c.videoAt != null).map(c => (

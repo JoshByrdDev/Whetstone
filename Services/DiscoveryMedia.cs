@@ -175,6 +175,13 @@ public static partial class DiscoveryMedia
                 c.RecordingId = rec.Id;
                 c.VideoAt = Math.Round(Math.Clamp((c.At - start).TotalSeconds, 0, length), 2);
             }
+            var said = (await db.DiscoveryNarrations.Where(n => n.TicketId == ticketId && n.RecordingId == null).ToListAsync(ct))
+                .Where(n => n.At >= from && n.At <= to).ToList();
+            foreach (var n in said)
+            {
+                n.RecordingId = rec.Id;
+                n.VideoAt = Math.Round(Math.Clamp((n.At - start).TotalSeconds, 0, length), 2);
+            }
             // Which run and round it was: whatever was logged during it says.
             var rounds = obs.Select(o => (o.Round, o.RunId)).Concat(chapters.Select(c => (c.Round, c.RunId))).ToList();
             if (rounds.Count > 0)

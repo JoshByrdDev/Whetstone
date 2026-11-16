@@ -45,7 +45,9 @@ Most projects are one repo, and this section does not apply to them. When your p
 
 ## Recording - as the scout records
 
-- **`browser_start_video` with no filename before the first goal**, one recording for the whole run; **`browser_stop_video` before you hand off**.
+- **Start recording before the first goal**, with the arguments your prompt gives (`browser_start_video` at the full window size, with the cursor on, then `browser_video_show_actions`), one recording for the whole run; **`browser_stop_video` before you hand off**.
+- **Say what you are doing, as you do it: `say`**, as the scout does - one or two short spoken sentences, first person, before the action they describe: which goal you are checking and how, what you expected, what you found. "This one was meant to let me take sign-ups. Let me try booking the class as a customer." It is the recording's voice-over; plain words a person would say aloud, no markdown, URLs or ids.
+- **Point at what you are talking about**: `browser_hover` it before you `say` something about it or log it, so the pointer and outline are on it in the video.
 - **A chapter at each goal and each job**: `browser_video_chapter` and `mark_chapter` **together, in the same message**, with the same title. The owner judges a goal by its clip, and chapters are where clips are cut.
 - **The screenshot is the moment**: an observation is placed in the video by when its screenshot was taken.
 - If recording will not start, carry on without it and say so in your hand-off comment.

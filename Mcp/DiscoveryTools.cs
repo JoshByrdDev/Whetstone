@@ -8,8 +8,8 @@ namespace Whetstone.Mcp;
 /// <summary>
 /// The Discovery track's tools, on the workers' own <c>/mcp</c> (docs/discovery-track-plan.md).
 /// <para>
-/// Each one is refused outside its phase - a route only while Charting, observations, visits and
-/// chapters only while Scouting or Rechecking, proposals only while Sifting or Rechecking, a goal's outcome only
+/// Each one is refused outside its phase - a route only while Charting, observations, visits,
+/// chapters and the voice-over (<c>say</c>) only while Scouting or Rechecking, proposals only while Sifting or Rechecking, a goal's outcome only
 /// while Rechecking - which is how a phase sees only its own part of the
 /// record without a second server. THERE IS NO TOOL THAT APPROVES, FILES OR ANSWERS: the verdict and
 /// Complete are REST routes a person presses, so a run that thinks a proposal is good has said so and
@@ -166,6 +166,25 @@ public class DiscoveryTools
         {
             var c = await svc.MarkChapterAsync(ticketId, title, job);
             return new { c.Id, c.At };
+        }
+        catch (DiscoveryService.Refused e) { return Refusal(e); }
+    }
+
+    [McpServerTool, Description(
+        "SCOUTING AND RECHECKING ONLY. Say what you are doing, as you do it: one or two short spoken sentences, first person, as the person on the route - " +
+        "what you are about to try and why, or what you just found. It is the recording's voice-over: the board stamps it now and voices it over the video, " +
+        "so call it just BEFORE the action it describes, at each step a watcher would not otherwise follow (a new job, a choice, a wait, a surprise, a dead end). " +
+        "Plain words a person would say aloud - no markdown, URLs, ids or quoted button names. At most 400 characters; the detail goes in an observation's saw. " +
+        "Point at what you are talking about first (browser_hover) so the video shows it. Harmless when the run is not being recorded.")]
+    public static async Task<object> Say(DiscoveryService svc,
+        [Description("The local ticket id of the discovery.")] int ticketId,
+        [Description("What you would say aloud right now, in one or two short sentences.")] string text,
+        [Description("Which of the route's jobs you are on, 0-based.")] int? job = null)
+    {
+        try
+        {
+            var n = await svc.SayAsync(ticketId, text, job);
+            return new { n.Id, n.At };
         }
         catch (DiscoveryService.Refused e) { return Refusal(e); }
     }

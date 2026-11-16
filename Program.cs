@@ -108,6 +108,7 @@ builder.Services.AddSingleton<ImprovementApplier>();
 // Executes one analysis and nothing else — when it runs is not its decision.
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.Narrator>();
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.WalkthroughVoicing>();
+builder.Services.AddSingleton<DiscoveryVoicing>();
 builder.Services.AddSingleton<SetupCheckService>(sp => new SetupCheckService(
     sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<DashboardPaths>(),
     sp.GetRequiredService<Whetstone.Services.Walkthrough.Narrator>(),

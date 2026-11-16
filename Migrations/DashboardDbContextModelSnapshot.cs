@@ -522,6 +522,45 @@ namespace Whetstone.Migrations
                     b.ToTable("DiscoveryGoalChecks");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.DiscoveryNarration", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("At")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("Job")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RecordingId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("RunId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<double?>("VideoAt")
+                        .HasColumnType("REAL");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.ToTable("DiscoveryNarrations");
+                });
+
             modelBuilder.Entity("Whetstone.Models.DiscoveryObservation", b =>
                 {
                     b.Property<int>("Id")
@@ -3222,6 +3261,17 @@ namespace Whetstone.Migrations
                 });
 
             modelBuilder.Entity("Whetstone.Models.DiscoveryGoalCheck", b =>
+                {
+                    b.HasOne("Whetstone.Models.Ticket", "Ticket")
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Ticket");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.DiscoveryNarration", b =>
                 {
                     b.HasOne("Whetstone.Models.Ticket", "Ticket")
                         .WithMany()
