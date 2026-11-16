@@ -99,6 +99,10 @@ public static class OwnerTaskEndpoints
         g.MapPost("/{id}/reopen", async (string id, OwnerTaskWord b, OwnerTaskService s, CancellationToken ct) =>
             OwnerTaskService.ParseRef(id) is { } n ? Reply(await s.ReopenAsync(n, b.Why, By(b.By), ct)) : Results.NotFound());
 
+        // Not a job but reading for a release: words, terms, docs, note or migration.
+        g.MapPost("/{id}/to-release-note", async (string id, OwnerTaskWord b, OwnerTaskService s, CancellationToken ct) =>
+            OwnerTaskService.ParseRef(id) is { } n ? Reply(await s.ToReleaseNoteAsync(n, b.Text, By(b.By), ct)) : Results.NotFound());
+
         g.MapPost("/{id}/note", async (string id, OwnerTaskWord b, OwnerTaskService s, CancellationToken ct) =>
             OwnerTaskService.ParseRef(id) is { } n ? Reply(await s.AppendAsync(n, b.Text ?? "", null, By(b.By), ct)) : Results.NotFound());
     }

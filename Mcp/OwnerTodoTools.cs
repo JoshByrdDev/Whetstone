@@ -61,7 +61,10 @@ public class OwnerTodoTools
         "Put something on the owner's to-do list: a thing ONLY the owner can do, that the work needs. A secret or API key from a vendor's " +
         "console; an account or subscription; infrastructure outside the local stack; a setting in a shared environment; a production or " +
         "shared-environment deploy (write the runbook to the branch first, and point at it); wording only they can approve. Not for anything " +
-        "you can do yourself, and not for a question - a decision is a Blocked ticket's question, not a to-do. " +
+        "you can do yourself, and not for a question - a decision is a Blocked ticket's question, not a to-do. Not for wording to read " +
+        "(a 'words' or 'terms' note for release) and not for a line for a document (the worker writes it, or a 'docs' note for release): " +
+        "both are refused as not-a-job. The TITLE is one plain line in everyday words, at most 110 characters, saying what to do and why " +
+        "it matters - 'Open the analytics account so the warehouse has somewhere to load', not file paths or code. " +
         "Write the body so a fresh Claude session can walk the owner through it with nothing else in front of it, under these headings: " +
         "**Why** (what it unblocks), **Where** (the console URL, the account, the region), **Steps**, **Done when** (something checkable: a " +
         "command, a URL, a value present in a named file), **Hand back** (where the result goes: the file and the key name). " +

@@ -476,6 +476,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
   const todos = r?.todos ?? [];
   const counts = r ? [
     [r.migrations, 'migration to tick off', 'migrations to tick off'],
+    [r.terms ?? 0, 'set of terms to read', 'sets of terms to read'],
   ].filter(([n]) => (n as number) > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`)
     .concat(todos.length > 0 ? [`${todos.map(t => t.ref).join(', ')} on your to-do list`] : []) : [];
   const box = (tone: string, children: ReactNode) => (

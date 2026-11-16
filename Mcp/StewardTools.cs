@@ -382,21 +382,21 @@ public class StewardTools
         s.SuggestPromoteAsync(project, decision, why, withdraw);
 
     [McpServerTool(Name = "steward_note_for_release"), Description(
-        "After merging a ticket that leaves the owner something to read before the base branch is released: a migration and " +
-        "what it adds, a line a worker wrote for the owner's own documents (copy it as written, with the file and section it " +
-        "names), a step to do by hand. A few lines, facts only. A ticket that leaves nothing gets no entry. One note is one " +
-        "kind of thing, because the owner reads them by kind: a ticket that leaves a migration and wording to check gets two " +
-        "notes. Start with the one sentence that would do if it were all the owner read. A 'config' or 'action' note is a job, not reading: it " +
-        "goes on the owner's to-do list as an item that holds this release (the same as owner_todo_add with holdsRelease), so write it " +
-        "the way owner_todo_add asks - why, where, steps, done when, where the result goes - and expect a likely-duplicate refusal to be " +
-        "answered with owner_todo_find and owner_todo_append.")]
+        "After merging a ticket that leaves the owner something to read before its slice is released, or something only their hands " +
+        "can do. A few lines, facts only, and the first sentence in plain everyday words: what it is and why the owner would care, " +
+        "before any path or code. A ticket that leaves nothing gets no entry. One note is one kind of thing: a ticket that leaves a " +
+        "migration and words to read gets two notes. NOT for words only an admin sees (note nothing), and NOT for a line for a " +
+        "document a worker may edit - the worker writes that itself, on its branch.")]
     public static Task<StewardReply> NoteForRelease(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
         [Description("What the owner should read or do, in a few lines.")] string text,
         [Description("What kind of thing it is. 'migration': the merge carries a migration or any change to the schema or data " +
-            "that runs on release. 'config': releasing needs something set up outside the code - a variable, a secret, " +
-            "infrastructure, an account. 'action': something for the owner to do, check or approve - wording to read, a line " +
-            "for their own documents, a step by hand. 'note': only to know.")] string kind) =>
+            "that runs on release (holds the release until ticked). 'config': something only the owner's hands can set up outside " +
+            "the code - a secret, an account, infrastructure, a scheduled task - which goes on their to-do list holding this release. " +
+            "'action': any other job for their hands, such as a test with their own keys or a step at deploy (also a to-do). " +
+            "'words': words a customer reads that no decision gave (read with the release; holds nothing). 'terms': words about money, " +
+            "consent or legal terms a customer agrees to or is charged by (holds the release until read). 'docs': a line for a document " +
+            "no branch may edit - the conventions file, CLAUDE.md - as the worker wrote it. 'note': only to know.")] string kind) =>
         s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text, kind);
 }
 

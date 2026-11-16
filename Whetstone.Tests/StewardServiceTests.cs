@@ -1460,6 +1460,33 @@ public partial class StewardServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Terms_hold_a_release_and_words_and_docs_do_not()
+    {
+        var id = await Built(1, "A1, A2");
+        await Begin();
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
+        Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "New hint under the short link box.", "words"))).Answer);
+        Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "A line for CLAUDE.md.", "docs"))).Answer);
+        Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "The charge-terms box now says who charges.", "terms"))).Answer);
+
+        Assert.Equal("notes-outstanding", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+        var terms = Entries().Single(e => e.Release == StewardReleaseKind.Terms).Id;
+        await In(s => s.OwnerMarksEntryAsync("alpha", terms, true, null));
+        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+    }
+
+    [Fact]
+    public async Task Wording_sent_as_an_action_is_refused_as_not_a_job()
+    {
+        var id = await AtReview();
+        await Begin();
+        var r = await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Read the new words on the invite phone.", "action"));
+        Assert.Equal("not-a-job", r.Answer);
+        Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.BeforeRelease);
+    }
+
+    [Fact]
     public async Task A_note_with_no_unit_goes_out_with_the_next_release()
     {
         var loose = await AtReview();   // a ticket filed outside the plan

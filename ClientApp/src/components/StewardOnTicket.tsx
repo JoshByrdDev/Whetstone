@@ -7,6 +7,9 @@ const RELEASE_WORD: Record<string, string> = {
   Migration: 'Before a release: a migration',
   Config: 'Before a release: to set up',
   Action: 'Before a release: yours to do',
+  Words: 'Before a release: words to read',
+  Terms: 'Before a release: terms to read',
+  Docs: 'Before a release: a line for CLAUDE.md',
   Note: 'Before a release: to know',
 };
 

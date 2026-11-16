@@ -22,11 +22,14 @@ const KINDS: { id: ReleaseKind; title: string; says: string; tier: keyof typeof 
   // Filing a note under either of these moves it to the to-do list, where it holds the release instead.
   { id: 'Config', title: 'To set up', says: 'Something outside the code: a variable, a secret, infrastructure, an account. Moves it to your to-do list.', tier: 'gate' },
   { id: 'Action', title: 'Yours to do', says: 'Something to do, check or approve. Moves it to your to-do list.', tier: 'active' },
+  { id: 'Terms', title: 'Terms', says: 'Words about money, consent or legal terms a customer agrees to. These hold the release until you have read them.', tier: 'blocked' },
+  { id: 'Words', title: 'Words', says: 'New words a customer reads, proposed by the ticket. Nothing waits on them: file a ticket to change one.', tier: 'queue' },
+  { id: 'Docs', title: 'For CLAUDE.md', says: 'A line a worker wrote for a file no branch may edit. Paste it in, or do not.', tier: 'backlog' },
   { id: 'Note', title: 'To know', says: 'Nothing to do: how a thing behaves, a limit, a reading somebody took.', tier: 'queue' },
 ];
 
 /** What is read before a release, rather than done: the rest is on the owner's to-do list. */
-const READ = KINDS.filter(k => k.id === 'Migration' || k.id === 'Note');
+const READ = KINDS.filter(k => k.id !== 'Config' && k.id !== 'Action');
 
 type Mark = (id: number, mark: { handled?: boolean; release?: ReleaseKind }) => Promise<void>;
 

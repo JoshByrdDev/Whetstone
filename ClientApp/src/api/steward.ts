@@ -109,7 +109,7 @@ export interface StewardEntry {
 /** A ruling the owner has to look at: new, or reading a decision that no longer holds. */
 export const unseenRuling = (e: StewardEntry) => e.kind === 'Ruling' && !e.reversedAt && !e.retired && (!e.handledAt || !!e.flagged);
 
-export type ReleaseKind = 'Migration' | 'Config' | 'Action' | 'Note';
+export type ReleaseKind = 'Migration' | 'Config' | 'Action' | 'Words' | 'Terms' | 'Docs' | 'Note';
 
 export interface StewardOutcomeRow {
   outcome: string;
@@ -223,6 +223,7 @@ export interface StewardPlanUnitView {
   /** What its release still asks, by kind; null for a unit nobody has agreed. */
   release?: {
     migrations: number; config: number; actions: number; toKnow: number; outstanding: number;
+    words?: number; terms?: number; docs?: number;
     /** The open to-do items that hold this release (config and actions are counted from these). */
     todos?: { ref: string; id: number; title: string; kind: string }[];
   } | null;

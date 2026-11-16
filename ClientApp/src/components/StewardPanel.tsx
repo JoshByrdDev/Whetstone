@@ -112,7 +112,7 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
   // What is waiting on you is counted by the list itself (WaitingOnYou), which is what reads the flags.
   const [waitingCount, setWaitingCount] = useState(0);
   // What a release still asks of its owner: the notes that are something to do, not only to know.
-  const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && !e.gone && e.release !== 'Note').length;
+  const outstanding = entries.filter(e => e.kind === 'BeforeRelease' && !e.handledAt && !e.gone && (e.release === 'Migration' || e.release === 'Terms')).length;
   // Rulings the steward made that the owner has not yet seen: they apply already, so they count.
   const unseen = entries.filter(unseenRuling).length;
   const recordCount = outstanding + unseen;

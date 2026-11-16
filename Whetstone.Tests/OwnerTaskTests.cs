@@ -212,4 +212,44 @@ public class OwnerTaskTests : IDisposable
         Assert.Equal(new[] { b, a }, list.Select(t => t.Id));
         Assert.Contains("Holds a release", OwnerTaskService.ListMarkdown(list, "http://localhost:5338"));
     }
+
+    [Theory]
+    [InlineData("Read the new trial-pricing words (#12, ruling 3).")]
+    [InlineData("Check two pieces of wording a member's customers still see")]
+    [InlineData("A line for docs/PLAN.md (slice 4, D1), as the worker wrote it")]
+    [InlineData("Add a CLAUDE.md line (Database conventions) from #20")]
+    [InlineData("Update slice 9's wording for the portal tabs")]
+    [InlineData("Two lines for your docs, from #21")]
+    [InlineData("Set `WarehouseHashKey` before the push")]
+    public async Task Wording_doc_lines_and_unreadable_titles_are_not_jobs(string title)
+    {
+        var r = await With(s => s.AddAsync(Draft(title: title), "steward"));
+        Assert.Equal("not-a-job", r.Answer);
+        // The owner may still write whatever they like on their own list.
+        Assert.NotEqual("not-a-job", (await With(s => s.AddAsync(Draft(title: title, notDup: new[] { 1, 2, 3 }), "owner"))).Answer);
+    }
+
+    [Theory]
+    [InlineData("Open the analytics account so the warehouse has somewhere to load")]
+    [InlineData("Set the warehouse hash secret before the next deploy, or it fails")]
+    [InlineData("Paste the new importer prompt into the scheduled task")]
+    public void Plain_jobs_pass(string title) => Assert.Null(OwnerTaskService.NotAJob(title));
+
+    [Fact]
+    public async Task An_item_that_is_reading_moves_to_the_release_notes()
+    {
+        var ticket = await Ticket(TicketPhase.Done);
+        var id = IdOf(await With(s => s.AddAsync(new OwnerTaskDraft("alpha", "Customer words on the plans table", "They say None at $0.", "action", TicketId: ticket), "owner")));
+        Assert.Equal("bad-request", (await With(s => s.ToReleaseNoteAsync(id, "action"))).Answer);
+        Assert.Equal("recorded", (await With(s => s.ToReleaseNoteAsync(id, "words"))).Answer);
+
+        await using var ctx = NewCtx();
+        var t = await ctx.OwnerTasks.SingleAsync();
+        Assert.Equal(OwnerTaskStatus.Dropped, t.Status);
+        var note = await ctx.StewardEntries.SingleAsync();
+        Assert.Equal(StewardReleaseKind.Words, note.Release);
+        Assert.Equal(ticket, note.TicketId);
+        Assert.Contains("None at $0", note.Text);
+        Assert.Empty(await ctx.Comments.ToListAsync());
+    }
 }

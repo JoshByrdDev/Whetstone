@@ -1825,7 +1825,7 @@ public partial class StewardService
         if (kind == StewardEntryKind.BeforeRelease)
         {
             if (ParseRelease(release) is not { } rk)
-                return Refuse("bad-request", "Say what kind of note it is: migration, config, action or note. One note, one kind - "
+                return Refuse("bad-request", "Say what kind of note it is: migration, config, action, words, terms, docs or note. One note, one kind - "
                     + "a ticket that leaves a migration and wording to check gets two notes.");
             releaseKind = rk;
         }
@@ -1845,6 +1845,8 @@ public partial class StewardService
                 "added" or "merged" => new StewardReply("noted", r.Why ?? "On the owner's to-do list, holding this release.", r.Data),
                 "possible-duplicate" => Refuse("possible-duplicate", r.Why + " For a release, add with owner_todo_add and holdsRelease true, "
                     + "or append to the one it is and say it holds this release.", r.Data),
+                "not-a-job" => Refuse("not-a-job", r.Why + (releaseKind == StewardReleaseKind.Config || releaseKind == StewardReleaseKind.Action
+                    ? " If it is a job for the owner's hands after all, owner_todo_add with holdsRelease true takes a plain title of its own." : ""), r.Data),
                 _ => Refuse(r.Answer, r.Why ?? "", r.Data),
             };
         }
@@ -2316,7 +2318,7 @@ public partial class StewardService
         if (release is not null)
         {
             if (e.Kind != StewardEntryKind.BeforeRelease) return Refuse("bad-request", "Only a note for a release has a kind.");
-            if (ParseRelease(release) is not { } rk) return Refuse("bad-request", "The kind is migration, config, action or note.");
+            if (ParseRelease(release) is not { } rk) return Refuse("bad-request", "The kind is migration, config, action, words, terms, docs or note.");
             e.Release = rk;
         }
         if (handled is { } h) e.HandledAt = h ? e.HandledAt ?? DateTime.UtcNow : null;
@@ -2447,8 +2449,9 @@ public partial class StewardService
         return notes.ByUnit.SelectMany(kv => kv.Value.Select(n => (n.Id, Unit: kv.Key))).ToDictionary(x => x.Id, x => x.Unit);
     }
 
+    /// <summary>What a release waits on from the record: an unticked migration, or terms a customer agrees to.</summary>
     private static bool Outstanding(StewardEntry e) =>
-        e.HandledAt is null && (e.Release ?? StewardReleaseKind.Note) != StewardReleaseKind.Note;
+        e.HandledAt is null && e.Release is StewardReleaseKind.Migration or StewardReleaseKind.Terms;
 
     /// <summary>
     /// The slices as their owner reads them: every slice with its own name, its spec, and its outcomes
@@ -2545,7 +2548,10 @@ public partial class StewardService
                         config = todo.Count(t => t.Kind is OwnerTaskKind.Secret or OwnerTaskKind.Config or OwnerTaskKind.Infra or OwnerTaskKind.Account),
                         actions = todo.Count(t => t.Kind is OwnerTaskKind.Action or OwnerTaskKind.Deploy),
                         todos = todo.Select(t => new { @ref = t.Ref, t.Id, t.Title, kind = t.Kind.ToString().ToLowerInvariant() }),
-                        toKnow = Left(StewardReleaseKind.Note),
+                        toKnow = Left(StewardReleaseKind.Note) + Left(StewardReleaseKind.Words) + Left(StewardReleaseKind.Docs),
+                        words = Left(StewardReleaseKind.Words),
+                        terms = Left(StewardReleaseKind.Terms),
+                        docs = Left(StewardReleaseKind.Docs),
                         outstanding,
                     },
                     progress = new { p.Percent, p.Done, p.InProgress, p.NotStarted, p.Outcomes },
@@ -2811,7 +2817,7 @@ public partial class StewardService
         if (outstanding > 0 || todos.Count > 0)
             return Refuse("notes-outstanding", string.Join(" ", new[]
             {
-                outstanding > 0 ? $"{outstanding} migration note{(outstanding == 1 ? "" : "s")} for this release {(outstanding == 1 ? "is" : "are")} not ticked off." : null,
+                outstanding > 0 ? $"{outstanding} note{(outstanding == 1 ? "" : "s")} for this release - a migration, or terms a customer agrees to - {(outstanding == 1 ? "is" : "are")} not ticked off." : null,
                 todos.Count > 0 ? $"{string.Join(", ", todos.Select(t => t.Ref))} on your to-do list {(todos.Count == 1 ? "holds" : "hold")} this release." : null,
             }.OfType<string>()), new { todos = todos.Select(t => new { @ref = t.Ref, t.Title }) });
 

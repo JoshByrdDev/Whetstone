@@ -164,6 +164,40 @@ public class OwnerTaskService
         return Math.Max(jaccard, contain * 0.8) * 0.85 + bodyHit * 0.15;
     }
 
+    /// <summary>The longest title an agent may write: one plain line, read at a glance.</summary>
+    public const int AgentTitleMax = 110;
+
+    private static readonly Regex WordingTitle = new(
+        @"^\W*(read|check|review|look at|confirm|update|reword|change)\b.{0,80}\b(word|words|wording|copy|sentence|sentences|hint|label|text|phrasing)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex DocsTitle = new(
+        @"\b(line|lines|wording|heading|entry|entries|sentence)\b.{0,60}\b(for|to|in|into)\b.{0,40}(docs?\b|claude\.md|plan\.md|phase-b|\bspec\b|runbook|conventions)"
+        + @"|^\W*(add|update|reword|change|paste)\b.{0,80}(claude\.md|plan\.md|phase-b|\.md\b|\bslice \d+\b.{0,20}\b[A-Z]\d\b)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex PathLike = new(@"`|\b[\w.\-]+/[\w.\-/]+\.\w{1,5}\b", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Why an agent's item is not a job for the owner's hands, or null when it may be one. The list is
+    /// for what needs the owner outside the code - an account, a secret, infrastructure, a deploy, a
+    /// test with their own keys - and the two things that used to crowd it out are sent where they go:
+    /// wording to the release's reading, and a line for a document to the branch or the release's docs.
+    /// The title is the first thing read, so it is plain words: what to do and why, no paths.
+    /// </summary>
+    public static string? NotAJob(string title)
+    {
+        if (WordingTitle.IsMatch(title))
+            return "Wording to read is not a to-do. A customer-facing word goes in the release's reading as a 'words' note "
+                + "(steward_note_for_release), or 'terms' when it is about money, consent or legal terms; words only an admin sees are not noted at all.";
+        if (DocsTitle.IsMatch(title))
+            return "A line for a document is not a to-do. A worker writes it into a document it may edit, on its branch; a line for "
+                + "one it may not (the conventions file, CLAUDE.md) is a 'docs' note for release (steward_note_for_release).";
+        if (title.Length > AgentTitleMax)
+            return $"The title is one plain line of at most {AgentTitleMax} characters: what to do, and why it matters, in everyday words. The detail goes in the body.";
+        if (PathLike.IsMatch(title))
+            return "The title is plain words: no file paths and no code. Say what to do and why it matters; paths and commands go in the body.";
+        return null;
+    }
+
     /// <summary>At or above this an add is refused as a possible duplicate until the agent rules each candidate out.</summary>
     public const double DuplicateAt = 0.5;
 
@@ -185,6 +219,7 @@ public class OwnerTaskService
         if (agent && requireBody && body.Length < 40)
             return Refuse("bad-request", "Write the body so a fresh session can carry it out with nothing else: why (what it unblocks), "
                 + "where (the console, the account), the steps, how to tell it is done, and where the result goes - the file and the key, never a secret's value.");
+        if (agent && NotAJob(title) is { } notAJob) return Refuse("not-a-job", notAJob);
         if (ParseKind(d.Kind) is not { } kind)
             return Refuse("bad-request", "The kind is secret, config, infra, account, deploy or action.");
 
@@ -382,6 +417,31 @@ public class OwnerTaskService
         if (changed.Count == 0) return new OwnerTaskReply("recorded", "Nothing changed.", Summary(t));
         t.UpdatedAt = DateTime.UtcNow;
         await AddNoteAsync(t, OwnerTaskNoteKind.Owner, by, null, $"Edited: {string.Join(", ", changed)}.", ct);
+        await _db.SaveChangesAsync(ct);
+        return new OwnerTaskReply("recorded", null, Summary(t));
+    }
+
+    /// <summary>
+    /// The owner says an item is not a job for their hands but reading for a release: it becomes a
+    /// release note of <paramref name="kind"/> on its ticket (words, terms, docs, note or migration),
+    /// and the item is dropped with where it went. Quiet: the tickets that asked are not told, since
+    /// nothing was done - it only moved.
+    /// </summary>
+    public async Task<OwnerTaskReply> ToReleaseNoteAsync(int id, string? kind, string by = "owner", CancellationToken ct = default)
+    {
+        var t = await _db.OwnerTasks.FirstOrDefaultAsync(x => x.Id == id, ct);
+        if (t is null) return Refuse("not-found", $"There is no OT-{id}.");
+        if (!t.IsOpen) return Refuse("closed", $"{t.Ref} is {t.Status.ToString().ToLowerInvariant()}.");
+        if (t.ProjectKey is null) return Refuse("bad-request", "One of your own items has no project, so no release to go out with.");
+        if (StewardService.ParseRelease(kind) is not { } rk || rk is StewardReleaseKind.Config or StewardReleaseKind.Action)
+            return Refuse("bad-request", "Move it to words, terms, docs, note or migration. Config and action are jobs, which is what the list is for.");
+        var body = t.Body.Trim();
+        var text = body.StartsWith(t.Title, StringComparison.Ordinal) || body.Length == 0 ? (body.Length == 0 ? t.Title : body) : $"{t.Title}\n\n{body}";
+        _db.StewardEntries.Add(new StewardEntry { ProjectKey = t.ProjectKey, Kind = StewardEntryKind.BeforeRelease, TicketId = t.TicketId, Text = text, Release = rk });
+        var word = rk.ToString().ToLowerInvariant();
+        (t.Status, t.DroppedAt, t.DroppedBecause) = (OwnerTaskStatus.Dropped, DateTime.UtcNow, $"Not a job for your hands: moved to the release notes as {word}.");
+        ClearSuggestion(t);
+        await AddNoteAsync(t, OwnerTaskNoteKind.Owner, by, null, $"Moved to the release notes as {word}.", ct);
         await _db.SaveChangesAsync(ct);
         return new OwnerTaskReply("recorded", null, Summary(t));
     }

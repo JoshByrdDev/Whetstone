@@ -189,6 +189,23 @@ public enum StewardReleaseKind
     Action,
     /// <summary>Only to know: how a thing behaves, a limit, a narrow reading somebody took.</summary>
     Note,
+    /// <summary>
+    /// Words a customer will read that no decision gave and the ticket proposed. Read with the release,
+    /// never a to-do, and holds nothing: the owner changes one by filing a ticket. Words only an admin
+    /// sees are not noted at all.
+    /// </summary>
+    Words,
+    /// <summary>
+    /// Words about money, consent or legal terms a customer agrees to or is charged by. The one kind
+    /// of wording that holds its release until the owner has read it.
+    /// </summary>
+    Terms,
+    /// <summary>
+    /// A line for a document no ticket's branch may edit - the conventions file, CLAUDE.md - as a
+    /// worker wrote it. Read with the release and pasted or not; holds nothing. A line for a document a
+    /// worker may edit is written by the worker, on its branch, and is never a note.
+    /// </summary>
+    Docs,
 }
 
 /// <summary>One line in a steward's record: a call it made, a note for release, or a word from the owner.</summary>
