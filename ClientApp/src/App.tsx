@@ -47,10 +47,10 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'tower', label: 'Tower' },
   { id: 'board', label: 'Board' },
   { id: 'steward', label: 'Steward' },
-  // What only you can do, across every project (docs/owner-todo-plan.md).
-  { id: 'todo', label: 'To-Do' },
   // Shown only while some project has a discovery block (docs/recon-tab-plan.md).
   { id: 'recon', label: 'Recon' },
+  // What only you can do, across every project (docs/owner-todo-plan.md).
+  { id: 'todo', label: 'To-Do' },
   { id: 'classroom', label: 'Classroom' },
   { id: 'heartbeat', label: 'Heartbeat' },
   { id: 'metrics', label: 'Metrics' },
