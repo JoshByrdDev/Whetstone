@@ -25,35 +25,57 @@ public static class OwnerTaskEndpoints
         : r.Answer == "not-found" ? Results.NotFound(new { answer = r.Answer, error = r.Why })
         : Results.BadRequest(new { answer = r.Answer, error = r.Why, data = r.Data });
 
+    /// <summary>
+    /// The slice each release-holding item holds, read per project from the steward's plan - only for
+    /// projects with such an item, since reading a plan is a git read.
+    /// </summary>
+    private static async Task<Dictionary<int, OwnerTaskSlice>> SlicesAsync(IEnumerable<Whetstone.Models.OwnerTask> items,
+        StewardService steward, CancellationToken ct)
+    {
+        var all = new Dictionary<int, OwnerTaskSlice>();
+        foreach (var p in items.Where(t => t.HoldsRelease && t.ProjectKey is not null).Select(t => t.ProjectKey!).Distinct())
+        {
+            try { foreach (var (id, s) in await steward.ReleaseSliceOfTodosAsync(p, ct)) all[id] = s; }
+            catch (Exception) { /* a plan that will not read leaves the slice unnamed, not the list unread */ }
+        }
+        return all;
+    }
+
     public static void MapOwnerTaskEndpoints(this WebApplication app)
     {
         var g = app.MapGroup("/api/owner-todos");
 
-        g.MapGet("", async (string? project, string? status, OwnerTaskService s, CancellationToken ct) =>
+        g.MapGet("", async (string? project, string? status, OwnerTaskService s, StewardService steward, CancellationToken ct) =>
         {
             var list = await s.ListAsync(project, status, ct);
-            return Results.Ok(new { open = await s.OpenCountAsync(ct), items = list.Select(OwnerTaskService.Detail) });
+            var slices = await SlicesAsync(list, steward, ct);
+            return Results.Ok(new { open = await s.OpenCountAsync(ct), items = list.Select(t => OwnerTaskService.Detail(t, slices.GetValueOrDefault(t.Id))) });
         });
 
         // The badge: open items, and waiting ones whose look-again date has come.
         g.MapGet("/count", async (OwnerTaskService s, CancellationToken ct) => Results.Ok(new { open = await s.OpenCountAsync(ct) }));
 
         // The open list as markdown, for a Claude Code session.
-        g.MapGet("/text", async (string? project, string? status, OwnerTaskService s, HttpContext http, CancellationToken ct) =>
-            Results.Text(OwnerTaskService.ListMarkdown(await s.ListAsync(project, status, ct), BoardUrl(http)), "text/markdown; charset=utf-8"));
+        g.MapGet("/text", async (string? project, string? status, OwnerTaskService s, StewardService steward, HttpContext http, CancellationToken ct) =>
+        {
+            var list = await s.ListAsync(project, status, ct);
+            return Results.Text(OwnerTaskService.ListMarkdown(list, BoardUrl(http), await SlicesAsync(list, steward, ct)), "text/markdown; charset=utf-8");
+        });
 
         g.MapGet("/find", async (string? project, string? q, OwnerTaskService s, CancellationToken ct) =>
             string.IsNullOrWhiteSpace(q) ? Results.BadRequest(new { error = "Say what to look for with ?q=" })
                 : Results.Ok((await s.FindAsync(project, q, ct)).Select(x => new { item = OwnerTaskService.Summary(x.Task), likeness = Math.Round(x.Score, 2) })));
 
-        g.MapGet("/{id}", async (string id, OwnerTaskService s, CancellationToken ct) =>
+        g.MapGet("/{id}", async (string id, OwnerTaskService s, StewardService steward, CancellationToken ct) =>
             OwnerTaskService.ParseRef(id) is { } n && await s.GetAsync(n, ct) is { } t
-                ? Results.Ok(OwnerTaskService.Detail(t)) : Results.NotFound(new { error = $"There is no {id}." }));
+                ? Results.Ok(OwnerTaskService.Detail(t, (await SlicesAsync(new[] { t }, steward, ct)).GetValueOrDefault(t.Id)))
+                : Results.NotFound(new { error = $"There is no {id}." }));
 
         // One item as a session reads it: everything needed to do it, and how to say it is done.
-        g.MapGet("/{id}/text", async (string id, OwnerTaskService s, HttpContext http, CancellationToken ct) =>
+        g.MapGet("/{id}/text", async (string id, OwnerTaskService s, StewardService steward, HttpContext http, CancellationToken ct) =>
             OwnerTaskService.ParseRef(id) is { } n && await s.GetAsync(n, ct) is { } t
-                ? Results.Text(OwnerTaskService.Markdown(t, BoardUrl(http)), "text/markdown; charset=utf-8")
+                ? Results.Text(OwnerTaskService.Markdown(t, BoardUrl(http), (await SlicesAsync(new[] { t }, steward, ct)).GetValueOrDefault(t.Id)),
+                    "text/markdown; charset=utf-8")
                 : Results.NotFound(new { error = $"There is no {id}." }));
 
         g.MapPost("", async (OwnerTaskCreate b, OwnerTaskService s, CancellationToken ct) =>

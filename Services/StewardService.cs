@@ -2420,6 +2420,23 @@ public partial class StewardService
     /// The slice each note for a release will go out with, by the note's
     /// id - so the record can show a unit's notes as the same set its release is held for.
     /// </summary>
+    /// <summary>
+    /// The slice each to-do item that holds a release is holding, by the item's id - placed exactly as
+    /// the release gate places it (its own slice, else its ticket's, else the next to be released),
+    /// so the list names the same slice the release is refused for.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, OwnerTaskSlice>> ReleaseSliceOfTodosAsync(string projectKey, CancellationToken ct = default)
+    {
+        var cfg = Config(projectKey);
+        if (cfg is null || !cfg.Steward.Plan.Configured) return new Dictionary<int, OwnerTaskSlice>();
+        var plan = await _git.PlanAsync(projectKey, ct);
+        var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey).ToListAsync(ct);
+        var placed = await UnitNotesAsync(projectKey, plan, rows, await _tickets.ListPlacesAsync(projectKey), track: false, ct);
+        string Title(int unit) => plan.FirstOrDefault(u => u.Number == unit) is { } u ? TicketGitService.UnitTitle(u) : "";
+        return placed.TasksByUnit.SelectMany(kv => kv.Value.Select(t => (t.Id, Slice: new OwnerTaskSlice(kv.Key, Title(kv.Key)))))
+            .ToDictionary(x => x.Id, x => x.Slice);
+    }
+
     public async Task<IReadOnlyDictionary<int, int>> ReleaseUnitOfNotesAsync(string projectKey, CancellationToken ct = default)
     {
         var cfg = Config(projectKey);

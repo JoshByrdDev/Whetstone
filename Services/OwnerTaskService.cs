@@ -11,6 +11,12 @@ public record OwnerTaskDraft(
     string? Project, string Title, string Body, string? Kind = null, string? Key = null,
     int? TicketId = null, int? Unit = null, bool HoldsRelease = false, IReadOnlyList<int>? NotDuplicateOf = null);
 
+/// <summary>The slice an item holds the release of, as the release gate places it: its number and its name.</summary>
+public record OwnerTaskSlice(int Unit, string Title)
+{
+    public override string ToString() => string.IsNullOrWhiteSpace(Title) ? $"slice {Unit:00}" : $"slice {Unit:00} ({Title})";
+}
+
 /// <summary>An answer from the list: a word, why when it is a refusal, and what it is about.</summary>
 public record OwnerTaskReply(string Answer, string? Why = null, object? Data = null)
 {
@@ -475,8 +481,10 @@ public class OwnerTaskService
     };
 
     /// <summary>An item in full, for the page and for a tool's get.</summary>
-    public static object Detail(OwnerTask t) => new
+    public static object Detail(OwnerTask t, OwnerTaskSlice? slice = null) => new
     {
+        // Which slice's release it holds, worked out the way the gate does; null when it holds none or none can be placed.
+        slice = slice is null ? null : new { unit = slice.Unit, title = slice.Title },
         @ref = t.Ref, t.Id, project = t.ProjectKey, kind = t.Kind.ToString().ToLowerInvariant(),
         status = t.Status.ToString().ToLowerInvariant(), t.Title, t.Body, t.Key,
         t.WaitingOn, t.WaitingUntil, t.TicketId, t.Unit, t.HoldsRelease, t.CreatedBy, t.CreatedAt, t.UpdatedAt,
@@ -488,7 +496,7 @@ public class OwnerTaskService
     /// <summary>
     /// One item as a Claude Code session reads it: everything needed to do it, and how to say it is done.
     /// </summary>
-    public static string Markdown(OwnerTask t, string boardUrl)
+    public static string Markdown(OwnerTask t, string boardUrl, OwnerTaskSlice? slice = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"# {t.Ref}: {t.Title}");
@@ -497,7 +505,7 @@ public class OwnerTaskService
         sb.AppendLine($"- **Kind:** {t.Kind.ToString().ToLowerInvariant()}");
         sb.AppendLine($"- **Project:** {t.ProjectKey ?? "(the owner's own)"}");
         if (t.TicketId is { } tid) sb.AppendLine($"- **Asked for by:** ticket {tid}{Also(t)}");
-        if (t.HoldsRelease) sb.AppendLine($"- **Holds:** the release of {(t.Unit is { } u2 ? $"slice {u2}" : "its ticket's slice")}");
+        if (t.HoldsRelease) sb.AppendLine($"- **Holds:** the release of {(slice is not null ? slice.ToString() : t.Unit is { } u2 ? $"slice {u2:00}" : "the next slice released")}");
         if (t.Key is { } k) sb.AppendLine($"- **Key:** `{k}`");
         sb.AppendLine($"- **Added:** {t.CreatedAt:yyyy-MM-dd} by {t.CreatedBy}");
         if (t.Suggestion is { } s) sb.AppendLine($"- **An agent says it looks {s}:** {t.SuggestionBecause}");
@@ -528,7 +536,8 @@ public class OwnerTaskService
     }
 
     /// <summary>The open list as a session reads it: grouped by what each item holds up.</summary>
-    public static string ListMarkdown(IReadOnlyList<OwnerTask> list, string boardUrl)
+    public static string ListMarkdown(IReadOnlyList<OwnerTask> list, string boardUrl,
+        IReadOnlyDictionary<int, OwnerTaskSlice>? slices = null)
     {
         var sb = new StringBuilder();
         var open = list.Where(t => t.IsOpen).ToList();
@@ -542,6 +551,7 @@ public class OwnerTaskService
             foreach (var t in l)
                 sb.AppendLine($"- **{t.Ref}** [{t.Kind.ToString().ToLowerInvariant()}] {t.Title} - {t.ProjectKey ?? "own"}"
                     + (t.TicketId is { } x ? $", ticket {x}" : "")
+                    + (t.HoldsRelease && slices?.GetValueOrDefault(t.Id) is { } sl ? $", holds {sl}" : "")
                     + (t.Suggestion is { } s ? $" _(an agent says it looks {s})_" : ""));
             sb.AppendLine();
         }

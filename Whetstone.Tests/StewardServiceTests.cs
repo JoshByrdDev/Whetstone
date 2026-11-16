@@ -1198,6 +1198,10 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal("notes-outstanding", refused.Answer);
         Assert.Contains("OT-", refused.Why);
 
+        // The list names the slice the release is refused for: the ticket's, placed as the gate places it.
+        var slices = await In0(s => s.ReleaseSliceOfTodosAsync("alpha"));
+        Assert.Equal(1, Assert.Single(slices).Value.Unit);
+
         int taskId;
         await using (var ctx = NewCtx()) taskId = (await ctx.OwnerTasks.SingleAsync()).Id;
         await using (var ctx = NewCtx())

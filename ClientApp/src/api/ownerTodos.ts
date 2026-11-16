@@ -46,6 +46,8 @@ export interface OwnerTodo {
   ticketId?: number | null;
   unit?: number | null;
   holdsRelease: boolean;
+  /** The slice whose release it holds, placed as the release gate places it. */
+  slice?: { unit: number; title: string } | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;

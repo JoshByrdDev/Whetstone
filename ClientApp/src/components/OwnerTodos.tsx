@@ -171,7 +171,12 @@ function Row({ t, project, open, onToggle, onChanged }: {
         <div className="flex flex-wrap gap-x-3 gap-y-0.5" style={{ font: `400 11px ${BODY}`, color: 'var(--w-t500)', marginTop: 3, paddingLeft: 2 }}>
           <span>{project}</span>
           {t.ticketId != null && <span>ticket #{t.ticketId}{t.askers.length > 1 ? ` +${t.askers.length - 1}` : ''}</span>}
-          {t.holdsRelease && <span style={{ color: TIER.blocked.c }}>holds {t.unit != null ? `slice ${t.unit}` : 'its slice'}</span>}
+          {t.holdsRelease && (
+            <span style={{ color: TIER.blocked.c }}>
+              holds {t.slice ? `slice ${String(t.slice.unit).padStart(2, '0')}${t.slice.title ? ` - ${t.slice.title}` : ''}`
+                : t.unit != null ? `slice ${String(t.unit).padStart(2, '0')}` : 'the next release'}
+            </span>
+          )}
           {t.status === 'waiting' && <span style={{ color: TIER.queue.c }}>waiting on {t.waitingOn}{t.waitingUntil ? `, look again ${t.waitingUntil.slice(0, 10)}` : ''}</span>}
           {t.suggestion && !closed && <span style={{ color: TIER.done.c }}>an agent says it looks {t.suggestion}</span>}
           <span>{t.status === 'done' ? `done ${ago(t.doneAt)}` : t.status === 'dropped' ? `dropped ${ago(t.droppedAt)}` : `added ${ago(t.createdAt)} by ${t.createdBy}`}</span>
