@@ -7,7 +7,7 @@ namespace Whetstone.Tests;
 
 /// <summary>
 /// This computer's own place on the Heartbeat page: the board host's workers switched On or Off,
-/// stopped after their current runs, and their berths and QA at once - the same controls a worker
+/// stopped after their current runs, and their berths and stacks at once - the same controls a worker
 /// host has. Off and a stop take nothing from anyone: they only stop new work being given here.
 /// </summary>
 public class WorkerHostBoardPlaceTests
@@ -20,22 +20,37 @@ public class WorkerHostBoardPlaceTests
     [Fact]
     public void Unwritten_it_is_on_with_the_configured_berths()
     {
-        var place = WorkerHostSettings.ReadBoard(AsGlobal(new JsonObject { ["heartbeatWorkers"] = 4, ["qaLeases"] = 2 }));
+        var place = WorkerHostSettings.ReadBoard(AsGlobal(new JsonObject { ["heartbeatWorkers"] = 4, ["stackCopies"] = 2 }));
         Assert.True(place.Enabled);
         Assert.False(place.StopPending);
         Assert.True(place.Dispatchable);
         Assert.Equal(4, place.Slots);
-        Assert.Equal(2, place.QaLeases);
+        Assert.Equal(2, place.StackCopies);
     }
 
     [Fact]
-    public void Berths_and_QA_are_the_settings_that_already_exist_and_are_clamped_where_stored()
+    public void Berths_and_stacks_are_the_settings_that_already_exist_and_are_clamped_where_stored()
     {
         var config = new JsonObject();
         WorkerHostSettings.SetBoard(config, new(null, 40, 0));
         Assert.Equal(HeartbeatManager.MaxWorkers, config["heartbeatWorkers"]!.GetValue<int>());
-        Assert.Equal(1, config["qaLeases"]!.GetValue<int>());
+        Assert.Equal(1, config["stackCopies"]!.GetValue<int>());
         Assert.Null(config[WorkerHostSettings.BoardKey]);   // nothing about On/Off was said
+    }
+
+    [Fact]
+    public void Stacks_at_once_written_under_its_old_name_is_still_read_and_the_next_save_renames_it()
+    {
+        // A config from before the rename, when QA was the only phase that took the stack.
+        var config = new JsonObject { ["qaLeases"] = 3 };
+        Assert.Equal(3, WorkerHostSettings.ReadBoard(AsGlobal(config)).StackCopies);
+
+        // The new name wins over the old where both are present.
+        Assert.Equal(2, WorkerHostSettings.ReadBoard(AsGlobal(new JsonObject { ["qaLeases"] = 3, ["stackCopies"] = 2 })).StackCopies);
+
+        WorkerHostSettings.SetBoard(config, new(null, null, 4));
+        Assert.Equal(4, config["stackCopies"]!.GetValue<int>());
+        Assert.Null(config["qaLeases"]);
     }
 
     [Fact]

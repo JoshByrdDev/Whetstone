@@ -236,8 +236,8 @@ interface GlobalConfig {
   maxHeartbeatWorkers: number;
   /** Copies of one project's stack this machine runs at once - only for a project that sets
    *  parallelStacks. Worker hosts have their own, in the Worker Hosts panel. */
-  qaLeases: number;
-  maxQaLeases: number;
+  stackCopies: number;
+  maxStackCopies: number;
   /** Whether the Heartbeat tab shows its Worker Hosts section. Display only. */
   showWorkerHosts: boolean;
   /** The slot-suggestion rules' knobs; only `auto` has a switch here. Absent from an older server. */
@@ -431,8 +431,8 @@ const splitList = (v: string) => v.split(',').map(s => s.trim()).filter(Boolean)
 function withDefaults(d: GlobalConfig): GlobalConfig {
   return {
     ...d,
-    qaLeases: d.qaLeases ?? 1,
-    maxQaLeases: d.maxQaLeases ?? 10,
+    stackCopies: d.stackCopies ?? 1,
+    maxStackCopies: d.maxStackCopies ?? 10,
     showWorkerHosts: d.showWorkerHosts ?? false,
     workerHostsInUse: d.workerHostsInUse ?? false,
     claudeSmartSwitch: d.claudeSmartSwitch ?? { enabled: false, chain: [] },
@@ -584,7 +584,7 @@ function GlobalSettings() {
         // Not the two counts: the This computer card on the Heartbeat tab writes those, and sending
         // what this page loaded would put back an older value over one changed there since.
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify((({ heartbeatWorkers: _w, qaLeases: _q, ...rest }) => rest)(cfg)),
+        body: JSON.stringify((({ heartbeatWorkers: _w, stackCopies: _q, ...rest }) => rest)(cfg)),
       });
       if (!res.ok) throw new Error((await res.json()).error ?? 'Save failed');
       setMsg({ type: 'success', text: 'Saved. Restart the server to apply.' });
@@ -776,7 +776,7 @@ function GlobalSettings() {
       <FieldGroup title="Agents">
         <p className="text-xs text-gray-500 -mt-2 mb-3">
           How much runs at once on this machine - {cfg.heartbeatWorkers} agent{cfg.heartbeatWorkers === 1 ? '' : 's'},
-          {' '}{cfg.qaLeases} QA cop{cfg.qaLeases === 1 ? 'y' : 'ies'} of a stack - is set on the Heartbeat tab, on
+          {' '}{cfg.stackCopies} cop{cfg.stackCopies === 1 ? 'y' : 'ies'} of a project's stack - is set on the Heartbeat tab, on
           the <span className="text-gray-300">This computer</span> card, beside any worker hosts. It applies on the
           heartbeat's next pass, with no restart, and the card also switches this machine's workers off or stops
           them after their current runs.

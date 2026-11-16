@@ -29,8 +29,8 @@ public static class ConfigEndpoints
         // projects it may claim from, and which priority bands. Both empty = no restriction.
         "heartbeatMaxAttempts", "heartbeatWorkerTimeoutMinutes", "heartbeatWorkerStallMinutes", "heartbeatProjects", "heartbeatPriorities",
         // How many agents the one orchestrator runs at once (1..HeartbeatManager.MaxWorkers), and how
-        // many copies of a parallelStacks project's stack this machine runs at once (qaLeases).
-        "heartbeatWorkers", "qaLeases",
+        // many copies of a parallelStacks project's stack this machine runs at once (stackCopies).
+        "heartbeatWorkers", "stackCopies",
         // Whether the Heartbeat tab shows its Worker Hosts section. Display only: off hides it and
         // changes nothing about hosts already set up.
         "showWorkerHosts",
@@ -314,8 +314,8 @@ public static class ConfigEndpoints
                 maxHeartbeatWorkers = HeartbeatManager.MaxWorkers,
                 // Copies of one project's stack this machine runs at once, for projects that set
                 // parallelStacks. Clamped on the way out for the same reason heartbeatWorkers is.
-                qaLeases = ResourceLeaseService.QaLeases(g),
-                maxQaLeases = ResourceLeaseService.MaxQaLeases,
+                stackCopies = ResourceLeaseService.StackCopies(g),
+                maxStackCopies = ResourceLeaseService.MaxStackCopies,
                 // Eligible projects for the heartbeat; empty = all (including any added later).
                 heartbeatProjects = StrArray(g, "heartbeatProjects"),
                 // Eligible priority bands (TicketPriority names); empty = all five.
@@ -398,14 +398,15 @@ public static class ConfigEndpoints
                 && WorkerHostsInUse(registry.GetGlobalConfig()))
                 target["showWorkerHosts"] = true;
 
-            if (target["qaLeases"] is JsonNode qa)
+            if (target["stackCopies"] is JsonNode qa)
             {
                 try
                 {
                     var n = (int)qa.GetValue<double>();
-                    target["qaLeases"] = JsonValue.Create(Math.Clamp(n, 1, ResourceLeaseService.MaxQaLeases));
+                    target["stackCopies"] = JsonValue.Create(Math.Clamp(n, 1, ResourceLeaseService.MaxStackCopies));
+                    target.Remove(ResourceLeaseService.LegacyStackCopiesKey);
                 }
-                catch { target.Remove("qaLeases"); }
+                catch { target.Remove("stackCopies"); }
             }
 
             // Every role is stored whole, and the settings it replaced go once it is. A role left

@@ -130,14 +130,14 @@ public static class WorkerHostEndpoints
             return Results.Ok(new
             {
                 mode = d.Mode, order = d.Order,
-                board = new { place.Enabled, place.StopPending, place.Slots, place.QaLeases,
+                board = new { place.Enabled, place.StopPending, place.Slots, place.StackCopies,
                     dispatchable = place.Dispatchable && diskLow is null, diskLow },
             });
         });
 
         // ---- This computer's own place ----
         //
-        // On/Off, berths and QA at once for the board host's own workers, and its stop after current
+        // On/Off, berths and stacks at once for the board host's own workers, and its stop after current
         // runs - the twin of a worker host's, applied on the orchestrator's next pass. None of it
         // touches the heartbeat itself or the steward's berth: the header's stop is for all of that.
         // A change that can only add room wakes an idle heartbeat, which may have backed off for an
@@ -415,10 +415,10 @@ public static class WorkerHostEndpoints
         var place = WorkerHostSettings.ReadBoard(registry.GetGlobalConfig());
         return new
         {
-            place.Enabled, place.StopPending, place.Slots, place.QaLeases,
+            place.Enabled, place.StopPending, place.Slots, place.StackCopies,
             disks = disk.Disks(), diskLow = disk.Low(),
             maxSlots = HeartbeatManager.MaxWorkers,
-            maxQaLeases = ResourceLeaseService.MaxQaLeases,
+            maxStackCopies = ResourceLeaseService.MaxStackCopies,
             @out = events.BoardBusyCount,
             runs = events.BoardRuns(),
         };

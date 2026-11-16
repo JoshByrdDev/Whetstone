@@ -31,16 +31,31 @@ public class ResourceLeaseService
     public static string TicketKey(int ticketId) => $"ticket:{ticketId}";
 
     /// <summary>Most copies of one project's stack this machine may run at once.</summary>
-    public const int MaxQaLeases = 10;
+    public const int MaxStackCopies = 10;
 
-    /// <summary>This machine's <c>qaLeases</c>, 1 unless Settings says more, never past the max.</summary>
-    public static int QaLeases(IReadOnlyDictionary<string, JsonElement> global) =>
-        global.TryGetValue("qaLeases", out var q) && q.ValueKind == JsonValueKind.Number
-            ? Math.Clamp((int)q.GetDouble(), 1, MaxQaLeases) : 1;
+    /// <summary>
+    /// The setting for how many copies of a project's stack a machine runs at once, on the board
+    /// host's own config and on each <c>workerHosts</c> entry. Every phase that stands the product up
+    /// takes one - QA, peer review, a scout, a recheck - so it is named for the stack, not for QA.
+    /// </summary>
+    public const string StackCopiesKey = "stackCopies";
+
+    /// <summary>
+    /// What <see cref="StackCopiesKey"/> was called while QA was the only phase that took the stack.
+    /// Still read where the new name is absent, so a config written before the rename keeps its
+    /// number; the next save through either card writes the new name and drops this one.
+    /// </summary>
+    public const string LegacyStackCopiesKey = "qaLeases";
+
+    /// <summary>This machine's <c>stackCopies</c>, 1 unless Settings says more, never past the max.</summary>
+    public static int StackCopies(IReadOnlyDictionary<string, JsonElement> global) =>
+        (global.TryGetValue(StackCopiesKey, out var q) && q.ValueKind == JsonValueKind.Number)
+        || (global.TryGetValue(LegacyStackCopiesKey, out q) && q.ValueKind == JsonValueKind.Number)
+            ? Math.Clamp((int)q.GetDouble(), 1, MaxStackCopies) : 1;
 
     /// <summary>
     /// How many holders a resource allows at once. One unless global config says otherwise: an
-    /// explicit <c>"resourceCapacity": { "claude:slot": 3 }</c> entry, or <c>qaLeases</c> for a
+    /// explicit <c>"resourceCapacity": { "claude:slot": 3 }</c> entry, or <c>stackCopies</c> for a
     /// project that sets <c>parallelStacks</c>. Exclusivity is the point, and a resource that
     /// safely allows several is the exception worth writing down.
     /// </summary>
@@ -56,7 +71,7 @@ public class ResourceLeaseService
         {
             var global = _registry.GetGlobalConfig();
 
-            // A worker host's own copy of a resource: its qaLeases, for a project whose stack can
+            // A worker host's own copy of a resource: its stackCopies, for a project whose stack can
             // run more than once on one machine, and one for any other. Never resourceCapacity,
             // which describes the board host's machine and not this one.
             if (WorkerHostConfig.SplitHostResource(resourceKey) is var (resource, hostName))
@@ -64,20 +79,20 @@ public class ResourceLeaseService
                 var host = WorkerHostConfig.Read(global).FirstOrDefault(h => h.Name.Equals(hostName, StringComparison.OrdinalIgnoreCase));
                 var colon = resource.IndexOf(':');
                 if (host is null || colon <= 0) return 1;
-                return _registry.GetProjectConfig(resource[..colon]).ParallelStacks ? host.QaLeases : 1;
+                return _registry.GetProjectConfig(resource[..colon]).ParallelStacks ? host.StackCopies : 1;
             }
 
             if (global.TryGetValue("resourceCapacity", out var caps) && caps.ValueKind == JsonValueKind.Object
                 && caps.TryGetProperty(resourceKey, out var v) && v.ValueKind == JsonValueKind.Number)
                 return Math.Max(1, v.GetInt32());
 
-            // This machine's own copies of a project's resource: its qaLeases (Settings), on the
+            // This machine's own copies of a project's resource: its stackCopies (Settings), on the
             // same terms as a worker host's - only for a project whose stack can run more than once
             // here, because without parallelStacks a second run would bring the stack up on the
             // same ports. A key naming no project reads as a project without it, and gets one.
             var sep = resourceKey.IndexOf(':');
             if (sep > 0 && _registry.GetProjectConfig(resourceKey[..sep]).ParallelStacks)
-                return QaLeases(global);
+                return StackCopies(global);
         }
         catch { /* malformed config must not make every resource unavailable */ }
         return 1;

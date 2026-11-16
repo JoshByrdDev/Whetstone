@@ -78,7 +78,7 @@ function MachineCard({ x }: { x: Machine }) {
       <div className="mt-3 grid gap-x-3 gap-y-2" style={{ gridTemplateColumns: 'minmax(0,auto) minmax(0,1fr)', alignItems: 'start' }}>
         <span style={label()}>Berths</span>
         <SlotSuggestionNote s={x.workers} />
-        <span style={label()}>QA at once</span>
+        <span style={label()}>Stacks at once</span>
         <SlotSuggestionNote s={x.qa} />
       </div>
 

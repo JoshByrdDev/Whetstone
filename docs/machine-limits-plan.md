@@ -2,8 +2,8 @@
 
 Agreed 2026-11-11: suggestions are driven by machine strain, the board host collects its own in
 C#, inventory gets a Machines section on the System page, and automatic mode is one global switch.
-Slot counts are hand-set today (`heartbeatWorkers`, `qaLeases`, and each
-worker host's `slots` / `qaLeases`). This adds three things, in this order:
+Slot counts are hand-set today (`heartbeatWorkers`, `stackCopies`, and each
+worker host's `slots` / `stackCopies`). This adds three things, in this order:
 
 1. an **inventory** of every machine's hardware, kept as a history of changes;
 2. a **load sample** per machine per minute, beside `CapacitySamples`;

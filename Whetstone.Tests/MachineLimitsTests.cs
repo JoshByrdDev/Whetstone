@@ -460,7 +460,7 @@ public class MachineLimitsTests : IDisposable
         var config = new JsonObject
         {
             ["heartbeatWorkers"] = 3,
-            ["workerHosts"] = new JsonArray(new JsonObject { ["name"] = "bravo-host", ["slots"] = 6, ["qaLeases"] = 2 }),
+            ["workerHosts"] = new JsonArray(new JsonObject { ["name"] = "bravo-host", ["slots"] = 6, ["stackCopies"] = 2 }),
         };
         File.WriteAllText(Path.Combine(root, "config.json"), config.ToJsonString());
         using (var db = Db())

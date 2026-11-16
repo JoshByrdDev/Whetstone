@@ -45,7 +45,7 @@ public static class WorkerHostSettings
     public static readonly string[] HostableSkills = { "speculate", "implement", "refine", "qa-test", "review-pr" };
 
     /// <summary>One host's settings as the page sends them. A null field is left as it is.</summary>
-    public record HostEdit(bool? Enabled, int? Slots, int? QaLeases, string[]? Skills, string[]? Projects);
+    public record HostEdit(bool? Enabled, int? Slots, int? StackCopies, string[]? Skills, string[]? Projects);
 
     public static void SetEnabled(JsonObject config, bool enabled) => config[EnabledKey] = enabled;
 
@@ -80,7 +80,11 @@ public static class WorkerHostSettings
         // On cancels it, and Off is where it was going.
         if (edit.Enabled is { } on) { entry["enabled"] = on; entry.Remove(StopPendingKey); }
         if (edit.Slots is { } slots) entry["slots"] = Math.Clamp(slots, 1, WorkerHostConfig.MaxSlots);
-        if (edit.QaLeases is { } qa) entry["qaLeases"] = Math.Clamp(qa, 1, WorkerHostConfig.MaxSlots);
+        if (edit.StackCopies is { } qa)
+        {
+            entry[ResourceLeaseService.StackCopiesKey] = Math.Clamp(qa, 1, WorkerHostConfig.MaxSlots);
+            entry.Remove(ResourceLeaseService.LegacyStackCopiesKey);
+        }
         if (edit.Skills is { } skills)
         {
             var unknown = skills.Where(s => !HostableSkills.Contains(s)).ToList();
@@ -131,11 +135,11 @@ public static class WorkerHostSettings
 
     // ---- This computer: the board host's own place ----
     //
-    // The same three things a worker host has - On/Off, a stop after current runs, berths and QA at
-    // once - for the workers in slots 1..MaxWorkers here. Off takes this machine out of dispatch and
+    // The same three things a worker host has - On/Off, a stop after current runs, berths and stacks
+    // at once - for the workers in slots 1..MaxWorkers here. Off takes this machine out of dispatch and
     // kills nothing; the orchestrator keeps running, worker hosts keep working, and the steward's berth
-    // is not one of these and is untouched. Berths and QA at once are the existing heartbeatWorkers and
-    // qaLeases, so nothing that already reads them changes; the orchestrator reads the berths every
+    // is not one of these and is untouched. Berths and stacks at once are the existing heartbeatWorkers and
+    // stackCopies, so nothing that already reads them changes; the orchestrator reads the berths every
     // pass through /api/hosts/dispatch rather than once at its start.
 
     /// <summary>The board host's own place: <c>{ enabled, stopPending, stopSince }</c>. Absent means on.</summary>
@@ -149,14 +153,14 @@ public static class WorkerHostSettings
     public static readonly TimeSpan BoardStopGrace = TimeSpan.FromSeconds(60);
 
     /// <summary>This computer's place as the orchestrator and the page read it.</summary>
-    public record BoardPlace(bool Enabled, bool StopPending, int Slots, int QaLeases)
+    public record BoardPlace(bool Enabled, bool StopPending, int Slots, int StackCopies)
     {
         /// <summary>Whether the orchestrator may give this machine new work.</summary>
         public bool Dispatchable => Enabled && !StopPending;
     }
 
     /// <summary>A change to it, as the page sends one. A null field is left as it is.</summary>
-    public record BoardEdit(bool? Enabled, int? Slots, int? QaLeases);
+    public record BoardEdit(bool? Enabled, int? Slots, int? StackCopies);
 
     public static BoardPlace ReadBoard(IReadOnlyDictionary<string, JsonElement> global)
     {
@@ -168,7 +172,7 @@ public static class WorkerHostSettings
         }
         var slots = global.TryGetValue("heartbeatWorkers", out var w) && w.ValueKind == JsonValueKind.Number
             ? Math.Clamp((int)w.GetDouble(), 1, HeartbeatManager.MaxWorkers) : HeartbeatManager.DefaultWorkers;
-        return new BoardPlace(enabled, stopping, slots, ResourceLeaseService.QaLeases(global));
+        return new BoardPlace(enabled, stopping, slots, ResourceLeaseService.StackCopies(global));
     }
 
     /// <summary>Change this computer's place. On or Off ends a pending stop, as it does for a worker host.</summary>
@@ -182,7 +186,11 @@ public static class WorkerHostSettings
             b.Remove("stopSince");
         }
         if (edit.Slots is { } slots) config["heartbeatWorkers"] = Math.Clamp(slots, 1, HeartbeatManager.MaxWorkers);
-        if (edit.QaLeases is { } qa) config["qaLeases"] = Math.Clamp(qa, 1, ResourceLeaseService.MaxQaLeases);
+        if (edit.StackCopies is { } qa)
+        {
+            config[ResourceLeaseService.StackCopiesKey] = Math.Clamp(qa, 1, ResourceLeaseService.MaxStackCopies);
+            config.Remove(ResourceLeaseService.LegacyStackCopiesKey);
+        }
     }
 
     /// <summary>Start or cancel this computer's stop after current runs. Returns why it was refused, or null.</summary>

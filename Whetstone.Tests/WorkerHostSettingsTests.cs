@@ -37,10 +37,25 @@ public class WorkerHostSettingsTests
         WorkerHostSettings.Upsert(config, "bravo-host", new(true, 3, 2, null, new[] { "alpha" }), Projects);
         WorkerHostSettings.Upsert(config, "BRAVO-HOST", new(null, null, null, new[] { "qa-test", "implement" }, null), Projects);
         var h = WorkerHostConfig.Read(AsGlobal(config)).Single();
-        Assert.Equal(("bravo-host", true, 3, 2), (h.Name, h.Enabled, h.Slots, h.QaLeases));
+        Assert.Equal(("bravo-host", true, 3, 2), (h.Name, h.Enabled, h.Slots, h.StackCopies));
         Assert.Equal(new[] { "alpha" }, h.Projects);
         // Stored in the pipeline's order, whatever order they were clicked in.
         Assert.Equal(new[] { "implement", "qa-test" }, h.Skills);
+    }
+
+    [Fact]
+    public void A_host_entry_written_with_qaLeases_keeps_its_number_until_it_is_next_edited()
+    {
+        var config = new JsonObject
+        {
+            ["workerHosts"] = new JsonArray(new JsonObject { ["name"] = "bravo-host", ["slots"] = 4, ["qaLeases"] = 2 }),
+        };
+        Assert.Equal(2, WorkerHostConfig.Read(AsGlobal(config)).Single().StackCopies);
+
+        WorkerHostSettings.Upsert(config, "bravo-host", new(null, null, 3, null, null), Projects);
+        var entry = config["workerHosts"]!.AsArray().Single()!.AsObject();
+        Assert.Equal(3, entry["stackCopies"]!.GetValue<int>());
+        Assert.Null(entry["qaLeases"]);
     }
 
     [Fact]
@@ -49,7 +64,7 @@ public class WorkerHostSettingsTests
         var config = new JsonObject();
         WorkerHostSettings.Upsert(config, "bravo-host", new(null, 99, 0, null, null), Projects);
         var h = WorkerHostConfig.Read(AsGlobal(config)).Single();
-        Assert.Equal((WorkerHostConfig.MaxSlots, 1), (h.Slots, h.QaLeases));
+        Assert.Equal((WorkerHostConfig.MaxSlots, 1), (h.Slots, h.StackCopies));
     }
 
     [Theory]

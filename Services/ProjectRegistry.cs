@@ -178,10 +178,34 @@ public class ProjectConfig
     public string[] ResourcesFor(string skill)
     {
         if (!PhaseResources.TryGetValue(skill, out var names))
-            if (!DefaultPhaseResources.TryGetValue(skill, out names))
-                return Array.Empty<string>();
+            if ((names = QaStackFor(skill)) is null)
+                if (!DefaultPhaseResources.TryGetValue(skill, out names))
+                    return Array.Empty<string>();
 
         return names.Select(Qualify).ToArray();
+    }
+
+    /// <summary>
+    /// The phases that stand the product up on the same stack and ports as QA. Each falls back to
+    /// <c>app-stack</c> in <see cref="DefaultPhaseResources"/>, which is right only while QA's stack is
+    /// called that: a project that names its own (<c>"qa-test": ["qa-copy"]</c>) and lists none of
+    /// these would otherwise lease a scout a key no QA run ever takes, and the two would boot the one
+    /// stack side by side, each believing it held it.
+    /// </summary>
+    private static readonly string[] OnQaStack = { "review-pr", "scout", "recheck" };
+
+    /// <summary>
+    /// For a phase in <see cref="OnQaStack"/> the project says nothing about: the project's own
+    /// resources its qa-test takes - the bare names, which are its stack. Not the qualified ones: a
+    /// machine-wide resource such as <c>android:emulator</c> is QA's own need, and a scout does not
+    /// boot a device because a QA run might. Null when the project's qa-test names none of its own,
+    /// and the phase keeps its default.
+    /// </summary>
+    private string[]? QaStackFor(string skill)
+    {
+        if (!OnQaStack.Contains(skill) || !PhaseResources.TryGetValue("qa-test", out var qa)) return null;
+        var own = qa.Where(r => !r.Contains(':')).ToArray();
+        return own.Length > 0 ? own : null;
     }
 
     private string Qualify(string resource) => resource.Contains(':') ? resource : $"{Name}:{resource}";
@@ -367,7 +391,7 @@ public class ProjectConfig
     /// <summary>
     /// This project's stack can run more than once on one machine at the same time: its skill or
     /// conventions say how a run on stack slot N (<c>WHETSTONE_STACK_SLOT</c>) picks its own compose
-    /// project and ports. Only then may a worker host's <c>qaLeases</c> above 1 apply to it - without
+    /// project and ports. Only then may a worker host's <c>stackCopies</c> above 1 apply to it - without
     /// it a second QA run would start the same stack on the same ports. Off unless set.
     /// See docs/worker-hosts-plan.md, phase 2.
     /// </summary>

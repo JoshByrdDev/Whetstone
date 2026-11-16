@@ -54,7 +54,7 @@ public record RunTiming(string Place, DateTime Start, DateTime End, double Durat
 /// </summary>
 public static class MachineLimits
 {
-    /// <summary>The ticket phases whose runs take a project's stack - what a QA lease is for.</summary>
+    /// <summary>The ticket phases whose runs take a project's stack - what stacks at once counts.</summary>
     public static readonly HashSet<string> StackPhases = new(StringComparer.OrdinalIgnoreCase)
     {
         nameof(TicketPhase.NeedsQa), nameof(TicketPhase.QaTesting),
@@ -104,14 +104,14 @@ public static class MachineLimits
         return (Math.Clamp(value, 1, max), why);
     }
 
-    /// <summary>QA leases on hardware alone: Docker's memory - on a Mac its VM's, not the Mac's - a stack each.</summary>
+    /// <summary>Stacks at once on hardware alone: Docker's memory - on a Mac its VM's, not the Mac's - a stack each.</summary>
     public static (int? Value, List<string> Why) QaFromHardware(MachineInventoryReport? inv, MachineLimitsConfig c, int workers)
     {
-        if (inv?.DockerMemMb is not { } mb) return (null, new() { "Docker's memory is not reported, so there is nothing to size QA by." });
+        if (inv?.DockerMemMb is not { } mb) return (null, new() { "Docker's memory is not reported, so there is nothing to size stacks by." });
         var gb = mb / 1024.0;
         var n = (int)Math.Floor((gb - c.DockerBaseGb) / c.QaStackGb);
         var why = new List<string> { $"Docker has {gb:0.#}GB; {c.DockerBaseGb:0.#}GB for itself, {c.QaStackGb:0.#}GB a stack -> {Math.Max(n, 0)}." };
-        if (n > workers) why.Add($"No more than the {workers} berth(s) suggested, since every QA run is a berth too.");
+        if (n > workers) why.Add($"No more than the {workers} berth(s) suggested, since every run on a stack is a berth too.");
         return (Math.Clamp(n, 1, Math.Max(workers, 1)), why);
     }
 
@@ -166,7 +166,7 @@ public static class MachineLimits
     }
 
     /// <summary>
-    /// QA leases learned from Docker's memory during QA: what a stack adds, fitted on the minutes
+    /// Stacks at once learned from Docker's memory while stacks run: what a stack adds, fitted on the minutes
     /// when Docker was read and stack phases were running.
     /// </summary>
     public static (int? Value, List<string> Why) QaFromLoad(IReadOnlyList<MachineLoadSample> samples, MachineLimitsConfig c, int max)
@@ -177,11 +177,11 @@ public static class MachineLimits
         if (levels.Count < 2 || levels.All(g => g.Key == 0)) return (null, new());
         var fit = Fit(levels.Select(g => ((double)g.Key, Quantile(g.Select(p => p.s.DockerMemUsedMb!.Value / 1024.0), 0.9), (double)g.Count())).ToList());
         var limitGb = pts.Last().s.DockerMemLimitMb!.Value / 1024.0;
-        if (fit.B <= 0.1) return (null, new() { "Docker's memory hardly moves with QA runs." });
+        if (fit.B <= 0.1) return (null, new() { "Docker's memory hardly moves with stack runs." });
         var n = (int)Math.Floor((limitGb * 0.9 - fit.A) / fit.B);
         return (Math.Clamp(n, 1, max), new()
         {
-            $"A QA stack has added about {fit.B:0.#}GB to Docker (p90), over {fit.A:0.#}GB with none; Docker's limit is {limitGb:0.#}GB -> {Math.Max(n, 0)} within 90% of it.",
+            $"A stack has added about {fit.B:0.#}GB to Docker (p90), over {fit.A:0.#}GB with none; Docker's limit is {limitGb:0.#}GB -> {Math.Max(n, 0)} within 90% of it.",
         });
     }
 
@@ -225,7 +225,7 @@ public static class MachineLimits
                      && s.DockerMemUsedMb >= 0.9 * s.DockerMemLimitMb))
         {
             var q = StackRuns(s.PhasesJson);
-            list.Add(new(Math.Max(1, q - 1), $"Docker used {s.DockerMemUsedMb / 1024.0:0.#}GB of its {s.DockerMemLimitMb / 1024.0:0.#}GB with {q} QA run(s) going ({When(s.At, now)}).", Qa: true));
+            list.Add(new(Math.Max(1, q - 1), $"Docker used {s.DockerMemUsedMb / 1024.0:0.#}GB of its {s.DockerMemLimitMb / 1024.0:0.#}GB with {q} stack run(s) going ({When(s.At, now)}).", Qa: true));
             break;
         }
 
@@ -495,9 +495,9 @@ public class MachineLimitsService
 
         var machines = new List<(string Place, int Workers, int Qa, int Max)>
         {
-            (CapacityPlaces.Board, BoardWorkers(global), ResourceLeaseService.QaLeases(global), HeartbeatManager.MaxWorkers),
+            (CapacityPlaces.Board, BoardWorkers(global), ResourceLeaseService.StackCopies(global), HeartbeatManager.MaxWorkers),
         };
-        machines.AddRange(WorkerHostConfig.Read(global).Select(h => (h.Name, h.Slots, h.QaLeases, WorkerHostConfig.MaxSlots)));
+        machines.AddRange(WorkerHostConfig.Read(global).Select(h => (h.Name, h.Slots, h.StackCopies, WorkerHostConfig.MaxSlots)));
 
         var inventories = await _db.MachineInventories.AsNoTracking().OrderBy(m => m.FirstSeen).ToListAsync(ct);
         var samples = await _db.MachineLoadSamples.AsNoTracking().Where(s => s.At >= since).OrderBy(s => s.At).ToListAsync(ct);

@@ -238,12 +238,14 @@ Optional. Leave it out and QA stays on the board host.
 
 15. **Let it take QA.** In the host's panel on the Heartbeat page, switch on the **QA** and
     **Review** phases and, if the machine can carry more than one copy of a project's stack, raise
-    **QA at once**.
+    **Stacks at once** (`stackCopies`; a config written before the rename says `qaLeases`, which is
+    still read). It counts every run that stands the product up - QA, a review, a scout, a recheck -
+    not QA alone.
 
-    **QA at once** above 1 applies only to a project whose `project.json` says `"parallelStacks": true`.
+    **Stacks at once** above 1 applies only to a project whose `project.json` says `"parallelStacks": true`.
     Only set that once the project's conventions say how a run on stack slot N
     (`WHETSTONE_STACK_SLOT`) picks its own compose project name and ports. Without it, a second
-    QA run on the same machine would start the same stack on the same ports.
+    run on the same machine would start the same stack on the same ports.
 
     On Windows, the NAT service under Hyper-V, WSL and Docker (winnat) reserves blocks of ports at
     every boot, and nothing can listen inside one. A project that writes its stack's ports into

@@ -25,7 +25,7 @@ import { ConfirmHostOffModal } from './ConfirmHostOffModal';
  * heartbeat's stop after cycle).
  *
  * This computer has the same card, first in the grid: its workers On or Off, stopped after their
- * current runs, and its berths and QA at once (heartbeatWorkers and qaLeases, which used to live in
+ * current runs, and its berths and stacks at once (heartbeatWorkers and stackCopies, which used to live in
  * Settings and needed a restart). It is drawn even with the worker hosts hidden, because it is this
  * machine's own control. None of it touches the heartbeat itself or the steward's berth - the
  * heartbeat's own Stop After Cycle is for all of that.
@@ -36,7 +36,7 @@ interface Settings {
   /** Whether Settings asks for this section at all. Absent from an older server, which always drew it. */
   shown?: boolean;
   boardCommit?: string | null;
-  hosts: (WorkerHost & { skills: string[]; projects: string[]; qaLeases: number; remoteOn: boolean; commit?: string | null })[];
+  hosts: (WorkerHost & { skills: string[]; projects: string[]; stackCopies: number; remoteOn: boolean; commit?: string | null })[];
   dispatch: Dispatch;
   seen: { name: string; lastSeen: string; commit?: string | null }[];
   projects: { key: string; displayName: string }[];
@@ -50,9 +50,9 @@ interface BoardPlace {
   enabled: boolean;
   stopPending: boolean;
   slots: number;
-  qaLeases: number;
+  stackCopies: number;
   maxSlots: number;
-  maxQaLeases: number;
+  maxStackCopies: number;
   /** Free space on the drives holding its projects' worktree roots. Absent from an older server. */
   disks?: HostDisk[];
   /** Set when one is under the floor (workerDiskFloorGb): the heartbeat gives this computer nothing new. */
@@ -62,9 +62,9 @@ interface BoardPlace {
   runs: { slot: number; ticketId?: string | null; project?: string | null; phase?: string | null }[];
 }
 
-type BoardEdit = Partial<{ enabled: boolean; slots: number; qaLeases: number }>;
+type BoardEdit = Partial<{ enabled: boolean; slots: number; stackCopies: number }>;
 
-type HostEdit = Partial<{ enabled: boolean; slots: number; qaLeases: number; skills: string[]; projects: string[] }>;
+type HostEdit = Partial<{ enabled: boolean; slots: number; stackCopies: number; skills: string[]; projects: string[] }>;
 
 /** Where work goes first. `@board` is this computer; the API always lists it and every host once. */
 type DispatchMode = 'fill' | 'spread';
@@ -420,10 +420,10 @@ function HostCard({ h, s, busy, onEdit, onStop, onRemove, machine }: {
           hint="How many workers this computer runs at once." />
         {machine && <><span /><SlotSuggestionNote s={machine.workers} current={h.slots} busy={busy} onUse={n => onEdit({ slots: Math.min(n, 8) })} /></>}
 
-        <span style={label()}>QA at once</span>
-        <Stepper value={h.qaLeases} min={1} max={8} busy={busy} onChange={v => onEdit({ qaLeases: v })}
+        <span style={label()}>Stacks at once</span>
+        <Stepper value={h.stackCopies} min={1} max={8} busy={busy} onChange={v => onEdit({ stackCopies: v })}
           hint="Copies of one project's stack this computer may run together. Above one, only for a project whose config sets parallelStacks." />
-        {machine && <><span /><SlotSuggestionNote s={machine.qa} current={h.qaLeases} busy={busy} onUse={n => onEdit({ qaLeases: Math.min(n, 8) })} /></>}
+        {machine && <><span /><SlotSuggestionNote s={machine.qa} current={h.stackCopies} busy={busy} onUse={n => onEdit({ stackCopies: Math.min(n, 8) })} /></>}
 
         <span style={label()}>Phases</span>
         <div className="flex flex-wrap gap-1.5">
@@ -564,15 +564,15 @@ function BoardCard({ b, busy, onEdit, onStop, machine }: {
           hint="How many workers this computer runs at once. Applies on the heartbeat's next pass; lowering it stops nothing that is running." />
         {machine && <><span /><SlotSuggestionNote s={machine.workers} current={b.slots} busy={busy} onUse={n => onEdit({ slots: Math.min(n, b.maxSlots) })} /></>}
 
-        <span style={label()}>QA at once</span>
-        <Stepper value={b.qaLeases} min={1} max={b.maxQaLeases} busy={busy} onChange={v => onEdit({ qaLeases: v })}
+        <span style={label()}>Stacks at once</span>
+        <Stepper value={b.stackCopies} min={1} max={b.maxStackCopies} busy={busy} onChange={v => onEdit({ stackCopies: v })}
           hint="Copies of one project's stack this computer may run together. Above one, only for a project whose config sets parallelStacks." />
-        {machine && <><span /><SlotSuggestionNote s={machine.qa} current={b.qaLeases} busy={busy} onUse={n => onEdit({ qaLeases: Math.min(n, b.maxQaLeases) })} /></>}
+        {machine && <><span /><SlotSuggestionNote s={machine.qa} current={b.stackCopies} busy={busy} onUse={n => onEdit({ stackCopies: Math.min(n, b.maxStackCopies) })} /></>}
       </div>
-      {b.qaLeases > b.slots && (
+      {b.stackCopies > b.slots && (
         <p className="mt-2" style={{ font: `400 10.5px ${BODY}`, color: DIM }}>
           Only {b.slots} worker{b.slots === 1 ? '' : 's'} run{b.slots === 1 ? 's' : ''} here at once, so no more than {b.slots} of
-          the {b.qaLeases} QA copies can be in use together.
+          the {b.stackCopies} copies of a stack can be in use together.
         </p>
       )}
     </Panel>

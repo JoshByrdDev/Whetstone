@@ -495,7 +495,8 @@ discoverable from the code:
 - **The project kit is an allowlist**: skills, `guard.ps1`, a read-only copy of the notes. Never
   `project.json`. Its missing `reflect-prompt.md` is part of what keeps reflection off a worker host.
 - **A worker host's resources are its own.** Its claim takes `alpha:app-stack@bravo-host`, never the
-  board host's `alpha:app-stack`. More than one at once needs both the host's `qaLeases` and the
+  board host's `alpha:app-stack`. More than one at once needs both the host's `stackCopies` ("Stacks at once", once
+  `qaLeases`, still read) and the
   project's `parallelStacks`, and what stack slot N means in ports is written in the project's
   folder, never here.
 - **With the smart switch on, the board chooses a worker host's Claude account.** A usage limit is

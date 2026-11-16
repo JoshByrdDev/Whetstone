@@ -32,7 +32,7 @@ public class WorkerHostStackTests : IDisposable
                 $$"""{ "displayName": "{{key}}", "projectPath": "C:\\nowhere\\{{key}}", "parallelStacks": {{(parallel ? "true" : "false")}} }""");
         }
         File.WriteAllText(Path.Combine(_root, "config.json"), """
-            { "workerHosts": [ { "name": "bravo-host", "slots": 4, "qaLeases": 3, "projects": ["alpha", "bravo"],
+            { "workerHosts": [ { "name": "bravo-host", "slots": 4, "stackCopies": 3, "projects": ["alpha", "bravo"],
                                  "skills": ["implement", "qa-test"] } ] }
             """);
         _registry = new ProjectRegistry(new DashboardPaths(_root));
@@ -75,13 +75,13 @@ public class WorkerHostStackTests : IDisposable
     }
 
     /// <summary>
-    /// The board host's own qaLeases follows the same rule as a worker host's: more than one copy
+    /// The board host's own stackCopies follows the same rule as a worker host's: more than one copy
     /// only of a stack that can run twice, and never past the ceiling.
     /// </summary>
     [Fact]
     public void The_board_hosts_qa_leases_apply_only_to_a_parallel_stacks_project()
     {
-        File.WriteAllText(Path.Combine(_root, "config.json"), """{ "qaLeases": 4 }""");
+        File.WriteAllText(Path.Combine(_root, "config.json"), """{ "stackCopies": 4 }""");
         using var ctx = NewCtx();
         var leases = new ResourceLeaseService(ctx, _registry);
         Assert.Equal(4, leases.CapacityFor("alpha:app-stack"));
@@ -89,8 +89,8 @@ public class WorkerHostStackTests : IDisposable
         Assert.Equal(1, leases.CapacityFor("nobody:app-stack"));
         Assert.Equal(1, leases.CapacityFor("ticket:7"));
 
-        File.WriteAllText(Path.Combine(_root, "config.json"), """{ "qaLeases": 40 }""");
-        Assert.Equal(ResourceLeaseService.MaxQaLeases, new ResourceLeaseService(ctx, _registry).CapacityFor("alpha:app-stack"));
+        File.WriteAllText(Path.Combine(_root, "config.json"), """{ "stackCopies": 40 }""");
+        Assert.Equal(ResourceLeaseService.MaxStackCopies, new ResourceLeaseService(ctx, _registry).CapacityFor("alpha:app-stack"));
 
         File.WriteAllText(Path.Combine(_root, "config.json"), "{}");
         Assert.Equal(1, new ResourceLeaseService(ctx, _registry).CapacityFor("alpha:app-stack"));
@@ -101,7 +101,7 @@ public class WorkerHostStackTests : IDisposable
     public void A_resource_capacity_entry_outranks_qa_leases()
     {
         File.WriteAllText(Path.Combine(_root, "config.json"),
-            """{ "qaLeases": 4, "resourceCapacity": { "alpha:app-stack": 2 } }""");
+            """{ "stackCopies": 4, "resourceCapacity": { "alpha:app-stack": 2 } }""");
         using var ctx = NewCtx();
         Assert.Equal(2, new ResourceLeaseService(ctx, _registry).CapacityFor("alpha:app-stack"));
     }
@@ -171,7 +171,7 @@ public class WorkerHostStackTests : IDisposable
         var slots = new List<int>();
         for (var i = 0; i < 3; i++) slots.Add((await svc.ClaimNextAsync(null, (_, _) => true, 3, Qa("bravo-host"), Ttl))!.StackSlot);
         Assert.Equal(new[] { 0, 1, 2 }, slots);
-        // qaLeases is 3: the fourth waits.
+        // stackCopies is 3: the fourth waits.
         Assert.Null(await svc.ClaimNextAsync(null, (_, _) => true, 3, Qa("bravo-host"), Ttl));
     }
 

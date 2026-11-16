@@ -162,7 +162,7 @@ function Set-Dispatch { param([string]$Mode, [string[]]$Order = @(), $Board = $n
     $script:DispatchView = [pscustomobject]@{ mode = $Mode; order = @($Order); board = $Board }
 }
 function New-BoardPlace { param([bool]$Enabled = $true, [bool]$StopPending = $false, [int]$Slots = 2, [string]$DiskLow = $null)
-    [pscustomobject]@{ enabled = $Enabled; stopPending = $StopPending; slots = $Slots; qaLeases = 1; diskLow = $DiskLow }
+    [pscustomobject]@{ enabled = $Enabled; stopPending = $StopPending; slots = $Slots; stackCopies = 1; diskLow = $DiskLow }
 }
 
 # A remote agent as Start-RemoteAgent books one, ordered $Ago seconds ago.

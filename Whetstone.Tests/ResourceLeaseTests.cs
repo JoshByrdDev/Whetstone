@@ -478,6 +478,35 @@ public class ResourceLeaseTests : IDisposable
         Assert.Empty(noneNeeded.ResourcesFor("qa-test"));
     }
 
+    [Fact]
+    public void A_scout_and_a_recheck_take_the_stack_QA_takes_when_a_project_renames_it()
+    {
+        // A project whose QA stack is not called app-stack. Left to the per-skill default, a scout
+        // would lease zeta:app-stack - a key no QA run holds - and boot the same stack beside one.
+        var renamed = new ProjectConfig { Name = "zeta", PhaseResources = new() { ["qa-test"] = new[] { "qa-copy" } } };
+        Assert.Equal(new[] { "zeta:qa-copy" }, renamed.ResourcesFor("scout"));
+        Assert.Equal(new[] { "zeta:qa-copy" }, renamed.ResourcesFor("recheck"));
+        Assert.Equal(new[] { "zeta:qa-copy" }, renamed.ResourcesFor("review-pr"));
+        Assert.Empty(renamed.ResourcesFor("implement"));
+
+        // Only the project's own stack follows. A machine-wide device QA needs is QA's alone.
+        var withDevice = new ProjectConfig { Name = "zeta", PhaseResources = new() { ["qa-test"] = new[] { "app-stack", "android:emulator" } } };
+        Assert.Equal(new[] { "zeta:app-stack" }, withDevice.ResourcesFor("scout"));
+
+        // What a project says about a phase itself still wins.
+        var own = new ProjectConfig
+        {
+            Name = "zeta",
+            PhaseResources = new() { ["qa-test"] = new[] { "qa-copy" }, ["scout"] = new[] { "showcase" } },
+        };
+        Assert.Equal(new[] { "zeta:showcase" }, own.ResourcesFor("scout"));
+
+        // A qa-test naming nothing of the project's own leaves the default in place.
+        var onlyShared = new ProjectConfig { Name = "zeta", PhaseResources = new() { ["qa-test"] = new[] { "docker:daemon" } } };
+        Assert.Equal(new[] { "zeta:app-stack" }, onlyShared.ResourcesFor("scout"));
+        Assert.Equal(new[] { "zeta:app-stack" }, new ProjectConfig { Name = "zeta" }.ResourcesFor("scout"));
+    }
+
     // ---- The human as a holder ------------------------------------------------------
 
     [Fact]

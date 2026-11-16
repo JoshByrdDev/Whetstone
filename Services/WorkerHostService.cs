@@ -13,7 +13,7 @@ namespace Whetstone.Services;
 /// from 21. The tens digit says which machine, the units which berth on it. The steward is 99,
 /// outside every block.
 /// </param>
-/// <param name="QaLeases">
+/// <param name="StackCopies">
 /// How many copies of one project's stack this host may run at once - its own capacity for a
 /// resource like <c>alpha:app-stack@bravo-host</c>. Applies only to a project that declares
 /// <c>parallelStacks</c>; any other gets one, whatever this says. Phase 2.
@@ -23,7 +23,7 @@ namespace Whetstone.Services;
 /// (<c>enabled: false</c>) once nothing is out there - see <see cref="WorkerHostService.DrainedStops"/>.
 /// In the config rather than in memory, so a board restart mid-drain does not put it back to work.
 /// </param>
-public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Skills, string[] Projects, int FirstSlot, int QaLeases = 1,
+public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Skills, string[] Projects, int FirstSlot, int StackCopies = 1,
     bool StopPending = false)
 {
     /// <summary>How far apart two worker hosts' first berths are: one per ten, so slot 23 reads as host 2, berth 3.</summary>
@@ -71,7 +71,9 @@ public record WorkerHostConfig(string Name, bool Enabled, int Slots, string[] Sk
             slots = Math.Clamp(slots, 1, MaxSlots);
             var skills = Strings(e, "skills");
             var projects = Strings(e, "projects");
-            var qa = e.TryGetProperty("qaLeases", out var q) && q.ValueKind == JsonValueKind.Number ? q.GetInt32() : 1;
+            var qa = (e.TryGetProperty(ResourceLeaseService.StackCopiesKey, out var q) && q.ValueKind == JsonValueKind.Number)
+                || (e.TryGetProperty(ResourceLeaseService.LegacyStackCopiesKey, out q) && q.ValueKind == JsonValueKind.Number)
+                ? q.GetInt32() : 1;
             // Only an On host can be stopping; one already Off has nothing left to wait for.
             var stopping = enabled && e.TryGetProperty(WorkerHostSettings.StopPendingKey, out var sp) && sp.ValueKind == JsonValueKind.True;
 
@@ -142,7 +144,7 @@ public record WorkerHostView(
     string Name, bool Enabled, int Slots, int FirstSlot, string[] Skills, string[] Projects,
     bool Online, DateTime? LastCheckin, string? Commit, bool CommitMatches,
     IReadOnlyList<HostRun> Runs, int PendingOrders, DateTime? UsageLimitUntil,
-    int QaLeases = 1, bool RemoteOn = true,
+    int StackCopies = 1, bool RemoteOn = true,
     HostAccountChoice? Claude = null, IReadOnlyList<HostClaudeLogin>? ClaudeLogins = null,
     string? PsVersion = null, bool WindowsPowerShell = false,
     bool StopPending = false, int Out = 0,
@@ -462,7 +464,7 @@ public class WorkerHostService
                 var pause = Pause(s, claude, now);
                 result.Add(new WorkerHostView(h.Name, h.Enabled, h.Slots, h.FirstSlot, h.Skills, h.Projects,
                     online, s?.LastCheckin, s?.Commit, matches,
-                    s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.QaLeases, remoteOn,
+                    s?.Runs.ToList() ?? new List<HostRun>(), s?.Orders.Count ?? 0, pause, h.StackCopies, remoteOn,
                     claude, logins, s?.PsVersion, s?.WindowsPowerShell ?? false, h.StopPending, OutOf(s),
                     s?.Disks?.ToList(), DiskFloor.Low(s?.Disks, floor)));
             }

@@ -439,9 +439,9 @@ A claim for a worker host takes that host's copy of every resource its phase nee
 `alpha:app-stack`. The two never wait on each other. The ticket's own lease is not qualified, so
 one worker per ticket still holds across machines.
 
-Capacity for a host-qualified resource is the host's `qaLeases` (default 1, at most 8), **but only
+Capacity for a host-qualified resource is the host's `stackCopies` (default 1, at most 8), **but only
 for a project that declares `parallelStacks: true`** in its config. Any other project gets one
-stack per machine, whatever `qaLeases` says. `qaLeases` is a statement about the machine's RAM.
+stack per machine, whatever `stackCopies` says. `stackCopies` is a statement about the machine's RAM.
 `parallelStacks` is a statement about the project: that its stack can run twice on one machine
 without the copies fighting over ports and container names. Both have to be true.
 
@@ -508,7 +508,7 @@ machine: see `docs/worker-host-setup.md`, step 14. And on the board host, the ho
 list the testing skills, since phase 1's default leaves them out:
 
 ```json
-{ "name": "bravo-host", "slots": 4, "qaLeases": 2, "projects": ["alpha"],
+{ "name": "bravo-host", "slots": 4, "stackCopies": 2, "projects": ["alpha"],
   "skills": ["speculate", "implement", "refine", "qa-test", "review-pr"] }
 ```
 

@@ -3062,7 +3062,7 @@ $hostNote = if ($onHost) {
     "the board host - every path a ticket tool gives you is on this machine."
 }
 $stackNote = if ($stackSlot -gt 0) {
-    "$stackSlot. Another QA run may be using this machine's other copies of this project's stack right now. Bring the stack up as your skill says, but as slot ${stackSlot}: this project's conventions say how a slot chooses its compose project name and ports, and ``WHETSTONE_STACK_SLOT`` is set to $stackSlot. If they say nothing about stack slots, do not start the stack - ``add_comment`` that this run was given slot $stackSlot on a project with no rules for one, and ``set_phase`` to ``Blocked``."
+    "$stackSlot. Another run that stands the product up - QA, a review, a scout, a recheck - may be using this machine's other copies of this project's stack right now. Bring the stack up as your skill says, but as slot ${stackSlot}: this project's conventions say how a slot chooses its compose project name and ports, and ``WHETSTONE_STACK_SLOT`` is set to $stackSlot. If they say nothing about stack slots, do not start the stack - ``add_comment`` that this run was given slot $stackSlot on a project with no rules for one, and ``set_phase`` to ``Blocked``."
 } else {
     "0 - this machine's one copy of the stack, used exactly as your skill says."
 }

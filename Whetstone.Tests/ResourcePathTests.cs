@@ -217,7 +217,7 @@ public class ResourcePathTests : IDisposable
         });
         await ctx.SaveChangesAsync();
 
-        // Capacity 2 for the stack, as qaLeases with parallelStacks would give it.
+        // Capacity 2 for the stack, as stackCopies with parallelStacks would give it.
         var leases = new FixedCapacityLeases(ctx, new() { ["alpha:app-stack"] = 2 });
         ctx.Tickets.Add(new Ticket
         {
