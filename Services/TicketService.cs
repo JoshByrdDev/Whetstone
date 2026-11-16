@@ -2536,6 +2536,38 @@ public class TicketService
         if (t is not null) t.UpdatedAt = DateTime.UtcNow;
     }
 
+    /// <summary>
+    /// Intake's close (docs/intake-plan.md): a ticket no run is working moved straight to Done by the
+    /// board, with the reason on its record, for the two cases where nobody is going to review
+    /// anything - an issue its owner muted ("never file this again"), and a project's end-to-end
+    /// test report. The phase machine reaches Done only from review, which is right for work; these
+    /// were never work. Refused while a run holds the ticket, so a worker is never pulled out from
+    /// under. Null when there is no such ticket; false when it was not closed.
+    /// </summary>
+    public async Task<bool?> CloseUnworkedAsync(int id, string reason, TransitionActor actor)
+    {
+        var t = await _db.Tickets.FirstOrDefaultAsync(x => x.Id == id);
+        if (t is null) return null;
+        if (t.Phase == TicketPhase.Done) return true;
+        if (PhaseMachine.IsInProgress(t.Phase)) return false;
+        var from = t.Phase;
+        var at = DateTime.UtcNow;
+        t.Phase = TicketPhase.Done;
+        t.PhaseBeforeBlock = null;
+        t.BlockedReason = null;
+        t.ReviewedOn = null;
+        t.ReviewedOnAt = null;
+        t.UpdatedAt = at;
+        _db.Comments.Add(new Comment { TicketId = t.Id, Author = AuthorKind.System, Body = $"Phase changed {from} → Done — {reason.Trim()}", Phase = TicketPhase.Done });
+        _db.PhaseTransitions.Add(new PhaseTransition
+        {
+            TicketId = t.Id, ProjectKey = t.ProjectKey, Track = t.Track, From = from, To = TicketPhase.Done,
+            Actor = actor, Reason = reason.Trim(), Backward = false, At = at,
+        });
+        await _db.SaveChangesAsync();
+        return true;
+    }
+
     // ---- Comments ----
 
     public async Task<Comment?> AddCommentAsync(int ticketId, string body, AuthorKind author,
