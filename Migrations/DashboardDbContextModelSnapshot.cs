@@ -1885,6 +1885,63 @@ namespace Whetstone.Migrations
                     b.ToTable("ReconDismissalEvents");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.ReconDraft", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Area")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CacheCreationTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("CacheReadTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CandidatesJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("DurationMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("InputTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("OutputTokens")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Question")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SuggestionKey")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "SuggestionKey");
+
+                    b.ToTable("ReconDrafts");
+                });
+
             modelBuilder.Entity("Whetstone.Models.ResourceLease", b =>
                 {
                     b.Property<int>("Id")
@@ -2617,6 +2674,10 @@ namespace Whetstone.Migrations
                     b.Property<string>("Description")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("DirectionSource")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
                     b.Property<int?>("DiscoveryId")
                         .HasColumnType("INTEGER");
 
@@ -2697,6 +2758,9 @@ namespace Whetstone.Migrations
 
                     b.Property<DateTime?>("QaShotsWaiverAt")
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("ReconDraftId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("ReconFrom")
                         .HasMaxLength(256)

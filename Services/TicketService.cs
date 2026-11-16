@@ -769,7 +769,7 @@ public class TicketService
         bool skipQaTesting = false, TicketPriority priority = TicketPriority.Normal,
         TicketTrack track = TicketTrack.Delivery, ReviewTarget? reviewTarget = null,
         bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null, int? planUnit = null,
-        bool requiresRouteReview = false, string? reconFrom = null)
+        bool requiresRouteReview = false, string? reconFrom = null, int? reconDraftId = null, string? directionSource = null)
     {
         // A ticket's own base is a delivery ticket's: a review ticket is read against the target
         // its pull request names (ReviewTarget.TargetBranch).
@@ -796,6 +796,8 @@ public class TicketService
             RequiresRouteReview = track == TicketTrack.Discovery && requiresRouteReview,
             // The Recon suggestion it was filed from; the create route has checked its shape.
             ReconFrom = track == TicketTrack.Discovery ? reconFrom : null,
+            ReconDraftId = track == TicketTrack.Discovery ? reconDraftId : null,
+            DirectionSource = track == TicketTrack.Discovery ? directionSource : null,
             SkipQaTesting = skipQaTesting,
             SkipClassroomAnalysis = skipClassroomAnalysis,
             Priority = priority,

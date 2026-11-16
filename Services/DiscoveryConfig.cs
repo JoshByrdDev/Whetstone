@@ -21,8 +21,25 @@ namespace Whetstone.Services;
 /// <c>**</c> across them). On a project of several repos each starts with its repo's folder
 /// (<c>alpha-api/src/Billing</c>). An area with no code paths shows coverage but is never stale.
 /// </para>
+/// <para>
+/// <b>About</b> is the owner's sentence or two on what the area is for and who comes to it ("where a
+/// business owner runs their listing and their staff check bookings in"). It is the one thing an
+/// agent drafting a direction for the area is told about it besides its name and pages, and Chart
+/// reads it through get_discovery. It describes the people and their reasons, never the screens: a
+/// direction drafted from a list of features is written as a feature, and finds less.
+/// </para>
+/// <para>
+/// <b>Roles</b> are which of the project's roles use the area, word for word from
+/// <see cref="DiscoveryConfig.Roles"/> (matched without case, written back in the project's
+/// spelling; a name the project does not list is dropped). Empty is every role. Recon's coverage
+/// counts only those cells as the area's, so nobody is asked to scout an owner's portal signed out.
+/// </para>
 /// </summary>
-public sealed record DiscoveryArea(string Name, string[] Pages, string[] Code);
+public sealed record DiscoveryArea(string Name, string[] Pages, string[] Code, string About = "", string[]? Roles = null)
+{
+    /// <summary>The roles that use it, never null: empty is every role.</summary>
+    public string[] Roles { get; init; } = Roles ?? Array.Empty<string>();
+}
 
 /// <summary>
 /// A project's <c>discovery</c> block in <c>project.defaults.json</c> (docs/discovery-track-plan.md).
@@ -105,11 +122,12 @@ public sealed record DiscoveryConfig
     public static DiscoveryConfig From(Dictionary<string, JsonElement> cfg)
     {
         if (!cfg.TryGetValue("discovery", out var d) || d.ValueKind != JsonValueKind.Object) return new DiscoveryConfig();
+        var roles = Strs(d, "roles").Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         var areas = new List<DiscoveryArea>();
         if (d.TryGetProperty("areas", out var a) && a.ValueKind == JsonValueKind.Array)
             foreach (var e in a.EnumerateArray())
                 if (e.ValueKind == JsonValueKind.Object && Str(e, "name") is { Length: > 0 } name)
-                    areas.Add(new DiscoveryArea(name, Strs(e, "pages"), Strs(e, "code")));
+                    areas.Add(new DiscoveryArea(name, Strs(e, "pages"), Strs(e, "code"), Str(e, "about"), AreaRoles(Strs(e, "roles"), roles)));
         var max = d.TryGetProperty("maxProposals", out var m) && m.ValueKind == JsonValueKind.Number ? m.GetInt32() : 6;
         var rounds = d.TryGetProperty("recheckRounds", out var rr) && rr.ValueKind == JsonValueKind.Number ? rr.GetInt32() : DefaultRecheckRounds;
         var review = d.TryGetProperty("reviewRoute", out var rv) && rv.ValueKind == JsonValueKind.True;
@@ -127,9 +145,16 @@ public sealed record DiscoveryConfig
             Prepare = Str(d, "prepare"),
             Teardown = Str(d, "teardown"),
             Areas = areas.ToArray(),
-            Roles = Strs(d, "roles").Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Roles = roles,
         };
     }
+
+    /// <summary>An area's roles in the project's own spelling and order; a name the project does not list is dropped.</summary>
+    private static string[] AreaRoles(string[] named, string[] project) =>
+        project.Where(r => named.Contains(r, StringComparer.OrdinalIgnoreCase)).ToArray();
+
+    /// <summary>The roles an area is used as: its own, else every one the project lists.</summary>
+    public string[] RolesOf(DiscoveryArea area) => area.Roles.Length > 0 ? area.Roles : Roles;
 
     private static string Str(JsonElement e, string name) =>
         e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()!.Trim() : "";

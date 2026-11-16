@@ -35,3 +35,36 @@ public class ReconDismissalEvent
 
     public DateTime At { get; set; } = DateTime.UtcNow;
 }
+
+/// <summary>
+/// One agent draft of directions for a Recon suggestion (docs/recon-tab-plan.md, "Drafted
+/// directions"): two or three candidates, each a person and the job they came to do, for the owner
+/// to pick from, edit and file - or to ignore. Asked for by the owner from the Scout form, through a
+/// REST route with no MCP tool behind it, and kept, so the form reopens on the last draft rather than
+/// paying for another, and so a filed discovery can say which candidate it started from
+/// (<see cref="Ticket.ReconDraftId"/>) - which is how drafted and written directions are compared.
+/// </summary>
+public class ReconDraft
+{
+    public int Id { get; set; }
+    public string ProjectKey { get; set; } = "";
+
+    /// <summary>The suggestion it was drafted for: <c>gap:&lt;area&gt;[:&lt;role&gt;:&lt;width&gt;]</c> or <c>changed:&lt;area&gt;</c>.</summary>
+    public string SuggestionKey { get; set; } = "";
+
+    public string Area { get; set; } = "";
+
+    /// <summary>The candidates, as JSON: <c>[{direction, signedInAs, width, why}]</c> (<see cref="Services.ReconDrafter.Candidate"/>).</summary>
+    public string CandidatesJson { get; set; } = "[]";
+
+    /// <summary>What the drafter said it would need to draft better, aimed at the area's <c>about</c>. Null when it had enough.</summary>
+    public string? Question { get; set; }
+
+    public string? Model { get; set; }
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long CacheReadTokens { get; set; }
+    public long CacheCreationTokens { get; set; }
+    public int DurationMs { get; set; }
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+}

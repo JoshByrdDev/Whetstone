@@ -348,7 +348,10 @@ So from the first run, Discovery keeps these, structured rather than in prose:
 - **Which area.** A project names its areas once (`discovery.areas` in `project.defaults.json`:
   each area's page patterns and code paths - its showcase modules are the natural first list), and
   every visit, observation and proposal carries the area it belongs to. Page patterns give the
-  tab coverage from the user's side; code paths give it what changed since, from git.
+  tab coverage from the user's side; code paths give it what changed since, from git. An area may
+  also say, in the owner's words, who comes to it and why (`about`) and which of the project's
+  roles use it (`roles`): coverage counts only those roles' cells, and both are what a drafted
+  direction and Chart read about it (docs/recon-tab-plan.md, "Drafted directions").
 - **Which showcase cases.** A run that starts from a case, or lands on one, records its id, so
   cases never visited show up as cold spots.
 - **Who it was.** The persona and role on the route, so coverage is by kind of user as well as by

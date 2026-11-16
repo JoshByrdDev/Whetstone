@@ -24,7 +24,7 @@ models:
     columns:
       - name: cut
         tests:
-          - accepted_values: {values: [area, direction]}
+          - accepted_values: {values: [area, direction, source]}
   - name: mart_recon_suggestions
     tests:
       - unique_combination: {columns: [project_key, suggestion_key]}
@@ -132,6 +132,82 @@ unit_tests:
         - {project_key: bravo, area: Help, role: any role, width: phone, in_config: true, visits: 1, state: fresh, last_commit: c9, commits_since: 0, tickets_since: '[]', shown: 0, approved: 0, area_head_commit: null}
         - {project_key: bravo, area: Help, role: any role, width: desk, in_config: true, visits: 0, state: gap, last_commit: null, commits_since: 0, tickets_since: '[]', shown: 0, approved: 0, area_head_commit: null}
 
+  # An area used as only some of the project's roles has cells for those alone: alpha's Portal is an
+  # owner's and their staff's, so nobody is asked to scout it signed out. An area naming no roles of
+  # its own (Events) has every role's cells. A visit there as a role it does not list is still shown,
+  # outside the config, so the list can be fixed.
+  - name: recon_coverage_keeps_to_an_areas_own_roles
+    model: mart_recon_coverage
+    given:
+      - input: ref('stg_recon__projects')
+        rows:
+          - {project_key: alpha, role_count: 3}
+      - input: ref('stg_recon__areas')
+        rows:
+          - {project_key: alpha, area: Events, area_ordinal: 0, has_code: false, roles: []}
+          - {project_key: alpha, area: Portal, area_ordinal: 1, has_code: false, roles: [owner, staff]}
+      - input: ref('stg_recon__roles')
+        rows:
+          - {project_key: alpha, role: signed out, role_ordinal: 0}
+          - {project_key: alpha, role: owner, role_ordinal: 1}
+          - {project_key: alpha, role: staff, role_ordinal: 2}
+      - input: ref('int_recon_visit_area')
+        rows:
+          - {visit_id: 1, discovery_id: 1, project_key: alpha, area: Portal, area_ordinal: 1, role: signed out, role_ordinal: 0, width: phone, seconds: 5, visited_at: '2026-10-01 10:00:00', commit_sha: c1, placement: line, fp_index: 0}
+      - input: ref('int_recon_visit_since')
+        rows:
+          - {visit_id: 1, commits_since: 0, files_since: 0, tickets_since: []}
+      - input: ref('int_recon_area_state')
+        rows:
+          - {project_key: alpha, area: Events, has_code: false, area_head_commit: null, cooling: false}
+          - {project_key: alpha, area: Portal, has_code: false, area_head_commit: null, cooling: false}
+      - input: ref('fct_discovery_proposals')
+        format: sql
+        rows: "select null::integer as proposal_id, null::integer as discovery_id, null::boolean as shown, null::boolean as approved where false"
+      - input: ref('stg_board__discovery_proposals')
+        format: sql
+        rows: "select null::integer as proposal_id, null::integer as discovery_id, null::integer[] as observation_ids where false"
+      - input: ref('int_recon_observation_area')
+        format: sql
+        rows: "select null::integer as observation_id, null::integer as discovery_id, null::varchar as project_key, null::varchar as area, null::varchar as role, null::varchar as width where false"
+    expect:
+      rows:
+        - {area: Events, role: signed out, width: phone, in_config: true, state: gap}
+        - {area: Events, role: signed out, width: desk, in_config: true, state: gap}
+        - {area: Events, role: owner, width: phone, in_config: true, state: gap}
+        - {area: Events, role: owner, width: desk, in_config: true, state: gap}
+        - {area: Events, role: staff, width: phone, in_config: true, state: gap}
+        - {area: Events, role: staff, width: desk, in_config: true, state: gap}
+        - {area: Portal, role: signed out, width: phone, in_config: false, state: fresh}
+        - {area: Portal, role: owner, width: phone, in_config: true, state: gap}
+        - {area: Portal, role: owner, width: desk, in_config: true, state: gap}
+        - {area: Portal, role: staff, width: phone, in_config: true, state: gap}
+        - {area: Portal, role: staff, width: desk, in_config: true, state: gap}
+
+  # A never-scouted area used as two of the project's three roles: its stub names those two, and
+  # its cells are theirs alone.
+  - name: recon_a_never_scouted_gap_names_who_it_is_for
+    model: mart_recon_suggestions
+    given:
+      - input: ref('int_recon_area_state')
+        rows:
+          - {project_key: alpha, area: Portal, area_ordinal: 0, has_code: true, state: never, changed_recently: false, commits_90d: 0, files_90d: 0, tickets_since: [], tickets_90d: [], cooling: false}
+      - input: ref('mart_recon_coverage')
+        rows:
+          - {project_key: alpha, area: Portal, role: owner, role_ordinal: 1, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Portal, role: owner, role_ordinal: 1, width: desk, width_ordinal: 1, in_config: true, state: gap}
+          - {project_key: alpha, area: Portal, role: staff, role_ordinal: 2, width: phone, width_ordinal: 0, in_config: true, state: gap}
+          - {project_key: alpha, area: Portal, role: staff, role_ordinal: 2, width: desk, width_ordinal: 1, in_config: true, state: gap}
+      - input: ref('int_discovery_tickets')
+        format: sql
+        rows: "select null::integer as discovery_id, null::varchar as project_key, null::varchar as direction, null::integer as direction_lineage_id, null::timestamp as created_at where false"
+      - input: ref('fct_discovery_proposals')
+        format: sql
+        rows: "select null::integer as proposal_id, null::integer as discovery_id, null::varchar as area, null::boolean as shown, null::boolean as approved, null::boolean as new_to_me where false"
+    expect:
+      rows:
+        - {suggestion_key: 'gap:Portal', rank: 1, direction: 'Nobody has used Portal yet, as owner or staff.', cells: '[{"role":"owner","width":"phone"},{"role":"owner","width":"desk"},{"role":"staff","width":"phone"},{"role":"staff","width":"desk"}]'}
+
   # The rules, in their order. Events changed since it was scouted and a past direction had an
   # approval there: rerun, first - and every cell of it is covered, so it has no gap row. Billing,
   # never scouted, changed in the last 30 days: gap, rule 2. Search is the same with more files, but
@@ -174,9 +250,9 @@ unit_tests:
     expect:
       rows:
         - {rank: 1, rule: 1, kind: rerun, suggestion_key: 'rerun:10', area: Events, direction: 'Plan your month as a member', source_discovery_id: 10, files_changed: 5, cooling: false, reasons: '["scouted 3 Oct on e1e1e1e","4 commits, 5 files in its code since, from 1 ticket","this direction: 1 approved here, 1 new to me"]'}
-        - {rank: 2, rule: 2, kind: gap, suggestion_key: 'gap:Billing', area: Billing, direction: 'Nobody has used Billing yet.', source_discovery_id: null, files_changed: 2, cooling: false, reasons: '["never scouted","its code changed in the last 30 days (2 commits in 90)"]'}
-        - {rank: 3, rule: 2, kind: gap, suggestion_key: 'gap:Search', area: Search, direction: 'Nobody has used Search yet.', source_discovery_id: null, files_changed: 9, cooling: true, reasons: '["never scouted","its code changed in the last 30 days (9 commits in 90)","cooling: its last 3 discoveries had nothing approved here"]'}
-        - {rank: 4, rule: 3, kind: gap, suggestion_key: 'gap:Admin', area: Admin, direction: 'Nobody has used Admin yet.', source_discovery_id: null, files_changed: 0, cooling: false, reasons: '["never scouted"]'}
+        - {rank: 2, rule: 2, kind: gap, suggestion_key: 'gap:Billing', area: Billing, direction: 'Nobody has used Billing yet, as member.', source_discovery_id: null, files_changed: 2, cooling: false, reasons: '["never scouted","its code changed in the last 30 days (2 commits in 90)"]'}
+        - {rank: 3, rule: 2, kind: gap, suggestion_key: 'gap:Search', area: Search, direction: 'Nobody has used Search yet, as member.', source_discovery_id: null, files_changed: 9, cooling: true, reasons: '["never scouted","its code changed in the last 30 days (9 commits in 90)","cooling: its last 3 discoveries had nothing approved here"]'}
+        - {rank: 4, rule: 3, kind: gap, suggestion_key: 'gap:Admin', area: Admin, direction: 'Nobody has used Admin yet, as member.', source_discovery_id: null, files_changed: 0, cooling: false, reasons: '["never scouted"]'}
         - {rank: 5, rule: 3, kind: gap, suggestion_key: 'gap:Help', area: Help, direction: 'Nobody has used Help as anyone on a phone.', source_discovery_id: null, files_changed: 0, cooling: false, reasons: '["scouted 1 Oct on e1e1e1e","never as member on a phone","no code paths, so never stale"]'}
         - {rank: 6, rule: 4, kind: changed, suggestion_key: 'changed:Shop', area: Shop, direction: 'Shop has changed since it was scouted on 2 Oct. Use it again as the people it is for, and see what is different.', source_discovery_id: null, files_changed: 1, cooling: false, reasons: '["scouted 2 Oct on e1e1e1e","1 commit, 1 file in its code since","nothing approved from past directions here"]'}
 
@@ -216,7 +292,8 @@ unit_tests:
 
   # A direction and its reruns are one lineage: discovery 11 reran 10, so their proposals count
   # together under 10's title, and Scout again reruns the latest of them. By area, a discovery
-  # counts where it visited or proposed; only its proposals in the area count there.
+  # counts where it visited or proposed; only its proposals in the area count there. By source, each
+  # discovery counts under where its direction came from: 10 was the owner's words, 11 a draft.
   - name: recon_yield_follows_a_direction_across_its_reruns
     model: mart_recon_yield
     overrides:
@@ -225,8 +302,8 @@ unit_tests:
     given:
       - input: ref('int_discovery_tickets')
         rows:
-          - {discovery_id: 10, project_key: alpha, track: Discovery, direction: 'Plan your month', direction_lineage_id: 10, direction_lineage_title: 'Plan a month', created_at: '2026-10-01 09:00:00', cost_usd: 1.5, cost_complete: true}
-          - {discovery_id: 11, project_key: alpha, track: Discovery, direction: 'Plan your month again', direction_lineage_id: 10, direction_lineage_title: 'Plan a month', created_at: '2026-11-01 09:00:00', cost_usd: null, cost_complete: false}
+          - {discovery_id: 10, project_key: alpha, track: Discovery, direction: 'Plan your month', direction_source: owner, direction_lineage_id: 10, direction_lineage_title: 'Plan a month', created_at: '2026-10-01 09:00:00', cost_usd: 1.5, cost_complete: true}
+          - {discovery_id: 11, project_key: alpha, track: Discovery, direction: 'Plan your month again', direction_source: draft, direction_lineage_id: 10, direction_lineage_title: 'Plan a month', created_at: '2026-11-01 09:00:00', cost_usd: null, cost_complete: false}
       - input: ref('int_recon_visit_area')
         rows:
           - {visit_id: 1, discovery_id: 10, project_key: alpha, area: Events}
@@ -243,3 +320,5 @@ unit_tests:
         - {window_days: 0, project_key: alpha, cut: area, cut_key: Billing, label: Billing, discoveries: 1, shown: 1, approved: 1, rejected: 0, rejected_generic: 0, new_to_me: 0, filed: 1, cost_usd: null, cost_complete: false, latest_discovery_id: 11}
         - {window_days: 0, project_key: alpha, cut: area, cut_key: Events, label: Events, discoveries: 2, shown: 2, approved: 1, rejected: 1, rejected_generic: 1, new_to_me: 1, filed: 1, cost_usd: null, cost_complete: false, latest_discovery_id: 11}
         - {window_days: 0, project_key: alpha, cut: direction, cut_key: '10', label: 'Plan a month', discoveries: 2, shown: 3, approved: 2, rejected: 1, rejected_generic: 1, new_to_me: 1, filed: 2, cost_usd: null, cost_complete: false, latest_discovery_id: 11}
+        - {window_days: 0, project_key: alpha, cut: source, cut_key: draft, label: draft, discoveries: 1, shown: 2, approved: 1, rejected: 1, rejected_generic: 1, new_to_me: 0, filed: 1, cost_usd: null, cost_complete: false, latest_discovery_id: 11}
+        - {window_days: 0, project_key: alpha, cut: source, cut_key: owner, label: owner, discoveries: 1, shown: 1, approved: 1, rejected: 0, rejected_generic: 0, new_to_me: 1, filed: 1, cost_usd: 1.5, cost_complete: true, latest_discovery_id: 10}

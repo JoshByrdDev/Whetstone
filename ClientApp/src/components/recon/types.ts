@@ -6,7 +6,8 @@ import type { AnalyticsStatus } from '../metrics/types';
  * every column.
  */
 
-export interface ReconArea { name: string; pages: string[]; code: string[] }
+/** An area as its config has it: `about` is the owner's words on who it is for, `roles` the roles it is used as (empty: every role). */
+export interface ReconArea { name: string; pages: string[]; code: string[]; about: string; roles: string[] }
 
 export interface ReconRepo { repo: string; base_ref: string | null; tip: string | null; commits: number | null; error: string | null }
 
@@ -72,7 +73,26 @@ export interface YieldRow {
   latestDiscoveryId: number | null; latestDirection: string | null; latestAt: string | null;
 }
 
-export interface YieldRead { days: number; areas: YieldRow[]; directions: YieldRow[] }
+export interface YieldRead { days: number; areas: YieldRow[]; directions: YieldRow[]; sources: YieldRow[] }
 
-/** What Scout this hands the new-ticket form: the key it files under, and the words it starts from. */
-export interface ScoutAsk { key: string; title: string; direction: string; note: string }
+/** One drafted direction (ReconDrafter.Candidate). */
+export interface DraftCandidate { direction: string; signedInAs: string; width: 'phone' | 'desk' | 'both'; why: string }
+
+/** A stored draft for one suggestion (ReconDrafter.DraftView). */
+export interface ReconDraftView {
+  id: number; key: string; area: string; candidates: DraftCandidate[]; question: string | null;
+  createdAt: string; model: string | null; durationMs: number;
+}
+
+/**
+ * What Scout this hands the new-ticket form: the key it files under, and the words it starts from.
+ * A gap's or a changed area's direction starts empty - the row's line describes the gap, it is not a
+ * direction - with a question as the placeholder, and `draftKey` set so the form can have one drafted.
+ */
+export interface ScoutAsk {
+  key: string; title: string; direction: string; note: string;
+  /** The question the empty direction asks, as its placeholder. */
+  placeholder?: string;
+  /** The suggestion an agent can draft directions for (gap or changed), and its area. */
+  draftKey?: string; area?: string;
+}

@@ -10,6 +10,9 @@ select
     nullif(trim("Description"), '')       as direction,
     coalesce("RequiresRouteReview", false) as requires_route_review,
     nullif("ReconFrom", '')               as recon_from,
+    -- Where the direction came from (Ticket.DirectionSource); one filed before it was recorded, or
+    -- by hand from the board, was the owner's own words.
+    coalesce(nullif("DirectionSource", ''), 'owner') as direction_source,
     {{ board_ts('"CreatedAt"') }}         as created_at,
     {{ board_ts('"UpdatedAt"') }}         as updated_at
 from {{ source('board', 'Tickets') }}

@@ -116,7 +116,10 @@ export function ReconPanel({ state }: { state: DashboardState }) {
       try { setTicketProjects((await getProjects()).projects); }
       catch (e) { setActionError(`Could not open the form: ${String(e)}`); return; }
     }
-    setAsk({ projectKey: p.key, track: 'Discovery', title: a.title, description: a.direction, note: a.note, reconFrom: a.key });
+    setAsk({
+      projectKey: p.key, track: 'Discovery', title: a.title, description: a.direction, note: a.note, reconFrom: a.key,
+      placeholder: a.placeholder, draftKey: a.draftKey, area: a.area,
+    });
   };
 
   const act = async (key: string, url: string, body: unknown) => {
@@ -200,11 +203,14 @@ function States({ p, read, onRefresh }: { p: ReconProject; read: ReconProjects; 
         <p className="mt-1">
           Recon maps where scouts have been by area, and {p.displayName} has none. Add them to its
           <span style={mono}> discovery</span> block in <span style={mono}>project.defaults.json</span> - each a name,
-          the page patterns it covers, and the code paths that make it:
+          the page patterns it covers, the code paths that make it, and optionally a sentence on who it is for
+          and the roles that use it, which is what a drafted direction is written from:
         </p>
         <pre className="mt-2 overflow-x-auto border border-hair bg-sunk p-2 text-[11px] text-gray-300" style={mono}>{`"discovery": {
   "areas": [
-    { "name": "Billing", "pages": ["/billing/**"], "code": ["src/billing/**"] }
+    { "name": "Billing", "pages": ["/billing/**"], "code": ["src/billing/**"],
+      "about": "Where a member pays and an admin chases what is owed.",
+      "roles": ["member", "admin"] }
   ],
   "roles": ["signed out", "member", "admin"]
 }`}</pre>

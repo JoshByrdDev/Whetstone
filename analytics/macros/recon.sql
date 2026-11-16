@@ -110,3 +110,9 @@
 {% macro recon_width_phrase(col) -%}
     (case {{ col }} when 'phone' then 'on a phone' when 'desk' then 'at a desk' else 'at an unknown width' end)
 {%- endmacro %}
+
+{#- A list of names as a sentence says it: "admin", "member or admin", "signed out, member or admin". -#}
+{% macro recon_or_list(col) -%}
+    (case when len({{ col }}) <= 1 then coalesce({{ col }}[1], '')
+          else array_to_string({{ col }}[1:len({{ col }}) - 1], ', ') || ' or ' || {{ col }}[len({{ col }})] end)
+{%- endmacro %}

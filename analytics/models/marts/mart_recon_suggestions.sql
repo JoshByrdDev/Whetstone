@@ -13,8 +13,10 @@
 -- Inside a rule: more files changed first (since the last scout, or in the last 90 days for an area
 -- never scouted), then the area scouted longest ago, never-scouted first. An area that is `cooling` -
 -- its last three judged discoveries had nothing approved there - sinks to the bottom of its rule.
--- A gap row is one per area, listing its empty cells (`cells`); its direction is a stub naming them,
--- for the owner to rewrite as a job. An area with no code paths is never stale, so it is never a
+-- A gap row is one per area, listing its empty cells (`cells`); its direction is a stub naming them
+-- - a description of the gap for the row, never a direction to file: Scout this starts the form's
+-- direction empty, for the owner to write or to have drafted. An area's cells are its own roles
+-- (discovery.areas[].roles) x the two widths, so its counts are per area, not per project. An area with no code paths is never stale, so it is never a
 -- rerun or changed row. Hiding a row while an open discovery carries its key, or while it is set
 -- aside, is the reader's, on live tables.
 with st as (
@@ -51,8 +53,8 @@ gaps as (
     select project_key, area, area_ordinal, role, role_ordinal, width, width_ordinal from cov where state = 'gap'
 ),
 dims as (
-    select project_key, count(distinct role) as n_roles, bool_or(role = 'any role') as any_role
-    from cov group by project_key
+    select project_key, area, count(distinct role) as n_roles, bool_or(role = 'any role') as any_role
+    from cov group by project_key, area
 ),
 gap_area as (
     select g.project_key, g.area, count(*) as missing, any_value(dm.n_roles) * 2 as cells_total,
@@ -61,18 +63,18 @@ gap_area as (
            list(case when dm.any_role then {{ recon_width_phrase('g.width') }}
                      else 'as ' || g.role || ' ' || {{ recon_width_phrase('g.width') }} end
                 order by g.role_ordinal, g.width_ordinal) as cell_phrases
-    from gaps g join dims dm using (project_key)
+    from gaps g join dims dm using (project_key, area)
     group by g.project_key, g.area
 ),
 full_w as (
     select g.project_key, g.area, g.width, g.width_ordinal
-    from gaps g join dims dm using (project_key)
+    from gaps g join dims dm using (project_key, area)
     group by g.project_key, g.area, g.width, g.width_ordinal
     having count(*) = any_value(dm.n_roles)
 ),
 full_r as (
     select g.project_key, g.area, g.role, g.role_ordinal
-    from gaps g join dims dm using (project_key)
+    from gaps g join dims dm using (project_key, area)
     where not dm.any_role
     group by g.project_key, g.area, g.role, g.role_ordinal
     having count(*) = 2
@@ -82,11 +84,11 @@ parts as (
     union all
     select w.project_key, w.area, 1, w.width_ordinal,
            case when dm.any_role then {{ recon_width_phrase('w.width') }} else 'as anyone ' || {{ recon_width_phrase('w.width') }} end
-    from full_w w join dims dm using (project_key)
+    from full_w w join dims dm using (project_key, area)
     union all
     select g.project_key, g.area, 2, g.role_ordinal * 10 + g.width_ordinal,
            'as ' || g.role || ' ' || {{ recon_width_phrase('g.width') }}
-    from gaps g join dims dm using (project_key)
+    from gaps g join dims dm using (project_key, area)
     where not dm.any_role
       and not exists (select 1 from full_w w where w.project_key = g.project_key and w.area = g.area and w.width = g.width)
       and not exists (select 1 from full_r r where r.project_key = g.project_key and r.area = g.area and r.role = g.role)
@@ -95,22 +97,25 @@ phrase as (
     select project_key, area, list(phrase order by grp, o) as ps from parts group by all
 ),
 role_names as (
-    select project_key, list(role order by role_ordinal) as roles
-    from (select distinct project_key, role, role_ordinal from cov) group by project_key
+    select project_key, area, list(role order by role_ordinal) as roles
+    from (select distinct project_key, area, role, role_ordinal from cov) group by project_key, area
 ),
 stub as (
     select ga.project_key, ga.area,
-           case when ga.missing = ga.cells_total and st.last_visited_at is null then 'Nobody has used ' || ga.area || ' yet.'
-                -- Visited, but only as a role or at a width the project does not list.
+           case when ga.missing = ga.cells_total and st.last_visited_at is null and ga.any_role then 'Nobody has used ' || ga.area || ' yet.'
+                -- Never scouted: say who it is for, so the row reads as the people missing, not the screens.
+                when ga.missing = ga.cells_total and st.last_visited_at is null then 'Nobody has used ' || ga.area || ' yet, as '
+                     || {{ recon_or_list('rn.roles') }} || '.'
+                -- Visited, but only as a role or at a width the area does not list.
                 when ga.missing = ga.cells_total then 'Nobody has used ' || ga.area || ' as '
-                     || array_to_string(rn.roles, ' or ') || '.'
+                     || {{ recon_or_list('rn.roles') }} || '.'
                 when len(ph.ps) = 1 then 'Nobody has used ' || ga.area || ' ' || ph.ps[1] || '.'
                 else 'Nobody has used ' || ga.area || ' ' || array_to_string(ph.ps[1:len(ph.ps) - 1], ', ')
                      || ', or ' || ph.ps[len(ph.ps)] || '.' end as direction
     from gap_area ga
     left join phrase ph using (project_key, area)
     join st using (project_key, area)
-    join role_names rn using (project_key)
+    join role_names rn using (project_key, area)
 ),
 
 -- ---- the rows, before ranking

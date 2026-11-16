@@ -425,6 +425,21 @@ public class Ticket
     public string? ReconFrom { get; set; }
 
     /// <summary>
+    /// The Recon draft a discovery's direction was picked from (<see cref="ReconDraft"/>), when it was.
+    /// Set only by the REST create route, like <see cref="ReconFrom"/>.
+    /// </summary>
+    public int? ReconDraftId { get; set; }
+
+    /// <summary>
+    /// Where a discovery's direction came from, worked out by the create route when it is filed:
+    /// <c>draft</c> (a drafted candidate as it was), <c>draft-edited</c> (one the owner changed),
+    /// <c>rerun</c> (a past direction offered again, word for word) or <c>owner</c> (written by the
+    /// owner, the default for every discovery filed any other way). Recon's yield is cut by it, which
+    /// is what says whether drafting pays (docs/recon-tab-plan.md, "Drafted directions").
+    /// </summary>
+    public string? DirectionSource { get; set; }
+
+    /// <summary>
     /// Run QA as a code review only — no app, no browser, no QA checklist. For work small or
     /// mechanical enough that standing a stack up to click through it costs more than it proves.
     /// Off by default, so an untouched ticket behaves exactly as it always has.

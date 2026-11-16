@@ -46,6 +46,7 @@ public class QaIsolationTests : IDisposable
     [InlineData("POST", "/api/classroom/analyses/3/walkthrough")]
     [InlineData("POST", "/api/unit-reports/3/walkthrough")]
     [InlineData("POST", "/api/steward/plan/units/2/report")]
+    [InlineData("POST", "/api/recon/alpha/drafts")]
     [InlineData("POST", "/api/tickets/7/git/pr")]
     [InlineData("POST", "/api/tickets/7/git/force-push")]
     [InlineData("POST", "/api/tickets/7/git/push")]

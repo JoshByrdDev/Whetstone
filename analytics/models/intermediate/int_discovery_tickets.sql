@@ -115,6 +115,7 @@ select
     d.phase = 'Done'                                        as is_done,
     d.title,
     d.direction,
+    d.direction_source,
     d.created_at,
     date_trunc('week', d.created_at)::date                  as created_week,
     c.lineage_id                                            as direction_lineage_id,

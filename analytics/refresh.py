@@ -127,6 +127,9 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         # Recon's "Scout this" key (docs/recon-tab-plan.md, R1): gap:/changed:/rerun:<id>. A rerun's
         # results count toward the direction it reran.
         "ReconFrom": "VARCHAR",
+        # Where a discovery's direction came from (Ticket.DirectionSource): owner, draft,
+        # draft-edited or rerun. NULL on a discovery filed before it was recorded, read as owner.
+        "DirectionSource": "VARCHAR",
     },
     # The Discovery track's record (docs/discovery-track-plan.md). Lists (Jobs, Areas, ObservationIds,
     # EventIds...) are the JSON arrays EF writes; long prose (a proposal's body, a taste file's text)
@@ -561,7 +564,9 @@ RECON_DDL = {
     # One row per project with a `discovery` block, as the board's config had it when it started
     # this refresh.
     "recon_projects": "project_key VARCHAR, ordinal INTEGER, areas INTEGER, roles INTEGER, inputs_at VARCHAR",
-    "recon_areas": "project_key VARCHAR, area VARCHAR, ordinal INTEGER, pages VARCHAR[], code VARCHAR[]",
+    # `roles` is the roles the area is used as, in the project's spelling: its own `roles`, else every
+    # one the project lists (the board resolves which), empty when the project lists none.
+    "recon_areas": "project_key VARCHAR, area VARCHAR, ordinal INTEGER, pages VARCHAR[], code VARCHAR[], roles VARCHAR[]",
     "recon_roles": "project_key VARCHAR, role VARCHAR, ordinal INTEGER",
     # Each repo's resolved base ref (TicketGitService's rule, applied by the board) and its tip.
     "recon_repos": "project_key VARCHAR, repo VARCHAR, base_ref VARCHAR, tip_sha VARCHAR, commits INTEGER, error VARCHAR",
@@ -609,7 +614,8 @@ def load_recon(con: duckdb.DuckDBPyConnection, inputs_file: Path) -> dict:
         p_roles = [r for r in proj.get("roles") or [] if r]
         projects.append((key, pi, len(p_areas), len(p_roles), at))
         for ai, a in enumerate(p_areas):
-            areas.append((key, a["name"], ai, list(a.get("pages") or []), list(a.get("code") or [])))
+            areas.append((key, a["name"], ai, list(a.get("pages") or []), list(a.get("code") or []),
+                          list(a.get("roles") or [])))
         for ri, r in enumerate(p_roles):
             roles.append((key, r, ri))
         # The commits this project's visits and observations recorded, to place on each repo's line.

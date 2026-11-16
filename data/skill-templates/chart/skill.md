@@ -36,6 +36,7 @@ Most projects are one repo, and this section does not apply to them. When your p
 - **Where to start**: showcase cases by id, when the project lists them (its copy of this skill says where). A case is a starting point, not a script.
 - **Widths**: a desk (`1440x900`) and a phone (`390x844`) unless the direction says otherwise. Most products are used on a phone more than anyone remembers.
 - **Areas**, when `get_discovery` lists the project's (`project.areas`): the ones these jobs will reach, by those names.
+- **The owner's word on an area**, when `get_discovery` has one (`project.areaGuide`): who comes to it and why (`about`), and the roles it is used as (`usedAs`). A route into that area is signed in as one of those roles, and its persona can lean on the `about`. It describes people, not the product's plans, so it is the one thing about the product this phase reads.
 - **Notes**: anything the scout needs to start - a case that only makes sense signed in, a job that needs a second visit. Never what the product is supposed to do.
 
 ## The rules this phase is built around

@@ -11,7 +11,11 @@ import type { InFlight, ReconCell, ScoutAsk, SetAside, Suggestion, SuggestionsRe
  * `mart_recon_suggestions.rank`, and the two live filters (an open discovery carrying a row's key,
  * the owner's Not now) were applied by the route.
  *
- * Scout this opens the new-ticket form with the direction in it; Not now sets a row aside until its
+ * Scout this opens the new-ticket form. A rerun's direction goes in word for word; a gap's or a
+ * changed area's does not - the row's line describes the gap, and a description of a gap is not a
+ * direction - so the form starts it empty, asking the question, with Draft directions beside it.
+ * A gap spanning more than one role lists its cells on the row itself, each scoutable on its own:
+ * a whole area is rarely one person's job. Not now sets a row aside until its
  * area's code moves, or for a week or a month. The first row's Scout this is the page's one primary
  * action - a page whose every row wore the accent would have none.
  */
@@ -28,28 +32,52 @@ const RULE_WORD: Record<number, string> = {
   4: 'changed since, but nothing past directions found here was approved',
 };
 
-/** The form's title and note for a suggestion, or one of its cells. */
+/** "owner or staff", "signed out, member or admin". */
+function orList(xs: string[]): string {
+  return xs.length <= 1 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} or ${xs[xs.length - 1]}`;
+}
+
+const JOB_HINT = 'Who they are and the job they came to do, not a feature to look at.';
+
+/** The form's title, note and starting words for a suggestion, or one of its cells. */
 export function askFor(s: Suggestion, cell?: ReconCell): ScoutAsk {
   if (cell) {
+    const key = `gap:${s.area}:${cell.role}:${cell.width}`;
     return {
-      key: `gap:${s.area}:${cell.role}:${cell.width}`,
+      key,
       title: `Scout ${s.area} ${cellPhrase(cell)}`,
-      direction: `Use ${s.area} ${cellPhrase(cell)}: who are you, and what did you come to do?`,
+      direction: '',
+      placeholder: `Using ${s.area} ${cellPhrase(cell)}: who are you, and what did you come to get done? ${JOB_HINT}`,
       note: `From Recon: a gap in ${s.area}, ${cellPhrase(cell)}.`,
+      draftKey: key, area: s.area,
     };
   }
-  const note = s.kind === 'rerun'
-    ? `From Recon: rerunning the direction of #${s.sourceDiscoveryId}, because ${s.area} has changed since.`
-    : s.kind === 'changed'
-      ? `From Recon: ${s.area} has changed since it was scouted.`
-      : `From Recon: a gap in ${s.area}${s.cells.length ? ` - ${s.cells.map(cellPhrase).join('; ')}` : ''}.`;
+  if (s.kind === 'rerun') {
+    return {
+      key: s.suggestionKey,
+      title: `Scout ${s.area} again`,
+      direction: s.direction,
+      note: `From Recon: rerunning the direction of #${s.sourceDiscoveryId}, because ${s.area} has changed since.`,
+    };
+  }
+  const roles = [...new Set(s.cells.map(c => c.role))].filter(r => r !== 'any role');
+  const who = roles.length ? `as ${orList(roles)}` : 'as anyone';
   return {
     key: s.suggestionKey,
-    title: s.kind === 'rerun' ? `Scout ${s.area} again` : s.kind === 'changed' ? `Scout what changed in ${s.area}` : `Scout ${s.area}`,
-    direction: s.direction,
-    note,
+    title: s.kind === 'changed' ? `Scout what changed in ${s.area}` : `Scout ${s.area}`,
+    direction: '',
+    placeholder: s.kind === 'changed'
+      ? `${s.area} has changed since it was scouted. Who comes to it, and what job are they doing today? ${JOB_HINT}`
+      : `Nobody has used ${s.area} ${who}. Pick one person: who are they, and what did they come to get done? ${JOB_HINT}`,
+    note: s.kind === 'changed'
+      ? `From Recon: ${s.area} has changed since it was scouted.`
+      : `From Recon: a gap in ${s.area}${s.cells.length ? ` - ${s.cells.map(cellPhrase).join('; ')}` : ''}.`,
+    draftKey: s.suggestionKey, area: s.area,
   };
 }
+
+/** A gap whose cells span more than one role: one direction rarely covers it, so its cells lead. */
+const isWide = (s: Suggestion) => s.kind === 'gap' && new Set(s.cells.map(c => c.role)).size > 1;
 
 export function ScoutNext({ read, error, onScout, onDismiss, onUndismiss, onOpenArea, onOpenTicket, busyKey, cannotFile }: {
   read: SuggestionsRead | null; error: string | null;
@@ -100,7 +128,8 @@ function SuggestionRow({ s, first, place, open, onToggle, onScout, onDismiss, on
 }) {
   const [asking, setAsking] = useState(false);
   const days = (n: number) => new Date(Date.now() + n * 86400000);
-  const expandable = s.kind === 'gap' ? s.cells.length > 0 : s.tickets.length > 0;
+  const wide = isWide(s);
+  const expandable = s.kind === 'gap' ? s.cells.length > 0 && !wide : s.tickets.length > 0;
 
   return (
     <li className="orbit-pick min-w-0 border border-hair bg-panel" style={{ clipPath: chamfer(10) }}
@@ -142,9 +171,23 @@ function SuggestionRow({ s, first, place, open, onToggle, onScout, onDismiss, on
           )}
         </div>
       </div>
+      {wide && (
+        <div className="min-w-0 border-t border-hair px-4 py-2.5">
+          <div className="mb-1.5 text-[11px] uppercase tracking-wide text-gray-500">One at a time</div>
+          <div className="flex min-w-0 flex-wrap gap-1.5">
+            {s.cells.map(c => (
+              <button key={`${c.role}:${c.width}`} className="orbit-tap border border-hair bg-sunk px-2 py-0.5 text-[11px] text-gray-300 disabled:opacity-40"
+                style={{ clipPath: chamfer(5) }} disabled={!canFile} onClick={() => onScout(askFor(s, c))}
+                title={`Scout ${s.area} ${cellPhrase(c)}`}>
+                {c.role === 'any role' ? 'anyone' : c.role} · {c.width}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       {open && (
         <div key="open" className="orbit-swap space-y-2 border-t border-hair px-4 py-3 text-xs text-gray-400">
-          {s.kind === 'gap' && s.cells.length > 0 && (
+          {s.kind === 'gap' && s.cells.length > 0 && !wide && (
             <>
               <div className="text-[11px] uppercase tracking-wide text-gray-500">The {s.cells.length} cell{s.cells.length === 1 ? '' : 's'} nobody has scouted</div>
               <ul className="space-y-1.5">

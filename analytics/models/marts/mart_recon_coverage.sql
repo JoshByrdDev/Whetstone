@@ -1,5 +1,6 @@
 -- Recon's grid (docs/recon-tab-plan.md, "Coverage"): one row per project x area x role x width.
--- Every cell of the project's areas x roles (or 'any role' when it lists none) x phone and desk is
+-- Every cell of the project's areas x the roles each is used as (discovery.areas[].roles, else all
+-- the project's; 'any role' when it lists none) x phone and desk is
 -- here, scouted or not - an empty one is a gap - plus the cells visits fell in outside that:
 -- '(unmapped)' for a URL no area matches, 'other' for a role the list does not have, 'unknown' for a
 -- width that is not a number. Those are there so the config can be fixed, not as coverage
@@ -30,6 +31,7 @@ visits as (
 config_cells as (
     select a.project_key, a.area, a.area_ordinal, r.role, r.role_ordinal, w.width, true as in_config
     from areas a join roles r using (project_key) cross join widths w
+    where len(coalesce(a.roles, [])) = 0 or list_contains(a.roles, r.role)
 ),
 seen_cells as (
     select distinct project_key, area, area_ordinal, role, role_ordinal, width from visits

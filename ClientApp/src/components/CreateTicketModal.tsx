@@ -7,6 +7,7 @@ import { TicketOptions } from './TicketOptions';
 import { useVeil } from '../hooks/useVeil';
 import { usePop, useHeld } from '../hooks/usePop';
 import { PriorityPicker } from './PriorityPicker';
+import { DirectionDrafts } from './recon/DirectionDrafts';
 
 // Phases a human would reasonably start a ticket in, per track. A review ticket usually wants to be
 // worked now - you filed it because somebody is waiting on you - so its queue phase leads.
@@ -30,6 +31,15 @@ export interface TicketPrefill {
   /** Said under the description, not sent: where this ticket's wording came from. */
   note?: string;
   reconFrom?: string;
+  /** The direction's placeholder: the question a Recon gap asks, when it starts empty. */
+  placeholder?: string;
+  /**
+   * The Recon suggestion an agent can draft directions for (a gap or a changed area), and its
+   * area. Offers Draft directions under the field; a candidate used narrows a whole-area gap's key
+   * to the cell it is for, so the area's other cells stay on the page.
+   */
+  draftKey?: string;
+  area?: string;
 }
 
 export function CreateTicketModal({
@@ -67,6 +77,10 @@ export function CreateTicketModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [projectKey]);
   const [masterNotes, setMasterNotes] = useState('');
+  // The Recon key this files under, and the draft its direction was picked from. A candidate for one
+  // cell of a whole-area gap files under that cell's key.
+  const [reconKey, setReconKey] = useState(prefill?.reconFrom);
+  const [draftUsed, setDraftUsed] = useState<{ id: number; direction: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -269,7 +283,9 @@ export function CreateTicketModal({
         // read the diff, do not stand the app up.
         ...(discovering ? { track, requiresRouteReview: routeReview } : { skipQaTesting: skipQa }),
         // Only while it is still the project and track the suggestion was for.
-        ...(discovering && prefill?.reconFrom && projectKey === prefill.projectKey ? { reconFrom: prefill.reconFrom } : {}),
+        ...(discovering && reconKey && projectKey === prefill?.projectKey ? { reconFrom: reconKey } : {}),
+        // The draft it was picked from, whether or not it was edited since: the board says which.
+        ...(discovering && reconKey && draftUsed && projectKey === prefill?.projectKey ? { reconDraftId: draftUsed.id } : {}),
         priority,
         masterNotes: masterNotes.trim() || undefined,
         // Delivery only: a review ticket is read against its pull request's target.
@@ -538,10 +554,26 @@ export function CreateTicketModal({
             <Labeled label={discovering ? 'Direction' : 'Description'}>
               <textarea value={description} onChange={e => setDescription(e.target.value)} rows={discovering ? 4 : 3} className={inputCls}
                 placeholder={discovering
-                  ? 'Who to be and what they came to do, written as a job: "plan your month of events as someone in a nearby town".'
+                  ? (prefill?.placeholder && projectKey === prefill.projectKey
+                    ? prefill.placeholder
+                    : 'Who to be and what they came to do, written as a job: "plan your month of events as someone in a nearby town".')
                   : 'Optional details / context'} />
               {discovering && prefill?.note && projectKey === prefill.projectKey && (
                 <div className="mt-1 text-[11px] text-gray-500">{prefill.note}</div>
+              )}
+              {discovering && prefill?.draftKey && projectKey === prefill.projectKey && (
+                <DirectionDrafts project={prefill.projectKey} draftKey={prefill.draftKey}
+                  used={draftUsed && draftUsed.direction === description ? draftUsed.direction : null}
+                  onUse={(c, id) => {
+                    setDescription(c.direction);
+                    setDraftUsed({ id, direction: c.direction });
+                    // A whole-area gap's candidate is for one person at one width: file it under that
+                    // cell, so the area's other cells stay suggested while this one is scouted.
+                    const whole = prefill.area && prefill.draftKey === `gap:${prefill.area}`;
+                    const cellKey = whole && c.width !== 'both' ? `gap:${prefill.area}:${c.signedInAs}:${c.width}` : prefill.reconFrom;
+                    setReconKey(cellKey);
+                    if (whole && title === prefill.title) setTitle(`Scout ${prefill.area} as ${c.signedInAs}`);
+                  }} />
               )}
             </Labeled>
           </>

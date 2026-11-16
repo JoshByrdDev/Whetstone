@@ -6,8 +6,10 @@ import { Notice, money, shortDay } from './parts';
 import type { ScoutAsk, YieldRead, YieldRow } from './types';
 
 /**
- * Yield (docs/recon-tab-plan.md, "The page" 3): where looking has paid, by area and by direction
- * lineage - a direction and every rerun of it counted together. Read whole from
+ * Yield (docs/recon-tab-plan.md, "The page" 3): where looking has paid, by area, by direction
+ * lineage - a direction and every rerun of it counted together - and by where the direction came
+ * from: the owner's own words, a drafted one taken as written or edited, a rerun. That last is the
+ * drafting experiment's scoreboard. Read whole from
  * `mart_recon_yield` for one window; a cohort by when each discovery was filed. Cost shows only
  * where every discovery behind the row is priced, as the mart says.
  *
@@ -27,6 +29,14 @@ function rejectedWords(r: YieldRow): string {
 }
 
 const cost = (r: YieldRow) => (r.costComplete ? money(r.costUsd) : 'not priced');
+
+/** Ticket.DirectionSource, said as the owner would. */
+const SOURCE_WORD: Record<string, string> = {
+  owner: 'You',
+  draft: 'A draft, as written',
+  'draft-edited': 'A draft you edited',
+  rerun: 'A rerun, word for word',
+};
 
 export function Yield({ project, days, setDays, onScout, bump }: {
   project: string; days: number; setDays: (d: number) => void; bump: number;
@@ -58,6 +68,7 @@ export function Yield({ project, days, setDays, onScout, bump }: {
             <>
               <Cut title="By area" rows={data.areas} />
               <Cut title="By direction" rows={data.directions} onAgain={onScout ? again : undefined} direction />
+              {(data.sources ?? []).length > 0 && <Cut title="By who wrote the direction" rows={data.sources} head="Written by" labels={SOURCE_WORD} />}
             </>
           )}
         </div>
@@ -66,10 +77,14 @@ export function Yield({ project, days, setDays, onScout, bump }: {
   );
 }
 
-function Cut({ title, rows, onAgain, direction }: { title: string; rows: YieldRow[]; onAgain?: (r: YieldRow) => void; direction?: boolean }) {
+function Cut({ title, rows, onAgain, direction, head: headWord, labels }: {
+  title: string; rows: YieldRow[]; onAgain?: (r: YieldRow) => void; direction?: boolean;
+  head?: string; labels?: Record<string, string>;
+}) {
   const narrow = useNarrow();
   if (rows.length === 0) return null;
-  const head = direction ? 'Direction' : 'Area';
+  const head = headWord ?? (direction ? 'Direction' : 'Area');
+  const named = (r: YieldRow): YieldRow => (labels ? { ...r, label: labels[r.cutKey] ?? r.label } : r);
   return (
     <div className="min-w-0">
       <div className="mb-1.5 text-[11px] uppercase tracking-wide text-gray-500">{title}</div>
@@ -77,7 +92,7 @@ function Cut({ title, rows, onAgain, direction }: { title: string; rows: YieldRo
         <div className="space-y-2">
           {rows.map(r => (
             <div key={r.cutKey} className="min-w-0 border border-hair bg-panel px-3 py-2 text-xs" style={{ clipPath: chamfer(10) }}>
-              <Label r={r} direction={!!direction} />
+              <Label r={named(r)} direction={!!direction} />
               <div className="mt-1 text-gray-400">
                 {r.discoveries} discover{r.discoveries === 1 ? 'y' : 'ies'} · {r.approved} approved of {r.shown} shown
                 {r.newToMe ? ` · ${r.newToMe} new to me` : ''}{r.filed ? ` · ${r.filed} filed` : ''}
@@ -110,7 +125,7 @@ function Cut({ title, rows, onAgain, direction }: { title: string; rows: YieldRo
             <tbody>
               {rows.map(r => (
                 <tr key={r.cutKey} className="border-b border-hair last:border-b-0 align-top text-gray-300">
-                  <td className={`${TD} min-w-[12rem]`}><Label r={r} direction={!!direction} /></td>
+                  <td className={`${TD} min-w-[12rem]`}><Label r={named(r)} direction={!!direction} /></td>
                   <td className={`${TD} ${NUM}`}>{r.discoveries}</td>
                   <td className={`${TD} ${NUM}`}>{r.shown}</td>
                   <td className={`${TD} ${NUM}`}>{r.approved}</td>

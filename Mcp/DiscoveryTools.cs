@@ -29,7 +29,8 @@ public class DiscoveryTools
         "and the earlier observations as one line each - enough to know what was seen, not a list to work through again. While Sifting or Rechecking it also returns " +
         "the project's taste file (taste): what the owner's verdicts have taught about what they want proposed - read it before you cut and rank. " +
         "In every phase it returns the project's own names for its areas and roles (project.areas, project.roles): a route's signedInAs is one of those roles, word for word, " +
-        "and every visit and observation is logged as that same role.")]
+        "and every visit and observation is logged as that same role. project.areaGuide is the owner's own word on the areas that have one: what each is for and who comes to it " +
+        "(about), and which roles use it (usedAs) - who the people are, never what the screens do.")]
     public static async Task<object> GetDiscovery(DiscoveryService svc, DiscoveryTaste taste, TicketService tickets, DashboardPaths paths, ProjectRegistry registry,
         [Description("The local ticket id of the discovery.")] int ticketId)
     {
@@ -62,11 +63,19 @@ public class DiscoveryTools
         };
         // The project's names for its areas and roles, so Chart picks signedInAs from the list and
         // the scout logs the same word (docs/recon-tab-plan.md, R1). Names only: the page and code
-        // patterns are the board's, matched at refresh time, never the agent's to apply.
+        // patterns are the board's, matched at refresh time, never the agent's to apply. The guide is
+        // the owner's sentence on who an area is for, and which roles use it: people, not screens,
+        // so Chart can read it without reading the product's plans.
         var discoveryCfg = registry.GetProjectConfig(await svc.ProjectOfAsync(ticketId)).Discovery;
         return new
         {
-            project = new { areas = discoveryCfg.Areas.Select(a => a.Name).ToArray(), roles = discoveryCfg.Roles },
+            project = new
+            {
+                areas = discoveryCfg.Areas.Select(a => a.Name).ToArray(),
+                roles = discoveryCfg.Roles,
+                areaGuide = discoveryCfg.Areas.Where(a => a.About.Length > 0 || a.Roles.Length > 0)
+                    .Select(a => new { name = a.Name, about = a.About.Length > 0 ? a.About : null, usedAs = discoveryCfg.RolesOf(a) }).ToArray(),
+            },
             taste = tasteRead is null ? null : new { version = tasteRead.Version, text = tasteRead.Text, note = tasteRead.Note },
             recheck,
             route = v.Route is null ? null : new

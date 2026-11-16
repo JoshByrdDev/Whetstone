@@ -1,7 +1,10 @@
 -- Where scouting has paid (docs/recon-tab-plan.md, "Yield"), per window, for one project at a time,
--- cut two ways: by `area` (the discoveries that went there - a visit or a shown proposal - and the
+-- cut three ways: by `area` (the discoveries that went there - a visit or a shown proposal - and the
 -- proposals in it) and by `direction` lineage (a direction and every rerun of it, ReconFrom =
--- 'rerun:<id>', counted together so a direction's record carries across its reruns).
+-- 'rerun:<id>', counted together so a direction's record carries across its reruns), and by
+-- `source`: where each discovery's direction came from - the owner's own words, an agent's draft
+-- taken as it was or edited, or a rerun (Ticket.DirectionSource). That last cut is the experiment
+-- drafting is (docs/recon-tab-plan.md, "Drafted directions"): whether a drafted direction pays.
 --
 -- A window is a cohort, as in the Discovery marts: a row counts by when its discovery was filed.
 -- Cost is the discoveries' runs (fct_runs' list price, via int_discovery_tickets), so an area's cost
@@ -27,6 +30,10 @@ rows as (
     select d.project_key, d.track, 'direction', cast(d.direction_lineage_id as varchar), d.direction_lineage_title,
            d.discovery_id, d.created_at, d.cost_usd, d.cost_complete, d.direction
     from d
+    union all
+    select d.project_key, d.track, 'source', d.direction_source, d.direction_source,
+           d.discovery_id, d.created_at, d.cost_usd, d.cost_complete, d.direction
+    from d
 ),
 s as ({{ scoped('rows', 'cohort_at') }}),
 -- Each discovery's proposals, counted once per cut it is in.
@@ -35,6 +42,9 @@ pc as (
     from p where area is not null group by all
     union all
     select 'direction', cast(d.direction_lineage_id as varchar), p.discovery_id, {{ recon_yield_counts() }}
+    from p join d using (discovery_id) group by all
+    union all
+    select 'source', d.direction_source, p.discovery_id, {{ recon_yield_counts() }}
     from p join d using (discovery_id) group by all
 )
 select

@@ -298,8 +298,8 @@ beside them.
   become a kind of suggestion.
 - **Yield cut by model, effort, skill version and A/B arm**, once step 5's marts carry them.
 - **Snoozed proposals that have come due**, offered as a suggestion in their area.
-- **Agent-drafted directions** for gaps, written as jobs. Not before the stub-and-rewrite has shown
-  whether the owner's rewrites are what makes a direction pay.
+- ~~Agent-drafted directions~~ for gaps, written as jobs: built, as an experiment, before the
+  stub-and-rewrite had shown anything. See "Drafted directions".
 - **Marking the marts stale** when a discovery reaches `NeedsVerdict`.
 
 ## R1 and R2 as built
@@ -547,12 +547,98 @@ left room:
 1. **The tab on a real project**: give one project's `discovery` block its `areas` and `roles`, add
    `Discovery` to its `tracks` if it is not there, reload, open Recon. Does the first suggestion
    look like where you would have pointed a scout?
-2. **The gap stubs.** A gap's direction is the marts' stub ("Nobody has used Billing as admin...")
-   and a single cell's is a question. They are meant to be rewritten as a job in the form before
-   filing; whether that is enough is the plan's open question about agent-drafted directions.
+2. **The gap stubs.** ~~A gap's direction is the marts' stub, meant to be rewritten.~~ Answered on
+   a real project: the stub went into the form as the direction, and for a wide area ("Nobody has
+   used Portal yet.") it told Chart nothing - not who, not why. See "Drafted directions".
 3. **Scout this on the first row only wears the accent.** If every row should look the same, it is
    one line in `ScoutNext.tsx`.
 4. **Yield defaults to all of history**, not 30 days. Say if you would rather it matched Metrics.
 5. **Not now applies the area-head rule to every key**, not just `changed:` (R2's notes read as if
    only `changed:` would come back on new code). A gap set aside comes back when its code moves too.
 
+
+## Drafted directions
+
+Built after R4, on what the first look at a real project showed: Scout this on a gap put the
+marts' stub in the form as the direction, and a stub names a gap, not a person or a job. On a wide
+area - one used by business owners and their staff alike - Chart was left to invent both, or to
+block and ask. Four changes, in the order they were made.
+
+### The stub is a description, not a direction
+
+The gap row still reads "Nobody has used Billing yet, as member or admin." - a never-scouted area's
+line now names the roles it is used as, where it used to say only "yet." But Scout this no longer
+puts it in the form. A gap's or a changed area's direction starts **empty**, with the question as
+its placeholder ("Nobody has used Billing as member or admin. Pick one person: who are they, and
+what did they come to get done?"), so it cannot be filed as it came. A rerun's direction still goes
+in word for word: it is a direction already.
+
+### A wide gap leads with its cells
+
+A gap row whose cells span more than one role lists them on the row itself, under **One at a
+time**, each opening the form for that one cell (`gap:<area>:<role>:<width>`). The whole-area Scout
+this stays; it is for when one person's job really does reach the whole area.
+
+### An area says who it is for
+
+`discovery.areas[]` takes two optional fields:
+
+```json
+{ "name": "Billing", "pages": ["/billing/**"], "code": ["src/billing"],
+  "about": "Where a member pays and an admin chases what is owed.",
+  "roles": ["member", "admin"] }
+```
+
+- **`roles`** are which of the project's `discovery.roles` use the area, matched without case and
+  stored in the project's spelling; a name the project does not list is dropped, and none means
+  every role. Coverage counts only those cells as the area's (`mart_recon_coverage`, via
+  `recon_areas.roles`, which the board resolves - its own or the project's - in `ReconInputs`), so
+  nobody is asked to scout an owner's portal signed out. A visit there as another role still shows,
+  outside the config, so the list can be fixed.
+- **`about`** is the owner's sentence on who comes to the area and why. People, not screens: a
+  direction drafted from a list of features is written as a feature. `get_discovery` hands both to
+  Chart as `project.areaGuide` (`{name, about, usedAs}`), the one thing about the product Chart
+  reads - every copy of the chart skill says so. The drill-down shows them, and says when `about`
+  is missing.
+
+### Drafting
+
+Under a gap's or a changed area's empty direction, **Draft directions** runs one agent
+(`ReconDrafter`, on Chart's agent role) and lists two or three candidates: a person, signed in as
+one of the area's roles, the job they came to do, phone or desk, and one line on what it would
+find that nobody has looked for. **Use this** puts one in the field to edit; filing is the form's,
+as always. On a whole-area gap, a candidate for one role at one width files under that cell's key,
+so the area's other cells stay suggested.
+
+- **What it is told** is what the board knows and nothing else: the area's name, pages, `about` and
+  roles; its empty cells and why it is suggested; every past direction on the project with its
+  yield (approved, new to me, rejected as generic, already decided or wrong); the directions being
+  scouted now; the taste file. Never the code, specs or plans - Chart's rule, for Chart's reason -
+  and it runs in an empty folder, so there is nothing to read.
+- **What it answers is checked** (`ReconDrafter.Check`): a candidate signed in as a role the area
+  does not list is dropped, as is one repeating a past or open direction; nothing left is refused.
+  When it lacked something it says what in `question`, aimed at the area's `about`, and the form
+  shows it.
+- **Kept**, as `ReconDraft` (project, key, candidates, question, model, tokens, time), so reopening
+  the form reads the last draft back rather than paying for another. `GET` and
+  `POST /api/recon/{project}/drafts`; the POST is an agent run, so it is in `QaIsolation`'s table
+  and refused again in the service. No MCP tool reads or writes a draft.
+
+### Whether it pays
+
+The plan held drafting back until the stub-and-rewrite had shown whether the owner's rewrites are
+what makes a direction pay. It was built first instead, so it is measured instead. A discovery
+records the draft it was picked from (`Ticket.ReconDraftId`) and where its direction came from
+(`Ticket.DirectionSource`, worked out by the create route): `draft` (a candidate as it was, compared
+without case, spacing or a closing stop), `draft-edited`, `rerun` (a past direction word for word)
+or `owner` - which is also every discovery filed before this, or by hand. `mart_recon_yield` has a
+third cut, `source`, and the Yield section shows it as **By who wrote the direction**. When drafted
+directions are approved less than the owner's, the drafter is what to change, or to switch off;
+when an edited draft pays and an unedited one does not, the edit is what to learn from.
+
+### Checked
+
+- `dotnet test --filter "Recon|QaIsolation"`: 134, `ReconDraftTests` among them. dbt build 337/337
+  on a snapshot of this machine's board, with the new unit tests for an area's roles and the
+  never-scouted stub. On that snapshot, an area given two of five roles became the first suggestion
+  as "Nobody has used <area> yet, as <role> or <role>." with four cells, not ten.

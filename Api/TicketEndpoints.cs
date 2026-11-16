@@ -43,7 +43,10 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     bool? RequiresRouteReview = null,
     // The Recon suggestion a discovery is filed from (Ticket.ReconFrom, docs/recon-tab-plan.md).
     // Here and nowhere else: the update route does not take it and no MCP tool does. Discovery only.
-    string? ReconFrom = null);
+    string? ReconFrom = null,
+    // The Recon draft its direction was picked from (Ticket.ReconDraftId): a draft of this project,
+    // for the same area as ReconFrom. Discovery only, and only with ReconFrom.
+    int? ReconDraftId = null);
 
 /// <summary>The owner setting a ticket's own base before it has a branch. Blank is the project's base.</summary>
 public record SetBaseBranchRequest(string? BaseBranch);
@@ -527,7 +530,7 @@ public static class TicketEndpoints
                             prepare = cfg.Discovery.Prepare,
                             teardown = cfg.Discovery.Teardown,
                             maxProposals = cfg.Discovery.MaxProposals,
-                            areas = cfg.Discovery.Areas.Select(a => new { name = a.Name, pages = a.Pages, code = a.Code }).ToArray(),
+                            areas = cfg.Discovery.Areas.Select(a => new { name = a.Name, pages = a.Pages, code = a.Code, about = a.About, roles = a.Roles }).ToArray(),
                         },
                     },
                 },
@@ -995,6 +998,29 @@ public static class TicketEndpoints
                     return Results.BadRequest(new { error = $"Ticket #{rerunOf} is not a discovery of {projectKey}, so there is no direction to rerun." });
             }
 
+            // Where its direction came from: a drafted candidate (as it was, or edited), a rerun's
+            // direction word for word, or the owner's own (docs/recon-tab-plan.md, "Drafted directions").
+            ReconDraft? draft = null;
+            if (req.ReconDraftId is { } draftId)
+            {
+                if (reconFrom is null)
+                    return Results.BadRequest(new { error = "A drafted direction is filed from the Recon suggestion it was drafted for." });
+                draft = await db.ReconDrafts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == draftId && x.ProjectKey == projectKey);
+                if (draft is null)
+                    return Results.BadRequest(new { error = $"Draft {draftId} is not one of {projectKey}'s." });
+                if (ReconDrafter.AreaOf(draft.SuggestionKey) != ReconDrafter.AreaOf(reconFrom))
+                    return Results.BadRequest(new { error = $"Draft {draftId} was written for {draft.Area}, not for this suggestion." });
+            }
+            string? directionSource = null;
+            if (track == TicketTrack.Discovery)
+            {
+                var rerunDirection = ReconKey.RerunOf(reconFrom) is { } rerunId
+                    ? await db.Tickets.AsNoTracking().Where(x => x.Id == rerunId).Select(x => x.Description).FirstOrDefaultAsync()
+                    : null;
+                directionSource = ReconDrafter.SourceOf(req.Description,
+                    draft is null ? null : ReconDrafter.ReadCandidates(draft.CandidatesJson), rerunDirection);
+            }
+
             // Title required only for standalone tickets; a linked one pulls it from the tracker.
             if (issueKey is null && string.IsNullOrWhiteSpace(title))
                 return Results.BadRequest(new { error = "Title is required when no issue is linked." });
@@ -1036,7 +1062,7 @@ public static class TicketEndpoints
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,
                 ownBase, branch, planUnit,
                 requiresRouteReview: req.RequiresRouteReview ?? registry.GetProjectConfig(projectKey).Discovery.ReviewRoute,
-                reconFrom: reconFrom);
+                reconFrom: reconFrom, reconDraftId: draft?.Id, directionSource: directionSource);
             if (req.IsBug == true) { await svc.SetBugAsync(t.Id, true); t.IsBug = true; }
             // Photographed now, while it waits in its queue, so the first run already has the pictures.
             captures.Enqueue(t.Id);

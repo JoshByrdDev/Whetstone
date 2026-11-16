@@ -160,6 +160,7 @@ builder.Services.AddSingleton<ReconInputs>(sp => new ReconInputs(sp.GetRequiredS
 builder.Services.AddSingleton<AnalyticsService>();
 // The Recon tab: reads the Recon marts with its live filters, and the owner's Not now.
 builder.Services.AddScoped<ReconService>();
+builder.Services.AddScoped<ReconDrafter>();
 // What each ticket is waiting on: the tracker's blocking links, refreshed live, with local overrides
 // that outrank them. TicketService takes it so the claim can pass over a ticket that is blocked.
 builder.Services.AddScoped<TicketDependencyService>();

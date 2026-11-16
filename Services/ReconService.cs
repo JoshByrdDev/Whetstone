@@ -37,7 +37,11 @@ public sealed class ReconService
 
     // ---- projects -------------------------------------------------------------------------
 
-    public sealed record AreaView(string Name, string[] Pages, string[] Code);
+    /// <summary>An area as its config has it. <see cref="Roles"/> empty is every role.</summary>
+    public sealed record AreaView(string Name, string[] Pages, string[] Code, string About, string[] Roles)
+    {
+        public static AreaView Of(DiscoveryArea a) => new(a.Name, a.Pages, a.Code, a.About, a.Roles);
+    }
 
     /// <summary>
     /// One project the tab can show: what its config says now, and what the marts were last built
@@ -60,7 +64,7 @@ public sealed class ReconService
             var built = Plain(_marts.ProjectMart("mart_recon_projects", key)).FirstOrDefault();
             list.Add(new ProjectView(
                 key, string.IsNullOrWhiteSpace(cfg.DisplayName) ? key : cfg.DisplayName,
-                cfg.Discovery.Areas.Select(a => new AreaView(a.Name, a.Pages, a.Code)).ToList(),
+                cfg.Discovery.Areas.Select(AreaView.Of).ToList(),
                 cfg.Discovery.Roles,
                 built is not null,
                 built?.GetValueOrDefault("areaCount") is { } ac ? Convert.ToInt32(ac) : null,
@@ -256,16 +260,20 @@ public sealed class ReconService
         var cfg = Project(project);
         var w = new Dictionary<string, object?> { ["area"] = area };
         var conf = cfg.Discovery.Areas.FirstOrDefault(a => a.Name == area);
-        return new AreaRead(area, conf is null ? null : new AreaView(conf.Name, conf.Pages, conf.Code),
+        return new AreaRead(area, conf is null ? null : AreaView.Of(conf),
             Plain(_marts.ProjectMart("mart_recon_coverage", project, w, "role_ordinal, role, width_ordinal, width")),
             Plain(_marts.ProjectMart("mart_recon_patterns", project, w, "route_pattern, role, width")),
             Plain(_marts.ProjectMart("mart_recon_area_discoveries", project, w, "created_at DESC, discovery_id DESC")),
             Plain(_marts.ProjectMart("mart_recon_area_commits", project, w, "repo, fp_index LIMIT 200")));
     }
 
-    public sealed record YieldRead(int Days, IReadOnlyList<Dictionary<string, object?>> Areas, IReadOnlyList<Dictionary<string, object?>> Directions);
+    public sealed record YieldRead(int Days, IReadOnlyList<Dictionary<string, object?>> Areas, IReadOnlyList<Dictionary<string, object?>> Directions,
+        IReadOnlyList<Dictionary<string, object?>> Sources);
 
-    /// <summary>Yield by area and by direction lineage, in one window (7, 30, 90, or 0 for all; all by default).</summary>
+    /// <summary>
+    /// Yield by area, by direction lineage and by where the direction came from (the owner, a draft,
+    /// an edited draft, a rerun), in one window (7, 30, 90, or 0 for all; all by default).
+    /// </summary>
     public YieldRead Yield(string project, int? days)
     {
         Project(project);
@@ -275,7 +283,8 @@ public sealed class ReconService
                 new Dictionary<string, object?> { ["window_days"] = d, ["cut"] = cut }, order));
         return new YieldRead(d,
             Cut("area", "approved DESC, shown DESC, discoveries DESC, label"),
-            Cut("direction", "approved DESC, new_to_me DESC, latest_at DESC NULLS LAST"));
+            Cut("direction", "approved DESC, new_to_me DESC, latest_at DESC NULLS LAST"),
+            Cut("source", "cut_key"));
     }
 
     /// <summary>The marts' rows with their JSON columns parsed, so the page reads a list as a list.</summary>

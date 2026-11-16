@@ -39,6 +39,7 @@ public class DashboardDbContext : DbContext
     public DbSet<DiscoveryRecording> DiscoveryRecordings => Set<DiscoveryRecording>();
     public DbSet<DiscoveryChapter> DiscoveryChapters => Set<DiscoveryChapter>();
     public DbSet<ReconDismissalEvent> ReconDismissalEvents => Set<ReconDismissalEvent>();
+    public DbSet<ReconDraft> ReconDrafts => Set<ReconDraft>();
     public DbSet<ReviewComment> ReviewComments => Set<ReviewComment>();
     public DbSet<GateFinding> GateFindings => Set<GateFinding>();
     public DbSet<StewardQuestion> StewardQuestions => Set<StewardQuestion>();
@@ -111,6 +112,7 @@ public class DashboardDbContext : DbContext
             e.Property(t => t.CreatedBy).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.PlanOutcomes).HasMaxLength(256);
             e.Property(t => t.ReconFrom).HasMaxLength(256);
+            e.Property(t => t.DirectionSource).HasMaxLength(16);
             e.HasIndex(t => t.Phase);
             e.HasIndex(t => t.ProjectKey);
 
@@ -396,6 +398,14 @@ public class DashboardDbContext : DbContext
             e.Property(v => v.ProjectKey).HasMaxLength(64);
             e.Property(v => v.SuggestionKey).HasMaxLength(256);
             e.Property(v => v.AreaHeadCommit).HasMaxLength(64);
+            e.HasIndex(v => new { v.ProjectKey, v.SuggestionKey });
+        });
+        b.Entity<ReconDraft>(e =>
+        {
+            e.Property(v => v.ProjectKey).HasMaxLength(64);
+            e.Property(v => v.SuggestionKey).HasMaxLength(256);
+            e.Property(v => v.Area).HasMaxLength(256);
+            e.Property(v => v.Model).HasMaxLength(128);
             e.HasIndex(v => new { v.ProjectKey, v.SuggestionKey });
         });
         b.Entity<DiscoveryVerdictEvent>(e =>

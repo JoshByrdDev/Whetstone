@@ -29,7 +29,8 @@ public sealed class ReconInputs
 
     public const string FileName = "recon-inputs.json";
 
-    public sealed record Area(string Name, string[] Pages, string[] Code);
+    /// <summary>One area: its patterns and code, and the roles it is used as - its own, else every one the project lists.</summary>
+    public sealed record Area(string Name, string[] Pages, string[] Code, string[] Roles);
     public sealed record Repo(string Dir, string Path, string? BaseRef, bool ReadOnly);
     public sealed record Project(string Key, Area[] Areas, string[] Roles, Repo[] Repos);
     public sealed record Inputs(DateTime WrittenAt, Project[] Projects);
@@ -55,7 +56,7 @@ public sealed class ReconInputs
                 repos.Add(new Repo(m.Dir, hub, baseRef, m.ReadOnly));
             }
             projects.Add(new Project(key,
-                cfg.Discovery.Areas.Select(a => new Area(a.Name, a.Pages, a.Code)).ToArray(),
+                cfg.Discovery.Areas.Select(a => new Area(a.Name, a.Pages, a.Code, cfg.Discovery.RolesOf(a))).ToArray(),
                 cfg.Discovery.Roles, repos.ToArray()));
         }
         return new Inputs(DateTime.UtcNow, projects.ToArray());

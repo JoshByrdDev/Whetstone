@@ -204,9 +204,17 @@ function AreaDrill({ project, area, onClose, onOpenTicket, bump }: {
         <div className="min-w-0">
           <div className="text-sm text-gray-100" style={{ overflowWrap: 'anywhere' }}>{area}</div>
           {data?.config && (
-            <div className="mt-1 text-[11px] text-gray-500" style={{ ...mono, overflowWrap: 'anywhere' }}>
-              pages {data.config.pages.join(', ') || '—'} · code {data.config.code.join(', ') || 'none'}
-            </div>
+            <>
+              {data.config.about
+                ? <p className="mt-1 text-gray-300" style={{ overflowWrap: 'anywhere' }}>{data.config.about}</p>
+                : <p className="mt-1 text-gray-500">No <span style={mono}>about</span> yet: a sentence on who comes here and why is what a drafted direction is written from.</p>}
+              {(data.config.roles ?? []).length > 0 && (
+                <div className="mt-1 text-[11px] text-gray-400">Used as {data.config.roles.join(', ')}</div>
+              )}
+              <div className="mt-1 text-[11px] text-gray-500" style={{ ...mono, overflowWrap: 'anywhere' }}>
+                pages {data.config.pages.join(', ') || '—'} · code {data.config.code.join(', ') || 'none'}
+              </div>
+            </>
           )}
         </div>
         <button className="orbit-tap flex-none text-[11px] text-gray-400 underline" onClick={onClose}>Close</button>
