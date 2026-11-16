@@ -176,6 +176,21 @@ models:
               arguments:
                 values: [all, missed_by, found_by, written_model, written_effort, written_skill_version, written_prompt_version, written_experiment_arm]
 
+  - name: mart_bugs_by_origin
+    description: Bug tickets by where they came from - origin and intake channel - per week filed and over the window.
+    tests:
+      - unique_combination:
+          arguments:
+            columns: [window_days, project_scope, track_scope, week, origin, channel]
+    columns:
+      - name: origin
+        tests:
+          - accepted_values:
+              arguments:
+                values: [owner, steward, found-in-run, regression, intake]
+      - name: filed
+        tests: [not_null, at_least]
+
   - name: fct_experiment_tickets
     description: One ticket enrolled in an experiment, measured from its assignment as the board measures it.
     tests:

@@ -276,7 +276,14 @@ public record TicketDetailDto(
     // The discovery this ticket was filed from, when it was (Ticket.DiscoveryId).
     int? DiscoveryId = null,
     // A discovery's route gate (Ticket.RequiresRouteReview).
-    bool RequiresRouteReview = false);
+    bool RequiresRouteReview = false,
+    // Where it came from (Ticket.Origin, TicketOrigin.Name): owner, steward, found-in-run,
+    // regression or intake, and for intake the channel and the issue it stands for.
+    string Origin = "owner",
+    string? IntakeChannel = null,
+    int? IntakeIssueId = null,
+    int? RegressionOf = null,
+    int? FoundOn = null);
 
 /// <summary>A ticket's place in a slice: the slice's number, and its outcomes.</summary>
 public record TicketPlanDto(int Unit, IReadOnlyList<string> Outcomes);
@@ -430,7 +437,12 @@ public static class TicketMapper
         SliceBranches.OwnBase(t),
         t.BranchStarted,
         t.DiscoveryId,
-        t.RequiresRouteReview);
+        t.RequiresRouteReview,
+        TicketOrigin.Name(t.Origin),
+        t.IntakeChannel,
+        t.IntakeIssueId,
+        t.RegressionOf,
+        t.FoundOn);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

@@ -769,7 +769,8 @@ public class TicketService
         bool skipQaTesting = false, TicketPriority priority = TicketPriority.Normal,
         TicketTrack track = TicketTrack.Delivery, ReviewTarget? reviewTarget = null,
         bool skipClassroomAnalysis = false, string? baseBranch = null, string? branch = null, int? planUnit = null,
-        bool requiresRouteReview = false, string? reconFrom = null, int? reconDraftId = null, string? directionSource = null)
+        bool requiresRouteReview = false, string? reconFrom = null, int? reconDraftId = null, string? directionSource = null,
+        TicketFiling? filing = null)
     {
         // A ticket's own base is a delivery ticket's: a review ticket is read against the target
         // its pull request names (ReviewTarget.TargetBranch).
@@ -810,6 +811,15 @@ public class TicketService
             // A name chosen at filing, which the first run creates. Not BranchMadeAt: nothing exists yet.
             Branch = track == TicketTrack.Review || string.IsNullOrWhiteSpace(branch) ? null : branch.Trim(),
         };
+        // Where it came from: the facts first, then the origin worked out from them, here and only
+        // here, so no filing path can spell it a way of its own.
+        filing ??= TicketFiling.ByOwner;
+        ticket.CreatedBy = filing.CreatedBy;
+        ticket.FoundOn = filing.FoundOn;
+        ticket.RegressionOf = filing.RegressionOf;
+        ticket.IntakeChannel = string.IsNullOrWhiteSpace(filing.IntakeChannel) ? null : filing.IntakeChannel;
+        ticket.IntakeIssueId = ticket.IntakeChannel is null ? null : filing.IntakeIssueId;
+        ticket.Origin = TicketOrigin.Of(ticket);
 
         // A Review ticket without a branch to review has nothing to work on, and the phase that
         // would claim it has no way to say so - it would fail deep in the worker, on a worktree
@@ -2524,6 +2534,38 @@ public class TicketService
     {
         var t = await _db.Tickets.FindAsync(ticketId);
         if (t is not null) t.UpdatedAt = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// Intake's close (docs/intake-plan.md): a ticket no run is working moved straight to Done by the
+    /// board, with the reason on its record, for the two cases where nobody is going to review
+    /// anything - an issue its owner muted ("never file this again"), and a project's end-to-end
+    /// test report. The phase machine reaches Done only from review, which is right for work; these
+    /// were never work. Refused while a run holds the ticket, so a worker is never pulled out from
+    /// under. Null when there is no such ticket; false when it was not closed.
+    /// </summary>
+    public async Task<bool?> CloseUnworkedAsync(int id, string reason, TransitionActor actor)
+    {
+        var t = await _db.Tickets.FirstOrDefaultAsync(x => x.Id == id);
+        if (t is null) return null;
+        if (t.Phase == TicketPhase.Done) return true;
+        if (PhaseMachine.IsInProgress(t.Phase)) return false;
+        var from = t.Phase;
+        var at = DateTime.UtcNow;
+        t.Phase = TicketPhase.Done;
+        t.PhaseBeforeBlock = null;
+        t.BlockedReason = null;
+        t.ReviewedOn = null;
+        t.ReviewedOnAt = null;
+        t.UpdatedAt = at;
+        _db.Comments.Add(new Comment { TicketId = t.Id, Author = AuthorKind.System, Body = $"Phase changed {from} → Done — {reason.Trim()}", Phase = TicketPhase.Done });
+        _db.PhaseTransitions.Add(new PhaseTransition
+        {
+            TicketId = t.Id, ProjectKey = t.ProjectKey, Track = t.Track, From = from, To = TicketPhase.Done,
+            Actor = actor, Reason = reason.Trim(), Backward = false, At = at,
+        });
+        await _db.SaveChangesAsync();
+        return true;
     }
 
     // ---- Comments ----

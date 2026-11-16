@@ -22,4 +22,9 @@
     <ProjectReference Include="..\Whetstone.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Intake's vendor-format fixtures, read by the adapter tests from the output folder. -->
+    <None Include="Fixtures/**/*.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

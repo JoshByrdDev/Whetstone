@@ -112,7 +112,9 @@ builder.Services.AddSingleton<DiscoveryVoicing>();
 builder.Services.AddSingleton<SetupCheckService>(sp => new SetupCheckService(
     sp.GetRequiredService<ProjectRegistry>(), sp.GetRequiredService<DashboardPaths>(),
     sp.GetRequiredService<Whetstone.Services.Walkthrough.Narrator>(),
-    sp.GetRequiredService<HeartbeatManager>()));
+    sp.GetRequiredService<HeartbeatManager>(),
+    sp.GetRequiredService<Whetstone.Services.Intake.IIntakeSettings>(),
+    sp.GetRequiredService<Whetstone.Services.Intake.IntakeStatus>()));
 builder.Services.AddSingleton<Whetstone.Services.Walkthrough.WalkthroughService>();
 builder.Services.AddSingleton<AnalysisRunner>();
 builder.Services.AddSingleton<Whetstone.Services.UnitReports.UnitReportRunner>();
@@ -133,6 +135,18 @@ builder.Services.AddDbContext<DashboardDbContext>((sp, options) =>
     options.UseSqlite($"Data Source={dbPath}");
 });
 builder.Services.AddScoped<TicketService>();
+// Intake (docs/intake-plan.md): board code that reads a project's outbox queue and files tickets.
+// The stand-in queues live as long as the process; a QA copy is handed no real queue.
+builder.Services.AddSingleton<Whetstone.Services.Intake.IIntakeSettings, Whetstone.Services.Intake.IntakeSettings>();
+builder.Services.AddSingleton<Whetstone.Services.Intake.IntakeTransports>();
+builder.Services.AddSingleton<Whetstone.Services.Intake.IntakeStatus>();
+builder.Services.AddSingleton<Whetstone.Services.Intake.IntakePoller>();
+if (!isolation.On) builder.Services.AddHostedService(sp => sp.GetRequiredService<Whetstone.Services.Intake.IntakePoller>());
+builder.Services.AddScoped<Whetstone.Services.Intake.IIntakeRunbook, Whetstone.Services.Intake.GitIntakeRunbook>();
+builder.Services.AddScoped(sp => new Whetstone.Services.Intake.IntakeService(
+    sp.GetRequiredService<DashboardDbContext>(), sp.GetRequiredService<TicketService>(),
+    sp.GetRequiredService<Whetstone.Services.Intake.IIntakeSettings>(),
+    sp.GetRequiredService<Whetstone.Services.Intake.IIntakeRunbook>(), sp.GetRequiredService<ProjectRegistry>()));
 builder.Services.AddScoped<DiscoveryService>();
 builder.Services.AddScoped<DiscoveryTaste>();
 // A project's steward: what it may do and every limit on it. Its git is the ticket git service,
@@ -400,6 +414,7 @@ app.MapUnitReportEndpoints();
 // never ride along into a worker's prompt - see Api/LabelEndpoints.cs.
 app.MapLabelEndpoints();
 app.MapBugEndpoints();
+app.MapIntakeEndpoints();
 app.MapExperimentEndpoints();
 // Whether a project's copies of the skill templates have fallen behind them (the Skills tab's badge).
 app.MapSkillDriftEndpoints();

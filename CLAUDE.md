@@ -106,6 +106,17 @@ prompt says so beside the rule. The guard allows that host and port exactly, nam
 any other port. The branch round trip is not a second exception: it is `worker.ps1`'s own git,
 outside the agent's session, into the board host's repo, and never to origin.
 
+**Intake is the other exception, and it is one queue wide** (`docs/intake-plan.md`). The board may
+read one queue in a project's own cloud account - the outbox the project's half fills with its error
+tracker's issues and its alarms - and file each report as a ticket. The board, never an agent: the
+poller is board code (`IntakePoller`), no worker, steward or MCP tool reaches the queue, the tracker
+or the cloud console, and nothing an agent is given carries the credential, which lives only in the
+machine-local `project.json`. The credential can receive, delete and read the attributes of that one
+queue; the board calls no tracker API, follows no link in a report, and writes nothing in the
+project's account but the deletes that acknowledge a message. The worker guard and
+`data/heartbeat-prompt.md` do not change: their rule is about agents, and it still holds. A QA copy
+never reads a real queue (`QaIsolation`); intake's tests and the copy use the stand-in transport.
+
 Changing the guard? Run its tests. They encode the commands a fleet legitimately runs every day —
 `docker compose down`, `sqlcmd -S localhost,1433`, a single-label docker host in a connection
 string — and a false positive here stops every worker at once:

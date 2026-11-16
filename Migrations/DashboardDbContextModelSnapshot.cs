@@ -1408,6 +1408,170 @@ namespace Whetstone.Migrations
                     b.ToTable("GateFindings");
                 });
 
+            modelBuilder.Entity("Whetstone.Models.IntakeIssue", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Fingerprint")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("FirstSeen")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("HeldIn")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("LastNotedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("LastSeen")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LastState")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Muted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("MutedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("Occurrences")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ReportedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("TicketHistory")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("UnnotedOccurrences")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TicketId");
+
+                    b.HasIndex("ProjectKey", "Channel", "Fingerprint")
+                        .IsUnique();
+
+                    b.ToTable("IntakeIssues");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.IntakeMessageLog", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Adapter")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("HandledAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("IssueId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MessageId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(400)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RawAttributes")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RawBody")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("HandledAt");
+
+                    b.HasIndex("ProjectKey", "Source", "MessageId")
+                        .IsUnique();
+
+                    b.ToTable("IntakeMessages");
+                });
+
+            modelBuilder.Entity("Whetstone.Models.IntakeStorm", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProjectKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Window")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectKey", "Window")
+                        .IsUnique();
+
+                    b.ToTable("IntakeStorms");
+                });
+
             modelBuilder.Entity("Whetstone.Models.Label", b =>
                 {
                     b.Property<int>("Id")
@@ -2865,6 +3029,9 @@ namespace Whetstone.Migrations
                     b.Property<int?>("DiscoveryId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("FoundOn")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("FullQaRequired")
                         .HasColumnType("INTEGER");
 
@@ -2879,6 +3046,13 @@ namespace Whetstone.Migrations
 
                     b.Property<string>("ImplementationSummary")
                         .HasColumnType("TEXT");
+
+                    b.Property<string>("IntakeChannel")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("IntakeIssueId")
+                        .HasColumnType("INTEGER");
 
                     b.Property<bool>("IsBug")
                         .HasColumnType("INTEGER");
@@ -2911,6 +3085,11 @@ namespace Whetstone.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<string>("NeedsResources")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Origin")
+                        .IsRequired()
+                        .HasMaxLength(16)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Phase")
@@ -2949,6 +3128,9 @@ namespace Whetstone.Migrations
                     b.Property<string>("ReconFrom")
                         .HasMaxLength(256)
                         .HasColumnType("TEXT");
+
+                    b.Property<int?>("RegressionOf")
+                        .HasColumnType("INTEGER");
 
                     b.Property<bool>("RequiresImplementationReview")
                         .HasColumnType("INTEGER");

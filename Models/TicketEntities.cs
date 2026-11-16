@@ -558,6 +558,30 @@ public class Ticket
     public TransitionActor? CreatedBy { get; set; }
 
     /// <summary>
+    /// Where this ticket came from, as attribution counts it (docs/intake-plan.md, section 6).
+    /// Written once at filing by <see cref="TicketOrigin.Of"/> and never changed; no tool writes it.
+    /// </summary>
+    public TicketOriginKind Origin { get; set; } = TicketOriginKind.Owner;
+
+    /// <summary>
+    /// The ticket whose run noticed this one in passing (a defect a reflection filed), or the
+    /// discovery that proposed it. What makes its origin <see cref="TicketOriginKind.FoundInRun"/>.
+    /// Null on tickets found in a run before this was recorded: their origin was backfilled from
+    /// the text the reflection writes, and the number was not.
+    /// </summary>
+    public int? FoundOn { get; set; }
+
+    /// <summary>The Done ticket whose problem came back as this one, when it is a regression.</summary>
+    public int? RegressionOf { get; set; }
+
+    /// <summary>
+    /// Set only on a ticket intake filed: the channel it came in on (<see cref="IntakeChannels"/>)
+    /// and the <c>IntakeIssue</c> it stands for. Null on everything else.
+    /// </summary>
+    public string? IntakeChannel { get; set; }
+    public int? IntakeIssueId { get; set; }
+
+    /// <summary>
     /// The unit of the project's plan this ticket delivers part of, by number, and which of its
     /// outcomes (<see cref="PlanOutcomes"/>, comma-separated ids). Set when a steward files a
     /// ticket against the plan, and what lets "how far is this unit" be counted off the board

@@ -60,6 +60,8 @@ public static class AnalyticsEndpoints
                 summary = a.Mart("mart_bugs", s, Where(("dimension", "all"))).FirstOrDefault(),
                 split = a.Mart("mart_bugs", s, Where(("dimension", dimension ?? "missed_by")), "bugs DESC, links DESC"),
                 links = a.BugLinks(s),
+                // Where the bugs came from (docs/intake-plan.md, section 6), per week and in all.
+                origins = a.Mart("mart_bugs_by_origin", s, null, "week DESC, origin, channel"),
             });
         });
 

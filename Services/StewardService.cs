@@ -1542,9 +1542,9 @@ public partial class StewardService
 
         var made = await _tickets.CreateAsync(projectKey, title, d.Description, null, null, TicketPhase.Backlog,
             requiresSpeculationReview: d.PlanReview, requiresImplementationReview: d.ImplementationReview,
-            skipQaTesting: d.CodeReviewOnly, priority: priority, skipClassroomAnalysis: cfg.SkipClassroomAnalysisByDefault);
+            skipQaTesting: d.CodeReviewOnly, priority: priority, skipClassroomAnalysis: cfg.SkipClassroomAnalysisByDefault,
+            filing: new TicketFiling(CreatedBy: TransitionActor.Steward));
         var row = await _db.Tickets.FirstAsync(t => t.Id == made.Id, ct);
-        row.CreatedBy = TransitionActor.Steward;
         row.PlanUnit = unit.Number;
         row.PlanOutcomes = string.Join(", ", outcomes);
         row.NeedsResources = string.IsNullOrEmpty(needs) ? null : needs;

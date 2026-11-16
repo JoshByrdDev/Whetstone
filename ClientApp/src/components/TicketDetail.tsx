@@ -13,6 +13,7 @@ import { LabelEditor } from './LabelEditor';
 import { LearningBrief, Markdown } from './LearningBrief';
 import { StewardOnTicket } from './StewardOnTicket';
 import { BugTrace } from './BugTrace';
+import { IntakeOnTicket } from './IntakeOnTicket';
 import { StewardTicketFlags } from './StewardTicketFlags';
 import { ReviewPanel } from './ReviewPanel';
 import { DiscoveryPanel } from './DiscoveryPanel';
@@ -410,6 +411,9 @@ export function TicketDetail({
             {/* Whether this fixes a bug, where the bug came from, and the bugs traced back to this
                 ticket. Delivery only: a review ticket owns no code to blame. */}
             {t.track === 'Delivery' && <BugTrace ticketId={t.id} />}
+
+            {/* Where it came from, and for an intake ticket the owner's mute. */}
+            {t.track === 'Delivery' && <IntakeOnTicket t={t} onChanged={() => { void reload(); onChanged(); }} />}
 
             {/* The way out to the deep version. The brief above is the few hundred words refinement
                 owed you; this is the one you go and ask for when those were not enough. */}

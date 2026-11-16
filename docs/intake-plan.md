@@ -242,3 +242,42 @@ A message from a project's queue, of either kind, becomes one ticket with the pr
 the right origin; a repeat becomes a note on it; the problem coming back after Done becomes a linked
 regression; a storm becomes one ticket; and the Metrics page answers how many bugs came from
 production reports this month against how many were found in-house.
+
+## Decided while building
+
+Where the plan was silent, or turned out wrong once it met the code, this is what was decided and why.
+
+- **`FoundOn` is a column now.** It used to be a request field and was never stored, so "found in a
+  run" could not be told apart after filing. The migration backfills it from `DiscoveryId` and from
+  the reflection's own sentence ("Filed by the heartbeat's reflection after a run on ticket #N").
+- **A walk-through counts as the steward's.** The board files it, not the owner, and the steward's
+  is the nearest origin. A discovery proposal counts as found in a run.
+- **`TicketOrigin.Of` has an order.** Its intake channel comes first, then `RegressionOf`, then
+  `FoundOn`, then a steward or system creator, and otherwise the owner. One function decides
+  `Origin`, and `CreateAsync` calls it for every filing path.
+- **The stand-in is a source kind.** `kind: standin` in `project.json` is the in-memory transport.
+  The QA copy refuses `sqs` at the transport and the poll and test routes in `QaIsolation`, so the
+  copy can file from the stand-in and from nothing else (`POST /api/projects/{key}/intake/standin`).
+- **Sentry `fatal` is High; `warning`, `info` and `debug` are Low.** Everything else stays Normal.
+- **Mute and test reports close through `CloseUnworkedAsync`.** `PhaseMachine` reaches Done only
+  from NeedsReview. The narrow close is refused while a run holds the ticket, so a mute never
+  pulls a ticket out from under a worker. It records the transition and its reason.
+- **A test report files at most one ticket an hour.** That ticket is not a bug, it creates no issue,
+  and it is closed at once. The ticket proves the path works and changes no count.
+- **The limits are counted from the message log.** The count is `filed` outcomes since the start of
+  the hour or the day, which needs no counter to keep in step. There is one storm ticket per window,
+  and its title and description are rewritten as the window holds more.
+- **Every intake ticket lands in NeedsSpeculation**, storm tickets included. Nothing from outside is
+  started without the steward or the owner looking first.
+- **The Intake page's counts are live, not a mart.** They cover 14 days, the life of the message
+  log. The Metrics page's weekly cut by origin is the mart (`mart_bugs_by_origin`).
+- **An unrecognised message is kept, raw, and never filed.** The `unrecognised` channel is reserved
+  for a later decision to file them.
+- **The SQS class's live test needs a local stand-in.** It skips unless ElasticMQ (9324) or
+  LocalStack (4566) answers, and says how to start one. The class itself was not run against SQS.
+- **The Intake page is a tab shown only when a project has intake**, so a board without it looks the
+  same as before.
+- **The Settings editor writes the machine-local `project.json`**, never the committed defaults,
+  because the source holds a credential. A blank secret keeps the saved one, and a read masks it.
+- **A new issue's `LastSeen` is the report's time, not the clock's.** A later, earlier-dated report
+  never moves it back.

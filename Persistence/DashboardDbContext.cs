@@ -63,6 +63,12 @@ public class DashboardDbContext : DbContext
     public DbSet<ExperimentArm> ExperimentArms => Set<ExperimentArm>();
     public DbSet<ExperimentAssignment> ExperimentAssignments => Set<ExperimentAssignment>();
     public DbSet<OwnerTask> OwnerTasks => Set<OwnerTask>();
+
+    // Intake (docs/intake-plan.md): one row per problem a project's production reported, every
+    // message taken off a queue for 14 days, and each limits window that overflowed.
+    public DbSet<IntakeIssue> IntakeIssues => Set<IntakeIssue>();
+    public DbSet<IntakeMessageLog> IntakeMessages => Set<IntakeMessageLog>();
+    public DbSet<IntakeStorm> IntakeStorms => Set<IntakeStorm>();
     public DbSet<OwnerTaskNote> OwnerTaskNotes => Set<OwnerTaskNote>();
 
     /// <summary>
@@ -113,6 +119,8 @@ public class DashboardDbContext : DbContext
             // materialized list, so nothing depends on this sorting in SQL.
             e.Property(t => t.Track).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.CreatedBy).HasConversion<string>().HasMaxLength(16);
+            e.Property(t => t.Origin).HasConversion<string>().HasMaxLength(16);
+            e.Property(t => t.IntakeChannel).HasMaxLength(32);
             e.Property(t => t.PlanOutcomes).HasMaxLength(256);
             e.Property(t => t.ReconFrom).HasMaxLength(256);
             e.Property(t => t.DirectionSource).HasMaxLength(16);
@@ -558,6 +566,35 @@ public class DashboardDbContext : DbContext
             e.Property(i => i.Until).HasMaxLength(600);
             e.Property(i => i.ClosedBy).HasMaxLength(16);
             e.HasIndex(i => new { i.ProjectKey, i.ClosedAt });
+        });
+
+        b.Entity<IntakeIssue>(e =>
+        {
+            e.Property(i => i.ProjectKey).HasMaxLength(128);
+            e.Property(i => i.Channel).HasMaxLength(32);
+            e.Property(i => i.Fingerprint).HasMaxLength(256);
+            e.Property(i => i.Title).HasMaxLength(300);
+            e.Property(i => i.LastState).HasMaxLength(16);
+            e.Property(i => i.HeldIn).HasMaxLength(32);
+            e.HasIndex(i => new { i.ProjectKey, i.Channel, i.Fingerprint }).IsUnique();
+            e.HasIndex(i => i.TicketId);
+        });
+        b.Entity<IntakeMessageLog>(e =>
+        {
+            e.Property(m => m.ProjectKey).HasMaxLength(128);
+            e.Property(m => m.Source).HasMaxLength(64);
+            e.Property(m => m.MessageId).HasMaxLength(128);
+            e.Property(m => m.Outcome).HasMaxLength(16);
+            e.Property(m => m.Adapter).HasMaxLength(32);
+            e.Property(m => m.Note).HasMaxLength(400);
+            e.HasIndex(m => new { m.ProjectKey, m.Source, m.MessageId }).IsUnique();
+            e.HasIndex(m => m.HandledAt);
+        });
+        b.Entity<IntakeStorm>(e =>
+        {
+            e.Property(s => s.ProjectKey).HasMaxLength(128);
+            e.Property(s => s.Window).HasMaxLength(32);
+            e.HasIndex(s => new { s.ProjectKey, s.Window }).IsUnique();
         });
 
         b.Entity<OwnerTask>(e =>
