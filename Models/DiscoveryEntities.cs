@@ -320,6 +320,14 @@ public class DiscoveryRecording
     public double Seconds { get; set; }
     public long Bytes { get; set; }
 
+    /// <summary>
+    /// Where the picture stands still, as JSON <c>[[from,to],...]</c> in seconds: measured once with
+    /// ffmpeg (<see cref="Whetstone.Services.Ffmpeg.StillsAsync"/>), the first time the discovery is read
+    /// after adoption. Null until measured, or on a machine without ffmpeg; <c>[]</c> when it never
+    /// stands still. What a player skips is worked out from it (<see cref="Whetstone.Services.DiscoveryMedia.Skips"/>).
+    /// </summary>
+    public string? Stills { get; set; }
+
     /// <summary>When the verdict this recording fed was completed: its 7 days count from here.</summary>
     public DateTime? VerdictAt { get; set; }
     /// <summary>When retention removed the file.</summary>

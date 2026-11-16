@@ -828,6 +828,9 @@ namespace Whetstone.Migrations
                     b.Property<DateTime>("StartedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Stills")
+                        .HasColumnType("TEXT");
+
                     b.Property<int>("TicketId")
                         .HasColumnType("INTEGER");
 

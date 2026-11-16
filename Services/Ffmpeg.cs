@@ -104,6 +104,48 @@ public static partial class Ffmpeg
 
     public sealed record Run(int Code, string Output);
 
+    [GeneratedRegex(@"freeze_(start|end):\s*([0-9.]+)")]
+    private static partial Regex FreezeLine();
+
+    /// <summary>
+    /// The stretches of a video where the picture does not change, from ffmpeg's freezedetect: a
+    /// browser recording's long stills are the agent thinking. The noise floor is set just above what
+    /// VP9 leaves on a still UI, and anything shorter than <paramref name="minSeconds"/> is not a still.
+    /// A still that runs to the end is closed at <paramref name="length"/>. Null when ffmpeg failed.
+    /// </summary>
+    public static async Task<IReadOnlyList<(double From, double To)>?> StillsAsync(string ffmpeg, string file, double length,
+        double minSeconds = 1.5, CancellationToken ct = default)
+    {
+        var r = await RunAsync(ffmpeg, new[]
+        {
+            "-hide_banner", "-nostdin", "-i", file, "-map", "0:v", "-an",
+            "-vf", $"freezedetect=n=0.003:d={minSeconds.ToString(CultureInfo.InvariantCulture)}", "-f", "null", "-",
+        }, TimeSpan.FromMinutes(5), ct);
+        if (r.Code != 0) return null;
+        return ParseStills(r.Output, length);
+    }
+
+    /// <summary>freezedetect's lines as spans, joined where two are less than a frame or so apart.</summary>
+    public static IReadOnlyList<(double From, double To)> ParseStills(string output, double length)
+    {
+        var spans = new List<(double From, double To)>();
+        double? open = null;
+        foreach (Match m in FreezeLine().Matches(output))
+        {
+            var t = double.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture);
+            if (m.Groups[1].Value == "start") open = t;
+            else if (open is { } s) { spans.Add((s, t)); open = null; }
+        }
+        if (open is { } last && length > last) spans.Add((last, length));
+        var joined = new List<(double From, double To)>();
+        foreach (var s in spans.OrderBy(x => x.From))
+        {
+            if (joined.Count > 0 && s.From - joined[^1].To < 0.3) joined[^1] = (joined[^1].From, Math.Max(joined[^1].To, s.To));
+            else joined.Add(s);
+        }
+        return joined.Select(s => (Math.Round(s.From, 2), Math.Round(s.To, 2))).ToList();
+    }
+
     private static async Task<Run> RunAsync(string exe, IEnumerable<string> args, TimeSpan timeout, CancellationToken ct)
     {
         var psi = new ProcessStartInfo(exe)

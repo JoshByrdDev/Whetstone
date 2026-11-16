@@ -87,6 +87,147 @@ public static partial class DiscoveryMedia
         return kept.Select(s => (Math.Round(s.From, 2), Math.Round(s.To, 2))).ToList();
     }
 
+    // ---- skipping the still stretches -------------------------------------------------------
+
+    /// <summary>What is left of a still at each end, so the watcher sees the page settle before it jumps.</summary>
+    public const double StillPad = 0.4;
+    /// <summary>A skip shorter than this is not worth the jump.</summary>
+    public const double MinSkip = 1.0;
+
+    /// <summary>
+    /// The stretches a player jumps over: each still, less <see cref="StillPad"/> at either end, less
+    /// every window it must keep - around a chapter's card, an observation's moment, a line of the
+    /// voice-over - leaving only the pieces at least <see cref="MinSkip"/> long. A skip never crosses
+    /// a moment that matters, so jumping one never passes a line before it is heard.
+    /// </summary>
+    public static IReadOnlyList<(double From, double To)> Skips(IEnumerable<(double From, double To)> stills,
+        IEnumerable<(double From, double To)> keep)
+    {
+        var keeps = keep.Where(k => k.To > k.From).OrderBy(k => k.From).ToList();
+        var result = new List<(double From, double To)>();
+        foreach (var s in stills.OrderBy(x => x.From))
+        {
+            var pieces = new List<(double From, double To)> { (s.From + StillPad, s.To - StillPad) };
+            foreach (var k in keeps)
+            {
+                var next = new List<(double From, double To)>();
+                foreach (var p in pieces)
+                {
+                    if (k.To <= p.From || k.From >= p.To) { next.Add(p); continue; }
+                    if (k.From > p.From) next.Add((p.From, k.From));
+                    if (k.To < p.To) next.Add((k.To, p.To));
+                }
+                pieces = next;
+            }
+            result.AddRange(pieces.Where(p => p.To - p.From >= MinSkip));
+        }
+        return result.Select(x => (Math.Round(x.From, 2), Math.Round(x.To, 2))).ToList();
+    }
+
+    /// <summary>
+    /// What a recording keeps of its stills: a chapter's card while it shows, a beat either side of an
+    /// observation's moment, and a beat at each line of the run's own voice-over.
+    /// </summary>
+    public static IEnumerable<(double From, double To)> KeepWindows(IEnumerable<double> chapters, IEnumerable<double> observed, IEnumerable<double> said) =>
+        chapters.Select(c => (c - 0.3, c + 2.0))
+            .Concat(observed.Select(o => (o - 1.0, o + 1.5)))
+            .Concat(said.Select(s => (s - 0.5, s + 1.0)));
+
+    /// <summary>The skips of one recording, or null when its stills have not been measured.</summary>
+    public static IReadOnlyList<(double From, double To)>? SkipsOf(DiscoveryService.View v, DiscoveryRecording r)
+    {
+        if (StillsOf(r) is not { } stills) return null;
+        return Skips(stills, KeepWindows(
+            v.Chapters.Where(c => c.RecordingId == r.Id && c.VideoAt is not null).Select(c => c.VideoAt!.Value),
+            v.Observations.Where(o => o.RecordingId == r.Id && o.VideoAt is not null).Select(o => o.VideoAt!.Value),
+            v.Narration.Where(n => n.RecordingId == r.Id && n.VideoAt is not null).Select(n => n.VideoAt!.Value)));
+    }
+
+    public static IReadOnlyList<(double From, double To)>? StillsOf(DiscoveryRecording r)
+    {
+        if (string.IsNullOrEmpty(r.Stills)) return null;
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<double[][]>(r.Stills)!
+                .Where(x => x.Length == 2).Select(x => (x[0], x[1])).ToList();
+        }
+        catch { return null; }
+    }
+
+    private static readonly ConcurrentDictionary<int, byte> Measuring = new();
+
+    /// <summary>
+    /// Measure the stills of every live recording of this discovery that has not been measured yet.
+    /// A couple of seconds of ffmpeg for a ten-minute run, once; a recording another read is already
+    /// measuring is left to it. Without ffmpeg nothing is measured and nothing is skipped.
+    /// </summary>
+    public static async Task MeasureStillsAsync(DashboardDbContext db, DashboardPaths paths, int ticketId, string? ffmpeg, CancellationToken ct = default)
+    {
+        if (ffmpeg is null) return;
+        var recs = await db.DiscoveryRecordings.Where(r => r.TicketId == ticketId && r.Stills == null && r.PrunedAt == null).ToListAsync(ct);
+        foreach (var r in recs)
+        {
+            var file = Path.Combine(paths.DiscoveryTicketDir(ticketId), r.File);
+            if (!File.Exists(file) || !Measuring.TryAdd(r.Id, 0)) continue;
+            try
+            {
+                if (await Ffmpeg.StillsAsync(ffmpeg, file, r.Seconds, ct: ct) is not { } stills) continue;
+                r.Stills = System.Text.Json.JsonSerializer.Serialize(stills.Select(s => new[] { s.From, s.To }));
+                await db.SaveChangesAsync(ct);
+            }
+            finally { Measuring.TryRemove(r.Id, out _); }
+        }
+    }
+
+    // ---- a proposal's clip, as a stretch of its recording ------------------------------------
+
+    /// <summary>
+    /// The recording a proposal's clip is cut from and the spans of it, worked out the one way both
+    /// the cut and the drawer's timeline use - so a line placed in the clip falls where the cut put it.
+    /// </summary>
+    public static (DiscoveryRecording? Recording, IReadOnlyList<(double From, double To)> Spans) PlanClip(DiscoveryProposal p,
+        IEnumerable<DiscoveryObservation> observations, IEnumerable<DiscoveryRecording> recordings, IEnumerable<double> chaptersOf)
+    {
+        var (rec, moments) = SourceOf(p, observations, recordings);
+        if (rec is null || moments.Count == 0) return (null, Array.Empty<(double, double)>());
+        var length = rec.Seconds > 0 ? rec.Seconds : moments.Max() + Tail;
+        return (rec, ClipSpans(length, chaptersOf, moments));
+    }
+
+    /// <summary>How far before a span a line may have been said and still open it: the scout says what it is about to do, then does it.</summary>
+    public const double LineLeadIn = 3;
+
+    /// <summary>Where a moment of the recording falls in the clip cut from <paramref name="spans"/>, or null when the clip leaves it out.</summary>
+    public static double? ToClip(IReadOnlyList<(double From, double To)> spans, double at, double leadIn = 0)
+    {
+        var offset = 0.0;
+        foreach (var s in spans)
+        {
+            if (at >= s.From && at < s.To) return Math.Round(offset + at - s.From, 2);
+            if (at >= s.From - leadIn && at < s.From) return Math.Round(offset, 2);
+            offset += s.To - s.From;
+        }
+        return null;
+    }
+
+    /// <summary>The recording's skips, as they fall in the clip.</summary>
+    public static IReadOnlyList<(double From, double To)> ClipSkips(IReadOnlyList<(double From, double To)> spans, IEnumerable<(double From, double To)> skips)
+    {
+        var result = new List<(double From, double To)>();
+        var offset = 0.0;
+        foreach (var s in spans)
+        {
+            foreach (var k in skips)
+            {
+                var a = Math.Max(k.From, s.From);
+                var b = Math.Min(k.To, s.To);
+                if (b - a >= MinSkip) result.Add((Math.Round(offset + a - s.From, 2), Math.Round(offset + b - s.From, 2)));
+            }
+            offset += s.To - s.From;
+        }
+        return result;
+    }
+
     // ---- adopting a run's recording ---------------------------------------------------------
 
     [GeneratedRegex(@"video-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z", RegexOptions.IgnoreCase)]
@@ -262,12 +403,11 @@ public static partial class DiscoveryMedia
             if (state == ClipState.Ready) return (Path.Combine(dir, p.ClipFile!), state, null);
             if (state != ClipState.Cuttable) return (null, state, null);
 
-            var (rec, moments) = SourceOf(p, obs, recs);
+            var (source, _) = SourceOf(p, obs, recs);
             var chapters = await db.DiscoveryChapters.AsNoTracking()
-                .Where(c => c.RecordingId == rec!.Id && c.VideoAt != null).Select(c => c.VideoAt!.Value).ToListAsync(ct);
-            var length = rec!.Seconds > 0 ? rec.Seconds : moments.Max() + Tail;
-            var spans = ClipSpans(length, chapters, moments);
-            if (spans.Count == 0) return (null, ClipState.None, null);
+                .Where(c => c.RecordingId == source!.Id && c.VideoAt != null).Select(c => c.VideoAt!.Value).ToListAsync(ct);
+            var (rec, spans) = PlanClip(p, obs, recs, chapters);
+            if (rec is null || spans.Count == 0) return (null, ClipState.None, null);
 
             await Cutters.WaitAsync(ct);
             try

@@ -59,6 +59,8 @@ export interface DiscoveryRecording {
   chapters: { id: number; title: string; job?: number | null; videoAt?: number | null }[];
   /** What is said over it, in the order it is heard. Null once the recording is removed. */
   voiceOver?: VoiceLine[] | null;
+  /** The still stretches a player jumps over ([from, to] seconds) - the agent thinking. Null until measured. */
+  skips?: [number, number][] | null;
 }
 
 /**
@@ -120,6 +122,8 @@ export interface DiscoveryProposal {
   goalId?: number | null;
   clip?: ClipState;
   clipPrunedAt?: string | null;
+  /** What is said over its clip and what the clip skips, in the clip's own seconds. Null when there is no clip to play. */
+  clipTimeline?: { voiceOver: VoiceLine[]; skips?: [number, number][] | null } | null;
   /** The owner's pin: its clip and shots outlive every retention rule. */
   pinned?: boolean;
 }

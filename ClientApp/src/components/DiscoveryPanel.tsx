@@ -480,22 +480,27 @@ function VoiceOverControl({ d, recordings, busy, onGenerate }: {
 }
 
 /**
- * Plays a recording's voice-over against its video. A line starts when the video reaches its
- * moment; when a voiced line is still speaking as the video reaches the next one, the video waits
- * for it - the scout says what it is doing faster than it does it, and a watcher needs both. A seek
- * starts over from the first line after the new place. With the voice off the lines still show as
- * captions and nothing waits.
+ * Plays a video's voice-over against it, and skips where it stands still. A line starts when the
+ * video reaches its moment; when a voiced line is still speaking as the video reaches the next one,
+ * the video waits for it - the scout says what it is doing faster than it does it, and a watcher
+ * needs both. A still stretch (the agent thinking) is jumped over while the video plays; the server
+ * never puts a skip across a line, a chapter or an observation, so a jump never passes one unheard.
+ * A seek by the watcher starts over from the first line after the new place. With the voice off the
+ * lines still show as captions and nothing waits.
  */
-function useVoiceOver(video: React.MutableRefObject<HTMLVideoElement | null>, lines: VoiceLine[], voiceOn: boolean) {
+function useVoiceOver(video: React.MutableRefObject<HTMLVideoElement | null>, lines: VoiceLine[], voiceOn: boolean,
+  skips: [number, number][], skipOn: boolean) {
   const [current, setCurrent] = useState<VoiceLine | null>(null);
-  const st = useRef({ next: 0, speaking: false, held: false, until: 0, shown: null as VoiceLine | null });
+  const st = useRef({ next: 0, speaking: false, held: false, until: 0, shown: null as VoiceLine | null, jumping: false });
   const audio = useRef<HTMLAudioElement | null>(null);
   const on = useRef(voiceOn);
   on.current = voiceOn;
+  const skipping = useRef(skipOn);
+  skipping.current = skipOn;
 
   useEffect(() => {
     const v = video.current;
-    if (!v || lines.length === 0) return;
+    if (!v || (lines.length === 0 && skips.length === 0)) return;
     const a = audio.current ?? (audio.current = new Audio());
     const s = st.current;
     let frame = 0;
@@ -518,6 +523,11 @@ function useVoiceOver(video: React.MutableRefObject<HTMLVideoElement | null>, li
 
     const tick = () => {
       const t = v.currentTime;
+      // The agent thinking: jump to where the picture moves again. Not while the voice holds the video.
+      if (skipping.current && !v.paused && !s.jumping) {
+        const k = skips.find(([from, to]) => t >= from && t < to - 0.05);
+        if (k) { s.jumping = true; v.currentTime = k[1]; }
+      }
       const l = lines[s.next];
       if (s.speaking && !a.src && performance.now() >= s.until) finish();
       // A caption stays a moment past its line, then clears rather than hanging over a long silence.
@@ -542,7 +552,8 @@ function useVoiceOver(video: React.MutableRefObject<HTMLVideoElement | null>, li
       frame = requestAnimationFrame(tick);
     };
 
-    const onSeeked = () => restartFrom(v.currentTime);
+    // A jump of our own is not the watcher seeking: the line being heard goes on.
+    const onSeeked = () => { if (s.jumping) { s.jumping = false; return; } restartFrom(v.currentTime); };
     const onPause = () => { if (!s.held) a.pause(); };
     const onPlay = () => { if (s.speaking && a.src && a.paused) void a.play().catch(() => finish()); };
     v.addEventListener('seeked', onSeeked);
@@ -557,7 +568,7 @@ function useVoiceOver(video: React.MutableRefObject<HTMLVideoElement | null>, li
       v.removeEventListener('play', onPlay);
       stopLine();
     };
-  }, [video, lines]);
+  }, [video, lines, skips]);
 
   // Turning the voice off mid-line stops it and lets a waiting video go on.
   useEffect(() => {
@@ -584,15 +595,63 @@ function VoiceCaption({ line }: { line: VoiceLine | null }) {
   );
 }
 
-/** One run's whole recording, with its chapters as places to jump to and its voice-over. Removed is said, not broken. */
-function RecordingPlayer({ ticketId, r, register }: { ticketId: number; r: DiscoveryRecording; register: (el: HTMLVideoElement | null) => void }) {
+/** A small on/off control beside a player. */
+function Toggle({ on, label, title, onClick }: { on: boolean; label: string; title: string; onClick: () => void }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={on} title={title}
+      className="orbit-tap shrink-0 px-2 py-0.5 rounded border border-hair text-gray-400 hover:text-gray-200">
+      {label} {on ? 'on' : 'off'}
+    </button>
+  );
+}
+
+/**
+ * A video with its voice-over and its still stretches skipped: the whole recording and a proposal's
+ * clip are the same player. The lines and skips are compared by content, not identity - the drawer
+ * reloads every couple of seconds while voicing, and the same lines must not restart the one heard.
+ */
+function NarratedVideo({ src, voiceOver, skips, seconds, label, register, onError, className }: {
+  src: string; voiceOver?: VoiceLine[] | null; skips?: [number, number][] | null; seconds?: number;
+  label?: ReactNode; register?: (el: HTMLVideoElement | null) => void; onError?: () => void; className?: string;
+}) {
   const ref = useRef<HTMLVideoElement | null>(null);
   const [voiceOn, setVoiceOn] = useState(true);
-  // By content, not identity: the drawer reloads every couple of seconds while voicing, and a new
-  // array of the same lines must not restart the line being heard.
-  const linesKey = JSON.stringify(r.voiceOver ?? []);
+  const [skipOn, setSkipOn] = useState(true);
+  const linesKey = JSON.stringify(voiceOver ?? []);
   const lines = useMemo(() => JSON.parse(linesKey) as VoiceLine[], [linesKey]);
-  const line = useVoiceOver(ref, lines, voiceOn);
+  const skipsKey = JSON.stringify(skips ?? []);
+  const jumps = useMemo(() => JSON.parse(skipsKey) as [number, number][], [skipsKey]);
+  const line = useVoiceOver(ref, lines, voiceOn, jumps, skipOn);
+  const voiced = lines.some(l => l.clip);
+  const skipped = jumps.reduce((n, [a, b]) => n + (b - a), 0);
+  return (
+    <div className={`space-y-1.5 ${className ?? ''}`}>
+      {(label || voiced || skipped >= 5) && (
+        <div className="flex items-center gap-2 text-[11px] text-gray-500">
+          <span className="min-w-0 truncate">
+            {label}
+            {skipped >= 5 && seconds ? ` · ${clock(Math.max(0, seconds - skipped))} with the still stretches skipped` : ''}
+          </span>
+          <span className="ml-auto flex gap-1.5">
+            {skipped >= 5 && <Toggle on={skipOn} label="Skip stills" onClick={() => setSkipOn(x => !x)}
+              title={skipOn ? 'Play the stretches where the screen stands still (the agent thinking)' : 'Jump over the stretches where the screen stands still'} />}
+            {voiced && <Toggle on={voiceOn} label="Voice" onClick={() => setVoiceOn(x => !x)}
+              title={voiceOn ? 'Mute the voice-over; its lines stay as captions' : 'Play the voice-over'} />}
+          </span>
+        </div>
+      )}
+      <div className="relative">
+        <video ref={el => { ref.current = el; register?.(el); }} src={src} controls preload="metadata" onError={onError}
+          className="w-full max-w-full rounded-lg border border-hair bg-black" />
+        <VoiceCaption line={line} />
+      </div>
+    </div>
+  );
+}
+
+/** One run's whole recording, with its chapters as places to jump to and its voice-over. Removed is said, not broken. */
+function RecordingPlayer({ ticketId, r, register }: { ticketId: number; r: DiscoveryRecording; register: (el: HTMLVideoElement | null) => void }) {
+  const video = useRef<HTMLVideoElement | null>(null);
   const who = r.round === 0 ? 'The scout' : `Recheck ${r.round}`;
   const length = r.seconds > 0 ? clock(r.seconds) : null;
   if (r.prunedAt) {
@@ -602,29 +661,16 @@ function RecordingPlayer({ ticketId, r, register }: { ticketId: number; r: Disco
     );
   }
   const jump = (at: number) => {
-    const v = ref.current;
+    const v = video.current;
     if (!v) return;
     v.currentTime = at;
     void v.play().catch(() => { /* the user can press play */ });
   };
-  const voiced = lines.some(l => l.clip);
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-2 text-[11px] text-gray-500">
-        <span className="min-w-0 truncate">{who}{length ? ` · ${length}` : ''}{r.verdictAt ? ' · kept a week after its verdict' : ''}</span>
-        {voiced && (
-          <button type="button" onClick={() => setVoiceOn(x => !x)} aria-pressed={voiceOn}
-            title={voiceOn ? 'Mute the voice-over; its lines stay as captions' : 'Play the voice-over'}
-            className="orbit-tap ml-auto shrink-0 px-2 py-0.5 rounded border border-hair text-gray-400 hover:text-gray-200">
-            Voice {voiceOn ? 'on' : 'off'}
-          </button>
-        )}
-      </div>
-      <div className="relative">
-        <video ref={el => { ref.current = el; register(el); }} src={api.recordingUrl(ticketId, r.id)} controls preload="metadata"
-          className="w-full max-w-full rounded-lg border border-hair bg-black" />
-        <VoiceCaption line={line} />
-      </div>
+      <NarratedVideo src={api.recordingUrl(ticketId, r.id)} voiceOver={r.voiceOver} skips={r.skips} seconds={r.seconds}
+        label={`${who}${length ? ` · ${length}` : ''}${r.verdictAt ? ' · kept a week after its verdict' : ''}`}
+        register={el => { video.current = el; register(el); }} />
       {r.chapters.some(c => c.videoAt != null) && (
         <div className="flex flex-wrap gap-1.5">
           {r.chapters.filter(c => c.videoAt != null).map(c => (
@@ -648,8 +694,8 @@ function ProposalClip({ p }: { p: DiscoveryProposal }) {
       return failed ? (
         <p className="mt-2 text-[11px] text-gray-500">The clip could not be cut; the screenshots below are its evidence.</p>
       ) : (
-        <video src={api.clipUrl(p.id)} controls preload="metadata" onError={() => setFailed(true)}
-          className="mt-2 w-full max-w-full rounded-lg border border-hair bg-black" />
+        <NarratedVideo src={api.clipUrl(p.id)} voiceOver={p.clipTimeline?.voiceOver} skips={p.clipTimeline?.skips}
+          onError={() => setFailed(true)} className="mt-2" />
       );
     case 'Removed':
       return p.clipPrunedAt ? (

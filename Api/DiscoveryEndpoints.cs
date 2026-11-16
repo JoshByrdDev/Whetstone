@@ -52,6 +52,31 @@ public static class DiscoveryEndpoints
             var dir = paths.DiscoveryTicketDir(id);
             var ffmpeg = svc.FfmpegPath is not null;
             var projectKey = await svc.ProjectOfAsync(id);
+            // Each live recording's voice-over and skips, once: the recordings show them whole, and a
+            // proposal's clip shows the part that falls in it.
+            var voice = v.Recordings.Where(r => r.PrunedAt is null).ToDictionary(r => r.Id, r => voicing.Timed(v, r.Id, projectKey));
+            var skips = v.Recordings.Where(r => r.PrunedAt is null).ToDictionary(r => r.Id, r => DiscoveryMedia.SkipsOf(v, r));
+            static object Line((DiscoveryVoiceOver.Line Line, string? Clip, double Seconds) x, double at) => new
+            {
+                key = x.Line.Key, from = x.Line.From.ToString(), x.Line.Text, at, x.Line.Kind, x.Clip, x.Seconds,
+            };
+            static object[]? Spans(IEnumerable<(double From, double To)>? s) => s?.Select(x => (object)new[] { x.From, x.To }).ToArray();
+            object? ClipTimeline(DiscoveryProposal p, DiscoveryMedia.ClipState state)
+            {
+                if (state is not (DiscoveryMedia.ClipState.Ready or DiscoveryMedia.ClipState.Cuttable)) return null;
+                var (src, _) = DiscoveryMedia.SourceOf(p, v.Observations, v.Recordings);
+                if (src is null || !voice.ContainsKey(src.Id)) return null;
+                var (rec, spans) = DiscoveryMedia.PlanClip(p, v.Observations, v.Recordings,
+                    v.Chapters.Where(c => c.RecordingId == src.Id && c.VideoAt is not null).Select(c => c.VideoAt!.Value));
+                if (rec is null || spans.Count == 0) return null;
+                return new
+                {
+                    voiceOver = voice[rec.Id]
+                        .Select(x => (x, at: DiscoveryMedia.ToClip(spans, x.Line.At, DiscoveryMedia.LineLeadIn)))
+                        .Where(y => y.at is not null).Select(y => Line(y.x, y.at!.Value)).ToArray(),
+                    skips = skips[rec.Id] is { } k ? Spans(DiscoveryMedia.ClipSkips(spans, k)) : null,
+                };
+            }
             return Results.Ok(new
             {
                 route = v.Route is null ? null : new
@@ -74,6 +99,8 @@ public static class DiscoveryEndpoints
                     p.NewToMe, draftKind = p.DraftKind.ToString(), p.DraftTitle, p.DraftWhy, p.DraftBody, p.DraftWorkItems,
                     p.Round, recheckKind = p.RecheckKind?.ToString(), p.GoalId,
                     clip = DiscoveryMedia.StateOf(p, v.Observations, v.Recordings, dir, ffmpeg).ToString(), p.ClipPrunedAt, p.Pinned,
+                    // What is said over the clip and what it skips, in the clip's own seconds.
+                    clipTimeline = ClipTimeline(p, DiscoveryMedia.StateOf(p, v.Observations, v.Recordings, dir, ffmpeg)),
                 }),
                 // The runs' videos, each with its chapters; a pruned one keeps its row and says when it went.
                 recordings = v.Recordings.Select(r => new
@@ -82,10 +109,9 @@ public static class DiscoveryEndpoints
                     chapters = v.Chapters.Where(c => c.RecordingId == r.Id).Select(c => new { c.Id, c.Title, c.Job, c.VideoAt }),
                     // Its voice-over, in the order it is heard: the run's own words where it narrated,
                     // else its chapters and findings read aloud. A line with no clip yet plays as a caption.
-                    voiceOver = r.PrunedAt is not null ? null : voicing.Timed(v, r.Id, projectKey).Select(x => new
-                    {
-                        key = x.Line.Key, from = x.Line.From.ToString(), x.Line.Text, at = x.Line.At, x.Line.Kind, x.Clip, x.Seconds,
-                    }),
+                    voiceOver = voice.TryGetValue(r.Id, out var lines) ? lines.Select(x => Line(x, x.Line.At)).ToArray() : null,
+                    // The still stretches a player jumps over - the agent thinking. Null until measured.
+                    skips = skips.TryGetValue(r.Id, out var k) ? Spans(k) : null,
                 }),
                 // Whether the voice-over can be generated here, and how the last press is going.
                 voicing = new { unavailable = narrator.Unavailable(), state = voicing.StateOf(id) },

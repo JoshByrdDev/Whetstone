@@ -58,6 +58,8 @@ public class DiscoveryService
         if (t is null || t.Track != TicketTrack.Discovery) return null;
         // A run's finished recording is picked up the first time anything reads the discovery after it.
         await DiscoveryMedia.AdoptAsync(_db, _paths, ticketId, FfmpegPath, DateTime.UtcNow);
+        // And measured where it stands still, once, so a player can skip the agent's thinking.
+        await DiscoveryMedia.MeasureStillsAsync(_db, _paths, ticketId, FfmpegPath);
         var route = await _db.DiscoveryRoutes.AsNoTracking().FirstOrDefaultAsync(r => r.TicketId == ticketId);
         var obs = await _db.DiscoveryObservations.AsNoTracking().Where(o => o.TicketId == ticketId).OrderBy(o => o.Id).ToListAsync();
         var visits = await _db.DiscoveryVisits.AsNoTracking().Where(v => v.TicketId == ticketId).OrderBy(v => v.Id).ToListAsync();

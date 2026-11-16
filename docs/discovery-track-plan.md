@@ -733,14 +733,26 @@ nothing showing where on the page anything was happening. Three changes, one per
   video reaches the next one, the video waits for it - an agent says what it is doing faster than
   it does it. A line not voiced yet is a caption only and holds nothing. *Voice on/off* mutes it and
   keeps the captions.
-- **Not done**: proposal clips are silent and have no captions - the voice-over is the whole
-  recording's. The scout's thinking time is still dead air in the video; a cut that drops long
-  still stretches between lines would shorten a 9-minute run a lot.
+- **The agent thinking is skipped, not cut.** A ten-minute run is mostly a still screen: the first
+  real one was 452s still out of 492. The first read after adoption measures where a recording
+  stands still (`Ffmpeg.StillsAsync`, freezedetect, about two seconds of ffmpeg for that run) into
+  `DiscoveryRecording.Stills`, and the player jumps those stretches while it plays. Nothing is
+  re-encoded, so every stamped moment, chapter and clip keeps its time. What it jumps is worked out
+  per read (`DiscoveryMedia.Skips`): each still less 0.4s at either end, less a window kept around
+  every chapter card, observation and line of the voice-over, so a jump never passes one unheard.
+  A jump made while a line is speaking leaves the line playing, and the video then waits for it at
+  the next line, so a run plays as long as its motion and its voice. *Skip stills* turns it off.
+- **A proposal's clip carries its part of both**: the lines and skips that fall in its spans, in
+  the clip's own seconds (`PlanClip`, `ToClip`, `ClipSkips`), with a line said up to 3s before a
+  span opening the clip. The cut and the timeline plan the spans the one way (`PlanClip`). The clip
+  file stays silent: the voice plays beside it, as over the whole recording.
 - **Proven on the QA copy**: a scripted run through the pinned browser server and the copy's own
   `/mcp`, with the note's exact arguments, came out 1440x900 with pointer, outlines and action
   titles. Its four `say` lines were placed at the right seconds and voiced from the drawer. Played
-  back, the video held at two lines until the voice finished and then went on. Checked at 375px
-  wide with no sideways scroll.
+  back, the video held at two lines until the voice finished and then went on. With thinking
+  pauses added, a 38s recording measured 26s of stills and played in about 22s with every line
+  heard whole; a proposal's 24s clip opened on the line that introduced it and played its three
+  lines with its own skips. Checked at 375px wide with no sideways scroll.
 
 ## Open for whoever builds it
 
