@@ -78,8 +78,9 @@ export function OwnerTodos({ focus, onFocused }: {
 
   const groups: { title: string; colour: string; rows: OwnerTodo[]; meta?: string }[] = show === 'open' ? [
     { title: 'Holds a release', colour: TIER.blocked.c, rows: shown.filter(i => i.status === 'open' && i.holdsRelease), meta: 'a slice cannot go out until these are done' },
-    { title: 'A ticket is waiting on it', colour: TIER.gate.c, rows: shown.filter(i => i.status === 'open' && !i.holdsRelease && i.ticketId != null) },
-    { title: 'The rest', colour: TIER.active.c, rows: shown.filter(i => i.status === 'open' && !i.holdsRelease && i.ticketId == null) },
+    { title: 'A ticket is waiting on it', colour: TIER.gate.c, rows: shown.filter(i => i.status === 'open' && !i.holdsRelease && !i.afterRelease && i.ticketId != null) },
+    { title: 'After a slice deploys', colour: TIER.queue.c, rows: shown.filter(i => i.status === 'open' && i.afterRelease), meta: 'needs what the deploy puts up; holds nothing' },
+    { title: 'The rest', colour: TIER.active.c, rows: shown.filter(i => i.status === 'open' && !i.holdsRelease && !i.afterRelease && i.ticketId == null) },
     { title: 'Waiting on someone', colour: TIER.queue.c, rows: shown.filter(i => i.status === 'waiting') },
   ] : [{ title: show === 'done' ? 'Done' : show === 'dropped' ? 'Dropped' : 'Everything', colour: TIER.done.c, rows: shown }];
 
@@ -177,6 +178,12 @@ function Row({ t, project, open, onToggle, onChanged }: {
                 : t.unit != null ? `slice ${String(t.unit).padStart(2, '0')}` : 'the next release'}
             </span>
           )}
+          {t.afterRelease && (
+            <span style={{ color: TIER.queue.c }}>
+              after {t.slice ? `slice ${String(t.slice.unit).padStart(2, '0')}${t.slice.title ? ` - ${t.slice.title}` : ''}`
+                : t.unit != null ? `slice ${String(t.unit).padStart(2, '0')}` : 'its slice'} deploys
+            </span>
+          )}
           {t.status === 'waiting' && <span style={{ color: TIER.queue.c }}>waiting on {t.waitingOn}{t.waitingUntil ? `, look again ${t.waitingUntil.slice(0, 10)}` : ''}</span>}
           {t.suggestion && !closed && <span style={{ color: TIER.done.c }}>an agent says it looks {t.suggestion}</span>}
           <span>{t.status === 'done' ? `done ${ago(t.doneAt)}` : t.status === 'dropped' ? `dropped ${ago(t.droppedAt)}` : `added ${ago(t.createdAt)} by ${t.createdBy}`}</span>
@@ -200,7 +207,7 @@ function Detail({ t, onChanged }: { t: OwnerTodo; onChanged: () => Promise<void>
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const [edit, setEdit] = useState({ title: t.title, body: t.body, kind: t.kind });
+  const [edit, setEdit] = useState({ title: t.title, body: t.body, kind: t.kind, holdsRelease: t.holdsRelease, afterRelease: t.afterRelease });
   const closed = t.status === 'done' || t.status === 'dropped';
 
   const run = async (fn: () => Promise<unknown>) => {
@@ -238,6 +245,13 @@ function Detail({ t, onChanged }: { t: OwnerTodo; onChanged: () => Promise<void>
         <div className="flex flex-col gap-2">
           <input className={field} value={edit.title} onChange={e => setEdit({ ...edit, title: e.target.value })} aria-label="Title" />
           <KindPicker kind={edit.kind} onKind={k => setEdit({ ...edit, kind: k })} />
+          {t.project && (t.ticketId != null || t.unit != null || t.holdsRelease) && (
+            <div className="flex flex-wrap gap-1.5" aria-label="When it is needed">
+              <Chip on={!edit.holdsRelease && !edit.afterRelease} onClick={() => setEdit({ ...edit, holdsRelease: false, afterRelease: false })}>Any time</Chip>
+              <Chip on={edit.holdsRelease} onClick={() => setEdit({ ...edit, holdsRelease: true, afterRelease: false })}>Before the release - holds it</Chip>
+              <Chip on={edit.afterRelease} onClick={() => setEdit({ ...edit, holdsRelease: false, afterRelease: true })}>After the deploy</Chip>
+            </div>
+          )}
           <textarea className={field} rows={10} value={edit.body} onChange={e => setEdit({ ...edit, body: e.target.value })} aria-label="Detail" />
           <div className="flex gap-2 flex-wrap">
             <GhostButton tone="go" disabled={busy} onClick={() => run(() => editOwnerTodo(t.id, edit))}>{busy ? 'Saving' : 'Save'}</GhostButton>
@@ -300,7 +314,7 @@ function Detail({ t, onChanged }: { t: OwnerTodo; onChanged: () => Promise<void>
             </>
           )}
           <GhostButton onClick={() => pick('note')}>Add a note</GhostButton>
-          <GhostButton onClick={() => { setEdit({ title: t.title, body: t.body, kind: t.kind }); setAct('edit'); }}>Edit</GhostButton>
+          <GhostButton onClick={() => { setEdit({ title: t.title, body: t.body, kind: t.kind, holdsRelease: t.holdsRelease, afterRelease: t.afterRelease }); setAct('edit'); }}>Edit</GhostButton>
           <GhostButton onClick={copy} title={`Copies "/todo ${t.ref}" to paste into Claude Code`}>{copied ? 'Copied' : 'Copy for Claude'}</GhostButton>
         </div>
       )}

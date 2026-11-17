@@ -26,6 +26,7 @@ session reads the item off the board and walks them through it in the browser.
 | `Status` | `Open`, `Waiting` (on someone else, with `WaitingOn` and a check-back `WaitingUntil`), `Done`, `Dropped` |
 | `TicketId`, `Unit` | The ticket that asked for it, and the slice it belongs to |
 | `HoldsRelease` | The slice's release is refused while this is open - it is what a config or action release note was |
+| `AfterRelease` | For after the slice is released and deployed: it needs what the deploy puts up. Linked to the slice, shown beside its release, and never holds it. Never set with `HoldsRelease` |
 | `DoneNote` | Required to mark it done: what was done, and where the result lives |
 | `SuggestedAt` / `Suggestion` | An agent's word that it looks done or no longer needed, with its evidence. The owner decides |
 
@@ -37,9 +38,19 @@ thing, context an agent appended, suggestions, and the owner's own marks.
 ## It replaces the config and action release notes
 
 A release note of kind `config` or `action` was always a to-do with a gate on it. Now
-`steward_note_for_release` with either kind files an owner task with `HoldsRelease` set, and the
-release gate counts open tasks for that slice beside the unticked migrations. Migrations and
-notes-to-know stay release notes: they are reading for the release, not jobs.
+`steward_note_for_release` with either kind files an owner task, and the release gate counts open
+tasks that hold that slice beside the unticked migrations. Migrations and notes-to-know stay
+release notes: they are reading for the release, not jobs.
+
+**A job says which side of the deploy it is on** (`when` on the note, `holdsRelease` or
+`afterRelease` on `owner_todo_add`), and the note is refused until it does. `before` - a secret or
+setting the deployed code reads, an account it calls - sets `HoldsRelease`. `after` - a role on a
+bucket the deploy creates, a step that reads from it - sets `AfterRelease`: the item is linked to
+the slice (its own `Unit`, else its ticket's, never "the next one") and counted against nothing.
+Without the second side, a job that needed the deployed infrastructure held the release that would
+deploy it, and the slice could never go out except by the owner switching the hold off by hand.
+When the slice is released, each open after-deploy item gets a note saying its deploy is out, and
+one `owner_todo` notice names them all. A job with a half on each side is two items.
 
 A task's slice is its own `Unit`, else its ticket's slice, else - like an unplaced release note -
 the earliest agreed slice not yet released. Ticking one off on the Steward page is marking the

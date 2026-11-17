@@ -387,18 +387,24 @@ public class StewardTools
         "can do. A few lines, facts only, and the first sentence in plain everyday words: what it is and why the owner would care, " +
         "before any path or code. A ticket that leaves nothing gets no entry. One note is one kind of thing: a ticket that leaves a " +
         "migration and words to read gets two notes. NOT for words only an admin sees (note nothing), and NOT for a line for a " +
-        "document a worker may edit - the worker writes that itself, on its branch.")]
+        "document a worker may edit - the worker writes that itself, on its branch. A job for the owner's hands (config, action) " +
+        "also says `when`: before the release, which it holds, or after the deploy, which it waits for.")]
     public static Task<StewardReply> NoteForRelease(StewardService s,
         [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
         [Description("What the owner should read or do, in a few lines.")] string text,
         [Description("What kind of thing it is. 'migration': the merge carries a migration or any change to the schema or data " +
             "that runs on release (holds the release until ticked). 'config': something only the owner's hands can set up outside " +
-            "the code - a secret, an account, infrastructure, a scheduled task - which goes on their to-do list holding this release. " +
+            "the code - a secret, an account, infrastructure, a scheduled task - which goes on their to-do list (say `when`). " +
             "'action': any other job for their hands, such as a test with their own keys or a step at deploy (also a to-do). " +
             "'words': words a customer reads that no decision gave (read with the release; holds nothing). 'terms': words about money, " +
             "consent or legal terms a customer agrees to or is charged by (holds the release until read). 'docs': a line for a document " +
-            "no branch may edit - the conventions file, CLAUDE.md - as the worker wrote it. 'note': only to know.")] string kind) =>
-        s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text, kind);
+            "no branch may edit - the conventions file, CLAUDE.md - as the worker wrote it. 'note': only to know.")] string kind,
+        [Description("For 'config' and 'action' only, and required for them: which side of the deploy the job is on. 'before': the " +
+            "release or the push needs it done first - a secret or setting the deployed code reads, an account it calls; it holds the " +
+            "release. 'after': it needs what the deploy itself puts up - a role on a bucket the deploy creates, a step that reads from " +
+            "it - so it cannot be done until the slice is out; it goes on the list linked to this slice and holds nothing. Holding the " +
+            "release for an 'after' job means the slice can never be released.")] string? when = null) =>
+        s.RecordAsync(project, StewardEntryKind.BeforeRelease, ticketId, text, kind, default, when);
 }
 
 /// <summary>

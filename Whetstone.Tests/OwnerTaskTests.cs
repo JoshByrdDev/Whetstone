@@ -225,6 +225,41 @@ public class OwnerTaskTests : IDisposable
         Assert.Contains("Holds a release", OwnerTaskService.ListMarkdown(list, "http://localhost:5338"));
     }
 
+    [Fact]
+    public async Task An_item_is_needed_before_the_release_or_after_the_deploy_never_both()
+    {
+        var ticket = await Ticket(TicketPhase.Done);
+        Assert.Equal("bad-request", (await With(s => s.AddAsync(new OwnerTaskDraft("alpha", "Grant the loader a role on the bucket", "",
+            "infra", TicketId: ticket, HoldsRelease: true, AfterRelease: true), "owner"))).Answer);
+        // After whose deploy: without a ticket or a slice there is none to wait for.
+        Assert.Equal("bad-request", (await With(s => s.AddAsync(new OwnerTaskDraft("alpha", "Grant the loader a role on the bucket", "",
+            "infra", AfterRelease: true), "owner"))).Answer);
+
+        var after = IdOf(await With(s => s.AddAsync(new OwnerTaskDraft("alpha", "Grant the loader a role on the bucket", "",
+            "infra", TicketId: ticket, AfterRelease: true), "owner")));
+        var plain = IdOf(await With(s => s.AddAsync(new OwnerTaskDraft("alpha", "Renew the vendor contract", "", "account"), "owner")));
+        var list = await With(s => s.ListAsync("alpha"));
+        var md = OwnerTaskService.ListMarkdown(list, "http://localhost:5338");
+        Assert.Contains("After a slice deploys", md);
+        Assert.DoesNotContain("Holds a release", md);
+        Assert.Contains("does not hold the release", OwnerTaskService.Markdown(list.Single(t => t.Id == after), "http://localhost:5338"));
+
+        // The owner moves it across: one side takes the other back.
+        await With(s => s.EditAsync(after, null, null, null, null, holdsRelease: true));
+        await using (var ctx = NewCtx())
+        {
+            var t = await ctx.OwnerTasks.SingleAsync(x => x.Id == after);
+            Assert.True(t.HoldsRelease); Assert.False(t.AfterRelease);
+        }
+        await With(s => s.EditAsync(after, null, null, null, null, null, afterRelease: true));
+        await using (var ctx = NewCtx())
+        {
+            var t = await ctx.OwnerTasks.SingleAsync(x => x.Id == after);
+            Assert.False(t.HoldsRelease); Assert.True(t.AfterRelease);
+        }
+        Assert.NotEqual(after, plain);
+    }
+
     [Theory]
     [InlineData("Read the new trial-pricing words (#12, ruling 3).")]
     [InlineData("Check two pieces of wording a member's customers still see")]

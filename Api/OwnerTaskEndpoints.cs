@@ -3,8 +3,8 @@ using Whetstone.Services;
 namespace Whetstone.Api;
 
 public record OwnerTaskCreate(string? Project, string? Title, string? Body, string? Kind, string? Key, int? TicketId,
-    bool? HoldsRelease, int[]? NotDuplicateOf, string? By);
-public record OwnerTaskEdit(string? Title, string? Body, string? Kind, string? Project, bool? HoldsRelease, string? By);
+    bool? HoldsRelease, int[]? NotDuplicateOf, string? By, bool? AfterRelease = null);
+public record OwnerTaskEdit(string? Title, string? Body, string? Kind, string? Project, bool? HoldsRelease, string? By, bool? AfterRelease = null);
 public record OwnerTaskWord(string? Note, string? Because, string? On, DateTime? Until, string? Why, string? Text, string? By);
 
 /// <summary>
@@ -33,7 +33,7 @@ public static class OwnerTaskEndpoints
         StewardService steward, CancellationToken ct)
     {
         var all = new Dictionary<int, OwnerTaskSlice>();
-        foreach (var p in items.Where(t => t.HoldsRelease && t.ProjectKey is not null).Select(t => t.ProjectKey!).Distinct())
+        foreach (var p in items.Where(t => (t.HoldsRelease || t.AfterRelease) && t.ProjectKey is not null).Select(t => t.ProjectKey!).Distinct())
         {
             try { foreach (var (id, s) in await steward.ReleaseSliceOfTodosAsync(p, ct)) all[id] = s; }
             catch (Exception) { /* a plan that will not read leaves the slice unnamed, not the list unread */ }
@@ -80,11 +80,11 @@ public static class OwnerTaskEndpoints
 
         g.MapPost("", async (OwnerTaskCreate b, OwnerTaskService s, CancellationToken ct) =>
             Reply(await s.AddAsync(new OwnerTaskDraft(b.Project, b.Title ?? "", b.Body ?? "", b.Kind, b.Key, b.TicketId,
-                null, b.HoldsRelease ?? false, b.NotDuplicateOf), By(b.By), ct)));
+                null, b.HoldsRelease ?? false, b.NotDuplicateOf, b.AfterRelease ?? false), By(b.By), ct)));
 
         g.MapPut("/{id}", async (string id, OwnerTaskEdit b, OwnerTaskService s, CancellationToken ct) =>
             OwnerTaskService.ParseRef(id) is { } n
-                ? Reply(await s.EditAsync(n, b.Title, b.Body, b.Kind, b.Project, b.HoldsRelease, By(b.By), ct))
+                ? Reply(await s.EditAsync(n, b.Title, b.Body, b.Kind, b.Project, b.HoldsRelease, By(b.By), ct, b.AfterRelease))
                 : Results.NotFound(new { error = $"There is no {id}." }));
 
         g.MapPost("/{id}/done", async (string id, OwnerTaskWord b, OwnerTaskService s, CancellationToken ct) =>

@@ -140,6 +140,10 @@ Where a ticket talks to a service beyond this machine - a vendor's API, another 
 - **Write the contract check, as a work item of its own.** A short script that someone with the service's credentials runs against its non-production environment: each request it sends, which guess that request settles, and what a matching answer looks like. It asks for any secret at the prompt and prints none. It goes in an `add_comment` as a fenced block, or where this repo's conventions keep developer scripts if they name such a place - it is a tool for that person, not part of the change. You never run it: this pipeline does not contact the service, and that is not a step you have left undone.
 - **A result someone recorded outranks your guess.** Where the master notes say what the real service did, build the app and the stand-in to match it, and say so.
 
+### When something is the owner's to do
+
+Anything the work needs that only the owner can do goes on their to-do list (`owner_todo_find`, then `owner_todo_append` or `owner_todo_add`, as your prompt's rules say). On a ticket of a slice, say which side of the deploy it is on: `holdsRelease: true` when the slice cannot go out without it - a secret or setting the deployed code reads, an account it calls - and `afterRelease: true` when it needs what the deploy itself puts up, such as a role on a bucket the deploy creates or a step that reads from it. Ask whether the owner could do it today, before anything ships; if not, it is `afterRelease`, because holding the release would hold the very deploy it waits for. Never both: a job with a half on each side is two items. Neither, for something no release waits on.
+
 ### 3. Post progress
 `add_comment` with a summary of what you changed (files/areas touched, notable decisions).
 

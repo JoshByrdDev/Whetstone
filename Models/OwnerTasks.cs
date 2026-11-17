@@ -51,6 +51,14 @@ public class OwnerTask
     /// </summary>
     public bool HoldsRelease { get; set; }
 
+    /// <summary>
+    /// For after the slice is released and deployed: it needs what the deploy puts up (a role on a
+    /// bucket the deploy creates, a step that reads from it), so it is linked to the slice
+    /// (<see cref="Unit"/>, else its ticket's) and never holds the release - holding it would hold
+    /// the deploy it waits for. Never set with <see cref="HoldsRelease"/>.
+    /// </summary>
+    public bool AfterRelease { get; set; }
+
     /// <summary>"owner", "session", "worker", "steward", or "release note" for one moved across.</summary>
     public string CreatedBy { get; set; } = "owner";
 

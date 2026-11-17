@@ -158,8 +158,11 @@ does changes. Today `OwnerReleasesUnitAsync` only records that the owner merged 
 Under this design, the board makes the merge, locally, on the owner's press:
 
 1. It refuses as today while an outcome is not done or a release note that is something to do is
-   not ticked off. It also refuses while the slice's walk-through has not passed, while the slice's
-   parent is unreleased, or while a ticket of the slice is open.
+   not ticked off - an open to-do that holds the release (`HoldsRelease`). A to-do for after the
+   deploy (`AfterRelease`: it needs what the release puts up) is shown beside the release and never
+   counted, or the slice would wait on a job that waits on it (docs/owner-todo-plan.md); the
+   release tells each one its deploy is out. It also refuses while the slice's walk-through has not
+   passed, while the slice's parent is unreleased, or while a ticket of the slice is open.
 2. It brings the slice branch up to the base (as above), runs the merge checks on that tree, and
    refuses if they fail.
 3. It merges the slice branch into the local base with `--no-ff`, a commit named for the slice

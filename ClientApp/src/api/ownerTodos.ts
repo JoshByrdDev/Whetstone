@@ -46,6 +46,8 @@ export interface OwnerTodo {
   ticketId?: number | null;
   unit?: number | null;
   holdsRelease: boolean;
+  /** For after its slice is released and deployed: linked to the slice, never holding it. */
+  afterRelease: boolean;
   /** The slice whose release it holds, placed as the release gate places it. */
   slice?: { unit: number; title: string } | null;
   createdBy: string;
@@ -70,7 +72,7 @@ export const ownerTodoCount = () => fetch('/api/owner-todos/count').then(json<{ 
 export const addOwnerTodo = (t: { project?: string | null; title: string; body: string; kind: OwnerTodoKind }) =>
   post('/api/owner-todos', { ...t, project: t.project ?? null });
 
-export const editOwnerTodo = (id: number, t: { title?: string; body?: string; kind?: OwnerTodoKind; project?: string; holdsRelease?: boolean }) =>
+export const editOwnerTodo = (id: number, t: { title?: string; body?: string; kind?: OwnerTodoKind; project?: string; holdsRelease?: boolean; afterRelease?: boolean }) =>
   fetch(`/api/owner-todos/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(t) }).then(json<unknown>);
 
 export const doneOwnerTodo = (id: number, note: string) => post(`/api/owner-todos/${id}/done`, { note });

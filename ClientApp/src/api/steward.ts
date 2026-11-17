@@ -226,6 +226,8 @@ export interface StewardPlanUnitView {
     words?: number; terms?: number; docs?: number;
     /** The open to-do items that hold this release (config and actions are counted from these). */
     todos?: { ref: string; id: number; title: string; kind: string }[];
+    /** On the to-do list for after this slice deploys: linked here, holding nothing. */
+    afterDeploy?: { ref: string; id: number; title: string; kind: string }[];
   } | null;
   progress: { percent: number; done: number; inProgress: number; notStarted: number; outcomes: number };
   /** The numbers of the decisions its spec still leaves open. */
