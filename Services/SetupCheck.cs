@@ -43,7 +43,10 @@ public class SetupCheckService
         // each source (docs/intake-plan.md); null or empty while no project has intake.
         Func<IReadOnlyList<IntakeSetup>>? Intake = null,
         // The projects whose resources name ios:simulator, and this machine's Xcode as read; null skips the row.
-        Func<(IReadOnlyList<string> Projects, IosToolchain Ios, bool Windows)>? IphoneSimulator = null);
+        Func<(IReadOnlyList<string> Projects, IosToolchain Ios, bool Windows)>? IphoneSimulator = null,
+        // Whether AXe, which a QA run taps and types into the simulator with, is on the fleet's PATH;
+        // null leaves it unchecked.
+        Func<bool>? SimulatorDriver = null);
 
     /// <summary>One project's intake, as the Setup check reads it: never a live call to the queue, only the poller's last word.</summary>
     public sealed record IntakeSetup(string Project, bool Enabled, IReadOnlyList<string> Problems,
@@ -90,7 +93,8 @@ public class SetupCheckService
                 .Select(p => new IntakeSetup(p.Key, p.Cfg.Enabled, p.Cfg.Problems,
                     p.Cfg.Sources.Select(s => (s.Name, intakeStatus?.Of(p.Key, s.Name))).ToList()))
                 .ToList(),
-            () => (registry.Projects.Where(k => SafeNamesSimulator(registry, k)).ToList(), devices.Ios(), OperatingSystem.IsWindows())))
+            () => (registry.Projects.Where(k => SafeNamesSimulator(registry, k)).ToList(), devices.Ios(), OperatingSystem.IsWindows()),
+            () => FindOnPath("axe", Environment.GetEnvironmentVariable("PATH")) is not null))
     { }
 
     public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Probe probe) =>
@@ -233,7 +237,7 @@ public class SetupCheckService
 
         // ---- an iPhone simulator, which only matters once a project's runs lease one ----
         if (probe.IphoneSimulator?.Invoke() is { } sim)
-            items.Add(IphoneSimulator(sim.Projects, sim.Ios, sim.Windows));
+            items.Add(IphoneSimulator(sim.Projects, sim.Ios, sim.Windows, probe.SimulatorDriver?.Invoke()));
 
         // ---- the narrator ----
         var narrator = probe.NarratorUnavailable();
@@ -303,9 +307,11 @@ public class SetupCheckService
     /// (docs/ios-simulator-plan.md, section 1). Never required: a machine without it is passed over
     /// by those runs (MachineDevices), and a Mac that has it takes them. With no project naming it,
     /// it reads as not needed - never as a failure. The fixes are said, not run: installing Xcode
-    /// and accepting its licence need the owner's password.
+    /// and accepting its licence need the owner's password. <paramref name="axe"/> is whether AXe is
+    /// on the fleet's PATH (null: not checked): <c>simctl</c> boots, installs and screenshots, but
+    /// only AXe taps and types, so without it a run can boot the simulator and not drive it.
     /// </summary>
-    public static SetupItem IphoneSimulator(IReadOnlyList<string> projects, IosToolchain ios, bool windows)
+    public static SetupItem IphoneSimulator(IReadOnlyList<string> projects, IosToolchain ios, bool windows, bool? axe = null)
     {
         const string key = "ios-simulator", label = "iPhone simulator (Xcode)";
         var who = string.Join(", ", projects);
@@ -318,10 +324,16 @@ public class SetupCheckService
                 (windows ? "The iPhone simulator is macOS-only, so this Windows machine never takes " : "The iPhone simulator is macOS-only, so this machine never takes ") +
                 $"a run of {who} that needs it. Such a run goes to a Mac worker host with Xcode, and waits while there is none.",
                 "Add a Mac with Xcode as a worker host (docs/worker-host-setup.md).");
+        if (ios.Has && axe == false)
+            return new SetupItem(key, label, "warn", false,
+                $"Runs of {who} that lease ios:simulator can boot one here (Xcode at {ios.XcodePath}), but nothing " +
+                "can tap or type into it: AXe is not on the fleet's PATH, so a QA run that drives the app stops as Blocked.",
+                "brew install cameroncooke/axe/axe, then restart Whetstone so the fleet's PATH has it.");
         if (ios.Has)
             return new SetupItem(key, label, "ok", false,
                 $"Runs of {who} that lease ios:simulator can boot one here: Xcode at {ios.XcodePath}, " +
-                $"{ios.Runtimes} iOS runtime{(ios.Runtimes == 1 ? "" : "s")}, licence accepted.", null);
+                $"{ios.Runtimes} iOS runtime{(ios.Runtimes == 1 ? "" : "s")}, licence accepted" +
+                (axe == true ? ", and AXe to drive it." : "."), null);
         var gaps = ios.Gaps();
         return new SetupItem(key, label, "warn", false,
             $"Runs of {who} that lease ios:simulator are passed over here, because {string.Join("; ", gaps.Select(g => g.What))}. " +

@@ -204,6 +204,19 @@ public class MachineDevicesTests : IDisposable
     }
 
     [Fact]
+    public void A_Mac_that_can_boot_the_simulator_but_has_no_AXe_says_nothing_can_drive_it()
+    {
+        var bare = SetupCheckService.IphoneSimulator(new[] { "alpha" }, IosToolchain.Probe(Xcode(), mac: true), windows: false, axe: false);
+        Assert.Equal("warn", bare.State);
+        Assert.Contains("AXe", bare.Detail);
+        Assert.StartsWith("brew install cameroncooke/axe/axe", bare.Fix);
+
+        var driven = SetupCheckService.IphoneSimulator(new[] { "alpha" }, IosToolchain.Probe(Xcode(), mac: true), windows: false, axe: true);
+        Assert.Equal("ok", driven.State);
+        Assert.Contains("AXe to drive it", driven.Detail);
+    }
+
+    [Fact]
     public void The_check_lists_the_row_when_the_probe_has_it()
     {
         var probe = new SetupCheckService.Probe(e => "/bin/" + e, _ => null, (_, k) => k == "user.name" ? "Pat" : "pat@example.com",
