@@ -328,7 +328,7 @@ public class SetupCheckService
             return new SetupItem(key, label, "warn", false,
                 $"Runs of {who} that lease ios:simulator can boot one here (Xcode at {ios.XcodePath}), but nothing " +
                 "can tap or type into it: AXe is not on the fleet's PATH, so a QA run that drives the app stops as Blocked.",
-                "brew install cameroncooke/axe/axe, then restart Whetstone so the fleet's PATH has it.");
+                "brew trust --formula cameroncooke/axe/axe, then brew install cameroncooke/axe/axe.");
         if (ios.Has)
             return new SetupItem(key, label, "ok", false,
                 $"Runs of {who} that lease ios:simulator can boot one here: Xcode at {ios.XcodePath}, " +

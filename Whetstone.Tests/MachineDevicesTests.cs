@@ -209,7 +209,7 @@ public class MachineDevicesTests : IDisposable
         var bare = SetupCheckService.IphoneSimulator(new[] { "alpha" }, IosToolchain.Probe(Xcode(), mac: true), windows: false, axe: false);
         Assert.Equal("warn", bare.State);
         Assert.Contains("AXe", bare.Detail);
-        Assert.StartsWith("brew install cameroncooke/axe/axe", bare.Fix);
+        Assert.Contains("brew install cameroncooke/axe/axe", bare.Fix);
 
         var driven = SetupCheckService.IphoneSimulator(new[] { "alpha" }, IosToolchain.Probe(Xcode(), mac: true), windows: false, axe: true);
         Assert.Equal("ok", driven.State);

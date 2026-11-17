@@ -325,6 +325,20 @@ if ($c -match ($sep + '(?:xcrun\s+)?devicectl(?=\s|$)')) {
 if ($c -match ($sep + $runner + 'ios-deploy(?=\s|$)')) {
     Deny "ios-deploy - it installs on a real iPhone. Only a simulator on this machine is in scope: xcrun simctl install"
 }
+# AXe drives a simulator, and a physical iPhone or iPad too when handed one's id. A simulator's id
+# is a UUID (8-4-4-4-12 hex); a device's is not, so any other --udid is a phone. 'axe agent' sends
+# its goal to a hosted AI, and 'axe init' writes skill files into the AI clients' own settings.
+foreach ($m in [regex]::Matches($c, '(?i)' + $sep + $runner + 'axe(?=\s)([^\r\n;&|]*)')) {
+    $axeArgs = $m.Groups[1].Value
+    if ($axeArgs -match '(?i)^\s*(?:--\S+\s+\S+\s+)*(agent|init|list-devices)(?=\s|$)') {
+        Deny "'axe $($Matches[1])' - it reaches a hosted AI, writes into AI clients' settings, or lists real phones. Drive the simulator with describe-ui, tap, type, gesture and screenshot"
+    }
+    foreach ($u in [regex]::Matches($axeArgs, '(?i)--udid(?:\s+|=)["' + [char]39 + ']?([^\s"' + [char]39 + ']+)')) {
+        if ($u.Groups[1].Value -notmatch '^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$') {
+            Deny "axe on '$($u.Groups[1].Value)', which is not a simulator's id - a real iPhone is out of scope. Find the simulator's id with: xcrun simctl list devices available"
+        }
+    }
+}
 # Apple's upload and notarisation services, under any spelling that reaches them.
 if ($c -match ($sep + '(?:xcrun\s+)?(?:altool|notarytool)(?=\s|$)')) {
     Deny "altool / notarytool - they upload to Apple. A store build is the owner's, through EAS"
