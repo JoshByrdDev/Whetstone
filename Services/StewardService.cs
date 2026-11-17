@@ -2098,7 +2098,6 @@ public partial class StewardService
         return await q.OrderBy(e => e.At).ThenBy(e => e.Id).ToListAsync(ct);
     }
 
-    /// <summary>A release note's kind by name. Null for anything that is not one: a number is not a kind.</summary>
     /// <summary>
     /// When a release job is needed: <c>before</c> (false - it holds the release) or <c>after</c> (true -
     /// it waits for the deploy). Null when it is neither, or not said.
@@ -2110,6 +2109,7 @@ public partial class StewardService
         _ => null,
     };
 
+    /// <summary>A release note's kind by name. Null for anything that is not one: a number is not a kind.</summary>
     public static StewardReleaseKind? ParseRelease(string? name)
     {
         var n = name?.Trim() ?? "";
