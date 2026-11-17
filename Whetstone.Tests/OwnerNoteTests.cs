@@ -441,6 +441,39 @@ public class OwnerNoteTests : IDisposable
         Assert.Equal(TicketPhase.NeedsApproval, after!.Phase);
     }
 
+    // The attachments route: files handed over by a tool outside the board ride on a System
+    // comment, so a worker sees them on the ticket but is never held to answer them.
+    [Fact]
+    public async Task Files_attached_under_a_system_comment_hold_no_handoff()
+    {
+        var id = await Seed(TicketPhase.Implementing);
+        var root = Path.Combine(Path.GetTempPath(), "whetstone-attach-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var files = new TicketFileStore(new DashboardPaths(root));
+            NoteAttachment a;
+            await using (var png = new MemoryStream(new byte[] { 0x89, 0x50, 0x4E, 0x47, 1, 2, 3 }))
+                a = await files.SaveAsync(id, "frame-0012.png", png, png.Length);
+
+            await using (var ctx = NewCtx())
+                await new TicketService(ctx).AddCommentAsync(id, "Frames from a screen capture.", AuthorKind.System, new[] { a });
+
+            await using var ctx2 = NewCtx();
+            var svc = new TicketService(ctx2);
+            var t = (await svc.GetAsync(id))!;
+            Assert.Empty(HandoffRequirements.UnansweredOwnerNotes(t));
+            Assert.Equal("frame-0012.png", t.Comments.Single().Attachments.Single().FileName);
+            Assert.True(File.Exists(files.PathFor(t.Comments.Single().Attachments.Single())));
+
+            var after = await svc.TransitionAsync(id, TicketPhase.NeedsImplementationReview, null, TransitionActor.Worker);
+            Assert.NotEqual(TicketPhase.Implementing, after!.Phase);
+        }
+        finally
+        {
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
     [Fact]
     public async Task A_replan_cannot_also_take_the_short_loop()
     {

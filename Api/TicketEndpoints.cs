@@ -1333,6 +1333,32 @@ public static class TicketEndpoints
             return Results.Ok(ToCommentDto(id, c));
         });
 
+        // Attach files to a ticket without saying anything a worker must answer: the way a tool
+        // outside the board (a screen capture, a script) hands over what it saw. Stored like a
+        // note's files, under a System comment, so it rides along on get_ticket with each file's
+        // path and holds no hand-off the way an owner note does. Same types and limits as a note;
+        // more files than one carries is more than one call.
+        app.MapPost("/api/tickets/{id:int}/attachments", async (int id, HttpRequest http,
+            TicketService svc, TicketFileStore files) =>
+        {
+            if (!http.HasFormContentType) return Results.BadRequest(new { error = "Expected a multipart form" });
+            var form = await http.ReadFormAsync();
+            if (form.Files.Count == 0) return Results.BadRequest(new { error = "No files attached" });
+
+            var (saved, error) = await SaveUploads(form.Files, id, files);
+            if (error is not null) return Results.BadRequest(new { error });
+
+            var body = form["body"].ToString();
+            if (string.IsNullOrWhiteSpace(body)) body = saved.Count == 1 ? "Attached a file." : $"Attached {saved.Count} files.";
+            var c = await svc.AddCommentAsync(id, body, AuthorKind.System, saved);
+            if (c is null)
+            {
+                foreach (var a in saved) files.Delete(a);
+                return Results.NotFound();
+            }
+            return Results.Ok(ToCommentDto(id, c));
+        });
+
         // The stored bytes of one note attachment. Referenced by NoteAttachmentDto.Url.
         app.MapGet("/api/tickets/{id:int}/files/{fileId:int}", async (int id, int fileId,
             DashboardDbContext db, TicketFileStore files) =>
