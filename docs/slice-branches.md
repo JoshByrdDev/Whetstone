@@ -263,8 +263,10 @@ The status line has three readings - idea, draft, agreed - each configurable thr
 `steward.sliceFormat` (`StewardPlan.Idea`, `Draft`, `Agreed`; the idea's default is
 `\*\*Status:\s*idea\b`). An idea has no outcomes and nothing is filed against it.
 
-**Expanding.** `steward_draft_unit` rewrites the next idea in place: the first idea after the last
-agreed slice. One draft ahead, never two, and a draft says it is a draft. The idea's paragraph stays
+**Expanding.** `steward_draft_unit` rewrites an idea in place: the one the owner put next, else the
+lowest-numbered. A number is the order a slice was written in, not the order it is built, so an
+idea below an agreed slice is drafted like any other; what it is built on is its "Built on" line.
+One draft at a time unless the owner asks for another, and a draft says it is a draft. The idea's paragraph stays
 at the top as the seed of the story, and git keeps the original. The steward drafts from the idea,
 the conventions, the decisions in force that apply to it (including those provisional until it),
 the slices before it, and the code as it now stands - never from a plan written weeks ago.
@@ -272,7 +274,7 @@ the slices before it, and the code as it now stands - never from a plan written 
 **Numbers.** A slice's file is named number first (`NN-slug.md`). An idea's number can change
 freely, because nothing points to an idea: reordering, splitting or merging ideas is renaming
 files. A slice's number is fixed once it is agreed, because tickets, outcomes and its branch carry
-it. Ideas only ever come after agreed slices, so renumbering ideas never touches an agreed slice;
+it. An idea takes a number no agreed slice has, so renumbering ideas never touches an agreed slice;
 the board flags an agreed slice whose number or file has changed rather than treating it as new.
 
 **Who changes ideas.** The owner only. The steward writes no idea. When it finds an idea too big to

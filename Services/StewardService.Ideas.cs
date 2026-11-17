@@ -20,8 +20,9 @@ public partial class StewardService
     public const string CommitIdea = "Commit this idea", LeaveIdeas = "Leave the ideas as they are";
 
     /// <summary>
-    /// Why a proposed idea cannot be committed as asked, or null when it can. An idea comes after
-    /// the last agreed slice, and replaces only an idea: a draft is the steward's to revise, and an
+    /// Why a proposed idea cannot be committed as asked, or null when it can. An idea takes a
+    /// number no agreed slice has - numbers are the order slices were written in, so one below an
+    /// agreed slice is fine - and replaces only an idea: a draft is the steward's to revise, and an
     /// agreed slice is never touched.
     /// </summary>
     private string? IdeaRefusal(StewardPlan p, IReadOnlyList<PlanUnit> plan, StewardIdeaProposal idea)
@@ -30,8 +31,8 @@ public partial class StewardService
         var m = Regex.Match(name, p.UnitFile, RegexOptions.IgnoreCase);
         if (!m.Success || name.Contains('/') || name.Contains('\\') || !int.TryParse(m.Groups[1].Value, out var number))
             return "Name the idea's file the way the plan's slices are named, number first, with no folder.";
-        var lastAgreed = plan.Where(u => u.Agreed).Select(u => u.Number).DefaultIfEmpty(0).Max();
-        if (number <= lastAgreed) return $"Slice {lastAgreed} is agreed, so an idea is numbered after it. An agreed slice's number never changes.";
+        if (plan.FirstOrDefault(u => u.Number == number && u.Agreed) is { } agreed)
+            return $"Slice {number} is agreed as {agreed.File}, and an agreed slice's number never changes. Number the idea with one no slice has.";
         var path = $"{p.UnitsDir}/{name}";
         var unit = TicketGitService.ReadUnit(p, number, path, idea.Text ?? "");
         if (!unit.Idea) return "Its status line must say it is an idea (**Status: idea.**): a draft is written with steward_draft_unit, and only from an idea.";

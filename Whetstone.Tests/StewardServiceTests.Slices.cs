@@ -98,6 +98,19 @@ public partial class StewardServiceTests
     }
 
     [Fact]
+    public async Task An_idea_below_an_agreed_slice_is_drafted_like_any_other()
+    {
+        // Numbers are the order slices were written in: slice 3 agreed first does not stop idea 2.
+        _git.Second = "# Unit 2: invites\n\n> **Status: idea.**\n\nA business invites its customers.\n";
+        _git.More[3] = ("docs/units/03-the-day.md", "# Unit 3: the day\n\n> **Status: agreed 2026-02-02.**\n\n- **A1.** One.\n");
+        await Begin();
+        const string draft = "# Unit 2: invites\n\n> **Status: draft, awaiting the owner.**\n\nA business invites its customers.\n\n## The walk-through this unit makes possible\n\nA business sends an invite (A1).\n\n- **A1.** One.\n";
+        Assert.Equal("drafted", (await In(s => s.DraftUnitAsync("alpha", "02-second.md", draft))).Answer);
+        // An agreed slice is never drafted over, whichever side of it the idea sits.
+        Assert.Equal("already-agreed", (await In(s => s.DraftUnitAsync("alpha", "03-the-day.md", draft.Replace("Unit 2", "Unit 3")))).Answer);
+    }
+
+    [Fact]
     public async Task The_steward_proposes_an_idea_and_the_board_commits_it_only_on_the_owners_yes()
     {
         await Begin();

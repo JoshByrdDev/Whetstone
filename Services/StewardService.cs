@@ -1595,8 +1595,9 @@ public partial class StewardService
     }
 
     /// <summary>
-    /// Write or revise the draft spec for the unit after the last agreed one. One draft ahead,
-    /// never two, and never one that says it is agreed: that is a commit only the owner makes.
+    /// Write or revise a draft spec: any idea expanded in place, or a draft revised, whatever its
+    /// number - numbers are the order slices were written in, not the order they are built. Never
+    /// one that says it is agreed: that is a commit only the owner makes.
     /// </summary>
     public async Task<StewardReply> DraftUnitAsync(string projectKey, string fileName, string text, CancellationToken ct = default)
     {
@@ -1609,11 +1610,19 @@ public partial class StewardService
         if (!m.Success || fileName!.Contains('/') || fileName.Contains('\\') || !int.TryParse(m.Groups[1].Value, out var number))
             return Refuse("bad-request", "Name the file the way the plan's other units are named, number first.");
         var plan = await _git.PlanAsync(projectKey, ct);
-        var lastAgreed = plan.Where(u => u.Agreed).Select(u => u.Number).DefaultIfEmpty(0).Max();
-        if (number != lastAgreed + 1)
-            return Refuse("not-next", $"The last agreed slice is {lastAgreed}, so the only draft there can be is slice {lastAgreed + 1}.");
         var path = $"{p.UnitsDir}/{fileName.Trim()}";
         var there = plan.FirstOrDefault(u => u.Number == number);
+        if (there is { Agreed: true })
+            return Refuse("already-agreed", $"Slice {number} is agreed as {there.File}. A draft is written from an idea, or over a draft, and never over an agreed slice.");
+        // A slice's number is the order it was written in, not the order it is built: any idea can be
+        // the next one drafted, whatever is agreed above it. Only a plan from before ideas, which
+        // drafts slices no idea stands for, numbers a new one after every slice it has.
+        if (there is null && !plan.Any(u => u.Idea))
+        {
+            var last = plan.Select(u => u.Number).DefaultIfEmpty(0).Max();
+            if (number != last + 1)
+                return Refuse("not-next", $"Slice {last} is the plan's last, so a new slice is numbered {last + 1}.");
+        }
         if (there is not null && !string.Equals(there.File, path, StringComparison.OrdinalIgnoreCase))
             return Refuse("exists", $"Slice {number} is already {(there.Idea ? "an idea" : "drafted")} as {there.File}. {(there.Idea ? "Expand" : "Revise")} that file, under its own name.");
         // A plan of ideas is drafted only from its ideas: the steward writes none, it expands the

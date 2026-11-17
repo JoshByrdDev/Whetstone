@@ -239,8 +239,9 @@ public class StewardTools
         s.SetOutcomeAsync(project, unit, outcome, state, moreToFile, note);
 
     [McpServerTool(Name = "steward_draft_unit"), Description(
-        "Write or revise the DRAFT spec for the slice after the last agreed one, committed to the base branch. One draft " +
-        "ahead, never two. Where there are ideas, it expands the next idea IN PLACE - same file, the idea's paragraph " +
+        "Write or revise a DRAFT spec, committed to the base branch. A slice's number is the order it was written in, " +
+        "not the order it is built: any idea can be drafted, whatever is agreed above or below it ('already-agreed' over an " +
+        "agreed slice). Where there are ideas, it expands the chosen idea IN PLACE - same file, the idea's paragraph " +
         "kept at the top as the story's seed - and a slice no idea stands for is refused ('no-idea'). Its status line must " +
         "say it is a draft: only the owner agrees a slice, and until they do nothing in a draft may be ticketed or used to " +
         "answer a question. Its story ('The walk-through this slice makes possible') is checked: every sentence cites the " +
