@@ -576,7 +576,7 @@ public partial class StewardService
             ownerTodos = ownerTodos.Select(t => new
             {
                 @ref = t.Ref, t.Title, kind = t.Kind.ToString().ToLowerInvariant(), status = t.Status.ToString().ToLowerInvariant(),
-                ticket = t.TicketId, t.HoldsRelease, suggested = t.Suggestion,
+                ticket = t.TicketId, t.HoldsRelease, t.AfterRelease, suggested = t.Suggestion,
             }),
             done = all.Count - open.Count,
             tickets = rows,
@@ -1822,7 +1822,7 @@ public partial class StewardService
     /// the steward - which is what keeps it out of every later run.
     /// </summary>
     public async Task<StewardReply> RecordAsync(string projectKey, StewardEntryKind kind, int ticketId, string text,
-        string? release = null, CancellationToken ct = default)
+        string? release = null, CancellationToken ct = default, string? when = null)
     {
         var (cfg, off) = await WritableAsync(projectKey);
         if (cfg is null) return off!;
@@ -1838,24 +1838,40 @@ public partial class StewardService
                     + "a ticket that leaves a migration and wording to check gets two notes.");
             releaseKind = rk;
         }
+        // A job says which side of the deploy it is on. Before holds the release; after waits for the
+        // deploy and holds nothing - a job that needs what the release puts up, made to hold that
+        // release, is a slice that can never go out.
+        bool afterDeploy = false;
+        if (releaseKind is StewardReleaseKind.Config or StewardReleaseKind.Action)
+        {
+            if (ParseWhen(when) is not { } w)
+                return Refuse("bad-request", "Say when it is needed: 'before' when the release or the push needs it done first (a secret the "
+                    + "deployed code reads, an account it calls) - it holds the release; 'after' when it needs what the deploy itself puts up "
+                    + "(a role on a bucket the deploy creates, a step that reads from it) - it goes on the list linked to this slice and holds nothing.");
+            afterDeploy = w;
+        }
+        else if (ParseWhen(when) == true)
+            return Refuse("bad-request", "Only a job - config or action - can be for after the deploy. The other kinds are read with the release.");
         var (t, no) = await TicketOfAsync(projectKey, ticketId);
         if (t is null) return no!;
         if (cfg.StewardMode == StewardMode.Propose) return Proposed($"note for ticket {ticketId}: {Head(text, 200)}");
 
         // Something to set up, or something the owner has to do, is a job and not reading: it goes on
-        // the owner's to-do list, holding this release (docs/owner-todo-plan.md).
+        // the owner's to-do list, holding this release or waiting for its deploy (docs/owner-todo-plan.md).
         if (releaseKind is StewardReleaseKind.Config or StewardReleaseKind.Action)
         {
             var r = await OwnerTasks.AddAsync(new OwnerTaskDraft(projectKey, Head(text, OwnerTaskService.TitleMax), text.Trim(),
-                releaseKind == StewardReleaseKind.Config ? "config" : "action", null, ticketId, t.PlanUnit, HoldsRelease: true), "steward", ct,
-                requireBody: false);
+                releaseKind == StewardReleaseKind.Config ? "config" : "action", null, ticketId, t.PlanUnit,
+                HoldsRelease: !afterDeploy, AfterRelease: afterDeploy), "steward", ct, requireBody: false);
+            var flag = afterDeploy ? "afterRelease" : "holdsRelease";
             return r.Answer switch
             {
-                "added" or "merged" => new StewardReply("noted", r.Why ?? "On the owner's to-do list, holding this release.", r.Data),
-                "possible-duplicate" => Refuse("possible-duplicate", r.Why + " For a release, add with owner_todo_add and holdsRelease true, "
-                    + "or append to the one it is and say it holds this release.", r.Data),
-                "not-a-job" => Refuse("not-a-job", r.Why + (releaseKind == StewardReleaseKind.Config || releaseKind == StewardReleaseKind.Action
-                    ? " If it is a job for the owner's hands after all, owner_todo_add with holdsRelease true takes a plain title of its own." : ""), r.Data),
+                "added" or "merged" => new StewardReply("noted", r.Why ?? (afterDeploy
+                    ? "On the owner's to-do list for after this slice deploys; it does not hold the release."
+                    : "On the owner's to-do list, holding this release."), r.Data),
+                "possible-duplicate" => Refuse("possible-duplicate", r.Why + $" For a release, add with owner_todo_add and {flag} true, "
+                    + (afterDeploy ? "or append to the one it is and say it is for after this slice deploys." : "or append to the one it is and say it holds this release."), r.Data),
+                "not-a-job" => Refuse("not-a-job", r.Why + $" If it is a job for the owner's hands after all, owner_todo_add with {flag} true takes a plain title of its own.", r.Data),
                 _ => Refuse(r.Answer, r.Why ?? "", r.Data),
             };
         }
@@ -2083,6 +2099,17 @@ public partial class StewardService
     }
 
     /// <summary>A release note's kind by name. Null for anything that is not one: a number is not a kind.</summary>
+    /// <summary>
+    /// When a release job is needed: <c>before</c> (false - it holds the release) or <c>after</c> (true -
+    /// it waits for the deploy). Null when it is neither, or not said.
+    /// </summary>
+    public static bool? ParseWhen(string? when) => (when ?? "").Trim().ToLowerInvariant() switch
+    {
+        "before" or "before-release" or "before release" => false,
+        "after" or "after-deploy" or "after deploy" or "after-release" or "after release" => true,
+        _ => null,
+    };
+
     public static StewardReleaseKind? ParseRelease(string? name)
     {
         var n = name?.Trim() ?? "";
@@ -2382,8 +2409,12 @@ public partial class StewardService
         _db.StewardOutcomes.AsNoTracking().Where(o => o.ProjectKey == projectKey).ToListAsync(ct);
 
     /// <summary>One plan's notes for a release, each under the unit it will go out with.</summary>
-    private sealed record UnitNotes(Dictionary<int, List<StewardEntry>> ByUnit, Dictionary<int, List<OwnerTask>> TasksByUnit)
+    private sealed record UnitNotes(Dictionary<int, List<StewardEntry>> ByUnit, Dictionary<int, List<OwnerTask>> TasksByUnit,
+        Dictionary<int, List<OwnerTask>> AfterByUnit)
     {
+        /// <summary>The to-do items that wait for this slice's deploy, open or not. They never hold it.</summary>
+        public IReadOnlyList<OwnerTask> AfterOf(int unit) => AfterByUnit.TryGetValue(unit, out var l) ? l : new List<OwnerTask>();
+
         public IReadOnlyList<StewardEntry> Of(int unit) => ByUnit.TryGetValue(unit, out var l) ? l : new List<StewardEntry>();
 
         /// <summary>The to-do items that hold this slice's release, open or not.</summary>
@@ -2424,7 +2455,17 @@ public partial class StewardService
             if (!tasks.TryGetValue(u, out var list)) tasks[u] = list = new();
             list.Add(t);
         }
-        return new UnitNotes(by, tasks);
+        // One for after a deploy goes with its own slice or its ticket's, never "the next": it waits for one
+        // particular deploy, and it is shown there and counted nowhere.
+        var after = new Dictionary<int, List<OwnerTask>>();
+        foreach (var t in await OwnerTasks.AfterReleaseAsync(projectKey, ct))
+        {
+            int? unit = t.Unit ?? (t.TicketId is { } id && unitOf.TryGetValue(id, out var at) ? at : null);
+            if (unit is not { } u) continue;
+            if (!after.TryGetValue(u, out var list)) after[u] = list = new();
+            list.Add(t);
+        }
+        return new UnitNotes(by, tasks, after);
     }
 
     /// <summary>
@@ -2444,7 +2485,8 @@ public partial class StewardService
         var rows = await _db.StewardUnits.AsNoTracking().Where(u => u.ProjectKey == projectKey).ToListAsync(ct);
         var placed = await UnitNotesAsync(projectKey, plan, rows, await _tickets.ListPlacesAsync(projectKey), track: false, ct);
         string Title(int unit) => plan.FirstOrDefault(u => u.Number == unit) is { } u ? TicketGitService.UnitTitle(u) : "";
-        return placed.TasksByUnit.SelectMany(kv => kv.Value.Select(t => (t.Id, Slice: new OwnerTaskSlice(kv.Key, Title(kv.Key)))))
+        return placed.TasksByUnit.Concat(placed.AfterByUnit)
+            .SelectMany(kv => kv.Value.Select(t => (t.Id, Slice: new OwnerTaskSlice(kv.Key, Title(kv.Key)))))
             .ToDictionary(x => x.Id, x => x.Slice);
     }
 
@@ -2557,6 +2599,9 @@ public partial class StewardService
                         config = todo.Count(t => t.Kind is OwnerTaskKind.Secret or OwnerTaskKind.Config or OwnerTaskKind.Infra or OwnerTaskKind.Account),
                         actions = todo.Count(t => t.Kind is OwnerTaskKind.Action or OwnerTaskKind.Deploy),
                         todos = todo.Select(t => new { @ref = t.Ref, t.Id, t.Title, kind = t.Kind.ToString().ToLowerInvariant() }),
+                        // For after it deploys: on the list, linked here, and holding nothing.
+                        afterDeploy = notes.AfterOf(u.Number).Where(t => t.IsOpen)
+                            .Select(t => new { @ref = t.Ref, t.Id, t.Title, kind = t.Kind.ToString().ToLowerInvariant() }),
                         toKnow = Left(StewardReleaseKind.Note) + Left(StewardReleaseKind.Words) + Left(StewardReleaseKind.Docs),
                         words = Left(StewardReleaseKind.Words),
                         terms = Left(StewardReleaseKind.Terms),
@@ -2830,9 +2875,17 @@ public partial class StewardService
                 todos.Count > 0 ? $"{string.Join(", ", todos.Select(t => t.Ref))} on your to-do list {(todos.Count == 1 ? "holds" : "hold")} this release." : null,
             }.OfType<string>()), new { todos = todos.Select(t => new { @ref = t.Ref, t.Title }) });
 
+        // What waited for this deploy is the owner's to do once it is out.
+        var afterIds = placed.AfterOf(unit).Where(t => t.IsOpen).Select(t => t.Id).ToList();
+        async Task<StewardReply> TellAfter(StewardReply r)
+        {
+            if (r.Answer == "released") await OwnerTasks.ReleasedAsync(projectKey, $"Slice {unit:00} ({TicketGitService.UnitTitle(u)})", afterIds, ct);
+            return r;
+        }
+
         // A slice with a branch of its own is released by the board's merge of it into the local base.
         if (SliceBranches.BaseFor(cfg, unit, row) is { } slice)
-            return await ReleaseSliceAsync(cfg, u, row, slice, notes, promote ?? Array.Empty<int>(), mine, ct);
+            return await TellAfter(await ReleaseSliceAsync(cfg, u, row, slice, notes, promote ?? Array.Empty<int>(), mine, ct));
         if (promote is { Count: > 0 })
             return Refuse("no-slice-branch", $"Slice {unit} has no branch of its own, so its release is not the board's merge and promotes nothing. Promote from the Steward page instead.");
 
@@ -2840,7 +2893,7 @@ public partial class StewardService
         foreach (var n in notes.Where(n => n.HandledAt is null)) n.HandledAt = now;
         (row.ReleasedAt, row.ReleasedSha) = (now, await _git.BaseHeadAsync(projectKey, ct));
         await _db.SaveChangesAsync(ct);
-        return new StewardReply("released", null, new { at = row.ReleasedSha });
+        return await TellAfter(new StewardReply("released", null, new { at = row.ReleasedSha }));
     }
 
     private static string Head(string s, int max)

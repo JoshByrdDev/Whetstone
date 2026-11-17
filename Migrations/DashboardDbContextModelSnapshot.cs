@@ -1775,6 +1775,9 @@ namespace Whetstone.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("AfterRelease")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Body")
                         .IsRequired()
                         .HasColumnType("TEXT");

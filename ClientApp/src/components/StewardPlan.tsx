@@ -474,6 +474,13 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
   const r = unit.release;
   // Migrations are ticked off in the record; what is to set up or do is on the to-do list.
   const todos = r?.todos ?? [];
+  const after = r?.afterDeploy ?? [];
+  // What waits for the deploy is named beside the release and never counted against it.
+  const afterNote = after.length > 0 && (
+    <div style={{ font: `400 12px/1.45 ${BODY}`, color: 'var(--w-t400)', marginTop: 6 }}>
+      After it deploys: {after.map(t => t.ref).join(', ')} on your to-do list. {after.length === 1 ? 'It needs' : 'They need'} what the deploy puts up, so {after.length === 1 ? 'it does' : 'they do'} not hold the release.
+    </div>
+  );
   const counts = r ? [
     [r.migrations, 'migration to tick off', 'migrations to tick off'],
     [r.terms ?? 0, 'set of terms to read', 'sets of terms to read'],
@@ -567,6 +574,11 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
           Open your to-do list
         </GhostButton>
       )}
+      {after.length > 0 && todos.length === 0 && (
+        <GhostButton onClick={() => openOwnerTodo(after[0].ref)} title={after.map(t => `${t.ref} ${t.title}`).join('\n')}>
+          For after it deploys
+        </GhostButton>
+      )}
     </>
   );
 
@@ -602,6 +614,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
             </div>
           </div>
         )}
+        {afterNote}
         <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
           {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole slice">Read the report first</GhostButton>}
           {seeNotes}
@@ -626,6 +639,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
         {say(r.outstanding > 0
           ? <>Every outcome is done. Before it goes out: <b>{counts.join(', ')}</b>{r.toKnow > 0 ? `, and ${r.toKnow} to know` : ''}.</>
           : <>Every outcome is done and nothing for its release is outstanding{r.toKnow > 0 ? ` (${r.toKnow} to know, which go out with it)` : ''}. Releasing it is yours: merge and push by hand, then say so here.</>)}
+        {afterNote}
         <div className="flex items-center gap-2 flex-wrap" style={{ marginTop: 8 }}>
           {onReport && <GhostButton onClick={onReport} title="One Classroom report on the whole slice">Read the report first</GhostButton>}
           {seeNotes}

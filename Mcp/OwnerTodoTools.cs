@@ -80,11 +80,16 @@ public class OwnerTodoTools
         [Description("The project key. Leave out only for something that is no project's.")] string? project = null,
         [Description("A dedupe slug, kind:name - secret:STRIPE_API_KEY, infra:uploads-bucket.")] string? key = null,
         [Description("The ticket that needs it.")] int? ticketId = null,
-        [Description("True when the ticket's slice must not be released until this is done (something its release needs set up first).")] bool holdsRelease = false,
-        [Description("Items a likely-duplicate refusal named, that you read and found to be something else.")] int[]? notDuplicateOf = null)
+        [Description("True when the ticket's slice must not be released until this is done: something the release or the push needs " +
+            "in place first (a secret the deployed code reads, an account it calls). Not for something that needs what the deploy itself " +
+            "puts up - that is afterRelease.")] bool holdsRelease = false,
+        [Description("Items a likely-duplicate refusal named, that you read and found to be something else.")] int[]? notDuplicateOf = null,
+        [Description("True when it can only be done after the ticket's slice is released and deployed, because it needs what the deploy " +
+            "puts up (a role on a bucket the deploy creates, a step that reads from a table it makes). Linked to the slice, shown beside " +
+            "its release, and never holds it. Needs ticketId. Never with holdsRelease.")] bool afterRelease = false)
     {
         if (Proposing(http, registry, project, $"add to the owner's to-do list: {title}") is { } p) return p;
-        return Out(await s.AddAsync(new OwnerTaskDraft(project, title, body, kind, key, ticketId, null, holdsRelease, notDuplicateOf), By(http)));
+        return Out(await s.AddAsync(new OwnerTaskDraft(project, title, body, kind, key, ticketId, null, holdsRelease, notDuplicateOf, afterRelease), By(http)));
     }
 
     [McpServerTool(Name = "owner_todo_append"), Description(

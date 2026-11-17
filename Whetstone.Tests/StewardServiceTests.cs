@@ -1192,7 +1192,7 @@ public partial class StewardServiceTests : IDisposable
         await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
         await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
         Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id,
-            "Set PAYMENTS_WEBHOOK_SECRET in the stack's .env before this goes out.", "config"))).Answer);
+            "Set PAYMENTS_WEBHOOK_SECRET in the stack's .env before this goes out.", "config", default, "before"))).Answer);
         Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.BeforeRelease);
 
         var refused = await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true));
@@ -1207,6 +1207,85 @@ public partial class StewardServiceTests : IDisposable
         await using (var ctx = NewCtx()) taskId = (await ctx.OwnerTasks.SingleAsync()).Id;
         await using (var ctx = NewCtx())
             Assert.Equal("recorded", (await new OwnerTaskService(ctx).DoneAsync(taskId, "Set it in the stack's .env.")).Answer);
+        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+    }
+
+    [Fact]
+    public async Task A_job_for_a_release_says_which_side_of_the_deploy_it_is_on()
+    {
+        var id = await Built(1, "A1, A2");
+        await Begin();
+        // Not said: refused, saying how to choose. Said for a kind that is read, not done: refused too.
+        var unsaid = await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Give the loader its role on the bucket.", "config"));
+        Assert.Equal("bad-request", unsaid.Answer);
+        Assert.Contains("'after'", unsaid.Why);
+        Assert.Equal("bad-request", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Words to check.", "words", default, "after"))).Answer);
+        await using var ctx = NewCtx();
+        Assert.False(await ctx.OwnerTasks.AnyAsync());
+    }
+
+    [Fact]
+    public async Task A_job_for_after_the_deploy_is_linked_to_the_slice_and_never_holds_its_release()
+    {
+        var id = await Built(1, "A1, A2");
+        await Begin();
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
+        var r = await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id,
+            "Give the warehouse loader a role on the bucket the deploy creates.", "config", default, "after"));
+        Assert.Equal("noted", r.Answer);
+        Assert.Contains("does not hold", r.Why);
+        Assert.Equal("noted", (await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id,
+            "Run the warehouse's load steps from the new bucket once it exists.", "action", default, "after"))).Answer);
+
+        int[] after;
+        await using (var ctx = NewCtx())
+        {
+            var tasks = await ctx.OwnerTasks.ToListAsync();
+            Assert.Equal(2, tasks.Count);
+            Assert.All(tasks, t => { Assert.True(t.AfterRelease); Assert.False(t.HoldsRelease); Assert.Equal(id, t.TicketId); Assert.Equal(1, t.Unit); });
+            after = tasks.Select(t => t.Id).ToArray();
+        }
+
+        // Shown with its slice - the list and the plan both name it - but counted against nothing.
+        var slices = await In0(s => s.ReleaseSliceOfTodosAsync("alpha"));
+        Assert.All(after, a => Assert.Equal(1, slices[a].Unit));
+        var plan = System.Text.Json.JsonSerializer.Serialize((await In(s => s.PlanViewAsync("alpha"))).Data);
+        Assert.Contains("\"afterDeploy\":[{", plan);
+        Assert.Contains("\"outstanding\":0", plan);
+
+        // Both open, and the release goes out; each item is told its deploy is out.
+        Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
+        await using (var ctx = NewCtx())
+        {
+            var tasks = await ctx.OwnerTasks.Include(t => t.Notes).ToListAsync();
+            Assert.All(tasks, t => Assert.Equal(OwnerTaskStatus.Open, t.Status));
+            Assert.All(tasks, t => Assert.Contains(t.Notes, n => n.Text.Contains("is released")));
+        }
+    }
+
+    [Fact]
+    public async Task A_before_and_an_after_job_on_one_slice_hold_it_only_for_the_before()
+    {
+        var id = await Built(1, "A1, A2");
+        await Begin();
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
+        await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Put the loader's key in the deploy's secrets.", "config", default, "before"));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Grant the loader a role on the new bucket.", "config", default, "after"));
+
+        var refused = await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true));
+        Assert.Equal("notes-outstanding", refused.Answer);
+        int before, after;
+        await using (var ctx = NewCtx())
+        {
+            before = (await ctx.OwnerTasks.SingleAsync(t => t.HoldsRelease)).Id;
+            after = (await ctx.OwnerTasks.SingleAsync(t => t.AfterRelease)).Id;
+        }
+        Assert.Contains($"OT-{before}", refused.Why);
+        Assert.DoesNotContain($"OT-{after}", refused.Why);
+
+        await using (var ctx = NewCtx()) await new OwnerTaskService(ctx).DoneAsync(before, "Set.");
         Assert.Equal("released", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
     }
 
@@ -1482,7 +1561,7 @@ public partial class StewardServiceTests : IDisposable
     {
         var id = await AtReview();
         await Begin();
-        var r = await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Read the new words on the invite phone.", "action"));
+        var r = await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, id, "Read the new words on the invite phone.", "action", default, "before"));
         Assert.Equal("not-a-job", r.Answer);
         Assert.DoesNotContain(Entries(), e => e.Kind == StewardEntryKind.BeforeRelease);
     }
@@ -1495,7 +1574,7 @@ public partial class StewardServiceTests : IDisposable
         await Begin();
         await In(s => s.SetOutcomeAsync("alpha", 1, "A1", "Done", false, null));
         await In(s => s.SetOutcomeAsync("alpha", 1, "A2", "Done", false, null));
-        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, loose, "Set the variable.", "config"));
+        await In(s => s.RecordAsync("alpha", StewardEntryKind.BeforeRelease, loose, "Set the variable.", "config", default, "before"));
 
         Assert.Equal("notes-outstanding", (await In(s => s.OwnerReleasesUnitAsync("alpha", 1, true))).Answer);
     }

@@ -9,7 +9,8 @@ namespace Whetstone.Services;
 /// <summary>What an agent or the owner wants on the list.</summary>
 public record OwnerTaskDraft(
     string? Project, string Title, string Body, string? Kind = null, string? Key = null,
-    int? TicketId = null, int? Unit = null, bool HoldsRelease = false, IReadOnlyList<int>? NotDuplicateOf = null);
+    int? TicketId = null, int? Unit = null, bool HoldsRelease = false, IReadOnlyList<int>? NotDuplicateOf = null,
+    bool AfterRelease = false);
 
 /// <summary>The slice an item holds the release of, as the release gate places it: its number and its name.</summary>
 public record OwnerTaskSlice(int Unit, string Title)
@@ -94,7 +95,7 @@ public class OwnerTaskService
     public static IEnumerable<OwnerTask> Order(IEnumerable<OwnerTask> list) => list
         .OrderBy(t => t.IsOpen ? 0 : 1)
         .ThenBy(t => t.Status == OwnerTaskStatus.Waiting ? 1 : 0)
-        .ThenBy(t => t.HoldsRelease ? 0 : t.TicketId is not null ? 1 : 2)
+        .ThenBy(t => t.HoldsRelease ? 0 : t.AfterRelease ? 2 : t.TicketId is not null ? 1 : 3)
         .ThenBy(t => t.IsOpen ? t.CreatedAt.Ticks : -(t.DoneAt ?? t.DroppedAt ?? t.UpdatedAt).Ticks)
         .ThenBy(t => t.Id);
 
@@ -223,6 +224,14 @@ public class OwnerTaskService
         if (ParseKind(d.Kind) is not { } kind)
             return Refuse("bad-request", "The kind is secret, config, infra, account, deploy or action.");
 
+        // Which side of the deploy it is on: before holds the release, after waits for it. Both at once
+        // is the deadlock this field exists to break - the release waiting on a job that waits on the release.
+        if (d.HoldsRelease && d.AfterRelease)
+            return Refuse("bad-request", "An item is needed either before the release (holdsRelease) or after the deploy (afterRelease), not both. "
+                + "If it needs what the deploy puts up, it is after: it cannot also hold the release that deploys it.");
+        if (d.AfterRelease && d.TicketId is null && d.Unit is null)
+            return Refuse("bad-request", "An item for after a deploy says whose deploy: give the ticket that needs it, so it is linked to that ticket's slice.");
+
         var project = string.IsNullOrWhiteSpace(d.Project) || d.Project == "none" ? null : d.Project.Trim();
         if (project is not null && _registry is not null && !_registry.IsEnabled(project))
             return Refuse("no-project", $"There is no enabled project '{project}'. Leave the project out for one of the owner's own.");
@@ -245,7 +254,9 @@ public class OwnerTaskService
             {
                 await AddNoteAsync(same, d.TicketId is not null && d.TicketId != same.TicketId ? OwnerTaskNoteKind.AlsoAsked : OwnerTaskNoteKind.Context,
                     by, d.TicketId, $"Asked again{(d.TicketId is { } a ? $" by ticket {a}" : "")}: {title}" + (body.Length > 0 && body != same.Body ? $"\n\n{body}" : ""), ct);
-                if (d.HoldsRelease && !same.HoldsRelease) { same.HoldsRelease = true; same.Unit ??= d.Unit; }
+                // Before wins over after: one asker that needs it before the release is enough to hold it.
+                if (d.HoldsRelease && !same.HoldsRelease) { same.HoldsRelease = true; same.AfterRelease = false; same.Unit ??= d.Unit; }
+                else if (d.AfterRelease && !same.HoldsRelease && !same.AfterRelease) { same.AfterRelease = true; same.Unit ??= d.Unit; }
                 await _db.SaveChangesAsync(ct);
                 return new OwnerTaskReply("merged", $"{same.Ref} is already on the list with this key; this ask is logged on it.", Summary(same));
             }
@@ -268,7 +279,7 @@ public class OwnerTaskService
         var task = new OwnerTask
         {
             ProjectKey = project, Kind = kind, Title = title, Body = body, Key = key,
-            TicketId = d.TicketId, Unit = d.Unit, HoldsRelease = d.HoldsRelease, CreatedBy = by,
+            TicketId = d.TicketId, Unit = d.Unit, HoldsRelease = d.HoldsRelease, AfterRelease = d.AfterRelease, CreatedBy = by,
         };
         _db.OwnerTasks.Add(task);
         task.Notes.Add(new OwnerTaskNote { Kind = OwnerTaskNoteKind.Added, By = by, TicketId = d.TicketId,
@@ -279,7 +290,9 @@ public class OwnerTaskService
         if (agent && (task.HoldsRelease || task.TicketId is not null) && _notify is not null)
         {
             var name = project is null ? "" : (_registry?.IsEnabled(project) == true ? _registry.GetProjectConfig(project).DisplayName : project) + ": ";
-            var holds = task.HoldsRelease ? "Holds a release." : $"Asked for by ticket {task.TicketId}.";
+            var holds = task.HoldsRelease ? "Holds a release."
+                : task.AfterRelease ? $"For after ticket {task.TicketId}'s slice is released and deployed; it does not hold the release."
+                : $"Asked for by ticket {task.TicketId}.";
             var o = await _notify.SendAsync("owner_todo", $"{name}{task.Ref} is yours to do",
                 $"{task.Title}\n\n{holds}\n\nIn Claude Code: /todo {task.Ref}", ct);
             task.Notice = o.Sent ? "sent" : Head(o.Message, 280);
@@ -386,7 +399,7 @@ public class OwnerTaskService
 
     /// <summary>The owner rewrites an item. Any field left null is kept; an empty project makes it the owner's own.</summary>
     public async Task<OwnerTaskReply> EditAsync(int id, string? title, string? body, string? kind, string? project,
-        bool? holdsRelease, string by = "owner", CancellationToken ct = default)
+        bool? holdsRelease, string by = "owner", CancellationToken ct = default, bool? afterRelease = null)
     {
         var t = await _db.OwnerTasks.FirstOrDefaultAsync(x => x.Id == id, ct);
         if (t is null) return Refuse("not-found", $"There is no OT-{id}.");
@@ -414,7 +427,13 @@ public class OwnerTaskService
             if (p is not null && _registry is not null && !_registry.IsEnabled(p)) return Refuse("no-project", $"There is no enabled project '{p}'.");
             if (p != t.ProjectKey) { t.ProjectKey = p; changed.Add("project"); }
         }
+        if (holdsRelease == true && afterRelease == true)
+            return Refuse("bad-request", "Before the release or after the deploy, not both.");
         if (holdsRelease is { } h && h != t.HoldsRelease) { t.HoldsRelease = h; changed.Add(h ? "now holds its release" : "no longer holds its release"); }
+        if (afterRelease is { } a && a != t.AfterRelease) { t.AfterRelease = a; changed.Add(a ? "now for after the deploy" : "no longer for after the deploy"); }
+        // The two sides exclude each other: saying one takes the other back.
+        if (holdsRelease == true && t.AfterRelease) { t.AfterRelease = false; changed.Add("no longer for after the deploy"); }
+        if (afterRelease == true && t.HoldsRelease) { t.HoldsRelease = false; changed.Add("no longer holds its release"); }
         if (changed.Count == 0) return new OwnerTaskReply("recorded", "Nothing changed.", Summary(t));
         t.UpdatedAt = DateTime.UtcNow;
         await AddNoteAsync(t, OwnerTaskNoteKind.Owner, by, null, $"Edited: {string.Join(", ", changed)}.", ct);
@@ -455,6 +474,33 @@ public class OwnerTaskService
     /// </summary>
     public Task<List<OwnerTask>> HoldingReleaseAsync(string projectKey, CancellationToken ct = default) =>
         _db.OwnerTasks.AsNoTracking().Where(t => t.ProjectKey == projectKey && t.HoldsRelease).ToListAsync(ct);
+
+    /// <summary>
+    /// The items on one project that wait for a slice's deploy, open or not: placed against the slices
+    /// as the holding ones are, shown beside them, and never counted against a release.
+    /// </summary>
+    public Task<List<OwnerTask>> AfterReleaseAsync(string projectKey, CancellationToken ct = default) =>
+        _db.OwnerTasks.AsNoTracking().Where(t => t.ProjectKey == projectKey && t.AfterRelease).ToListAsync(ct);
+
+    /// <summary>
+    /// A slice is released: each open item that waited for its deploy can be done now. A note on each
+    /// says so, and one notice names them all - the owner is the one who pushes, and this is the list
+    /// for after.
+    /// </summary>
+    public async Task ReleasedAsync(string projectKey, string slice, IReadOnlyCollection<int> ids, CancellationToken ct = default)
+    {
+        if (ids.Count == 0) return;
+        var items = await _db.OwnerTasks.Where(t => ids.Contains(t.Id) && t.AfterRelease
+            && (t.Status == OwnerTaskStatus.Open || t.Status == OwnerTaskStatus.Waiting)).ToListAsync(ct);
+        if (items.Count == 0) return;
+        foreach (var t in items)
+            await AddNoteAsync(t, OwnerTaskNoteKind.Context, "steward", null, $"{slice} is released: once it is deployed, this can be done.", ct);
+        await _db.SaveChangesAsync(ct);
+        if (_notify is null) return;
+        var name = _registry?.IsEnabled(projectKey) == true ? _registry.GetProjectConfig(projectKey).DisplayName : projectKey;
+        await _notify.SendAsync("owner_todo", $"{name}: {items.Count} to do after the deploy",
+            $"{slice} is released. Once it is deployed:\n" + string.Join("\n", items.Select(t => $"- {t.Ref}: {t.Title}")), ct);
+    }
 
     /// <summary>
     /// Move a config or action release note onto the list: the note row goes, and an item that holds
@@ -538,7 +584,7 @@ public class OwnerTaskService
     public static object Summary(OwnerTask t) => new
     {
         @ref = t.Ref, t.Id, t.Title, kind = t.Kind.ToString().ToLowerInvariant(), status = t.Status.ToString().ToLowerInvariant(),
-        project = t.ProjectKey, t.TicketId, t.HoldsRelease,
+        project = t.ProjectKey, t.TicketId, t.HoldsRelease, t.AfterRelease,
     };
 
     /// <summary>An item in full, for the page and for a tool's get.</summary>
@@ -548,7 +594,7 @@ public class OwnerTaskService
         slice = slice is null ? null : new { unit = slice.Unit, title = slice.Title },
         @ref = t.Ref, t.Id, project = t.ProjectKey, kind = t.Kind.ToString().ToLowerInvariant(),
         status = t.Status.ToString().ToLowerInvariant(), t.Title, t.Body, t.Key,
-        t.WaitingOn, t.WaitingUntil, t.TicketId, t.Unit, t.HoldsRelease, t.CreatedBy, t.CreatedAt, t.UpdatedAt,
+        t.WaitingOn, t.WaitingUntil, t.TicketId, t.Unit, t.HoldsRelease, t.AfterRelease, t.CreatedBy, t.CreatedAt, t.UpdatedAt,
         t.DoneAt, t.DoneNote, t.DroppedAt, t.DroppedBecause, t.Suggestion, t.SuggestionBecause, t.SuggestedAt, t.Notice,
         askers = t.Notes.Select(n => n.TicketId).Append(t.TicketId).OfType<int>().Distinct(),
         notes = t.Notes.OrderBy(n => n.At).Select(n => new { n.Id, kind = n.Kind.ToString(), n.By, n.TicketId, n.Text, n.At }),
@@ -567,6 +613,7 @@ public class OwnerTaskService
         sb.AppendLine($"- **Project:** {t.ProjectKey ?? "(the owner's own)"}");
         if (t.TicketId is { } tid) sb.AppendLine($"- **Asked for by:** ticket {tid}{Also(t)}");
         if (t.HoldsRelease) sb.AppendLine($"- **Holds:** the release of {(slice is not null ? slice.ToString() : t.Unit is { } u2 ? $"slice {u2:00}" : "the next slice released")}");
+        if (t.AfterRelease) sb.AppendLine($"- **After:** {(slice is not null ? slice.ToString() : t.Unit is { } u3 ? $"slice {u3:00}" : "its ticket's slice")} is released and deployed - it needs what the deploy puts up, and does not hold the release");
         if (t.Key is { } k) sb.AppendLine($"- **Key:** `{k}`");
         sb.AppendLine($"- **Added:** {t.CreatedAt:yyyy-MM-dd} by {t.CreatedBy}");
         if (t.Suggestion is { } s) sb.AppendLine($"- **An agent says it looks {s}:** {t.SuggestionBecause}");
@@ -613,12 +660,14 @@ public class OwnerTaskService
                 sb.AppendLine($"- **{t.Ref}** [{t.Kind.ToString().ToLowerInvariant()}] {t.Title} - {t.ProjectKey ?? "own"}"
                     + (t.TicketId is { } x ? $", ticket {x}" : "")
                     + (t.HoldsRelease && slices?.GetValueOrDefault(t.Id) is { } sl ? $", holds {sl}" : "")
+                    + (t.AfterRelease && slices?.GetValueOrDefault(t.Id) is { } sa ? $", after {sa} deploys" : "")
                     + (t.Suggestion is { } s ? $" _(an agent says it looks {s})_" : ""));
             sb.AppendLine();
         }
         Group("Holds a release", open.Where(t => t.Status == OwnerTaskStatus.Open && t.HoldsRelease));
-        Group("A ticket asked for it", open.Where(t => t.Status == OwnerTaskStatus.Open && !t.HoldsRelease && t.TicketId is not null));
-        Group("The rest", open.Where(t => t.Status == OwnerTaskStatus.Open && !t.HoldsRelease && t.TicketId is null));
+        Group("A ticket asked for it", open.Where(t => t.Status == OwnerTaskStatus.Open && !t.HoldsRelease && !t.AfterRelease && t.TicketId is not null));
+        Group("After a slice deploys", open.Where(t => t.Status == OwnerTaskStatus.Open && t.AfterRelease));
+        Group("The rest", open.Where(t => t.Status == OwnerTaskStatus.Open && !t.HoldsRelease && !t.AfterRelease && t.TicketId is null));
         Group("Waiting on someone", open.Where(t => t.Status == OwnerTaskStatus.Waiting));
         if (open.Count == 0) sb.AppendLine("Nothing open.");
         sb.AppendLine($"Read one in full: `curl -s {boardUrl}/api/owner-todos/<id>/text`");
