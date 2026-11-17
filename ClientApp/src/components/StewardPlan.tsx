@@ -57,8 +57,13 @@ const STEPS: { stage: UnitStage; word: string }[] = [
   { stage: 'released', word: 'Released' },
 ];
 
-export function StewardPlan({ project, view, status, waiting, register, mode, onChanged, onNotes, onNow, onDecisions }: {
+/** A run going on the project: a worker on a ticket, or its steward. Either can move the base under a release. */
+export type OutRun = { ticketId?: string; phase?: string };
+
+export function StewardPlan({ project, view, status, waiting, register, mode, onChanged, onNotes, onNow, onDecisions, out = [] }: {
   project: string;
+  /** What is running on this project now - named beside a release, which any of it can make refuse. */
+  out?: OutRun[];
   view: StewardPlanView | null;
   status: StewardStatus | null;
   /** The questions on Now: what holds an outcome, and which decisions an open question touches. */
@@ -121,7 +126,7 @@ export function StewardPlan({ project, view, status, waiting, register, mode, on
                 parents={units.filter(p => p.unit !== unit.unit && p.sliceBranch && p.builtOn == null
                   && p.stage !== 'released' && p.stage !== 'abandoned').map(p => p.unit)}
                 status={unit.unit === current ? status : null} onChanged={onChanged} onNotes={onNotes}
-                waiting={waiting} register={register} mode={mode} onNow={onNow} onDecisions={onDecisions}
+                waiting={waiting} register={register} mode={mode} onNow={onNow} onDecisions={onDecisions} out={out}
               />
             )}
           </>
@@ -284,8 +289,8 @@ function Steps({ stage }: { stage: UnitStage }) {
 
 type Show = 'outcomes' | 'spec' | 'report';
 
-function UnitView({ project, unit, parents, status, onChanged, onNotes, waiting, register, mode, onNow, onDecisions }: {
-  project: string; unit: StewardPlanUnitView; parents: number[]; status: StewardStatus | null;
+function UnitView({ project, unit, parents, status, onChanged, onNotes, waiting, register, mode, onNow, onDecisions, out }: {
+  project: string; unit: StewardPlanUnitView; parents: number[]; status: StewardStatus | null; out: OutRun[];
   onChanged: () => Promise<void>; onNotes: (unit: number) => void;
   waiting: StewardQuestion[]; register: StewardRegister | null; mode?: StewardMode;
   onNow: () => void; onDecisions: () => void;
@@ -340,7 +345,7 @@ function UnitView({ project, unit, parents, status, onChanged, onNotes, waiting,
           </div>
         )}
 
-        <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes}
+        <Yours project={project} unit={unit} onChanged={onChanged} onNotes={onNotes} out={out}
           onReport={show === 'report' ? undefined : () => pick('report')} />
         {unit.agreed && (unit.openDecisions?.length ?? 0) > 0 && (
           <StillOpen project={project} unit={unit} onChanged={onChanged} />
@@ -454,8 +459,8 @@ function sortGroups(unit: StewardPlanUnitView) {
  * The step that is the owner's, when the unit is at one: agree a draft, or say a built unit has
  * gone out. Both ask twice, because both are said once and acted on by something unattended.
  */
-function Yours({ project, unit, onChanged, onNotes, onReport }: {
-  project: string; unit: StewardPlanUnitView; onChanged: () => Promise<void>; onNotes: (unit: number) => void;
+function Yours({ project, unit, onChanged, onNotes, onReport, out }: {
+  project: string; unit: StewardPlanUnitView; onChanged: () => Promise<void>; onNotes: (unit: number) => void; out: OutRun[];
   /** Open the unit's report - offered beside the release, as the thing to read first. */
   onReport?: () => void;
 }) {
@@ -470,6 +475,37 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
     catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
     finally { setBusy(false); }
   };
+
+  // A release brings the slice up to the base, runs the merge checks, then merges - and refuses if the
+  // base moved in between. On a project where finished tickets merge into that base, every run still
+  // going is a chance of that, so the are-you-sure says so and offers the pending stop.
+  const [stopAsked, setStopAsked] = useState(false);
+  const askStop = async () => {
+    setFailed(null);
+    try {
+      const res = await fetch('/api/heartbeat/stop-after-cycle', { method: 'POST' });
+      if (!res.ok) throw new Error((await res.text()) || 'Could not ask the heartbeat to stop');
+      setStopAsked(true);
+    } catch (err) { setFailed(err instanceof Error ? err.message : String(err)); }
+  };
+  const tickets = out.filter(o => o.ticketId).map(o => o.ticketId as string);
+  const stewardOut = out.some(o => !o.ticketId);
+  const busyWarning = out.length > 0 && (
+    <div style={{ font: `400 12px/1.5 ${BODY}`, color: TIER.gate.c, marginTop: 8 }}>
+      {tickets.length > 0 && <>{tickets.length === 1 ? 'A worker is' : `${tickets.length} workers are`} still running on this project ({tickets.map(t => `#${t}`).join(', ')})</>}
+      {tickets.length > 0 && stewardOut && ', and '}
+      {stewardOut && <>{tickets.length > 0 ? 'its steward is' : 'Its steward is'} running</>}
+      . If anything merges into the base while the release's checks run, the release is refused and nothing is merged.
+      {stopAsked
+        ? ' A stop is pending: release once the runs have finished.'
+        : ' Better to stop the heartbeat after its current runs and release once they have finished.'}
+      {!stopAsked && (
+        <div style={{ marginTop: 6 }}>
+          <GhostButton onClick={askStop} title="The header's pending stop: runs out now finish, nothing new starts">Stop after current runs</GhostButton>
+        </div>
+      )}
+    </div>
+  );
 
   const r = unit.release;
   // Migrations are ticked off in the record; what is to set up or do is on the to-do list.
@@ -629,6 +665,7 @@ function Yours({ project, unit, onChanged, onNotes, onReport }: {
             )
             : <GhostButton tone="go" onClick={() => setSure(true)}>Release it</GhostButton>)}
         </div>
+        {r.outstanding === 0 && sure && busyWarning}
       </>
     ));
   }

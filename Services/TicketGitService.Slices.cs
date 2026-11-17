@@ -371,7 +371,7 @@ public partial class TicketGitService
         var baseTip = await TipAsync(repo, baseBranch, ct);
         if (baseTip is null) return (null, $"The base branch '{baseBranch}' is not a local branch in {repo}.");
         if (!(await GitAsync(repo, ct, "merge-base", "--is-ancestor", baseTip, sliceTip)).Ok)
-            return (null, $"{baseBranch} moved while {slice} was being checked. Nothing was merged; release it again, so the checks run on what it merges into.");
+            return (null, $"{baseBranch} moved while {slice} was being checked. Nothing was merged; release it again, so the checks run on what it merges into. If workers are still merging tickets into {baseBranch}, stop the heartbeat after its current runs first and release once they have finished.");
 
         // The slice holds the whole base, so the merge's tree is the slice's own.
         var tree = (await GitAsync(repo, ct, "rev-parse", $"{sliceTip}^{{tree}}")).Stdout.Trim();

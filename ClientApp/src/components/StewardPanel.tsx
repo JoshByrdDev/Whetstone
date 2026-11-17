@@ -194,6 +194,11 @@ export function StewardPanel({ events, state }: { events: HeartbeatEvent[]; stat
                 waiting={page.waiting} register={register} mode={page.mode}
                 onNotes={unit => { setNotesUnit(unit); show('record'); }}
                 onNow={() => show('now')} onDecisions={() => show('decisions')}
+                out={[
+                  ...state.agents.filter(a => a.project === page.project && a.ticketId)
+                    .map(a => ({ ticketId: a.ticketId, phase: a.phase })),
+                  ...(state.steward?.project === page.project ? [{ phase: 'Steward' }] : []),
+                ]}
               />
             </div>
           )}
