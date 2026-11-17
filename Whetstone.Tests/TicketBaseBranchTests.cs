@@ -190,6 +190,82 @@ public class TicketBaseBranchTests : IDisposable
         Assert.Equal(Feature, pre.BaseBranch);
     }
 
+    // ---- a defect in code the branch did not change is the base's ----------------------------
+
+    [Fact]
+    public void A_named_path_matches_however_loosely_a_model_wrote_it()
+    {
+        var changed = new[] { "alpha-web/src/sign/SigningView.tsx", "alpha-api/Services/Sign.cs" };
+        Assert.True(TicketGitService.NamesAny(changed, new[] { "alpha-web/src/sign/SigningView.tsx" }));
+        Assert.True(TicketGitService.NamesAny(changed, new[] { "src\\sign\\SigningView.tsx:42" }));
+        Assert.True(TicketGitService.NamesAny(changed, new[] { "./src/sign/SigningView.tsx" }));
+        Assert.True(TicketGitService.NamesAny(changed, new[] { "SigningView.tsx" }));
+        Assert.True(TicketGitService.NamesAny(changed, new[] { "alpha-api/Services" }));
+        Assert.True(TicketGitService.NamesAny(changed, new[] { "src/sign" }));
+        Assert.False(TicketGitService.NamesAny(changed, new[] { "src/render/Renderer.tsx", "View.tsx", " " }));
+    }
+
+    [Fact]
+    public async Task A_defect_found_on_a_feature_ticket_goes_to_the_base_when_the_feature_changed_none_of_its_files()
+    {
+        // The feature changes feature.txt only; shared.txt is the base's.
+        Commit(_hub, "shared.txt", "shared code");
+        Git(_hub, "push", "-q", "origin", "main");
+        Git(_hub, "branch", Feature, "main");
+        OnBranch(Feature, "feature.txt", "F: the feature");
+        Git(_hub, "push", "-q", "origin", Feature);
+        // The base moving on later does not make its files the feature's.
+        Commit(_hub, "later.txt", "M: base moves on");
+        Git(_hub, "push", "-q", "origin", "main");
+
+        await using var db = new DashboardDbContext(_options);
+        var alpha = _registry.GetProjectConfig("alpha");
+        var source = new Ticket { Id = 7, ProjectKey = "alpha", BaseBranch = Feature };
+
+        Assert.True(await _svc.BranchChangesAnyAsync("alpha", Feature, new[] { "feature.txt" }));
+        Assert.False(await _svc.BranchChangesAnyAsync("alpha", Feature, new[] { "shared.txt", "later.txt" }));
+
+        var (own, unit, why) = await TicketEndpoints.DefectBaseAsync(db, _svc, alpha, source, new[] { "shared.txt" });
+        Assert.Equal((null, null), (own, unit));
+        Assert.Contains(Feature, why);
+        Assert.Contains("#7", why);
+
+        // In the feature's own code, or with nothing named, it stays on the feature.
+        Assert.Equal((Feature, null, null), await TicketEndpoints.DefectBaseAsync(db, _svc, alpha, source, new[] { "shared.txt", "feature.txt" }));
+        Assert.Equal((Feature, null, null), await TicketEndpoints.DefectBaseAsync(db, _svc, alpha, source, null));
+        Assert.Equal((Feature, null, null), await TicketEndpoints.DefectBaseAsync(db, _svc, alpha, source, new[] { " " }));
+        // Found on a ticket of the base: nothing to decide.
+        Assert.Equal((null, null, null), await TicketEndpoints.DefectBaseAsync(db, _svc, alpha,
+            new Ticket { Id = 8, ProjectKey = "alpha" }, new[] { "feature.txt" }));
+    }
+
+    [Fact]
+    public async Task A_defect_found_in_a_slice_goes_to_the_base_when_the_slice_changed_none_of_its_files()
+    {
+        Git(_hub, "branch", Slice, "main");
+        OnBranch(Slice, "cards.txt", "S: the slice");
+        await using var db = new DashboardDbContext(_options);
+        db.StewardUnits.Add(new StewardUnit { ProjectKey = "bravo", Unit = 13, Branch = Slice, AgreedAt = DateTime.UtcNow });
+        await db.SaveChangesAsync();
+        var bravo = _registry.GetProjectConfig("bravo");
+        var source = new Ticket { Id = 9, ProjectKey = "bravo", PlanUnit = 13 };
+
+        Assert.Equal((null, 13, null), await TicketEndpoints.DefectBaseAsync(db, _svc, bravo, source, new[] { "cards.txt" }));
+        var (own, unit, why) = await TicketEndpoints.DefectBaseAsync(db, _svc, bravo, source, new[] { "README.md" });
+        Assert.Equal((null, null), (own, unit));
+        Assert.NotNull(why);
+    }
+
+    [Fact]
+    public async Task A_branch_git_cannot_read_keeps_the_defect_where_it_was_found()
+    {
+        await using var db = new DashboardDbContext(_options);
+        var source = new Ticket { Id = 7, ProjectKey = "alpha", BaseBranch = "feature/nowhere" };
+        Assert.Null(await _svc.BranchChangesAnyAsync("alpha", "feature/nowhere", new[] { "README.md" }));
+        Assert.Equal(("feature/nowhere", null, null), await TicketEndpoints.DefectBaseAsync(db, _svc,
+            _registry.GetProjectConfig("alpha"), source, new[] { "README.md" }));
+    }
+
     // ---- fixed once the ticket has a branch --------------------------------------------------
 
     [Fact]

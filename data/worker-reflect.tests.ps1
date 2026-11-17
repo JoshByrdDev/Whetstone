@@ -34,9 +34,9 @@ foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Langu
 $script:filed = New-Object System.Collections.Generic.List[object]
 $script:boardDown = $false
 function New-DefectTicket {
-    param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn)
+    param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn, [string[]]$Files)
     if ($script:boardDown) { return $null }
-    $script:filed.Add([pscustomobject]@{ Project = $ProjectKey; Key = $Key; Text = $Text; FoundOn = $FoundOn })
+    $script:filed.Add([pscustomobject]@{ Project = $ProjectKey; Key = $Key; Text = $Text; FoundOn = $FoundOn; Files = @($Files) })
     return "$(900 + $script:filed.Count)"
 }
 $contract = $tree.FindAll({
@@ -170,7 +170,13 @@ Check 'defect: the ticket says which run found it' $script:filed[0].FoundOn 'PRO
 Check 'defect: no note was written' (Test-Path (Join-Path $r.mem 'invoice-total-drops-tax.md')) $false
 Check 'defect: nothing was queued' (Test-Path (Join-Path $r.proj 'improvement-suggestions.md')) $false
 Check 'defect: its key is claimed' ((Get-Content (Join-Path $r.proj 'reflection-keys.txt')) -join ',') 'invoice-total-drops-tax'
+Check 'defect with no files: none are sent' $script:filed[0].Files.Count 0
 
+# The files it names go to the board, which decides from them which branch it is filed on.
+$withFiles = '[{"kind":"defect","key":"rounding-off","text":"Totals round half down in billing/round.ts.","confidence":"high","files":["billing/round.ts"," ",7,"billing/sum.ts "]}]'
+$script:filed.Clear()
+$r = Invoke-Case -Name 'defect-files' -Reply $withFiles
+Check 'defect with files: the paths are passed on, trimmed, junk dropped' ($script:filed[0].Files -join ',') 'billing/round.ts,billing/sum.ts'
 # The board cannot be reached: still not a note, and the key is handed back for a later run.
 $script:boardDown = $true
 $r = Invoke-Case -Name 'defect-down' -Reply $defect

@@ -41,6 +41,10 @@ public record CreateTicketRequest(string ProjectKey, string? Title, string? Desc
     // The Done ticket of the same project whose problem has come back as this one
     // (Ticket.RegressionOf), which makes its origin a regression.
     int? RegressionOf = null,
+    // With FoundOn: the files what it is about lives in, as the run that saw it named them. When that
+    // ticket's branch is not the project's base and changes none of them, the code is the base's, so
+    // the new ticket is filed there instead (DefectBaseAsync). Absent, it inherits as before.
+    string[]? FoundIn = null,
     // A discovery's route gate (Ticket.RequiresRouteReview). Absent = the project's
     // discovery.reviewRoute, off unless it says so. Refused on any other track.
     bool? RequiresRouteReview = null,
@@ -148,6 +152,39 @@ public static class TicketEndpoints
     /// name when every writable repo has it where the ticket's git will look
     /// (<see cref="TicketGitService.TicketBaseProblemAsync"/>), and the refusal otherwise.
     /// </summary>
+    /// <summary>
+    /// Where a ticket about something seen on <paramref name="source"/> is based: what it inherits from
+    /// that ticket (<see cref="SliceBranches.InheritedFromAsync"/>), unless the files it names
+    /// (<paramref name="foundIn"/>) are none of them changed by that ticket's branch - then the code
+    /// is the project base's, and so is the ticket. A feature branch's runs walk through plenty of
+    /// shared code, and every bug they noticed in it was filed on the feature, where its fix waits for
+    /// the feature to ship and the next run on it, seeing more shared code, files the next one there.
+    /// <para>
+    /// No files named, or git unable to say, keeps the inheritance: a defect in the branch's own code
+    /// filed on the base blocks there, which is what inheriting was for. The third value is a line for
+    /// the new ticket's description when it was moved, so whoever reads it knows why it is not where
+    /// the run was.
+    /// </para>
+    /// </summary>
+    public static async Task<(string? OwnBase, int? Unit, string? Why)> DefectBaseAsync(DashboardDbContext db,
+        TicketGitService git, ProjectConfig cfg, Ticket source, IReadOnlyCollection<string>? foundIn,
+        CancellationToken ct = default)
+    {
+        var (own, unit) = await SliceBranches.InheritedFromAsync(db, cfg, source, ct);
+        if (own is null && unit is null) return (null, null, null);
+        var files = (foundIn ?? Array.Empty<string>()).Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => f.Trim()).ToList();
+        if (files.Count == 0) return (own, unit, null);
+
+        var branch = own ?? await SliceBranches.ForTicketAsync(db, cfg, source, ct);
+        if (branch is null) return (own, unit, null);
+        if (await git.BranchChangesAnyAsync(cfg.Name, branch, files, ct) != false) return (own, unit, null);
+
+        var named = string.Join(", ", files.Take(5).Select(f => $"`{f}`")) + (files.Count > 5 ? $" and {files.Count - 5} more" : "");
+        return (null, null,
+            $"Filed on the project's base, not on `{branch}` where ticket #{source.Id} is: that branch changes none of " +
+            $"the files this is about ({named}), so the code is the base's and so is its fix.");
+    }
+
     public static async Task<(string? Base, string? Error)> OwnBaseAsync(TicketGitService git, string projectKey, string? requested)
     {
         var name = requested?.Trim();
@@ -1054,13 +1091,18 @@ public static class TicketEndpoints
             // Found on another ticket: based where that ticket is, unless a base was named outright.
             string? inheritedBase = null;
             int? planUnit = null;
+            var description = req.Description;
             if (req.FoundOn is { } foundOn && track == TicketTrack.Delivery)
             {
                 var source = await db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == foundOn);
                 if (source is null || source.ProjectKey != projectKey)
                     return Results.BadRequest(new { error = $"Ticket #{foundOn} is not a ticket of {projectKey}." });
                 if (string.IsNullOrWhiteSpace(req.BaseBranch))
-                    (inheritedBase, planUnit) = await SliceBranches.InheritedFromAsync(db, registry.GetProjectConfig(projectKey), source);
+                {
+                    string? why;
+                    (inheritedBase, planUnit, why) = await DefectBaseAsync(db, git, registry.GetProjectConfig(projectKey), source, req.FoundIn);
+                    if (why is not null) description = string.IsNullOrWhiteSpace(description) ? why : description.TrimEnd() + "\n\n" + why;
+                }
             }
             if (req.RegressionOf is { } regressionOf)
             {
@@ -1080,7 +1122,7 @@ public static class TicketEndpoints
             if (branch is not null && await BranchNameProblemAsync(svc, git, projectKey, branch, null) is { } branchError)
                 return Results.BadRequest(new { error = branchError });
 
-            var t = await svc.CreateAsync(projectKey, title, req.Description, issueKey, issueUrl, phase,
+            var t = await svc.CreateAsync(projectKey, title, description, issueKey, issueUrl, phase,
                 req.RequiresSpeculationReview ?? false, req.RequiresImplementationReview ?? false, req.MasterNotes,
                 req.SkipQaTesting ?? false, priority ?? TicketPriority.Normal, track, reviewTarget,
                 req.SkipClassroomAnalysis ?? registry.GetProjectConfig(projectKey).SkipClassroomAnalysisByDefault,

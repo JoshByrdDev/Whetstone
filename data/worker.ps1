@@ -1865,7 +1865,8 @@ Each element:
     "key":        "short-kebab-case-id",
     "text":       "One or two sentences. Specific enough to act on without this run's context.",
     "confidence": "high" | "low",
-    "ticket":     true | false
+    "ticket":     true | false,
+    "files":      ["path/to/file.ts"]
   }
 
 - "environment" - a durable fact about THIS machine or stack: a port, a path, a credential location,
@@ -1877,6 +1878,11 @@ Each element:
   ticket in the Backlog for the owner to triage, never a note. Say what is wrong, where (file and
   function), and how it shows. A fact about how the repo or machine BEHAVES ("the seed script
   takes four minutes", "sqlcmd needs -C") is not a defect - it is "environment" or "codebase".
+  A defect also lists "files": the repo paths of the code that is wrong - not of the code where the
+  run saw it show - as they appear in the diff or the log (on a project of several repos, starting
+  with the repo's folder). They decide which branch its ticket is filed on: the branch this run was
+  on when it changed one of them, the project's base otherwise. Leave the list out, rather than
+  guess, when the run never saw where the code is. Only a defect has it.
 - "process"     - a change to how the heartbeat itself works (a skill, a prompt, this script).
 
 A BUG IS NOT A FACT. Writing one into the notes store makes every later run read it as how the code
@@ -1985,7 +1991,7 @@ function ConvertFrom-ReflectOutput {
 #
 # Returns the new ticket's id, or $null when the board could not be reached or refused it.
 function New-DefectTicket {
-    param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn)
+    param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn, [string[]]$Files)
 
     if (-not $DashboardUrl -or -not $ProjectKey -or -not $Text) { return $null }
     $title = Get-NoteSummary -Text $Text -Max 90
@@ -2000,7 +2006,14 @@ function New-DefectTicket {
     # Based where the ticket it was seen on is - its own base, else its open slice - which the board
     # works out (CreateTicketRequest.FoundOn). Filed on the project's base instead, a defect in a
     # slice's code lands on a branch that has none of that code, and blocks there.
-    if ($FoundOn -match '^\d+$') { $body.foundOn = [int]$FoundOn }
+    # Unless that branch changes none of the files the defect is in: then the code is the base's, and
+    # the board files it there (TicketEndpoints.DefectBaseAsync). On a feature branch, bugs in shared
+    # code a run walked through were all filed on the feature, where their fix waited for it to ship.
+    if ($FoundOn -match '^\d+$') {
+        $body.foundOn = [int]$FoundOn
+        $named = @($Files | Where-Object { "$_".Trim() } | ForEach-Object { "$_".Trim() })
+        if ($named.Count -gt 0) { $body.foundIn = $named }
+    }
     $body = $body | ConvertTo-Json
     try {
         $t = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets" -Method Post -ContentType 'application/json' `
@@ -2227,6 +2240,8 @@ function Invoke-Reflection {
                     # Either the model said so or the text names the ticket; see Test-FindingNamesTicket.
                     Ticket     = (($f.ticket -eq $true) -or "$($f.ticket)" -eq 'true' -or
                                   (Test-FindingNamesTicket -Text $text -TicketId $TicketId -IssueKey $IssueKey -Branch $Branch))
+                    # A defect's files, which decide its ticket's base (New-DefectTicket).
+                    Files      = @(@($f.files) | Where-Object { $_ -is [string] -and $_.Trim() } | ForEach-Object { $_.Trim() })
                 })
 
                 Add-Utf8Text -Path $keysFile -Text ($key + [Environment]::NewLine)
@@ -2265,7 +2280,7 @@ function Invoke-Reflection {
             # never written into the store, not even as the fallback when the board cannot be reached
             # - its key is handed back instead, so the next run that trips over it files it then.
             if ($a.Kind -eq 'defect') {
-                $filedAs = New-DefectTicket -ProjectKey $ProjectKey -Key $a.Key -Text $a.Text -FoundOn $TicketId
+                $filedAs = New-DefectTicket -ProjectKey $ProjectKey -Key $a.Key -Text $a.Text -FoundOn $TicketId -Files $a.Files
                 if ($filedAs) {
                     Write-Log "  Reflection: filed defect '$($a.Key)' as Backlog ticket #$filedAs"
                     $ticketed++

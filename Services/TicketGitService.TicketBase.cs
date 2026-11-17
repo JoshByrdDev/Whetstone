@@ -53,6 +53,65 @@ public partial class TicketGitService
         return null;
     }
 
+    /// <summary>
+    /// Whether <paramref name="branch"/> changes any of <paramref name="paths"/> against the
+    /// project's base - the files a defect seen in passing names - or null when git cannot say (no
+    /// repo, a ref missing). Asked before a defect found on a feature or slice ticket is filed there:
+    /// the run that saw it was on that branch, but what it saw may be code the base has had all along,
+    /// and filed on the branch its fix ships only when the branch does.
+    /// <para>
+    /// Both sides are read by <see cref="BaseRefAsync"/>'s rule, and the range is three-dot - what the
+    /// branch brings, not what the base gained since. On a project of several repos a path starts with
+    /// its repo's folder; a path without one is matched in every writable repo.
+    /// </para>
+    /// </summary>
+    public async Task<bool?> BranchChangesAnyAsync(string projectKey, string branch, IReadOnlyCollection<string> paths,
+        CancellationToken ct = default)
+    {
+        var cfg = _registry.GetProjectConfig(projectKey);
+        var changed = new List<string>();
+        foreach (var target in TargetsOf(cfg).Where(t => !t.ReadOnly))
+        {
+            if (!IsGitRepo(target.Path)) return null;
+            if (branch == target.BaseBranch) continue;
+            var baseRef = await BaseRefAsync(target.Path, cfg, target.BaseBranch, ct);
+            var branchRef = await BaseRefAsync(target.Path, cfg, branch, ct);
+            if (baseRef is null || branchRef is null) return null;
+            var r = await GitAsync(target.Path, ct, "diff", "--name-only", "--no-renames", $"{baseRef}...{branchRef}");
+            if (!r.Ok) return null;
+            var prefix = target.Dir.Length > 0 ? target.Dir + "/" : "";
+            changed.AddRange(r.Stdout.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0).Select(l => prefix + l));
+        }
+        return NamesAny(changed, paths);
+    }
+
+    /// <summary>
+    /// Whether any of <paramref name="named"/> - paths a model wrote, so loosely: backslashes, a
+    /// leading <c>./</c>, a <c>:line</c> after it, a folder, a bare file name, or a path missing its
+    /// repo's folder - is one of <paramref name="changed"/> (repo-relative, prefixed by the repo's
+    /// folder on a project of several).
+    /// </summary>
+    public static bool NamesAny(IEnumerable<string> changed, IEnumerable<string> named)
+    {
+        var files = changed.Select(c => c.Replace('\\', '/')).ToList();
+        foreach (var raw in named)
+        {
+            var p = Regex.Replace((raw ?? "").Trim().Trim('`', '"', '\'').Replace('\\', '/'), @"(:\d+)+(-\d+)?$", "");
+            while (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
+            p = p.Trim('/');
+            if (p.Length == 0) continue;
+            foreach (var f in files)
+            {
+                if (string.Equals(f, p, StringComparison.OrdinalIgnoreCase)
+                    || f.StartsWith(p + "/", StringComparison.OrdinalIgnoreCase)
+                    || f.EndsWith("/" + p, StringComparison.OrdinalIgnoreCase)
+                    || f.Contains("/" + p + "/", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+        return false;
+    }
+
     private async Task<bool> HasRefAsync(string repo, string fullRef, CancellationToken ct) =>
         (await GitAsync(repo, ct, "rev-parse", "--verify", "--quiet", fullRef)).Ok;
 
