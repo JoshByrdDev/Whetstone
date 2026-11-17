@@ -87,6 +87,12 @@ $cases = @(
     @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl install booted build/Build/Products/Debug-iphonesimulator/App.app && xcrun simctl launch booted com.example.app' },
     @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl terminate booted com.example.app' },
     @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl io booted screenshot /data/qa-shots/12/home.png' },
+    # What a project's QA skill drives a simulator with: one device by id, AXe for taps and typing.
+    @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl bootstatus 9F5DD787-80AC-43C1-94A7-6C50470A8A1B -b && xcrun simctl uninstall 9F5DD787-80AC-43C1-94A7-6C50470A8A1B com.example.app' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl addmedia 9F5DD787-80AC-43C1-94A7-6C50470A8A1B /data/qa-shots/12/photo.png' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='cd apps/app/ios && pod install && RCT_METRO_PORT=53548 xcodebuild -workspace App.xcworkspace -scheme App -configuration Debug -sdk iphonesimulator -destination "id=9F5DD787-80AC-43C1-94A7-6C50470A8A1B" -derivedDataPath build build' },
+    @{ Expect='allow'; Tool='Bash'; Cmd='axe describe-ui --udid 9F5DD787-80AC-43C1-94A7-6C50470A8A1B && axe tap --label "Calendar" --udid 9F5DD787-80AC-43C1-94A7-6C50470A8A1B' },
+    @{ Expect='allow'; Tool='Bash'; Cmd="axe type 'pat@example.com' --udid 9F5DD787-80AC-43C1-94A7-6C50470A8A1B && axe gesture swipe-from-left-edge --udid 9F5DD787-80AC-43C1-94A7-6C50470A8A1B" },
     @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl io 3F1C2B9A-6D7E-4A10-9B2C-0E5D8A7F6B41 recordVideo --codec h264 /data/qa-shots/12/flow.mp4' },
     @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl openurl booted "myapp://plans/42"' },
     @{ Expect='allow'; Tool='Bash'; Cmd='xcrun simctl openurl booted http://localhost:8081/--/plans' },
