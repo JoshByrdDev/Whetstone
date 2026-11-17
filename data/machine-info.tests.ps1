@@ -145,6 +145,40 @@ Check 'the report is camelCase JSON the board reads' ($json -match '"ramMb":1638
 
 # ---- This machine, for real ----
 
+# ---- An iPhone simulator: the device rule's PowerShell copy (MachineDevicesTests hold the C# to the same files) ----
+
+Check 'simctl runtimes: available iOS ones only' (Read-SimctlIosRuntimes (Fixture 'mac-simctl-runtimes.json')) 1
+Check 'simctl runtimes: not that output is no reading' "[$(Read-SimctlIosRuntimes 'xcrun: error')]" '[]'
+Check 'simctl runtimes: none installed is zero' (Read-SimctlIosRuntimes '{ "runtimes" : [ ] }') 0
+Check 'simctl booted: the booted UDIDs' ((Read-SimctlBooted (Fixture 'mac-simctl-booted.json')) -join ',') '3F1C2B9A-6D7E-4A10-9B2C-0E5D8A7F6B41'
+Check 'simctl booted: nothing readable is none' @(Read-SimctlBooted '').Count 0
+Check 'new simulators: what was up before is left alone' ((Select-NewSimulators -Before @('AAAA-1', 'bbbb-2') -Now @('aaaa-1', 'CCCC-3', 'BBBB-2')) -join ',') 'CCCC-3'
+Check 'new simulators: a UDID that is not hex never reaches a command line' @(Select-NewSimulators -Before @() -Now @('AB12; rm -rf /', 'AB12')).Count 1
+
+$xcode = @{
+    'cmd:xcode-select -p' = "/Applications/Xcode.app/Contents/Developer`n"
+    'cmd:xcodebuild -license check' = ''
+    'cmd:xcodebuild -checkFirstLaunchStatus' = ''
+    'cmd:xcrun simctl list runtimes -j' = (Fixture 'mac-simctl-runtimes.json')
+}
+function Use-Probes { param([hashtable]$Answers) $script:ProbeOverride = { param($Key, $Path) if ($Answers.ContainsKey($Key)) { $Answers[$Key] } else { $null } }.GetNewClosure() }
+
+Use-Probes $xcode
+Check 'a Mac with Xcode, its licence and a runtime has the simulator' ((Get-MachineDevices -Os 'macos') -join ',') 'ios:simulator'
+$noLicence = $xcode.Clone(); $noLicence.Remove('cmd:xcodebuild -license check')
+Use-Probes $noLicence
+Check 'a licence not accepted is no simulator' @(Get-MachineDevices -Os 'macos').Count 0
+Check '... and the toolchain says which step' "$((Get-IosToolchain -Os 'macos').licence)" 'False'
+$noRuntime = $xcode.Clone(); $noRuntime['cmd:xcrun simctl list runtimes -j'] = '{ "runtimes" : [ ] }'
+Use-Probes $noRuntime
+Check 'no iOS runtime is no simulator' @(Get-MachineDevices -Os 'macos').Count 0
+Use-Probes @{}
+Check 'no Xcode selected is no simulator' @(Get-MachineDevices -Os 'macos').Count 0
+Check '... and nothing after it is read' "[$((Get-IosToolchain -Os 'macos').licence)]" '[]'
+Use-Probes $xcode
+Check 'Windows never has one, whatever it answers' @(Get-MachineDevices -Os 'windows').Count 0
+Check 'the list is a list when empty, for the check-in' (ConvertTo-Json -Compress @{ devices = @(Get-MachineDevices -Os 'windows') }) '{"devices":[]}'
+
 $script:ProbeOverride = $null
 $live = Get-MachineInventory -DataRoot $PSScriptRoot -Docker $false
 Check 'live: logical cores read' ($live.logicalCores -gt 0) $true

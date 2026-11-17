@@ -18,9 +18,15 @@ public class ResourceLeaseService
 {
     private readonly DashboardDbContext _db;
     private readonly ProjectRegistry? _registry;
+    private readonly SimulatorReset? _simulators;
 
-    public ResourceLeaseService(DashboardDbContext db, ProjectRegistry? registry = null)
-        => (_db, _registry) = (db, registry);
+    /// <param name="simulators">
+    /// Shuts down what a run booted on this machine's simulator when its lease is freed, whichever
+    /// way it is freed. Told of every lease, and acts only on a gated device's: the name is the
+    /// device table's business (MachineDevices), never this class's. Null in tests that need none.
+    /// </param>
+    public ResourceLeaseService(DashboardDbContext db, ProjectRegistry? registry = null, SimulatorReset? simulators = null)
+        => (_db, _registry, _simulators) = (db, registry, simulators);
 
     /// <summary>
     /// The ticket itself, as a resource. Every claim takes this one, which is what stops two workers
@@ -112,6 +118,7 @@ public class ResourceLeaseService
             l.ReleasedAt = now;
             l.ReleaseReason = "expired - the holder never released it";
         }
+        if (dead.Count > 0) _simulators?.Released(dead);
         if (dead.Count > 0) await _db.SaveChangesAsync();
         return dead.Count;
     }
@@ -174,6 +181,7 @@ public class ResourceLeaseService
             return null;
         }
 
+        _simulators?.Acquired(taken);
         return taken;
     }
 
@@ -190,6 +198,7 @@ public class ResourceLeaseService
             l.ReleasedAt = DateTime.UtcNow;
             l.ReleaseReason = reason ?? "released";
         }
+        if (held.Count > 0) _simulators?.Released(held);
         if (held.Count > 0) await _db.SaveChangesAsync();
         return held.Count;
     }
@@ -224,6 +233,7 @@ public class ResourceLeaseService
             l.ReleasedAt = DateTime.UtcNow;
             l.ReleaseReason = reason;
         }
+        if (held.Count > 0) _simulators?.Released(held);
         if (held.Count > 0) await _db.SaveChangesAsync();
         return held.Count;
     }

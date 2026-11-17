@@ -30,7 +30,8 @@ const LABEL: Record<string, string> = {
   'account-full': 'Claude accounts over their limits',
   'nothing-ready': 'Nothing ready to work',
   dependency: 'Waiting on another ticket',
-  resource: 'Waiting for a QA stack or emulator',
+  resource: 'Waiting for a QA stack, emulator or simulator',
+  device: "Needs a device this machine doesn't have",
   analysis: 'Waiting for a Classroom analysis',
   'not-here': "Phase this machine doesn't run",
   filling: 'Between runs',
@@ -45,7 +46,7 @@ const FAMILIES: { key: string; label: string; swatch: string; reasons: string[] 
   { key: 'busy', label: 'Working', swatch: 'bg-emerald-500', reasons: [] },
   { key: 'waiting', label: 'Work waiting on something', swatch: 'bg-amber-500', reasons: ['resource', 'dependency', 'analysis'] },
   { key: 'empty', label: 'Nothing ready', swatch: 'bg-sky-500', reasons: ['nothing-ready'] },
-  { key: 'machine', label: "Machine couldn't take it", swatch: 'bg-violet-500', reasons: ['usage-limit', 'account-full', 'host-behind', 'disk-low', 'host-offline', 'not-here'] },
+  { key: 'machine', label: "Machine couldn't take it", swatch: 'bg-violet-500', reasons: ['usage-limit', 'account-full', 'host-behind', 'disk-low', 'host-offline', 'not-here', 'device'] },
   { key: 'other', label: 'Other', swatch: 'bg-gray-500', reasons: ['filling', 'unknown'] },
   // Outlined: it is the empty part of the bar, and a fill this dark vanishes on the panel.
   { key: 'off', label: 'Off duty', swatch: 'bg-gray-700 ring-1 ring-inset ring-gray-500', reasons: ['stopped', 'off-hours', 'host-off'] },
@@ -80,6 +81,11 @@ function nowLine(p: PlaceNow): string {
   if (p.reason === 'resource' && p.detail) {
     const held = Object.keys(p.detail).filter(k => k.includes(':'));
     if (held.length) why = `Waiting for ${held.join(', ')}`;
+  }
+  // The server's own words, from the device table: "waiting for an iPhone simulator, which only a Mac has".
+  if (p.reason === 'device' && typeof p.detail?.waitingFor === 'string' && p.detail.waitingFor) {
+    const w = p.detail.waitingFor;
+    why = w.charAt(0).toUpperCase() + w.slice(1);
   }
   return `${head} · ${free} free: ${why}`;
 }

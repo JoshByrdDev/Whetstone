@@ -136,6 +136,43 @@ boots or drives one, it belongs in `QaIsolation`'s table.
 - The Claude desktop app's own iOS simulator panel, which is for an interactive session, not
   for workers.
 
+## As built
+
+Where the code went, and where it differs from the plan above.
+
+- **The rule** is `Services/MachineDevices.cs`: `MachineDevices.Known` is the one table of
+  resources a machine must *have* as well as lease (only `ios:simulator`; `android:emulator` is not
+  gated, as before), and `IosToolchain.Has` is what counts as having it. Its PowerShell copy is
+  `Get-MachineDevices` in `data/machine-info.ps1`, beside the hardware probes it already mirrored;
+  the two are held to `data/machine-fixtures/mac-simctl-*.json` by `MachineDevicesTests` and
+  `machine-info.tests.ps1`. The runner sends `devices` on its check-in every five minutes; the board
+  host reads its own (`BoardDevices`), kept fresh by `MachineProbeService`.
+- **Dispatch does not skip a machine; the claim skips a run.** `GET /api/hosts/dispatch` has no run
+  in hand - it orders machines - so a machine without the simulator still takes every other phase.
+  The claim (`ClaimNextAsync`, `deviceLacking`) passes over a ticket whose needed resources include a
+  device the claiming machine lacks, before anything is taken: no lease, no phase move, no attempt.
+  Dispatch reports the board's own `devices`, for reading only.
+- **Why it waits:** the claim's trace names the tickets (`ClaimTrace.DeviceTickets`); `DeviceWaits`
+  keeps them, and a ticket says `waitingForDevice` only while no machine that can take work has the
+  device. The capacity strip's `device` reason carries the same sentence from the table.
+- **The licence** is `xcodebuild -license check`; `-checkFirstLaunchStatus` is the first-launch tasks,
+  which are a separate gap with a separate fix (`sudo xcodebuild -runFirstLaunch`).
+- **The reaper does not shut down every simulator.** On a Mac board host the simulator is also the
+  owner's, and `simctl shutdown all` would close theirs. So what was booted is written down when the
+  lease is taken (`data/run/device-leases/<lease>.json`, which survives an API restart) and only what
+  booted since is shut down when it is freed - by any path: the run's own release, the reaper, an
+  expiry, or an orchestrator's start-up reset (`SimulatorReset`, called by `ResourceLeaseService`). A
+  simulator the owner boots *during* a run is shut down with it. A worker host's runner does the same
+  for `ios:simulator@<host>` (`Reset-RunSimulators`). A QA copy shuts nothing down.
+- **`expo run:ios --device`** is denied, and it also picks a *simulator* by name. A project's skill
+  boots the simulator first and runs `expo run:ios` without it, or drives `xcodebuild -destination
+  'platform=iOS Simulator,...'`.
+- **Captures** needed no new route. `simctl io ... screenshot` writes a PNG into the run's
+  screenshot directory and goes back with the rest; a `recordVideo` is not a capture and stays on
+  the worker host. `Send-QaCaptures` built its relative path with a Windows separator, which on a Mac
+  cut the first letter off every name when the folder was given with a trailing `/`; fixed.
+- **QaIsolation** gained nothing: no new route boots or drives a simulator.
+
 ## Done when
 
 - On a Mac with Xcode, a project that names `ios:simulator` gets QA runs that hold that

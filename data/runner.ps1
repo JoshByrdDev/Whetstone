@@ -194,6 +194,27 @@ function Convert-ClaimForHost {
     return $Claim
 }
 
+# Whether a claim holds this machine's simulator lease (ios:simulator@<this host>), whose run's
+# simulators are shut down once it is over - see Stop-NewSimulators in machine-info.ps1.
+function Test-ClaimHoldsSimulator {
+    param($Claim, [string]$HostName)
+    return [bool](@($Claim.leases) | Where-Object { "$_" -eq "$IosSimulatorDevice@$HostName" })
+}
+
+# The runner's half of the simulator hygiene the board host does for its own (SimulatorReset):
+# once a run that held this machine's simulator lease is over, shut down the simulators it booted -
+# not the ones already up when it started. Once per run.
+function Reset-RunSimulators {
+    param($Run, [string]$Why)
+    if ($null -eq $Run.SimBefore -or $Run.SimReset) { return }
+    $Run.SimReset = $true
+    try {
+        $stopped = @(Stop-NewSimulators -Before @($Run.SimBefore))
+        if ($stopped.Count -gt 0) { Write-Log "  Shut down $($stopped.Count) simulator(s) run $($Run.RunId) booted ($Why): $($stopped -join ', ')" }
+    }
+    catch { Write-Log "  Could not shut down the simulators run $($Run.RunId) booted: $($_.Exception.Message)" }
+}
+
 # Replace a project's kit with a fresh one. Only what the kit carries is replaced - its skills, its
 # guard and its notes - so nothing else in the folder is touched (there should be nothing else).
 function Install-ProjectKit {
@@ -309,6 +330,14 @@ function Start-Run {
     }
 
     $claim = Convert-ClaimForHost -Claim $claim -HostName $HostCfg.name -Map $map -ProjectDir $projectDir
+    # The board granted this lease, so whatever run held it before has let it go - even if its
+    # process is still tidying up. Its simulators are shut down now, before this run boots one,
+    # and what is up after that is what this run leaves alone.
+    $simBefore = $null
+    if (Test-ClaimHoldsSimulator -Claim $claim -HostName $HostCfg.name) {
+        foreach ($other in @($Runs.Values)) { Reset-RunSimulators -Run $other -Why 'its lease went to the next run' }
+        $simBefore = @(Get-BootedSimulators)
+    }
     $claimFile = Join-Path $RunDir "claim-$slot.json"
     ($claim | ConvertTo-Json -Depth 15) | Set-Content -Path $claimFile -Encoding UTF8
 
@@ -326,7 +355,7 @@ function Start-Run {
     # Touch the handle while the process is alive, or ExitCode is unreadable later (see Start-Agent).
     try { $null = $proc.Handle } catch { }
     $Runs[$slot] = @{ Process = $proc; Pid = $proc.Id; TicketId = $ticket; RunId = $Order.runId; Project = $key
-                      StartedAt = Get-Date; ExitCode = $null; ExitedAt = $null }
+                      StartedAt = Get-Date; ExitCode = $null; ExitedAt = $null; SimBefore = $simBefore; SimReset = $false }
     Write-Log "Slot $slot -> ticket #$ticket [$key] $($claim.ticket.phase) / $($claim.skill) (run $($Order.runId), pid $($proc.Id))"
 }
 
@@ -671,6 +700,11 @@ $MachineInventoryMinutes = 60
 $machineSentAt = $null
 $machineTriedAt = $null
 $machineLoadAt = $null
+# The devices this machine has (Get-MachineDevices: an iPhone simulator) go with a check-in every few
+# minutes - xcodebuild takes a second - and the board keeps the last list between. A run needing a
+# device a host lacks is never claimed for it (MachineDevices).
+$DevicesMinutes = 5
+$devicesAt = $null
 # A ticket's copies here are removed once no run holds it - see Remove-HostTicketCopies.
 $CopiesSweepMinutes = 60
 $copiesSweptAt = $null
@@ -696,6 +730,7 @@ while ($true) {
                 $r.ExitedAt = Get-Date
                 $code = if ($r.Process) { try { $r.Process.ExitCode } catch { $null } } else { $null }
                 Write-Log "Slot $slot finished ticket #$($r.TicketId) (run $($r.RunId), exit $code)."
+                Reset-RunSimulators -Run $r -Why 'it ended'
             }
         }
         elseif (((Get-Date) - $r.ExitedAt).TotalMinutes -ge $RunnerKeepExitedMinutes) { $Runs.Remove($slot) }
@@ -750,7 +785,12 @@ while ($true) {
     if (-not $disksAt -or ((Get-Date) - $disksAt).TotalMinutes -ge $DiskMeasureMinutes) {
         try { $disks = @(Get-HostDisks -Folders $worktreeRoots); $disksAt = Get-Date } catch { }
     }
+    $devices = $null
+    if (-not $devicesAt -or ((Get-Date) - $devicesAt).TotalMinutes -ge $DevicesMinutes) {
+        try { $devices = @(Get-MachineDevices); $devicesAt = Get-Date } catch { }
+    }
     $body = @{
+        devices = $devices
         disks = $disks
         commit = $commit
         runs = (Get-RunReport -Runs $Runs)

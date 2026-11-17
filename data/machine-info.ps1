@@ -297,3 +297,93 @@ function Get-MachineLoad {
     $script:MachineLoads++
     return $r
 }
+
+# ---- Devices: what a run's lease may need this machine to have (docs/ios-simulator-plan.md) ----
+#
+# The rule is MachineDevices / IosToolchain in Services/MachineDevices.cs, which the board host
+# applies to itself; this is its copy for a worker host, sent on the check-in as `devices`. The same
+# commands, in the same order, judged the same way, and held to the same fixtures
+# (data/machine-fixtures/mac-simctl-*.json) by both sides' tests. A device named here and not in the
+# C# table is dropped by the board, so the two must also agree on the name.
+
+$IosSimulatorDevice = 'ios:simulator'
+
+# How many available iOS runtimes `simctl list runtimes -j` lists, or $null when it is not that output.
+function Read-SimctlIosRuntimes { param([string]$Text)
+    if (-not "$Text".Trim()) { return $null }
+    try { $j = $Text | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
+    if ($null -eq $j.runtimes) { return $null }
+    return @($j.runtimes | Where-Object { "$($_.platform)" -eq 'iOS' -and $_.isAvailable -eq $true }).Count
+}
+
+# The UDIDs of the booted devices `simctl list devices booted -j` lists; empty when none or unreadable.
+function Read-SimctlBooted { param([string]$Text)
+    if (-not "$Text".Trim()) { return @() }
+    try { $j = $Text | ConvertFrom-Json -ErrorAction Stop } catch { return @() }
+    if ($null -eq $j.devices) { return @() }
+    $ids = @()
+    foreach ($rt in $j.devices.PSObject.Properties) {
+        foreach ($d in @($rt.Value)) { if ($d -and "$($d.state)" -eq 'Booted' -and "$($d.udid)") { $ids += "$($d.udid)" } }
+    }
+    return $ids
+}
+
+# macOS, Xcode selected, its licence and first-launch tasks done, and the iOS runtimes - read the
+# way IosToolchain.Probe reads them. A step after one that failed is not read.
+function Get-IosToolchain {
+    param([string]$Os = (Get-MachineOs))
+    $r = [ordered]@{ mac = ($Os -eq 'macos'); xcodePath = $null; licence = $null; firstLaunch = $null; runtimes = $null }
+    if (-not $r.mac) { return $r }
+    $path = "$(Invoke-Probe 'cmd:xcode-select -p')".Trim()
+    if (-not $path) { return $r }
+    $r.xcodePath = $path
+    $r.licence = $null -ne (Invoke-Probe 'cmd:xcodebuild -license check')
+    $r.firstLaunch = $null -ne (Invoke-Probe 'cmd:xcodebuild -checkFirstLaunchStatus')
+    $r.runtimes = Read-SimctlIosRuntimes (Invoke-Probe 'cmd:xcrun simctl list runtimes -j')
+    return $r
+}
+
+# The rule: IosToolchain.Has.
+function Test-IosSimulatorReady { param($Toolchain)
+    return [bool]($Toolchain.mac -and $Toolchain.xcodePath -and $Toolchain.licence -eq $true -and
+        $Toolchain.firstLaunch -eq $true -and $null -ne $Toolchain.runtimes -and $Toolchain.runtimes -gt 0)
+}
+
+# The devices this machine has, as the board's table names them. Always a list, empty when none.
+function Get-MachineDevices {
+    param([string]$Os = (Get-MachineOs))
+    $devices = @()
+    if (Test-IosSimulatorReady (Get-IosToolchain -Os $Os)) { $devices += $IosSimulatorDevice }
+    return $devices
+}
+
+# The simulators booted right now - written down as a run that leases this machine's simulator
+# starts, so the ones it booted can be told apart from any that were already up.
+function Get-BootedSimulators {
+    return @(Read-SimctlBooted (Invoke-Probe 'cmd:xcrun simctl list devices booted -j'))
+}
+
+# The simulators booted now that were not in -Before: SimulatorReset.ToShutDown. A UDID is hex and
+# dashes; anything else is not put on a command line.
+function Select-NewSimulators { param([string[]]$Before, [string[]]$Now)
+    $kept = @{}
+    foreach ($b in @($Before)) { if ($b) { $kept["$b".ToUpperInvariant()] = $true } }
+    $out = @()
+    foreach ($u in @($Now)) {
+        if (-not $u -or $kept.ContainsKey("$u".ToUpperInvariant())) { continue }
+        if ("$u" -notmatch '^[0-9A-Fa-f-]+$') { continue }
+        if ($out -notcontains $u) { $out += $u }
+    }
+    return $out
+}
+
+# Shut down what a run booted, once its lease on this machine's simulator is over: the runner's half
+# of SimulatorReset. Returns the UDIDs it shut down.
+function Stop-NewSimulators { param([string[]]$Before)
+    $stopped = @()
+    foreach ($u in @(Select-NewSimulators -Before $Before -Now (Get-BootedSimulators))) {
+        $null = Invoke-Probe "cmd:xcrun simctl shutdown $u"
+        $stopped += $u
+    }
+    return $stopped
+}

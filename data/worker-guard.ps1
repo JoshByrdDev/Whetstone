@@ -270,7 +270,7 @@ if ($c -match ($sep + '(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?deploy:[\w-]+')) {
     Deny "a package script named deploy:<stage> - a deploy is a human's to run"
 }
 
-# ---- A phone app: Expo's cloud, and devices that are not an emulator --------
+# ---- A phone app: Expo's cloud, and devices that are not an emulator or simulator --------
 
 # EAS is Expo's hosted service and has no offline verb: build and submit upload the source to
 # Expo's servers (and on to a store), update publishes to every installed copy, and even login,
@@ -307,6 +307,63 @@ foreach ($m in [regex]::Matches($c, '(?i)(?:^|[\s\\/"' + [char]39 + '&;|(])adb(?
     if ($serial.Success -and $serial.Groups[1].Value -notmatch '^(?:emulator-\d+|(?:localhost|127\.0\.0\.1):\d+)$') {
         Deny "adb on device '$($serial.Groups[1].Value)', which is not an emulator - only an emulator on this machine is in scope"
     }
+}
+
+# ---- An iPhone app: a simulator here, never a device or Apple's services ----
+#
+# The simulator is this machine: xcrun simctl (list, boot, shutdown, erase, install, launch,
+# terminate, io screenshot / recordVideo, privacy, status_bar, spawn), xcodebuild aimed at the
+# iphonesimulator SDK or an 'iOS Simulator' destination, 'expo prebuild', 'expo run:ios' onto a
+# simulator, and 'pod install' (which fetches packages, as pnpm install does). What reaches a
+# phone, signs in to Apple or reads the keychain's signing identities is not, and a store build,
+# TestFlight or a real device is the owner's, through EAS.
+
+# A real device: devicectl drives a phone on a cable or the network, and ios-deploy installs on one.
+if ($c -match ($sep + '(?:xcrun\s+)?devicectl(?=\s|$)')) {
+    Deny "'xcrun devicectl' - it drives a real iPhone. Only a simulator on this machine is in scope: xcrun simctl"
+}
+if ($c -match ($sep + $runner + 'ios-deploy(?=\s|$)')) {
+    Deny "ios-deploy - it installs on a real iPhone. Only a simulator on this machine is in scope: xcrun simctl install"
+}
+# Apple's upload and notarisation services, under any spelling that reaches them.
+if ($c -match ($sep + '(?:xcrun\s+)?(?:altool|notarytool)(?=\s|$)')) {
+    Deny "altool / notarytool - they upload to Apple. A store build is the owner's, through EAS"
+}
+if ($c -match ($sep + '(?:bundle\s+exec\s+)?fastlane(?=\s|$)')) {
+    Deny "fastlane - it signs, uploads and talks to App Store Connect. A store build is the owner's, through EAS"
+}
+# xcodebuild is local, apart from what signs in to Apple, exports a signed archive, or aims at a
+# phone: a destination on platform=iOS that is not the simulator ('generic/platform=iOS' included).
+foreach ($m in [regex]::Matches($c, '(?i)' + $sep + 'xcodebuild(?=\s|$)([^\r\n;&|]*)')) {
+    $xbArgs = $m.Groups[1].Value
+    if ($xbArgs -match '(?i)\s-allowProvisioning(?:Updates|DeviceRegistration)\b') {
+        Deny "'xcodebuild -allowProvisioningUpdates' - it signs in to Apple's developer account. Build for the simulator, which needs no signing"
+    }
+    if ($xbArgs -match '(?i)\s-exportArchive\b') {
+        Deny "'xcodebuild -exportArchive' - a signed build for a store or a device is the owner's, through EAS"
+    }
+    foreach ($d in [regex]::Matches($xbArgs, '(?i)\s-destination\s+(?:"([^"]*)"|' + [char]39 + '([^' + [char]39 + ']*)' + [char]39 + '|(\S+))')) {
+        $dest = "$($d.Groups[1].Value)$($d.Groups[2].Value)$($d.Groups[3].Value)"
+        if ($dest -match '(?i)platform\s*=\s*iOS(?!\s*Simulator)') {
+            Deny "xcodebuild aimed at '$dest' - a real iPhone. Use -destination 'platform=iOS Simulator,name=...' or -sdk iphonesimulator"
+        }
+    }
+}
+# 'expo run:ios' builds and installs locally; --device (or -d) is how it is pointed at a phone.
+if ($c -match ($sep + $runner + 'expo\s+run:ios\b[^\r\n;&|]*\s(?:--device\b|-d(?=\s|$))')) {
+    Deny "'expo run:ios --device' - it installs on a real iPhone. Boot a simulator first and run 'expo run:ios' without --device"
+}
+# The simulator opening a URL is the simulator browsing: an app's own scheme or this machine's dev
+# server, never a host somewhere else.
+foreach ($m in [regex]::Matches($c, '(?i)' + $sep + '(?:xcrun\s+)?simctl\s+openurl\s+\S+\s+["' + [char]39 + ']?([^\s"' + [char]39 + ']+)')) {
+    $target = $m.Groups[1].Value
+    if ($target -match '(?i)^(?:https?|wss?|exps?)://' -and -not (Test-LocalHost $target)) {
+        Deny "'simctl openurl' to '$target' - the simulator may open an app's own scheme or this machine's dev server, nothing beyond it"
+    }
+}
+# The login keychain's signing identities, certificates and passwords. A simulator build needs none.
+if ($c -match ($sep + 'security\s+(?:find-identity|find-certificate|find-key|find-generic-password|find-internet-password|dump-keychain|export|import|unlock-keychain|set-key-partition-list|cms)(?=\s|$)')) {
+    Deny "reading or changing the keychain's signing identities and secrets - a simulator build needs no signing"
 }
 
 # ---- File transfer to somebody else's server -------------------------------

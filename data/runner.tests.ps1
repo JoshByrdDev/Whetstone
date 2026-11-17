@@ -689,7 +689,27 @@ exit 3
     Check '... while the pass is still running' ($pass -and -not $pass.HasExited) $true
     if ($pass) { $pass.WaitForExit(30000) | Out-Null }
     Check '... and its "more" reaches the runner as its exit code' $pass.ExitCode $ReapMoreExit
+
+    # ---- This machine's simulator: which claims hold it, and what is shut down once one is over ----
+    & {
+        $IosSimulatorDevice = 'ios:simulator'
+        $claim = [pscustomobject]@{ leases = @('ticket:12', 'alpha:app-stack@bravo-host', 'ios:simulator@bravo-host') }
+        Check 'simulator: a claim holding this host''s simulator lease' (Test-ClaimHoldsSimulator -Claim $claim -HostName 'bravo-host') $true
+        Check 'simulator: another host''s is not this one''s' (Test-ClaimHoldsSimulator -Claim $claim -HostName 'charlie-host') $false
+        Check 'simulator: the board host''s own key is never a worker host''s' (Test-ClaimHoldsSimulator -Claim ([pscustomobject]@{ leases = @('ios:simulator') }) -HostName 'bravo-host') $false
+
+        $script:stopCalls = @()
+        function Stop-NewSimulators { param([string[]]$Before) $script:stopCalls += ,@($Before); return ,@('CCCC-3') }
+        $run = @{ RunId = 7; SimBefore = @('AAAA-1'); SimReset = $false }
+        Reset-RunSimulators -Run $run -Why 'it ended'
+        Reset-RunSimulators -Run $run -Why 'again'
+        Check 'simulator: a run that held it is reset once, against what was up when it started' "$($script:stopCalls.Count) $($script:stopCalls[0] -join ',')" '1 AAAA-1'
+        $script:stopCalls = @()
+        Reset-RunSimulators -Run @{ RunId = 8; SimBefore = $null; SimReset = $false } -Why 'it ended'
+        Check 'simulator: a run that never held it shuts nothing down' $script:stopCalls.Count 0
+    }
 }
+
 # An exception is a failure, not the end of the list: without this, everything after it
 # goes unrun and the summary still says every check passed.
 catch { $script:fail++; $script:total++; Write-Host "FAIL  stopped by an exception: $($_.Exception.Message)" -ForegroundColor Red }

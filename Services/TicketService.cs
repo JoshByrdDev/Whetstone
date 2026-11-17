@@ -287,7 +287,8 @@ public class TicketService
         IReadOnlyCollection<TicketPriority>? priorityFilter = null,
         IReadOnlyCollection<string>? skillFilter = null,
         ClaimTrace? trace = null,
-        Func<Ticket, string, Task<bool>>? resourceNeeded = null)
+        Func<Ticket, string, Task<bool>>? resourceNeeded = null,
+        Func<IEnumerable<string>, MachineDevice?>? deviceLacking = null)
     {
         if (maxAttempts < 1) maxAttempts = 1;
 
@@ -456,6 +457,16 @@ public class TicketService
                     // it, and does not hold it away from one that does.
                     foreach (var key in resourcesFor(t.ProjectKey, skill))
                         if (resourceNeeded is null || await resourceNeeded(t, key)) needed.Add(key);
+                }
+
+                // A device the machine claiming does not have (an iPhone simulator on Windows) would
+                // be waited for forever, so the run is passed over here, before anything is taken,
+                // and a machine that has one takes it (MachineDevices). Never claimed and then failed.
+                if (deviceLacking?.Invoke(needed.Skip(1)) is { } lacking)
+                {
+                    trace?.Skip(ClaimSkip.Device);
+                    if (trace is not null) trace.DeviceTickets[t.Id] = lacking.Key;
+                    continue;
                 }
 
                 leases = await _leases.TryAcquireAllAsync(needed, t.Id, skill,

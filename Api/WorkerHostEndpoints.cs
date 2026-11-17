@@ -20,7 +20,9 @@ namespace Whetstone.Api;
 public record HostCheckinRequest(string? Commit, HostRun[]? Runs, DateTime? UsageLimitUntil, int? WaitSeconds, string? DataRoot = null,
     HostClaudeLogin[]? ClaudeLogins = null, HostUsageLimit[]? UsageLimits = null,
     MachineInventoryReport? Inventory = null, MachineLoadReport? Load = null,
-    string? PsVersion = null, bool? WindowsPowerShell = null, HostDisk[]? Disks = null);
+    string? PsVersion = null, bool? WindowsPowerShell = null, HostDisk[]? Disks = null,
+    // The machine-wide devices it has (MachineDevices), from data/machine-info.ps1. Null: not said this time.
+    string[]? Devices = null);
 
 /// <summary>A runner asking which of one project's worktrees on its machine may go. See <see cref="HostWorktrees"/>.</summary>
 public record HostWorktreesRequest(string Project, HostWorktreeItem[]? Worktrees);
@@ -118,7 +120,7 @@ public static class WorkerHostEndpoints
         // It also carries this computer's own place (on, stopping, its berths), read the same way and
         // for the same reason - and, being read every pass, is where this machine's own pending stop
         // is finished once its berths are empty.
-        app.MapGet("/api/hosts/dispatch", (ProjectRegistry registry, DashboardPaths paths, EventStore events, BoardDisk disk) =>
+        app.MapGet("/api/hosts/dispatch", (ProjectRegistry registry, DashboardPaths paths, EventStore events, BoardDisk disk, BoardDevices devices) =>
         {
             FinishBoardStop(paths, events);
             var global = registry.GetGlobalConfig();
@@ -131,7 +133,10 @@ public static class WorkerHostEndpoints
             {
                 mode = d.Mode, order = d.Order,
                 board = new { place.Enabled, place.StopPending, place.Slots, place.StackCopies,
-                    dispatchable = place.Dispatchable && diskLow is null, diskLow },
+                    dispatchable = place.Dispatchable && diskLow is null, diskLow,
+                    // The devices this machine has (MachineDevices). Not a reason to skip the machine:
+                    // a claim from here passes over only the runs that need one it lacks.
+                    devices = devices.Has() },
             });
         });
 
@@ -266,7 +271,7 @@ public static class WorkerHostEndpoints
 
             var wait = TimeSpan.FromSeconds(Math.Clamp(req.WaitSeconds ?? 0, 0, (int)WorkerHostService.MaxWait.TotalSeconds));
             var orders = await hosts.CheckInAsync(name, req.Commit, runs, req.UsageLimitUntil, wait, ct, req.DataRoot,
-                req.ClaudeLogins, req.UsageLimits, req.PsVersion, req.WindowsPowerShell ?? false, req.Disks);
+                req.ClaudeLogins, req.UsageLimits, req.PsVersion, req.WindowsPowerShell ?? false, req.Disks, req.Devices);
             if (orders is not null && orders.Any(o => o.Kind == "start"))
             {
                 var startIds = orders.Where(o => o.Kind == "start").Select(o => o.RunId).ToList();

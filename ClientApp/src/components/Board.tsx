@@ -1374,6 +1374,7 @@ function OrbitRow({
                   font: `700 10.5px ${MONO}`, color: tier.c, whiteSpace: 'nowrap',
                   textShadow: `0 0 14px ${fade(tier.c, 50)}`,
                 }}
+                title={t.waitingForDevice ?? undefined}
               >
                 {status}
               </span>
@@ -1575,6 +1576,10 @@ function rowStatus(t: TicketSummary): string {
     const more = on.length > 2 ? ` +${on.length - 2}` : '';
     return on.length ? `waiting on ${shown}${more}` : 'waiting';
   }
+  // A run that needs a device no machine able to take work has (an iPhone simulator, with no Mac
+  // free) is passed over by every claim. Said here, or the row promises a pickup that cannot come.
+  // The whole sentence is the row's title and the capacity strip's line.
+  if (t.waitingForDevice) return 'waiting for a Mac';
   // An unanswered owner note holds this ticket's next hand-off. Said on the row rather than left
   // for the drawer, because from out here the ticket is otherwise indistinguishable from one the
   // heartbeat has quietly stopped working — and the person it is waiting on is the one reading this.

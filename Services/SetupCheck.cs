@@ -41,7 +41,9 @@ public class SetupCheckService
         Func<(IReadOnlyList<string> Projects, string? Ffmpeg, bool Recorder)?>? DiscoveryVideo = null,
         // Each project with intake set up, its config's problems, and what the poller last saw of
         // each source (docs/intake-plan.md); null or empty while no project has intake.
-        Func<IReadOnlyList<IntakeSetup>>? Intake = null);
+        Func<IReadOnlyList<IntakeSetup>>? Intake = null,
+        // The projects whose resources name ios:simulator, and this machine's Xcode as read; null skips the row.
+        Func<(IReadOnlyList<string> Projects, IosToolchain Ios, bool Windows)>? IphoneSimulator = null);
 
     /// <summary>One project's intake, as the Setup check reads it: never a live call to the queue, only the poller's last word.</summary>
     public sealed record IntakeSetup(string Project, bool Enabled, IReadOnlyList<string> Problems,
@@ -59,7 +61,7 @@ public class SetupCheckService
     private readonly Probe _probe;
 
     public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Narrator narrator, HeartbeatManager heartbeat,
-        Intake.IIntakeSettings? intakeSettings = null, Intake.IntakeStatus? intakeStatus = null)
+        BoardDevices devices, Intake.IIntakeSettings? intakeSettings = null, Intake.IntakeStatus? intakeStatus = null)
         : this(registry, paths, new Probe(
             name => FindOnPath(name, Environment.GetEnvironmentVariable("PATH")),
             name => FindOnPath(name, UserPath()),
@@ -87,7 +89,8 @@ public class SetupCheckService
                 .Where(p => p.Cfg.Enabled || p.Cfg.Sources.Count > 0 || p.Cfg.Problems.Count > 0)
                 .Select(p => new IntakeSetup(p.Key, p.Cfg.Enabled, p.Cfg.Problems,
                     p.Cfg.Sources.Select(s => (s.Name, intakeStatus?.Of(p.Key, s.Name))).ToList()))
-                .ToList()))
+                .ToList(),
+            () => (registry.Projects.Where(k => SafeNamesSimulator(registry, k)).ToList(), devices.Ios(), OperatingSystem.IsWindows())))
     { }
 
     public SetupCheckService(ProjectRegistry registry, DashboardPaths paths, Probe probe) =>
@@ -228,6 +231,10 @@ public class SetupCheckService
         foreach (var intake in probe.Intake?.Invoke() ?? [])
             items.Add(IntakeItem(intake));
 
+        // ---- an iPhone simulator, which only matters once a project's runs lease one ----
+        if (probe.IphoneSimulator?.Invoke() is { } sim)
+            items.Add(IphoneSimulator(sim.Projects, sim.Ios, sim.Windows));
+
         // ---- the narrator ----
         var narrator = probe.NarratorUnavailable();
         items.Add(narrator is null
@@ -289,6 +296,37 @@ public class SetupCheckService
                 $"The browser has no recorder, so scouts on {who} run without video: proposals show screenshots only.", recorderFix);
         return new SetupItem("ffmpeg", label, "warn", false,
             $"Scouts on {who} are recorded, but there is no ffmpeg to cut clips with: the drawer plays the whole recording and says clips are not set up.", ffmpegFix);
+    }
+
+    /// <summary>
+    /// Xcode, an iOS runtime and the licence, for a project whose runs lease <c>ios:simulator</c>
+    /// (docs/ios-simulator-plan.md, section 1). Never required: a machine without it is passed over
+    /// by those runs (MachineDevices), and a Mac that has it takes them. With no project naming it,
+    /// it reads as not needed - never as a failure. The fixes are said, not run: installing Xcode
+    /// and accepting its licence need the owner's password.
+    /// </summary>
+    public static SetupItem IphoneSimulator(IReadOnlyList<string> projects, IosToolchain ios, bool windows)
+    {
+        const string key = "ios-simulator", label = "iPhone simulator (Xcode)";
+        var who = string.Join(", ", projects);
+        if (projects.Count == 0)
+            return new SetupItem(key, label, "ok", false,
+                ios.Has ? "Not needed: no project's runs lease ios:simulator. This Mac could take them."
+                        : "Not needed: no project's runs lease ios:simulator.", null);
+        if (!ios.Mac)
+            return new SetupItem(key, label, "warn", false,
+                (windows ? "The iPhone simulator is macOS-only, so this Windows machine never takes " : "The iPhone simulator is macOS-only, so this machine never takes ") +
+                $"a run of {who} that needs it. Such a run goes to a Mac worker host with Xcode, and waits while there is none.",
+                "Add a Mac with Xcode as a worker host (docs/worker-host-setup.md).");
+        if (ios.Has)
+            return new SetupItem(key, label, "ok", false,
+                $"Runs of {who} that lease ios:simulator can boot one here: Xcode at {ios.XcodePath}, " +
+                $"{ios.Runtimes} iOS runtime{(ios.Runtimes == 1 ? "" : "s")}, licence accepted.", null);
+        var gaps = ios.Gaps();
+        return new SetupItem(key, label, "warn", false,
+            $"Runs of {who} that lease ios:simulator are passed over here, because {string.Join("; ", gaps.Select(g => g.What))}. " +
+            "They go to a Mac worker host that has one, and wait while there is none.",
+            string.Join(" Then: ", gaps.Select(g => g.Fix)));
     }
 
     /// <summary>
@@ -405,6 +443,12 @@ public class SetupCheckService
     private static bool SafeCapture(ProjectRegistry registry, string key)
     {
         try { return registry.GetProjectConfig(key).PrototypeCapture.IsOn; }
+        catch { return false; }
+    }
+
+    private static bool SafeNamesSimulator(ProjectRegistry registry, string key)
+    {
+        try { return MachineDevices.NamedBy(registry.GetProjectConfig(key)).Contains(MachineDevices.IosSimulator); }
         catch { return false; }
     }
 

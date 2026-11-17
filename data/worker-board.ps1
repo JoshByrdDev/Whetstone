@@ -629,7 +629,9 @@ function Send-QaCaptures {
     param([string]$DashboardUrl, [string]$Dir, [string]$TicketId, [string]$HostName, [string]$RunId, [hashtable]$Seen)
     if (-not (Test-Path $Dir)) { return 0 }
     $sent = 0
-    $base = [IO.Path]::GetFullPath($Dir).TrimEnd('\') + '\'
+    # This machine's separator, and either trimmed: on a Mac a folder named with a trailing '/'
+    # would otherwise cut the first letter off every capture's name.
+    $base = [IO.Path]::GetFullPath($Dir).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     foreach ($f in @(Get-ChildItem -Path $Dir -File -Recurse -ErrorAction SilentlyContinue)) {
         if (@('.png', '.jpg', '.jpeg', '.webp', '.gif') -notcontains $f.Extension.ToLowerInvariant()) { continue }
         $rel = $f.FullName.Substring($base.Length) -replace '\\', '/'

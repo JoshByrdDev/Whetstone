@@ -27,6 +27,8 @@ public enum ClaimSkip
     Resource,
     /// <summary>The claim blocked it there and then (no skill file, no progress).</summary>
     BlockedNow,
+    /// <summary>It needs a device this machine does not have (<see cref="MachineDevices"/>): an iPhone simulator off a Mac.</summary>
+    Device,
 }
 
 /// <summary>
@@ -40,6 +42,9 @@ public class ClaimTrace
 
     /// <summary>For <see cref="ClaimSkip.Resource"/> and <see cref="ClaimSkip.Skill"/>: which resource, which phase.</summary>
     public Dictionary<string, int> Held { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>For <see cref="ClaimSkip.Device"/>: which tickets, and the device each needs, so the board can say why they wait.</summary>
+    public Dictionary<int, string> DeviceTickets { get; } = new();
 
     /// <summary>Set by the route when the claim never reached the tickets: nothing this machine may run.</summary>
     public bool NothingHere { get; set; }
@@ -67,6 +72,8 @@ public static class CapacityReasons
     public const string NothingReady = "nothing-ready";
     public const string Dependency = "dependency";
     public const string Resource = "resource";
+    /// <summary>Work that needs a device this machine does not have - an iPhone simulator off a Mac.</summary>
+    public const string Device = "device";
     public const string Analysis = "analysis";
     public const string NotHere = "not-here";
     public const string Filling = "filling";
@@ -143,12 +150,17 @@ public static class CapacityClassifier
         var reason = waiting[0].Key switch
         {
             ClaimSkip.Resource => CapacityReasons.Resource,
+            ClaimSkip.Device => CapacityReasons.Device,
             ClaimSkip.Dependency => CapacityReasons.Dependency,
             ClaimSkip.Analysis => CapacityReasons.Analysis,
             ClaimSkip.Skill => p.Place == CapacityPlaces.Board && p.AnyProviderPaused
                 ? CapacityReasons.UsageLimit : CapacityReasons.NotHere,
             _ => CapacityReasons.Unknown,
         };
+        // What the strip says for it, in the words the ticket uses: the table's, not the page's.
+        if (reason == CapacityReasons.Device)
+            detail["waitingFor"] = string.Join("; ", t.DeviceTickets.Values.Select(MachineDevices.For).Where(d => d is not null)
+                .Select(d => d!.Waiting).Distinct());
         return new(reason, detail);
     }
 
@@ -158,7 +170,8 @@ public static class CapacityClassifier
         ClaimSkip.Resource => 0,
         ClaimSkip.Dependency => 1,
         ClaimSkip.Analysis => 2,
-        _ => 3,
+        ClaimSkip.Device => 3,
+        _ => 4,
     };
 }
 
