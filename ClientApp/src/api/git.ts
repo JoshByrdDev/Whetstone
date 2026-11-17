@@ -96,6 +96,8 @@ export interface PrPreflightResponse {
   repoType: RepoType;
   /** The project delivers by merging into its base instead of raising a PR - see ProjectConfig.MergeInsteadOfPr. */
   mergeInsteadOfPr?: boolean;
+  /** The feature branch this ticket may also be merged into without a pull request, or null - see ProjectConfig.MergeIntoFeatureBranches. */
+  featureMerge?: string | null;
   preflight: PrPreflight;
   suggestedTitle: string;
   suggestedDescription: string;
@@ -202,6 +204,43 @@ export interface MergeResult {
   output: string[];
   movedToDone?: boolean;
   phaseNote?: string | null;
+}
+
+/** One repo of a feature-branch merge. */
+export interface FeatureMergeRepo {
+  dir: string;
+  /** merged (and pushed) · already (origin had it all) · conflict · ready (stopped by another repo) · not-pushed */
+  outcome: 'merged' | 'already' | 'conflict' | 'ready' | 'not-pushed';
+  mergeSha?: string | null;
+  conflictedFiles: string[];
+  /** Why the local feature branch was left where it was, when it was. */
+  localNote?: string | null;
+}
+
+/** A ticket merged into its feature branch and pushed, with no pull request - see /git/merge-feature. */
+export interface FeatureMergeResult {
+  ok: boolean;
+  error?: string | null;
+  branch: string;
+  baseBranch: string;
+  repos: FeatureMergeRepo[];
+  output: string[];
+  mergeSha?: string | null;
+  movedToDone?: boolean;
+  phaseNote?: string | null;
+}
+
+export async function mergeIntoFeature(id: number, title: string, description: string): Promise<FeatureMergeResult> {
+  const res = await fetch(`/api/tickets/${id}/git/merge-feature`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title, description }),
+  });
+  if (res.status === 404) throw new Error('Ticket not found.');
+  const body = await res.json().catch(() => null);
+  if (!body) throw new Error(`${res.status} ${res.statusText}`);
+  // A QA copy's refusal carries only an error.
+  return { branch: '', baseBranch: '', repos: [], output: [], ...body } as FeatureMergeResult;
 }
 
 export interface RebaseResult {

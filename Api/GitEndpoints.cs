@@ -165,6 +165,11 @@ public static class GitEndpoints
                 repoType = cfg.RepoType,
                 // A git project that delivers by merging into its base: the dialog's last button merges.
                 mergeInsteadOfPr = cfg.MergeInsteadOfPr && !cfg.IsTfvc,
+                // The feature branch this ticket may also be merged into without a pull request
+                // (ProjectConfig.MergeIntoFeatureBranches), or null. Never under PR review: a pull
+                // request someone has read is finished through that pull request.
+                featureMerge = t.Track != TicketTrack.Review && !t.UnderReview
+                    ? await git.FeatureBaseOfAsync(t.ProjectKey, branch, ct) : null,
                 multiRepo = cfg.IsMultiRepo,
                 // Under PR review: what the reviewer last saw. The dialog then offers the diff since
                 // it, does not ask for a rebase, and says the push is a fast-forward.
@@ -312,6 +317,53 @@ public static class GitEndpoints
                     await tickets.TransitionAsync(id, TicketPhase.Done,
                         $"Merged into {result.BaseBranch} at {result.MergeSha?[..Math.Min(7, result.MergeSha.Length)]}",
                         TransitionActor.Human);
+                    result = result with { MovedToDone = true };
+                }
+                catch (InvalidTransitionException ex) { result = result with { PhaseNote = ex.Message }; }
+            }
+            else
+                result = result with
+                {
+                    PhaseNote = $"The ticket was left in {t.Phase}: only a ticket at NeedsReview can be signed off to Done, so move it by hand.",
+                };
+
+            return Results.Ok(result);
+        });
+
+        // The second way out for a ticket on a feature branch of its own, on a project that otherwise
+        // raises pull requests (ProjectConfig.MergeIntoFeatureBranches): merged into that branch in
+        // every repo it touched and pushed, with no pull request. 409 on refusal; a conflict in any
+        // repo changes nothing in all of them, and the body names the files.
+        app.MapPost("/api/tickets/{id:int}/git/merge-feature", async (
+            int id, CreatePrRequest? req, TicketService tickets, TicketGitService git, ProjectRegistry registry,
+            CancellationToken ct) =>
+        {
+            var t = await tickets.GetAsync(id);
+            if (t is null) return Results.NotFound();
+
+            if ((RefuseWriteOnReview(t, "merge it")
+                 ?? RefuseOnTfvc(registry, t, "merge it into its feature branch")) is { } no)
+                return Results.Json(new { ok = false, error = no }, statusCode: 409);
+            if (t.UnderReview)
+                return Results.Json(new
+                {
+                    ok = false,
+                    error = "This ticket is under PR review: someone has read its pull request, so it is finished through that pull request.",
+                }, statusCode: 409);
+
+            var result = await git.MergeIntoFeatureBaseAsync(t.ProjectKey, BranchOf(t), req?.Title, req?.Description, ct);
+            if (!result.Ok) return Results.Json(result, statusCode: 409);
+            await tickets.SetMergedAsync(id, result.MergeSha);
+
+            // As the local merge does: only NeedsReview is signed off to Done, anything else is said.
+            if (t.Phase == TicketPhase.Done)
+                result = result with { PhaseNote = "The ticket was already Done." };
+            else if (PhaseMachine.CanTransition(t.Phase, TicketPhase.Done, t.Track))
+            {
+                try
+                {
+                    await tickets.TransitionAsync(id, TicketPhase.Done,
+                        $"Merged into {result.BaseBranch} without a pull request, and pushed", TransitionActor.Human);
                     result = result with { MovedToDone = true };
                 }
                 catch (InvalidTransitionException ex) { result = result with { PhaseNote = ex.Message }; }

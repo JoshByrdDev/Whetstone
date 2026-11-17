@@ -679,6 +679,7 @@ public static class ConfigEndpoints
             tracks = typed.Tracks.Select(t => t.ToString()).ToArray(),
             skipClassroomAnalysisByDefault = typed.SkipClassroomAnalysisByDefault,
             mergeInsteadOfPr = typed.MergeInsteadOfPr,
+            mergeIntoFeatureBranches = typed.MergeIntoFeatureBranches,
             // "always" or "onDemand": whether a walkthrough is voiced as it is written (ProjectConfig.Narration).
             narration = typed.Narration,
             // Every track that exists, so the form can render a checkbox for one this project does
@@ -820,6 +821,8 @@ public static class ConfigEndpoints
             defaults["skipClassroomAnalysisByDefault"] = req.SkipClassroomAnalysisByDefault.Value;
         // How the team delivers - by PR or by merging to the base itself. Theirs, not this machine's.
         if (req.MergeInsteadOfPr is not null) defaults["mergeInsteadOfPr"] = req.MergeInsteadOfPr.Value;
+        // Whether a feature branch's tickets may also merge into it without a PR - the team's call too.
+        if (req.MergeIntoFeatureBranches is not null) defaults["mergeIntoFeatureBranches"] = req.MergeIntoFeatureBranches.Value;
         // When walkthroughs are voiced - the team's choice, so committed. Normalised on the way in.
         if (req.Narration is not null) defaults["narration"] = NarrationModes.Normalize(req.Narration);
 
@@ -1023,6 +1026,8 @@ public record ProjectUpsertRequest(
     bool? SkipClassroomAnalysisByDefault = null,
     // Deliver by merging to the base branch instead of raising a PR. Null leaves it alone.
     bool? MergeInsteadOfPr = null,
+    // Let a ticket on a feature branch also merge into it without a PR. Null leaves it alone.
+    bool? MergeIntoFeatureBranches = null,
     // A steward merge check's time limit in minutes, keyed by the check's name. A name that is not
     // one of the project's checks is ignored; null leaves every check alone.
     Dictionary<string, int>? MergeCheckTimeouts = null,

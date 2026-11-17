@@ -335,6 +335,8 @@ interface ProjectDetail {
   skipClassroomAnalysisByDefault?: boolean;
   /** Deliver by merging the ticket's branch into the base instead of raising a pull request. */
   mergeInsteadOfPr?: boolean;
+  /** A ticket on a feature branch of its own may also merge into it and push, with no pull request. */
+  mergeIntoFeatureBranches?: boolean;
   /** When a Classroom walkthrough is voiced: as it is written, or when someone presses Generate. */
   narration?: 'always' | 'onDemand';
   projectPath: string;
@@ -1553,6 +1555,7 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
           displayName: p.displayName, projectPath: p.projectPath, tracks: p.tracks,
           skipClassroomAnalysisByDefault: p.skipClassroomAnalysisByDefault ?? false,
           mergeInsteadOfPr: p.mergeInsteadOfPr ?? false,
+          mergeIntoFeatureBranches: p.mergeIntoFeatureBranches ?? false,
           narration: p.narration ?? 'onDemand',
           baseBranch: p.baseBranch, branchPrefix: p.branchPrefix, branchNameStyle: p.branchNameStyle ?? 'key',
           worktreeRoot: p.worktreeRoot ?? '', worktreeSetup: p.worktreeSetup ?? [], worktreeCopyFiles: p.worktreeCopyFiles ?? [],
@@ -1718,6 +1721,17 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
               checked={p.mergeInsteadOfPr ?? false}
               onChange={v => update({ mergeInsteadOfPr: v })}
             />
+            {/* Only where tickets go by pull request: with the box above on, every ticket merges already. */}
+            {!p.mergeInsteadOfPr && (
+              <div className="mt-3">
+                <CheckField
+                  label="Feature-branch tickets can merge without a pull request"
+                  description="For a ticket filed on a feature branch of its own: the PR dialog also offers to merge it straight into that feature branch and push it, with no pull request. Every repo the ticket touched is merged, or none if any conflicts. Tickets on the project's base still go by pull request."
+                  checked={p.mergeIntoFeatureBranches ?? false}
+                  onChange={v => update({ mergeIntoFeatureBranches: v })}
+                />
+              </div>
+            )}
           </div>
 
           {/* Only the time limit is editable: what a check runs is written in the project's own

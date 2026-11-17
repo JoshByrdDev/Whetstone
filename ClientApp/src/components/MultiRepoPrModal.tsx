@@ -4,6 +4,7 @@ import { useVeil } from '../hooks/useVeil';
 import { getPrPreflight, getPrBaseCheck, createPr, rebaseTicket, forcePushTicket, pushRound, copyLeftOutDescription } from '../api/git';
 import type { PrPreflight, PrCreateResult, RepoPreflight } from '../api/git';
 import { DiffReviewList } from './DiffReviewList';
+import { FeatureMergeBar } from './FeatureMergeBar';
 import { Action, Banner, Cmd, LeftOutDescription, Tab, providerLabel, withBase } from './PrModal';
 
 /**
@@ -31,6 +32,8 @@ export function MultiRepoPrModal({ ticketId, onClose }: { ticketId: number; onCl
   const [error, setError] = useState<string | null>(null);
   const [showLeft, setShowLeft] = useState(false);
   const [creatingAll, setCreatingAll] = useState(false);
+  // The feature branch this ticket may also merge into, in every repo, without pull requests.
+  const [featureMerge, setFeatureMerge] = useState<string | null>(null);
   const run = useRef(0);
 
   const patch = useCallback((dir: string, change: Partial<Section> | ((s: Section) => Partial<Section>)) => {
@@ -71,6 +74,7 @@ export function MultiRepoPrModal({ ticketId, onClose }: { ticketId: number; onCl
       if (mine !== run.current) return;
       const list = r.repos ?? [];
       setRepos(list);
+      setFeatureMerge(r.featureMerge ?? null);
       if (!keepText) setTitle(r.suggestedTitle ?? '');
       setSections(prev => {
         const next: Record<string, Section> = {};
@@ -314,6 +318,13 @@ export function MultiRepoPrModal({ ticketId, onClose }: { ticketId: number; onCl
             </div>
           )}
         </div>
+
+        {/* One merge for every repo, so its commit body is the first touched repo's draft. */}
+        {featureMerge && !touched.some(r => sections[r.dir].reviewedSha) && (
+          <FeatureMergeBar ticketId={ticketId} feature={featureMerge} title={title}
+            description={touched.length > 0 ? sections[touched[0].dir].description : ''}
+            disabled={loading || creatingAll || touched.some(r => sections[r.dir].busy || sections[r.dir].gitBusy)} />
+        )}
 
         {/* Footer */}
         <div className="flex flex-wrap items-center justify-between gap-3 px-5 max-sm:px-3 py-3 border-t border-hair bg-panel">

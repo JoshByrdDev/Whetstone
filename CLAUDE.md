@@ -184,6 +184,12 @@ refuses one that is not (`TicketBaseProblemAsync`), and so does the claim (`Test
 The project's own Base Branch setting writes the committed `project.defaults.json` and moves every
 ticket, so it is not the way to put one feature on its branch.
 
+By pull request, such a ticket can also skip its pull request where the owner allows it
+(`mergeIntoFeatureBranches`, `MergeIntoFeatureBaseAsync`): merged into `origin/<feature>` in every
+repo it touched, or none if one conflicts, and **pushed**. That is the one merge the board pushes,
+because the next ticket of the feature forks from origin's copy; a merge left local would be
+invisible to it. Never for a ticket on the project's base, and never under PR review.
+
 ```bash
 pwsh -NoProfile -ExecutionPolicy Bypass -File data/worker-base.tests.ps1
 ```

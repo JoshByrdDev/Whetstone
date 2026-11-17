@@ -71,7 +71,7 @@ public sealed class QaIsolation
         R("POST", @"^/api/unit-reports/\d+/walkthrough/?$", "launching a walkthrough agent"),
         R("POST", @"^/api/steward/plan/units/\d+/report/?$", "launching a unit report agent"),
         R("POST", @"^/api/recon/[^/]+/drafts/?$", "launching an agent to draft a direction"),
-        R("POST", @"^/api/tickets/\d+/git/(force-push|push|pr)/?$", "pushing a branch or raising a pull request"),
+        R("POST", @"^/api/tickets/\d+/git/(force-push|push|pr|merge-feature)/?$", "pushing a branch or raising a pull request"),
         R("*", @"^/api/tickets/\d+/git/checkin(/|$)", "a TFVC check-in"),
         R("*", @"^/api/projects/[^/]+/tfvc/sync/?$", "syncing with TFVC"),
         R("POST", @"^/api/projects/[^/]+/stack/(start|stop)/?$", "starting or stopping a docker stack"),

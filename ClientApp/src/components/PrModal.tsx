@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { useVeil } from '../hooks/useVeil';
 import { getPrPreflight, getPrBaseCheck, createPr, mergeTicket, rebaseTicket, forcePushTicket, pushRound, copyLeftOutDescription } from '../api/git';
 import type { PrPreflight, PrBaseCheck, PrCreateResult, MergeResult, ForcePushResult } from '../api/git';
+import { FeatureMergeBar } from './FeatureMergeBar';
 import { DiffReviewList } from './DiffReviewList';
 
 /**
@@ -57,6 +58,8 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
   // Set from the preflight: this project merges into its base rather than raising a PR.
   const [merge, setMerge] = useState(false);
   const [merged, setMerged] = useState<MergeResult | null>(null);
+  // Set from the preflight: the feature branch this ticket may also merge into without a PR.
+  const [featureMerge, setFeatureMerge] = useState<string | null>(null);
   // Opting past a stale base. Reset on every re-check so a fresh answer is never pre-overridden.
   const [override, setOverride] = useState(false);
   const [tab, setTab] = useState<'diff' | 'commits'>('diff');
@@ -94,6 +97,7 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
       known = r.preflight;
       setPre(r.preflight);
       setMerge(r.mergeInsteadOfPr === true);
+      setFeatureMerge(r.featureMerge ?? null);
       setReviewedOn(r.reviewedOn ?? null);
       setSince(r.repos?.find(x => x.sinceReviewed)?.sinceReviewed ?? null);
       if (!keepText) {
@@ -600,6 +604,11 @@ export function PrModal({ ticketId, onClose }: { ticketId: number; onClose: () =
             </pre>
           )}
         </div>
+
+        {featureMerge && !merge && !underReview && (
+          <FeatureMergeBar ticketId={ticketId} feature={featureMerge} title={title} description={description}
+            disabled={busy || gitting || loading} />
+        )}
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-3 px-5 py-3 border-t border-hair bg-panel">

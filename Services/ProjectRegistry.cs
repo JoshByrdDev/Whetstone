@@ -379,6 +379,21 @@ public class ProjectConfig
     public bool MergeInsteadOfPr { get; init; }
 
     /// <summary>
+    /// On a project that delivers by pull request, a ticket filed on a feature branch of its own
+    /// (<see cref="Models.Ticket.BaseBranch"/>) may also be merged straight into that branch and
+    /// pushed, with no pull request - for the small fixes a feature collects, where a PR each is all
+    /// ceremony. The pull request stays the main path and the only one for a ticket on the project's
+    /// base. See <c>TicketGitService.MergeIntoFeatureBaseAsync</c>. Off unless set.
+    /// </summary>
+    public bool MergeIntoFeatureBranches { get; init; }
+
+    /// <summary>
+    /// <see cref="MergeIntoFeatureBranches"/> as it applies: a git project that raises pull requests.
+    /// Where every ticket merges without one already, or on TFVC, there is nothing for it to add.
+    /// </summary>
+    public bool FeatureMergeOn => MergeIntoFeatureBranches && !MergeInsteadOfPr && !IsTfvc;
+
+    /// <summary>
     /// Whether this project works in slices with a branch each (docs/slice-branches.md): each
     /// agreed slice gets a branch of its own off the base, its tickets fork from it and merge into
     /// it, and it reaches the base as one piece when its owner releases it. Only where delivery is
@@ -736,6 +751,7 @@ public class ProjectRegistry
             SkipClassroomAnalysisByDefault = cfg.TryGetValue("skipClassroomAnalysisByDefault", out var sca)
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
+            MergeIntoFeatureBranches = cfg.TryGetValue("mergeIntoFeatureBranches", out var mifb) && mifb.ValueKind == JsonValueKind.True,
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
             Narration = NarrationModes.Normalize(
                 cfg.TryGetValue("narration", out var nar) && nar.ValueKind == JsonValueKind.String ? nar.GetString() : null),
