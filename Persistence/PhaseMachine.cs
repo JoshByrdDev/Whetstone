@@ -15,8 +15,10 @@ public static class PhaseMachine
         // CanTransition leaves exactly one of them visible to any given ticket, so this table can
         // hold every edge in the system without a Delivery ticket ever being offered a Review move.
         [TicketPhase.Backlog]             = new[] { TicketPhase.NeedsSpeculation, TicketPhase.NeedsPeerReview, TicketPhase.NeedsCharting },
-        [TicketPhase.NeedsSpeculation]    = new[] { TicketPhase.Speculating },
-        [TicketPhase.Speculating]         = new[] { TicketPhase.NeedsApproval },
+        // Back to the backlog: a person parking work nobody has started (a bug that is not wanted
+        // yet). Only a person - TicketService.TransitionAsync refuses it to every other actor.
+        [TicketPhase.NeedsSpeculation]    = new[] { TicketPhase.Speculating, TicketPhase.Backlog },
+        [TicketPhase.Speculating]       = new[] { TicketPhase.NeedsApproval },
         // Approve → implement, or send back for another speculation pass.
         [TicketPhase.NeedsApproval]       = new[] { TicketPhase.NeedsImplementation, TicketPhase.NeedsSpeculation },
         [TicketPhase.NeedsImplementation] = new[] { TicketPhase.Implementing },
@@ -159,6 +161,7 @@ public static class PhaseMachine
         new Dictionary<(TicketPhase, TicketPhase), string>
         {
             [(TicketPhase.Backlog, TicketPhase.NeedsSpeculation)] = "Pull the ticket out of the backlog and queue it for speculation.",
+            [(TicketPhase.NeedsSpeculation, TicketPhase.Backlog)] = "Park the ticket in the backlog before any run has started on it. A person's move only.",
             [(TicketPhase.Speculating, TicketPhase.NeedsApproval)] = "FORWARD: speculation done, hand off for approval. Auto-skips straight to NeedsImplementation when this ticket does not require a speculation review.",
             [(TicketPhase.NeedsApproval, TicketPhase.NeedsImplementation)] = "Approved - queue it for implementation.",
             [(TicketPhase.NeedsApproval, TicketPhase.NeedsSpeculation)] = "BACKWARD: the plan needs another speculation pass.",

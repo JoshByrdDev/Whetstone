@@ -1225,6 +1225,11 @@ public class TicketService
 
         if (closing is null && !PhaseMachine.CanTransitionFor(t, to))
             throw new InvalidTransitionException($"Illegal transition {t.Phase} → {to}", t.Phase, PhaseMachine.NextPhasesFor(t));
+        // Parking queued work is the owner's call about what the fleet does next. A worker's tool can
+        // name any ticket, and a steward stands in for the owner only on the moves it was given.
+        if (t.Phase == TicketPhase.NeedsSpeculation && to == TicketPhase.Backlog && actor != TransitionActor.Human)
+            throw new InvalidTransitionException($"Only a person moves a ticket from {t.Phase} back to {to}", t.Phase,
+                PhaseMachine.NextPhasesFor(t).Where(p => p != TicketPhase.Backlog).ToList());
 
         // What the ticket has to be CARRYING for this hand-off, checked only for the workers the
         // requirement is aimed at. A person moving a ticket by hand is making a deliberate choice

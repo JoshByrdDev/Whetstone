@@ -33,9 +33,11 @@ foreach ($fn in $tree.FindAll({ $args[0] -is [System.Management.Automation.Langu
 # is recorded; $script:boardDown makes it answer as an unreachable board would.
 $script:filed = New-Object System.Collections.Generic.List[object]
 $script:boardDown = $false
+$script:boardNotes = $false
 function New-DefectTicket {
     param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn, [string[]]$Files)
     if ($script:boardDown) { return $null }
+    if ($script:boardNotes) { return 'noted' }
     $script:filed.Add([pscustomobject]@{ Project = $ProjectKey; Key = $Key; Text = $Text; FoundOn = $FoundOn; Files = @($Files) })
     return "$(900 + $script:filed.Count)"
 }
@@ -184,6 +186,13 @@ $script:boardDown = $false
 Check 'defect, board down: no note' (Test-Path (Join-Path $r.mem 'invoice-total-drops-tax.md')) $false
 Check 'defect, board down: not queued' (Test-Path (Join-Path $r.proj 'improvement-suggestions.md')) $false
 Check 'defect, board down: key left unclaimed' ((@(Get-Content (Join-Path $r.proj 'reflection-keys.txt') | Where-Object { $_ })).Count) 0
+# The project files no bugs from this ticket's pipeline, and the board noted it on the ticket: done,
+# so the key stays claimed and the next run that sees it does not note it again.
+$script:boardNotes = $true
+$r = Invoke-Case -Name 'defect-noted' -Reply $defect
+$script:boardNotes = $false
+Check 'defect, noted on its ticket: no note' (Test-Path (Join-Path $r.mem 'invoice-total-drops-tax.md')) $false
+Check 'defect, noted on its ticket: key stays claimed' ((@(Get-Content (Join-Path $r.proj 'reflection-keys.txt') | Where-Object { $_ })).Count) 1
 
 # --- A fact about one ticket is tagged with it, and retired when that ticket is done ---
 # The board, as the maintenance pass asks it: ticket 42 is done, 43 is in QA, 44 is gone, and 45

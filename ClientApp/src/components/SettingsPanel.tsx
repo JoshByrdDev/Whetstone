@@ -337,6 +337,10 @@ interface ProjectDetail {
   mergeInsteadOfPr?: boolean;
   /** A ticket on a feature branch of its own may also merge into it and push, with no pull request. */
   mergeIntoFeatureBranches?: boolean;
+  /** A bug a run files on the project's base goes to the Backlog rather than the queue (machine-local). */
+  baseBugsToBacklog?: boolean;
+  /** The pipelines whose runs may file a bug as a ticket of its own; the rest leave it as a comment (machine-local). */
+  bugFilingTracks?: Track[];
   /** When a Classroom walkthrough is voiced: as it is written, or when someone presses Generate. */
   narration?: 'always' | 'onDemand';
   projectPath: string;
@@ -1556,6 +1560,8 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
           skipClassroomAnalysisByDefault: p.skipClassroomAnalysisByDefault ?? false,
           mergeInsteadOfPr: p.mergeInsteadOfPr ?? false,
           mergeIntoFeatureBranches: p.mergeIntoFeatureBranches ?? false,
+          baseBugsToBacklog: p.baseBugsToBacklog ?? false,
+          bugFilingTracks: p.bugFilingTracks ?? p.allTracks,
           narration: p.narration ?? 'onDemand',
           baseBranch: p.baseBranch, branchPrefix: p.branchPrefix, branchNameStyle: p.branchNameStyle ?? 'key',
           worktreeRoot: p.worktreeRoot ?? '', worktreeSetup: p.worktreeSetup ?? [], worktreeCopyFiles: p.worktreeCopyFiles ?? [],
@@ -1697,6 +1703,34 @@ function ProjectCard({ project, onChanged }: { project: ProjectDetail; onChanged
               checked={p.skipClassroomAnalysisByDefault ?? false}
               onChange={v => update({ skipClassroomAnalysisByDefault: v })}
             />
+          </div>
+
+          {/* What a run does with a bug it noticed in passing. Only a run's own filings: a person,
+              a discovery's verdict and Intake file as they always did. Machine-local settings. */}
+          <div>
+            <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+              Bugs Found by Runs <span className="text-gray-600 normal-case font-normal">(noticed in passing, filed by reflection)</span>
+            </h4>
+            <CheckField
+              label="Bugs on the base go to the Backlog"
+              description="A bug a run files on the project's base branch - seen on a ticket of the base, or in code a feature branch does not change - is parked in the Backlog instead of queued for speculation. Bugs on a feature branch or an open slice are queued as usual. For while the fleet should stay on a feature."
+              checked={p.baseBugsToBacklog ?? false}
+              onChange={v => update({ baseBugsToBacklog: v })}
+            />
+            <div className="mt-3 text-xs text-gray-400 mb-2">Spawn bug tickets from these pipelines</div>
+            <div className="space-y-2.5">
+              {(p.allTracks ?? ['Delivery']).filter(k => (p.tracks ?? []).includes(k)).map(k => (
+                <CheckField
+                  key={k}
+                  label={TRACK_COPY[k].label}
+                  description={`A bug noticed on a ${TRACK_COPY[k].noun} ticket is filed as a ticket of its own. Off: it is left as a comment on the ticket it was seen on.`}
+                  checked={(p.bugFilingTracks ?? p.allTracks ?? []).includes(k)}
+                  onChange={v => update({
+                    bugFilingTracks: (p.allTracks ?? []).filter(t => (t === k ? v : (p.bugFilingTracks ?? p.allTracks ?? []).includes(t))),
+                  })}
+                />
+              ))}
+            </div>
           </div>
 
           <div>

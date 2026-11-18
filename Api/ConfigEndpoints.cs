@@ -680,6 +680,10 @@ public static class ConfigEndpoints
             skipClassroomAnalysisByDefault = typed.SkipClassroomAnalysisByDefault,
             mergeInsteadOfPr = typed.MergeInsteadOfPr,
             mergeIntoFeatureBranches = typed.MergeIntoFeatureBranches,
+            // Where a run's bug about the base goes, and which pipelines' runs file bugs at all
+            // (ProjectConfig.BaseBugsToBacklog, BugFilingTracks). Both machine-local.
+            baseBugsToBacklog = typed.BaseBugsToBacklog,
+            bugFilingTracks = typed.BugFilingTracks.Select(t => t.ToString()).ToArray(),
             // "always" or "onDemand": whether a walkthrough is voiced as it is written (ProjectConfig.Narration).
             narration = typed.Narration,
             // Every track that exists, so the form can render a checkbox for one this project does
@@ -874,6 +878,21 @@ public static class ConfigEndpoints
             if (req.QaLogin.Password is not null) qa["password"] = req.QaLogin.Password;
             local["qaLogin"] = qa;
         }
+        // The owner's choice for this machine's fleet rather than the team's, so local, beside
+        // stewardMode (ProjectConfig.BaseBugsToBacklog, BugFilingTracks).
+        // Each is left out of the file at its default (off; every track), so a project that never
+        // touched them carries neither, and a track added later is filed from like the rest.
+        if (req.BaseBugsToBacklog is not null)
+        {
+            if (req.BaseBugsToBacklog.Value) local["baseBugsToBacklog"] = true;
+            else local.Remove("baseBugsToBacklog");
+        }
+        if (req.BugFilingTracks is not null)
+        {
+            var filing = EnabledTracks.Parse(req.BugFilingTracks)!;
+            if (filing.Length == Enum.GetValues<TicketTrack>().Length) local.Remove("bugFilingTracks");
+            else local["bugFilingTracks"] = ToJsonArray(filing.Select(t => t.ToString()));
+        }
         SaveObject(paths.ProjectConfig(key), local, localBefore);
     }
 
@@ -1034,7 +1053,11 @@ public record ProjectUpsertRequest(
     // "key" or "key-slug": how a ticket's branch is named when nobody chose one. Null leaves it alone.
     string? BranchNameStyle = null,
     // "always" or "onDemand": when a Classroom walkthrough is voiced. Null leaves it alone.
-    string? Narration = null);
+    string? Narration = null,
+    // File a run's bug about the project's base into the Backlog. Null leaves it alone.
+    bool? BaseBugsToBacklog = null,
+    // TicketTrack names whose runs may file a bug as a ticket; [] is none. Null leaves it alone.
+    string[]? BugFilingTracks = null);
 
 /// <param name="Kind">"jira", "azureDevOps", or "none".</param>
 /// <param name="BaseUrl">The Jira site, or the Azure DevOps organisation URL.</param>

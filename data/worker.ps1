@@ -1987,9 +1987,13 @@ function ConvertFrom-ReflectOutput {
 # bugs are triaged anyway. It goes straight to Needs Speculation rather than Backlog: parked in
 # Backlog, a defect waited for a person who did not know it was there, and the first run on it is
 # the check its description asks for - confirmed, or blocked as wrong or already fixed for the owner
-# to close. It is marked a bug so a fix of it is traced like any other.
+# to close. It is marked a bug so a fix of it is traced like any other. The owner can narrow both
+# per project, and the board applies it: a bug on the base parked in the Backlog after all
+# (baseBugsToBacklog), or none filed from a pipeline they do not take bugs from (bugFilingTracks).
 #
-# Returns the new ticket's id, or $null when the board could not be reached or refused it.
+# Returns the new ticket's id; 'noted' when the board declined to file it because the project files
+# no bugs from runs on that ticket's pipeline (ProjectConfig.BugFilingTracks) and left what was seen as
+# a comment on that ticket instead; or $null when the board could not be reached or refused it.
 function New-DefectTicket {
     param([string]$ProjectKey, [string]$Key, [string]$Text, [string]$FoundOn, [string[]]$Files)
 
@@ -2019,6 +2023,7 @@ function New-DefectTicket {
         $t = Invoke-RestMethod -Uri "$DashboardUrl/api/tickets" -Method Post -ContentType 'application/json' `
             -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 15
         if ($t -and $t.id) { return "$($t.id)" }
+        if ($t -and $t.filed -eq $false) { return 'noted' }
     }
     catch { Write-Log "  Reflection: the board refused defect '$Key': $($_.Exception.Message)" }
     return $null
@@ -2281,8 +2286,14 @@ function Invoke-Reflection {
             # - its key is handed back instead, so the next run that trips over it files it then.
             if ($a.Kind -eq 'defect') {
                 $filedAs = New-DefectTicket -ProjectKey $ProjectKey -Key $a.Key -Text $a.Text -FoundOn $TicketId -Files $a.Files
+                # Declined by the project's choice, not by a failure: noted on the ticket, so its key
+                # stays claimed and the next run that sees the same thing does not note it again.
+                if ($filedAs -eq 'noted') {
+                    Write-Log "  Reflection: defect '$($a.Key)' not filed - this project takes no bugs from this pipeline; noted on ticket #$TicketId"
+                    continue
+                }
                 if ($filedAs) {
-                    Write-Log "  Reflection: filed defect '$($a.Key)' as Backlog ticket #$filedAs"
+                    Write-Log "  Reflection: filed defect '$($a.Key)' as ticket #$filedAs"
                     $ticketed++
                 }
                 else {

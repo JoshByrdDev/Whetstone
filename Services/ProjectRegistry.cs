@@ -394,6 +394,28 @@ public class ProjectConfig
     public bool FeatureMergeOn => MergeIntoFeatureBranches && !MergeInsteadOfPr && !IsTfvc;
 
     /// <summary>
+    /// A bug a run files about the project's base - noticed in passing on a ticket of the base, or
+    /// on a feature branch that does not change its files (TicketEndpoints.DefectBaseAsync) - is
+    /// filed into the Backlog rather than the queue. For while the owner wants the fleet on a
+    /// feature and not on the base: one on a feature branch or an open slice is queued as ever.
+    /// The owner's choice for this machine's fleet, so in the machine-local <c>project.json</c>
+    /// (<c>baseBugsToBacklog</c>). Off unless set.
+    /// </summary>
+    public bool BaseBugsToBacklog { get; init; }
+
+    /// <summary>
+    /// The pipelines whose runs may file a bug as a ticket of its own (<c>bugFilingTracks</c>, machine-
+    /// local like <see cref="BaseBugsToBacklog"/>). A run on any other track files none: what it saw is
+    /// left as a comment on the ticket it was working instead. Absent, every track files - the default.
+    /// Only a run's own filings (CreateTicketRequest.FoundOn): a person, a discovery's verdict and
+    /// Intake file as they always did.
+    /// </summary>
+    public IReadOnlyList<TicketTrack> BugFilingTracks { get; init; } = Enum.GetValues<TicketTrack>();
+
+    /// <summary>Whether a run on a ticket of <paramref name="track"/> may file a bug as a ticket.</summary>
+    public bool FilesBugsFrom(TicketTrack track) => BugFilingTracks.Contains(track);
+
+    /// <summary>
     /// Whether this project works in slices with a branch each (docs/slice-branches.md): each
     /// agreed slice gets a branch of its own off the base, its tickets fork from it and merge into
     /// it, and it reaches the base as one piece when its owner releases it. Only where delivery is
@@ -752,6 +774,11 @@ public class ProjectRegistry
                 && sca.ValueKind == JsonValueKind.True,
             MergeInsteadOfPr = cfg.TryGetValue("mergeInsteadOfPr", out var mip) && mip.ValueKind == JsonValueKind.True,
             MergeIntoFeatureBranches = cfg.TryGetValue("mergeIntoFeatureBranches", out var mifb) && mifb.ValueKind == JsonValueKind.True,
+            BaseBugsToBacklog = cfg.TryGetValue("baseBugsToBacklog", out var bbb) && bbb.ValueKind == JsonValueKind.True,
+            // Absent is every track; present - even empty, which files no bug from any run - is the list.
+            BugFilingTracks = cfg.TryGetValue("bugFilingTracks", out var bft) && bft.ValueKind == JsonValueKind.Array
+                ? EnabledTracks.Parse(GetStrArray(cfg, "bugFilingTracks"))!
+                : Enum.GetValues<TicketTrack>(),
             ParallelStacks = cfg.TryGetValue("parallelStacks", out var ps) && ps.ValueKind == JsonValueKind.True,
             Narration = NarrationModes.Normalize(
                 cfg.TryGetValue("narration", out var nar) && nar.ValueKind == JsonValueKind.String ? nar.GetString() : null),

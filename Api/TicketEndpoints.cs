@@ -169,6 +169,34 @@ public static class TicketEndpoints
     /// the run was.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// Why a run's bug from a ticket on <paramref name="source"/>'s track was left as a comment rather
+    /// than filed (ProjectConfig.BugFilingTracks), in the words the owner reads on that ticket.
+    /// </summary>
+    public static string NotFiledReason(ProjectConfig cfg, TicketTrack source)
+    {
+        static string Name(TicketTrack t) => t switch
+        {
+            TicketTrack.Review => "peer review",
+            TicketTrack.Discovery => "discovery",
+            _ => "delivery",
+        };
+        var allowed = cfg.BugFilingTracks.Count == 0 ? "no run's bugs as tickets"
+            : "bugs from " + string.Join(" and ", cfg.BugFilingTracks.Select(Name)) + " runs only";
+        return $"Not filed as a ticket: this project files {allowed}, and this was seen on a {Name(source)} ticket " +
+            "(Settings, \"Spawn bug tickets from these pipelines\").";
+    }
+
+    /// <summary>
+    /// Whether a ticket being filed is a run's bug about the project's base that
+    /// <see cref="ProjectConfig.BaseBugsToBacklog"/> parks: found on another ticket, a bug, on the
+    /// delivery track, with no base of its own and no slice - and not already headed for the Backlog.
+    /// </summary>
+    public static bool ParksAsBaseBug(ProjectConfig cfg, int? foundOn, bool isBug, TicketTrack track,
+        string? ownBase, int? planUnit, TicketPhase phase) =>
+        cfg.BaseBugsToBacklog && foundOn is not null && isBug && track == TicketTrack.Delivery
+        && ownBase is null && planUnit is null && phase != TicketPhase.Backlog;
+
     public static async Task<(string? OwnBase, int? Unit, string? Why)> DefectBaseAsync(DashboardDbContext db,
         TicketGitService git, ProjectConfig cfg, Ticket source, IReadOnlyCollection<string>? foundIn,
         CancellationToken ct = default)
@@ -1100,6 +1128,17 @@ public static class TicketEndpoints
                 var source = await db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == foundOn);
                 if (source is null || source.ProjectKey != projectKey)
                     return Results.BadRequest(new { error = $"Ticket #{foundOn} is not a ticket of {projectKey}." });
+                // A run on a pipeline the owner does not take bugs from (ProjectConfig.BugFilingTracks):
+                // no ticket, and what it saw is kept where the owner reads that run's work. Answered as
+                // done rather than refused, so reflection keeps the finding's key claimed and the next
+                // run that sees the same thing does not note it again.
+                if (req.IsBug == true && !registry.GetProjectConfig(projectKey).FilesBugsFrom(source.Track))
+                {
+                    var notFiled = NotFiledReason(registry.GetProjectConfig(projectKey), source.Track);
+                    await svc.AddCommentAsync(source.Id,
+                        $"**Bug noticed in passing: {title}**\n\n{req.Description?.Trim()}\n\n{notFiled}", AuthorKind.System);
+                    return Results.Ok(new { filed = false, notedOn = source.Id, reason = notFiled });
+                }
                 if (string.IsNullOrWhiteSpace(req.BaseBranch))
                 {
                     string? why;
@@ -1117,6 +1156,16 @@ public static class TicketEndpoints
             }
             var (ownBase, baseError) = await OwnBaseAsync(git, projectKey, req.BaseBranch ?? inheritedBase);
             if (baseError is not null) return Results.BadRequest(new { error = baseError });
+
+            // A run's bug about the project's base, while the owner is keeping the fleet off the base
+            // (ProjectConfig.BaseBugsToBacklog): filed, so it is not lost, but parked rather than queued.
+            if (ParksAsBaseBug(registry.GetProjectConfig(projectKey), req.FoundOn, req.IsBug == true, track, ownBase, planUnit, phase))
+            {
+                phase = TicketPhase.Backlog;
+                const string parked = "Parked in the Backlog: it is a bug on the project's base, and this project files those there " +
+                    "for now (Settings, \"Bugs on the base go to the Backlog\"). Move it to Needs Speculation when it is wanted.";
+                description = string.IsNullOrWhiteSpace(description) ? parked : description.TrimEnd() + "\n\n" + parked;
+            }
 
             // A branch name of its own, which the first run creates. A review ticket owns no branch.
             string? branch = string.IsNullOrWhiteSpace(req.Branch) ? null : req.Branch.Trim();
