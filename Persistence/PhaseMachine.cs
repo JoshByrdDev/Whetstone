@@ -447,6 +447,9 @@ public static class PhaseMachine
     public static bool IsBackward(TicketPhase from, TicketPhase to)
     {
         if (from == TicketPhase.Blocked || to == TicketPhase.Blocked) return false;
+        // Shelving queued work is neither a send-back nor progress: nothing was rejected, so it is
+        // no bounce and no rework, and it does not make NeedsSpeculation look like a gate.
+        if (to == TicketPhase.Backlog) return false;
         return ProgressRank(to) < ProgressRank(from);
     }
 
