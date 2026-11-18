@@ -24,6 +24,22 @@ public enum TicketOriginKind
 }
 
 /// <summary>
+/// Why a ticket was closed without its work landing (<see cref="Ticket.Resolution"/>). Stored by
+/// name, like <see cref="TicketOriginKind"/>. A ticket closed by its work has none.
+/// </summary>
+public enum TicketResolution
+{
+    /// <summary>What it reported is not a defect: the behaviour is intended, or the report misread it.</summary>
+    NotABug,
+    /// <summary>What it asked for is already true on its base - fixed by other work before this one built anything.</summary>
+    AlreadyFixed,
+    /// <summary>Another ticket covers it (<see cref="Ticket.DuplicateOf"/>).</summary>
+    Duplicate,
+    /// <summary>Real once, and no longer wanted: superseded by a decision, or the code it was about is gone.</summary>
+    NotNeeded,
+}
+
+/// <summary>
 /// The facts about a filing that decide its origin. Handed to <c>TicketService.CreateAsync</c> by
 /// every caller that is not a person filing by hand, so each of those facts is on the row before
 /// the origin is worked out from them.

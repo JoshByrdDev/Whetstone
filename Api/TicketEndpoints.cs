@@ -83,6 +83,9 @@ public record UpdateTicketRequest(string? Title, string? Description, string? Is
     // A discovery's route gate; refused once its route has been walked, since there is nothing left to look at first.
     bool? RequiresRouteReview = null);
 public record TransitionRequest(string ToPhase, string? Reason);
+
+/// <summary>Close a ticket that needs no work (TicketResolution), keeping it in every count.</summary>
+public record CloseUnneededRequest(string Resolution, string Reason, int? DuplicateOf = null);
 public record SetBranchRequest(string? Branch, string? WorktreePath);
 public record OrderRequest(double BoardOrder);
 public record AddWorkItemRequest(string Text);
@@ -1232,6 +1235,21 @@ public static class TicketEndpoints
                     allowed = ex.Allowed.Select(p => new NextPhaseDto(p.ToString(), PhaseMachine.Meaning(ex.From, p))),
                 });
             }
+        });
+
+        // The owner closing a ticket that needs no work: not a bug, already fixed, a duplicate, not
+        // needed. What deleting it used to be for, without taking its history out of the metrics.
+        app.MapPost("/api/tickets/{id:int}/close", async (int id, CloseUnneededRequest req, TicketService svc) =>
+        {
+            if (!Enum.TryParse<TicketResolution>(req.Resolution, true, out var resolution) || !Enum.IsDefined(resolution))
+                return Results.BadRequest(new { error = $"Unknown resolution '{req.Resolution}'. Use NotABug, AlreadyFixed, Duplicate or NotNeeded." });
+            try
+            {
+                var t = await svc.CloseUnneededAsync(id, resolution, req.Reason, TransitionActor.Human, req.DuplicateOf);
+                return t is null ? Results.NotFound() : Results.Ok(TicketMapper.ToDetail(t));
+            }
+            catch (InvalidTransitionException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
         });
 
         app.MapPut("/api/tickets/{id:int}/order", async (int id, OrderRequest req, TicketService svc) =>

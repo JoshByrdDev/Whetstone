@@ -162,6 +162,10 @@ export interface BugLinkRow {
 export interface BugOriginRow {
   week: string; origin: 'owner' | 'steward' | 'found-in-run' | 'regression' | 'intake'; channel: string;
   filed: number; done: number; medianHoursToDone: number | null; regressions: number;
+  // Done is fixed + closedWithoutWork: a bug closed as not a bug, already fixed, a duplicate or not
+  // needed (Ticket.Resolution) stays counted as filed. Optional: marts built before it was recorded.
+  fixed?: number; closedWithoutWork?: number; notABug?: number; alreadyFixed?: number;
+  duplicates?: number; notNeeded?: number; closedBySteward?: number;
 }
 
 export interface BugsView { summary: BugRow | null; split: BugRow[]; links: BugLinkRow[]; origins?: BugOriginRow[] }

@@ -40,6 +40,13 @@ models:
         tests: [unique, not_null]
       - name: rework_minutes
         tests: [at_least]
+      - name: resolution
+        tests:
+          - accepted_values:
+              arguments:
+                values: [NotABug, AlreadyFixed, Duplicate, NotNeeded]
+      - name: closed_without_work
+        tests: [not_null]
 
   - name: mart_phase_breakdown
     description: What each phase costs, cut by provider, model, effort, skill and prompt version, entry reason, pass, CLI version, A/B arm, machine and the machine's load.
@@ -189,6 +196,10 @@ models:
               arguments:
                 values: [owner, steward, found-in-run, regression, intake]
       - name: filed
+        tests: [not_null, at_least]
+      - name: fixed
+        tests: [not_null, at_least]
+      - name: closed_without_work
         tests: [not_null, at_least]
 
   - name: fct_experiment_tickets

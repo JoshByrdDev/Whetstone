@@ -33,6 +33,16 @@ export function BugOrigins({ rows }: { rows: BugOriginRow[] | undefined }) {
   const max = Math.max(1, ...weeks.map(w => sum(rows.filter(r => r.week === w), r => r.filed)));
   // A median over several rows is not theirs to combine: shown only where one row is the answer.
   const prodMedian = prod.length === 1 ? prod[0].medianHoursToDone : null;
+  // Bugs closed without work: filed, then found not to need any. Kept on the record rather than
+  // deleted, so a pipeline that files bugs which do not hold up shows it here.
+  const unneeded = sum(all, r => r.closedWithoutWork ?? 0);
+  const why = [
+    [sum(all, r => r.notABug ?? 0), 'not a bug'],
+    [sum(all, r => r.alreadyFixed ?? 0), 'already fixed'],
+    [sum(all, r => r.duplicates ?? 0), 'duplicate'],
+    [sum(all, r => r.notNeeded ?? 0), 'not needed'],
+  ].filter(([n]) => n).map(([n, l]) => `${n} ${l}`).join(' · ');
+  const bySteward = sum(all, r => r.closedBySteward ?? 0);
 
   return (
     <Section title="Where bugs came from" meta="every bug ticket · by when it was filed">
@@ -45,8 +55,10 @@ export function BugOrigins({ rows }: { rows: BugOriginRow[] | undefined }) {
               context={homeN && prodN + homeN ? `${Math.round((100 * homeN) / (prodN + homeN))}% of bugs` : 'the owner, a run, a steward'} />
             <Stat label="Regressions" value={String(sum(all, r => r.regressions))} muted={!sum(all, r => r.regressions)}
               context="a Done ticket's problem came back" />
-            <Stat label="Production to Done" value={hours(prodMedian)} muted={prodMedian == null}
-              context={prod.length > 1 ? 'see each channel below' : 'median, filed to Done'} />
+            <Stat label="Closed without work" value={String(unneeded)} muted={!unneeded}
+              context={unneeded ? `${why}${bySteward ? ` · ${bySteward} by the steward` : ''}` : 'not a bug, already fixed, duplicate'} />
+            <Stat label="Production to fixed" value={hours(prodMedian)} muted={prodMedian == null}
+              context={prod.length > 1 ? 'see each channel below' : 'median, filed to fixed'} />
           </div>
           <Sheet pad={false}>
             <table className="w-full table-fixed text-xs">
@@ -56,7 +68,8 @@ export function BugOrigins({ rows }: { rows: BugOriginRow[] | undefined }) {
                   <th className={`${TH} text-left`}>Filed</th>
                   <th className={`${TH} ${NUM} w-12`}>Prod</th>
                   <th className={`${TH} ${NUM} w-12`}>Home</th>
-                  <th className={`${TH} ${NUM} w-14 max-sm:hidden`}>Done</th>
+                  <th className={`${TH} ${NUM} w-14 max-sm:hidden`}>Fixed</th>
+                  <th className={`${TH} ${NUM} w-16 max-sm:hidden`} title="closed as not a bug, already fixed, a duplicate or not needed">No work</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-hairsoft">
@@ -74,7 +87,8 @@ export function BugOrigins({ rows }: { rows: BugOriginRow[] | undefined }) {
                       </td>
                       <td className={`${TD} ${NUM} text-gray-100`} style={{ fontFamily: MONO }}>{sum(wr.filter(r => r.origin === 'intake'), r => r.filed)}</td>
                       <td className={`${TD} ${NUM} text-gray-300`} style={{ fontFamily: MONO }}>{sum(wr.filter(r => r.origin !== 'intake'), r => r.filed)}</td>
-                      <td className={`${TD} ${NUM} text-gray-500 max-sm:hidden`} style={{ fontFamily: MONO }}>{sum(wr, r => r.done)}</td>
+                      <td className={`${TD} ${NUM} text-gray-500 max-sm:hidden`} style={{ fontFamily: MONO }}>{sum(wr, r => r.fixed ?? r.done)}</td>
+                      <td className={`${TD} ${NUM} text-gray-500 max-sm:hidden`} style={{ fontFamily: MONO }}>{sum(wr, r => r.closedWithoutWork ?? 0)}</td>
                     </tr>
                   );
                 })}
@@ -89,7 +103,7 @@ export function BugOrigins({ rows }: { rows: BugOriginRow[] | undefined }) {
                     <Swatch swatch={k.swatch} />
                     <span>{k.label}</span>
                     <span className="text-gray-300" style={{ fontFamily: MONO }}>{n}</span>
-                    {rs.length === 1 && rs[0].medianHoursToDone != null && <span title="median, filed to Done">· {hours(rs[0].medianHoursToDone)}</span>}
+                    {rs.length === 1 && rs[0].medianHoursToDone != null && <span title="median, filed to fixed">· {hours(rs[0].medianHoursToDone)}</span>}
                   </li>
                 );
               })}

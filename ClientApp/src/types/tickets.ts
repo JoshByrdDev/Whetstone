@@ -27,6 +27,9 @@ export type Phase =
   | 'Done'
   | 'Blocked';
 
+/** Why a Done ticket needed no work (Ticket.Resolution). Absent on a ticket closed by its work. */
+export type Resolution = 'NotABug' | 'AlreadyFixed' | 'Duplicate' | 'NotNeeded';
+
 export type PhaseKind = 'backlog' | 'queue' | 'active' | 'gate' | 'terminal' | 'blocked';
 
 /**
@@ -276,6 +279,8 @@ export interface TicketSummary {
   reviewRepo?: string | null;
   // A bug fix: blamed back to its cause when it lands (docs/bugs-and-experiments-plan.md).
   isBug?: boolean;
+  // Why it is Done without its work, when it is: not a bug, already fixed, a duplicate, not needed.
+  resolution?: Resolution | null;
   // The branch its owner filed it on, when it is not the project's base (a feature branch a set of
   // tickets builds on). Null for almost every ticket. The row's base mark.
   baseBranch?: string | null;
@@ -503,6 +508,9 @@ export interface TicketDetail {
   intakeIssueId?: number | null;
   regressionOf?: number | null;
   foundOn?: number | null;
+  // Why it is Done without its work (Ticket.Resolution), and the ticket it repeats when a duplicate.
+  resolution?: Resolution | null;
+  duplicateOf?: number | null;
   // A discovery's route gate: the owner reads the route before a scout walks it.
   requiresRouteReview?: boolean;
   blockedReason?: string | null;

@@ -151,7 +151,7 @@ public class TicketService
                 Id = t.Id, ProjectKey = t.ProjectKey, Title = t.Title, IssueKey = t.IssueKey, Phase = t.Phase,
                 PhaseBeforeBlock = t.PhaseBeforeBlock, Track = t.Track, Walkthrough = t.Walkthrough,
                 PlanUnit = t.PlanUnit, PlanOutcomes = t.PlanOutcomes, Branch = t.Branch,
-                MergeSha = t.MergeSha, MergedAt = t.MergedAt, IsBug = t.IsBug, BoardOrder = t.BoardOrder,
+                MergeSha = t.MergeSha, MergedAt = t.MergedAt, IsBug = t.IsBug, Resolution = t.Resolution, BoardOrder = t.BoardOrder,
                 CreatedAt = t.CreatedAt, UpdatedAt = t.UpdatedAt,
             }).ToListAsync();
 
@@ -180,7 +180,7 @@ public class TicketService
             IssueKey = t.IssueKey, IssueUrl = t.IssueUrl, Branch = t.Branch, BaseBranch = t.BaseBranch, BoardOrder = t.BoardOrder,
             Priority = t.Priority, RequiresSpeculationReview = t.RequiresSpeculationReview,
             SkipQaTesting = t.SkipQaTesting, Walkthrough = t.Walkthrough, SkipClassroomAnalysis = t.SkipClassroomAnalysis,
-            GateAnalysisId = t.GateAnalysisId, PlanUnit = t.PlanUnit, IsBug = t.IsBug,
+            GateAnalysisId = t.GateAnalysisId, PlanUnit = t.PlanUnit, IsBug = t.IsBug, Resolution = t.Resolution,
             BlockedReason = t.BlockedReason, PhaseBeforeBlock = t.PhaseBeforeBlock,
             CreatedAt = t.CreatedAt, UpdatedAt = t.UpdatedAt,
         }).ToListAsync();
@@ -1160,13 +1160,70 @@ public class TicketService
     /// reading the one rendered string.
     /// </para>
     /// </summary>
-    public async Task<Ticket?> TransitionAsync(int id, TicketPhase to, string? reason,
-        TransitionActor actor = TransitionActor.System, BlockPayload? questions = null, string? build = null)
+    public Task<Ticket?> TransitionAsync(int id, TicketPhase to, string? reason,
+        TransitionActor actor = TransitionActor.System, BlockPayload? questions = null, string? build = null) =>
+        TransitionCoreAsync(id, to, reason, actor, questions, build, closing: null);
+
+    /// <summary>
+    /// Close a ticket that needs no delivery - not a bug, already fixed, a duplicate, no longer
+    /// wanted - with its <see cref="Ticket.Resolution"/>, instead of deleting it. The move to Done
+    /// is recorded like any other (comment, <see cref="PhaseTransition"/>), so the ticket stays in
+    /// every count of what was filed and what was thrown away.
+    /// <para>
+    /// The one way to Done that is not the review gate's, so it bypasses the phase table, and only
+    /// from a ticket nothing is working on: a queue, Backlog, Blocked or a review gate. A worker
+    /// never reaches this - the callers are the owner's REST route and the steward's tool, which
+    /// adds its own limits first (<c>StewardService.CloseNotNeededAsync</c>).
+    /// </para>
+    /// </summary>
+    public async Task<Ticket?> CloseUnneededAsync(int id, TicketResolution resolution, string reason,
+        TransitionActor actor, int? duplicateOf = null)
+    {
+        if (actor == TransitionActor.Worker)
+            throw new InvalidOperationException("A worker does not close tickets.");
+        var t = await GetAsync(id);
+        if (t is null) return null;
+        if (CloseUnneededProblem(t) is { } problem)
+            throw new InvalidTransitionException(problem, t.Phase, PhaseMachine.NextPhasesFor(t));
+        if (string.IsNullOrWhiteSpace(reason))
+            throw new ArgumentException("Say why it needs no work: that is the record of the close.");
+        if (resolution == TicketResolution.Duplicate)
+        {
+            if (duplicateOf is not { } dup || dup == id)
+                throw new ArgumentException("A duplicate names the other ticket it repeats.");
+            var other = await _db.Tickets.AsNoTracking().FirstOrDefaultAsync(x => x.Id == dup);
+            if (other is null || other.ProjectKey != t.ProjectKey)
+                throw new ArgumentException($"No ticket {dup} in {t.ProjectKey} for this one to duplicate.");
+        }
+        else duplicateOf = null;
+
+        var label = ResolutionLabel(resolution) + (duplicateOf is { } d ? $" of #{d}" : "");
+        return await TransitionCoreAsync(id, TicketPhase.Done, $"Closed as {label}: {reason.Trim()}", actor, null, null,
+            closing: (resolution, duplicateOf));
+    }
+
+    /// <summary>Why <paramref name="t"/> cannot be closed as not needed right now, or null when it can.</summary>
+    public static string? CloseUnneededProblem(Ticket t) =>
+        t.Phase == TicketPhase.Done ? $"Ticket {t.Id} is already Done."
+        : PhaseMachine.IsInProgress(t.Phase) ? $"Ticket {t.Id} is {t.Phase}: a run is working on it. Close it once the run has handed off."
+        : null;
+
+    /// <summary>How a resolution reads in a sentence: "not a bug", "already fixed".</summary>
+    public static string ResolutionLabel(TicketResolution r) => r switch
+    {
+        TicketResolution.NotABug => "not a bug",
+        TicketResolution.AlreadyFixed => "already fixed",
+        TicketResolution.Duplicate => "a duplicate",
+        _ => "not needed",
+    };
+
+    private async Task<Ticket?> TransitionCoreAsync(int id, TicketPhase to, string? reason, TransitionActor actor,
+        BlockPayload? questions, string? build, (TicketResolution Resolution, int? DuplicateOf)? closing)
     {
         var t = await GetAsync(id);
         if (t is null) return null;
 
-        if (!PhaseMachine.CanTransitionFor(t, to))
+        if (closing is null && !PhaseMachine.CanTransitionFor(t, to))
             throw new InvalidTransitionException($"Illegal transition {t.Phase} → {to}", t.Phase, PhaseMachine.NextPhasesFor(t));
 
         // What the ticket has to be CARRYING for this hand-off, checked only for the workers the
@@ -1283,6 +1340,19 @@ public class TicketService
             t.ReviewedOnAt = null;
         }
 
+        // A resolution says why a ticket is Done without its work. Written with the move that closes
+        // it, and gone the moment it is reopened: a reopened ticket is being worked, not dismissed.
+        if (closing is { } c)
+        {
+            t.Resolution = c.Resolution;
+            t.DuplicateOf = c.DuplicateOf;
+        }
+        else if (from == TicketPhase.Done)
+        {
+            t.Resolution = null;
+            t.DuplicateOf = null;
+        }
+
         // The owner's full re-run is spent the same way: by the QA pass it asked for, once that pass
         // hands off clean. A QA run that sends the work back keeps it standing for the next one.
         if (from == TicketPhase.QaTesting && to is TicketPhase.NeedsRefinement or TicketPhase.NeedsReview)
@@ -1358,7 +1428,8 @@ public class TicketService
 
         await _db.SaveChangesAsync();
         WakeFor(to);
-        if (to == TicketPhase.Done) _bugTraces?.Enqueue(t.Id);
+        // A ticket closed as not needed has no fix to blame back to the tickets that wrote it.
+        if (to == TicketPhase.Done && closing is null) _bugTraces?.Enqueue(t.Id);
 
         // A ticket a discovery filed, settling: the discovery may be waiting on it.
         if (to == TicketPhase.Done && t.DiscoveryId is { } discoveryId) await SettleDiscoveryAsync(discoveryId);

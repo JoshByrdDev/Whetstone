@@ -81,6 +81,13 @@ public class StewardConfig
     public int SendBacksPerTicket { get; init; } = 2;
 
     /// <summary>
+    /// How many tickets the steward may close as not needed (not a bug, already fixed, a duplicate,
+    /// no longer wanted) in one local day. A ceiling on a mistake repeated across the board, not a
+    /// quota: the next is the next day's, or the owner's.
+    /// </summary>
+    public int ClosedPerDay { get; init; } = 10;
+
+    /// <summary>
     /// A file in the repo that the owner's decisions are written out to, or empty for none.
     /// <para>
     /// The dashboard's database is the record a steward works from, and it is machine-local. What
@@ -183,6 +190,7 @@ public class StewardConfig
             CreatedPerDay = Int(limits, "createdPerDay", d.CreatedPerDay, 0, 1000),
             OpenAtOnce = Int(limits, "openAtOnce", d.OpenAtOnce, 1, 1000),
             SendBacksPerTicket = Int(limits, "sendBacksPerTicket", d.SendBacksPerTicket, 0, 20),
+            ClosedPerDay = Int(limits, "closedPerDay", d.ClosedPerDay, 0, 100),
             DecisionsFile = Str(s, "decisionsFile").Replace('\\', '/').TrimStart('/'),
             Conventions = Str(s, "conventions").Replace('\\', '/').Trim('/'),
             Plan = PlanFrom(Str(s, "slices").Replace('\\', '/').Trim('/'), format),

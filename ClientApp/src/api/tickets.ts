@@ -1,7 +1,7 @@
 import type {
   Phase, PhaseInfo, ProjectInfo, TicketSummary, TicketDetail,
   WorkItem, QaItem, Comment, QaStatusName, JourneyLeg, RunContext, Priority,
-  Track, ReviewSeverity, ReviewCommentStatus, ReviewVerdict,
+  Track, ReviewSeverity, ReviewCommentStatus, ReviewVerdict, Resolution,
 } from '../types/tickets';
 
 async function json<T>(res: Response): Promise<T> {
@@ -102,6 +102,11 @@ export const updateTicket = (id: number, body: Partial<{
 // repo is taken as what the reviewer saw - also how it is re-taken after pushing a round by hand.
 export const setUnderReview = (id: number, on: boolean, reviewedOn?: string) =>
   fetch(`/api/tickets/${id}/under-review`, { method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ on, reviewedOn }) })
+    .then(json<TicketDetail>);
+
+// Close a ticket that needs no work, with why. Unlike delete, it stays counted in the metrics.
+export const closeUnneeded = (id: number, resolution: Resolution, reason: string, duplicateOf?: number) =>
+  fetch(`/api/tickets/${id}/close`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ resolution, reason, duplicateOf }) })
     .then(json<TicketDetail>);
 
 export const deleteTicket = (id: number) =>

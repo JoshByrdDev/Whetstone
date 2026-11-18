@@ -25,6 +25,7 @@ import { AgentMascot, agentAccent } from './AgentMascot';
 import { useShotLightbox } from './ShotLightbox';
 import { PrototypeCaptures } from './PrototypeCaptures';
 import { usePop } from '../hooks/usePop';
+import { CloseUnneeded, resolutionLabel } from './CloseUnneeded';
 import { RemovedShot } from './RemovedShot';
 
 const PROGRESS_LIMIT = 4;
@@ -164,6 +165,14 @@ export function TicketDetail({
           <div className="px-5 py-4 flex flex-col gap-5">
             {error && (
               <div className="text-xs text-red-400 bg-red-950/40 border border-red-900 rounded-lg px-3 py-2">{error}</div>
+            )}
+
+            {/* Closed without its work: why, so a Done ticket that delivered nothing does not read as delivered. */}
+            {t.phase === 'Done' && t.resolution && (
+              <div className="text-xs text-gray-400 bg-gray-900 border border-hair rounded-lg px-3 py-2">
+                Closed with no work done: <span className="text-gray-200">{resolutionLabel(t.resolution)}</span>
+                {t.duplicateOf != null && <> of #{t.duplicateOf}</>}.
+              </div>
             )}
 
             {/* A stopped ticket asking a question. First thing in the drawer because it is the only
@@ -785,8 +794,12 @@ export function TicketDetail({
               onUnlink={title => run(() => api.updateTicket(t.id, { issueKey: '', title }))}
             />
             <span className="flex-1" />
+            {t.phase !== 'Done' && (
+              <CloseUnneeded busy={busy}
+                onClose={(r, why, dup) => run(() => api.closeUnneeded(t.id, r, why, dup))} />
+            )}
             <button
-              onClick={() => { if (window.confirm('Delete this ticket permanently?')) run(async () => { await api.deleteTicket(t.id); onClose(); }); }}
+              onClick={() => { if (window.confirm('Delete this ticket permanently? Its runs and history go with it, and it drops out of the metrics. To keep it counted, use "Close, no work" instead.')) run(async () => { await api.deleteTicket(t.id); onClose(); }); }}
               className="text-[11px] text-red-400/60 hover:text-red-300"
             >
               Delete

@@ -549,6 +549,7 @@ public partial class StewardService
                     ? $"{oc.Counted}/{cfg.Steward.OpenAtOnce} workable ({oc.Say()}); {oc.Total}/{OpenCeiling(cfg.Steward)} in all"
                     : "",
                 sendBacksPerTicket = cfg.Steward.SendBacksPerTicket,
+                closedNotNeededToday = $"{await ClosedTodayAsync(projectKey)}/{cfg.Steward.ClosedPerDay}",
             },
             plan = plan.Count == 0
                 ? (object)"This project has no plan configured (steward.plan.units), so there is nothing to file tickets from."
@@ -1152,6 +1153,80 @@ public partial class StewardService
         await _db.SaveChangesAsync(ct);
         await _tickets.TransitionAsync(ticketId, TicketPhase.Done, $"Closed with nothing to merge: {Head(why, 300)}", TransitionActor.Steward);
         return new StewardReply("closed", null, new { closed = true });
+    }
+
+    /// <summary>
+    /// Close a ticket that needs no work - what it reports is not a bug, the base already does it, it
+    /// repeats another ticket, or it is no longer wanted - with its resolution, instead of leaving it
+    /// blocked for the owner to delete. The ticket stays, so it is still counted as filed, and as
+    /// closed without work, in every mart that counts tickets.
+    /// <para>
+    /// The limits are here, not in the prompt: full mode only, as for every close; never a ticket the
+    /// owner filed, whose worth is theirs to judge; never one with commits its base lacks, which is
+    /// work to merge or send back, not to drop; never one a run is working; at most
+    /// <see cref="StewardConfig.ClosedPerDay"/> a day. The reason goes on the ticket and the record.
+    /// </para>
+    /// </summary>
+    public async Task<StewardReply> CloseNotNeededAsync(string projectKey, int ticketId, string resolution, string why,
+        int? duplicateOf = null, CancellationToken ct = default)
+    {
+        var (cfg, off) = await WritableAsync(projectKey);
+        if (cfg is null) return off!;
+        if (cfg.StewardMode == StewardMode.Manage)
+            return Refuse("not-in-this-mode", "Closing a ticket is the owner's in this mode. Ask them, with the ticket's id and why it needs no work.");
+        if (!Enum.TryParse<TicketResolution>(resolution, true, out var r) || !Enum.IsDefined(r))
+            return Refuse("bad-request", $"Unknown resolution '{resolution}'. Use NotABug, AlreadyFixed, Duplicate or NotNeeded.");
+        why = why?.Trim() ?? "";
+        if (why.Length == 0)
+            return Refuse("bad-request", "Say why it needs no work, and what shows it: the decision (#n), the commit or ticket that fixed it, or what the code does.");
+        if (r == TicketResolution.Duplicate && duplicateOf is null)
+            return Refuse("bad-request", "A duplicate names the ticket it repeats (duplicateOf).");
+        var (t, no) = await TicketOfAsync(projectKey, ticketId);
+        if (t is null) return no!;
+        if (t.Origin == TicketOriginKind.Owner)
+            return Refuse("owner", $"The owner filed ticket {ticketId}, so whether it is needed is theirs. Ask them, with the ticket's id and why it needs no work.");
+        if (t.Track != TicketTrack.Delivery) return Refuse("not-ready", "Only a delivery ticket is closed this way.");
+        if (t.Walkthrough) return Refuse("refused", "A slice's walk-through is the board's: it is filed and closed by the board, not by you.");
+        if (TicketService.CloseUnneededProblem(t) is { } problem) return Refuse("not-ready", problem);
+        if (r == TicketResolution.Duplicate)
+        {
+            var (other, none) = await TicketOfAsync(projectKey, duplicateOf!.Value);
+            if (other is null) return none!;
+            if (other.Id == t.Id) return Refuse("bad-request", "A ticket does not duplicate itself.");
+        }
+        var change = string.IsNullOrWhiteSpace(t.Branch) ? null : await _git.BranchChangeAsync(projectKey, t.Branch, ct);
+        if (change is not null && change.Ahead > 0)
+            return Refuse("has-commits", $"Ticket {ticketId} has {change.Ahead} commit(s) its base lacks. That is work: it is reviewed and merged, " +
+                "or sent back - or, if it should be thrown away, the owner's to decide. Ask.");
+        var closed = await ClosedTodayAsync(projectKey, ct);
+        if (closed >= cfg.Steward.ClosedPerDay)
+            return Refuse("limit", $"{cfg.Steward.ClosedPerDay} tickets have been closed as not needed today. Leave the rest for tomorrow's runs.");
+
+        var label = TicketService.ResolutionLabel(r) + (r == TicketResolution.Duplicate ? $" of #{duplicateOf}" : "");
+        if (cfg.StewardMode == StewardMode.Propose) return Proposed($"close ticket {ticketId} as {label}: {Head(why, 200)}");
+
+        _db.StewardEntries.Add(new StewardEntry
+        {
+            ProjectKey = projectKey, Kind = StewardEntryKind.Call, TicketId = ticketId,
+            Text = $"Closed as {label}, with no work done. {why}",
+        });
+        await _db.SaveChangesAsync(ct);
+        await _tickets.CloseUnneededAsync(ticketId, r, why, TransitionActor.Steward, r == TicketResolution.Duplicate ? duplicateOf : null);
+        return new StewardReply("closed", null, new
+        {
+            closed = true, resolution = r.ToString(), closedToday = $"{closed + 1}/{cfg.Steward.ClosedPerDay}",
+            next = t.PlanUnit is null ? null : "It was a slice's ticket: set its outcome if this close settles it, as after a merge.",
+        });
+    }
+
+    /// <summary>How many tickets this project's steward has closed as not needed since this machine's midnight.</summary>
+    private Task<int> ClosedTodayAsync(string projectKey, CancellationToken ct = default)
+    {
+        var since = DateTime.Today.ToUniversalTime();
+        return _db.PhaseTransitions.AsNoTracking()
+            .Where(p => p.ProjectKey == projectKey && p.Actor == TransitionActor.Steward && p.To == TicketPhase.Done && p.At >= since)
+            .Join(_db.Tickets.AsNoTracking().Where(x => x.Resolution != null), p => p.TicketId, x => x.Id, (p, _) => p.TicketId)
+            .Distinct().CountAsync(ct);
     }
 
     /// <summary>

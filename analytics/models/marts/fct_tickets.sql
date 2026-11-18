@@ -35,6 +35,14 @@ qa as (
     group by ticket_id
 ),
 
+-- Who made the move that closed it last: the owner, the steward, a run, the board.
+closer as (
+    select ticket_id, lower(actor) as closed_by
+    from moves
+    where to_phase = 'Done'
+    qualify row_number() over (partition by ticket_id order by moved_at desc, transition_id desc) = 1
+),
+
 run_totals as (
     select
         ticket_id,
@@ -76,6 +84,12 @@ select
     qa.done_at,
     qa.done_at is not null                                       as reached_done,
     datediff('second', t.created_at, qa.done_at) / 3600.0        as hours_to_done,
+    -- Done without its work: not a bug, already fixed, a duplicate, not needed. Kept rather than
+    -- deleted so a bug the pipeline filed and threw away still counts as filed.
+    t.resolution,
+    t.duplicate_of,
+    t.phase = 'Done' and t.resolution is not null                 as closed_without_work,
+    case when t.phase = 'Done' then cl.closed_by end              as closed_by,
     coalesce(rt.runs, 0)                                         as runs,
     coalesce(rt.minutes, 0)                                      as minutes,
     coalesce(rt.rework_minutes, 0)                               as rework_minutes,
@@ -95,3 +109,4 @@ left join qa using (ticket_id)
 left join run_totals rt using (ticket_id)
 left join first_build fb using (ticket_id)
 left join caused c using (ticket_id)
+left join closer cl using (ticket_id)

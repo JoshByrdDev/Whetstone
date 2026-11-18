@@ -100,6 +100,23 @@ public class StewardTools
         [Description("Why there is nothing to merge: what on the base already does what it asked, and where.")] string why) =>
         s.CloseUnchangedAsync(project, ticketId, why);
 
+    [McpServerTool(Name = "steward_close_not_needed"), Description(
+        "Close a ticket that needs no work, with why, instead of leaving it blocked for the owner to delete. resolution is one of: " +
+        "NotABug (what it reports is intended, or the report misread it), AlreadyFixed (the base already does what it asks - " +
+        "name the commit or ticket that did it), Duplicate (another ticket covers it: pass duplicateOf), NotNeeded (a decision " +
+        "or a change since has made it moot - quote the decision, #n). The ticket stays on the record as closed without work, " +
+        "so it still counts as filed: never close one to tidy the board. Read the ticket, its block and the code first; " +
+        "close only what the evidence settles - a block that asks what to build, or a real bug on the wrong base, is not " +
+        "this. Only in full mode. Refused: 'owner' - the owner filed it, so ask; 'has-commits' - it has work, which is " +
+        "merged or sent back, never dropped by you; 'not-ready' - a run is on it; 'limit' - enough closed today. After a " +
+        "slice's ticket, set its outcome as after a merge.")]
+    public static Task<StewardReply> CloseNotNeeded(StewardService s,
+        [Description("The project key.")] string project, [Description("The ticket id.")] int ticketId,
+        [Description("NotABug, AlreadyFixed, Duplicate or NotNeeded.")] string resolution,
+        [Description("Why it needs no work, and what shows it: the decision (#n), the commit or ticket that fixed it, or what the code does and where.")] string why,
+        [Description("For a Duplicate: the id of the ticket it repeats.")] int? duplicateOf = null) =>
+        s.CloseNotNeededAsync(project, ticketId, resolution, why, duplicateOf);
+
     [McpServerTool(Name = "steward_diff"), Description(
         "The ticket's change itself, as one diff against its base. A long diff is cut and says so: ask again with a path " +
         "for one file's share of it.")]

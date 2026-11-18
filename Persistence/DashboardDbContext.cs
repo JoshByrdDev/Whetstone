@@ -120,6 +120,7 @@ public class DashboardDbContext : DbContext
             e.Property(t => t.Track).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.CreatedBy).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.Origin).HasConversion<string>().HasMaxLength(16);
+            e.Property(t => t.Resolution).HasConversion<string>().HasMaxLength(16);
             e.Property(t => t.IntakeChannel).HasMaxLength(32);
             e.Property(t => t.PlanOutcomes).HasMaxLength(256);
             e.Property(t => t.ReconFrom).HasMaxLength(256);

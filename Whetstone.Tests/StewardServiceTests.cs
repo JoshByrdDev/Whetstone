@@ -2216,6 +2216,113 @@ public partial class StewardServiceTests : IDisposable
         Assert.Equal(TicketPhase.NeedsReview, (await Reload(id)).Phase);
     }
 
+    // ---- tickets that need no work: closed with a resolution, never deleted -----------
+
+    private async Task<int> BlockedBug(TicketOriginKind origin = TicketOriginKind.FoundInRun, string? branch = null,
+        TicketPhase before = TicketPhase.Speculating)
+    {
+        await using var ctx = NewCtx();
+        var t = new Ticket { ProjectKey = "alpha", Title = "Day view drops a visit", Phase = before, IsBug = true, Origin = origin, Branch = branch };
+        ctx.Tickets.Add(t);
+        await ctx.SaveChangesAsync();
+        await new TicketService(ctx).TransitionAsync(t.Id, TicketPhase.Blocked, "The owner decided in #12 this is intended. I cannot close a ticket.");
+        return t.Id;
+    }
+
+    [Fact]
+    public async Task A_blocked_bug_that_is_not_one_is_closed_with_its_resolution_and_stays_on_the_record()
+    {
+        var id = await BlockedBug();
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.CloseNotNeededAsync("alpha", id, "NotABug", " "))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.CloseNotNeededAsync("alpha", id, "Spam", "No."))).Answer);
+
+        var r = await In(s => s.CloseNotNeededAsync("alpha", id, "notabug", "Decision #12: a cancelled visit is meant to leave the day view."));
+        Assert.Equal("closed", r.Answer);
+
+        var t = await Reload(id);
+        Assert.Equal(TicketPhase.Done, t.Phase);
+        Assert.Equal(TicketResolution.NotABug, t.Resolution);
+        Assert.Null(t.BlockedReason);
+        Assert.Contains("not a bug", Entries().Single(e => e.Kind == StewardEntryKind.Call && e.TicketId == id).Text);
+        await using var ctx = NewCtx();
+        var close = ctx.PhaseTransitions.AsNoTracking().Where(p => p.TicketId == id).OrderBy(p => p.Id).ToList().Last();
+        Assert.Equal((TicketPhase.Blocked, TicketPhase.Done, TransitionActor.Steward), (close.From, close.To, close.Actor));
+        Assert.StartsWith("Closed as not a bug", close.Reason);
+    }
+
+    [Fact]
+    public async Task Closing_as_not_needed_is_refused_for_the_owners_tickets_work_on_a_branch_a_running_ticket_and_outside_full_mode()
+    {
+        var owners = await BlockedBug(TicketOriginKind.Owner);
+        var withWork = await BlockedBug(branch: "ticket-9");
+        int running;
+        await using (var ctx = NewCtx())
+        {
+            var t = new Ticket { ProjectKey = "alpha", Title = "Being built", Phase = TicketPhase.Implementing, Origin = TicketOriginKind.Steward };
+            ctx.Tickets.Add(t);
+            await ctx.SaveChangesAsync();
+            running = t.Id;
+        }
+        await Begin();
+        Assert.Equal("owner", (await In(s => s.CloseNotNeededAsync("alpha", owners, "NotABug", "Intended."))).Answer);
+        Assert.Equal("has-commits", (await In(s => s.CloseNotNeededAsync("alpha", withWork, "AlreadyFixed", "Fixed by #3."))).Answer);
+        Assert.Equal("not-ready", (await In(s => s.CloseNotNeededAsync("alpha", running, "NotNeeded", "Moot since #4."))).Answer);
+        Configure("manage");
+        _git.Ahead = 0;
+        Assert.Equal("not-in-this-mode", (await In(s => s.CloseNotNeededAsync("alpha", withWork, "AlreadyFixed", "Fixed by #3."))).Answer);
+        Assert.All(new[] { owners, withWork }, i => Assert.Equal(TicketPhase.Blocked, Reload(i).Result.Phase));
+    }
+
+    [Fact]
+    public async Task A_duplicate_names_another_ticket_of_the_project_and_propose_mode_changes_nothing()
+    {
+        var id = await BlockedBug();
+        var other = await BlockedBug();
+        await Begin();
+        Assert.Equal("bad-request", (await In(s => s.CloseNotNeededAsync("alpha", id, "Duplicate", "Same as the other."))).Answer);
+        Assert.Equal("bad-request", (await In(s => s.CloseNotNeededAsync("alpha", id, "Duplicate", "Itself.", id))).Answer);
+        Assert.Equal("no-ticket", (await In(s => s.CloseNotNeededAsync("alpha", id, "Duplicate", "Gone.", 99999))).Answer);
+
+        Configure("propose");
+        Assert.Equal("proposed", (await In(s => s.CloseNotNeededAsync("alpha", id, "Duplicate", "Same report as the other.", other))).Answer);
+        Assert.Equal(TicketPhase.Blocked, (await Reload(id)).Phase);
+
+        Configure("full");
+        Assert.Equal("closed", (await In(s => s.CloseNotNeededAsync("alpha", id, "Duplicate", "Same report as the other.", other))).Answer);
+        var t = await Reload(id);
+        Assert.Equal((TicketResolution.Duplicate, other), (t.Resolution!.Value, t.DuplicateOf!.Value));
+    }
+
+    [Fact]
+    public async Task The_steward_closes_no_more_than_its_daily_limit_as_not_needed()
+    {
+        Configure("full", """
+            "limits": { "closedPerDay": 1 },
+            "slices": "docs/units"
+            """);
+        var first = await BlockedBug();
+        var second = await BlockedBug();
+        await Begin();
+        Assert.Equal("closed", (await In(s => s.CloseNotNeededAsync("alpha", first, "AlreadyFixed", "Fixed by #3, on the base since."))).Answer);
+        Assert.Equal("limit", (await In(s => s.CloseNotNeededAsync("alpha", second, "AlreadyFixed", "Fixed by #3, on the base since."))).Answer);
+    }
+
+    [Fact]
+    public async Task A_reopened_ticket_loses_its_resolution_and_a_worker_cannot_close_one()
+    {
+        var id = await BlockedBug();
+        await using var ctx = NewCtx();
+        var svc = new TicketService(ctx);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => svc.CloseUnneededAsync(id, TicketResolution.NotABug, "No.", TransitionActor.Worker));
+        await svc.CloseUnneededAsync(id, TicketResolution.NotABug, "Intended, per #12.", TransitionActor.Human);
+        await Assert.ThrowsAsync<InvalidTransitionException>(() => svc.CloseUnneededAsync(id, TicketResolution.NotABug, "Again.", TransitionActor.Human));
+        await svc.TransitionAsync(id, TicketPhase.NeedsImplementation, "It is a bug after all", TransitionActor.Human);
+        var t = await Reload(id);
+        Assert.Null(t.Resolution);
+        Assert.Equal(TicketPhase.NeedsImplementation, t.Phase);
+    }
+
     // ---- the owner's link from a ticket to the plan --------------------------------
 
     private async Task<int> Loose(string? description = null)

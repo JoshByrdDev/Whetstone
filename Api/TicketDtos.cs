@@ -68,7 +68,9 @@ public record TicketSummaryDto(
     string? BaseBranch = null,
     // Why the heartbeat passes it over when that is a device no machine that can take work has:
     // "waiting for an iPhone simulator, which only a Mac has" (MachineDevices). Null otherwise.
-    string? WaitingForDevice = null);
+    string? WaitingForDevice = null,
+    // Why a Done ticket needed no work (Ticket.Resolution, by name), for the card's chip. Null otherwise.
+    string? Resolution = null);
 
 /// <summary>One thing a ticket is waiting on, resolved as far as it can be.</summary>
 public record BlockerDto(
@@ -286,7 +288,10 @@ public record TicketDetailDto(
     string? IntakeChannel = null,
     int? IntakeIssueId = null,
     int? RegressionOf = null,
-    int? FoundOn = null);
+    int? FoundOn = null,
+    // Why it is Done without its work (Ticket.Resolution, by name: NotABug, AlreadyFixed, Duplicate,
+    // NotNeeded), and the ticket it repeats when a duplicate. Null on a ticket closed by its work.
+    string? Resolution = null, int? DuplicateOf = null);
 
 /// <summary>A ticket's place in a slice: the slice's number, and its outcomes.</summary>
 public record TicketPlanDto(int Unit, IReadOnlyList<string> Outcomes);
@@ -348,7 +353,8 @@ public static class TicketMapper
         t.ReviewTarget?.Repo,
         t.IsBug,
         SliceBranches.OwnBase(t),
-        waitingForDevice);
+        waitingForDevice,
+        t.Resolution?.ToString());
 
     private static int HeldForExpansion(Ticket t) =>
         WorkItemScopes.HeldForExpansion(t) ? WorkItemScopes.OpenExpansionCount(t) : 0;
@@ -446,7 +452,9 @@ public static class TicketMapper
         t.IntakeChannel,
         t.IntakeIssueId,
         t.RegressionOf,
-        t.FoundOn);
+        t.FoundOn,
+        t.Resolution?.ToString(),
+        t.DuplicateOf);
 
     private static IndependentReviewDto? ToIndependentReview(Ticket t)
     {

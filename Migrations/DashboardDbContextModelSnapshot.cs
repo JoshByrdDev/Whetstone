@@ -3032,6 +3032,9 @@ namespace Whetstone.Migrations
                     b.Property<int?>("DiscoveryId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int?>("DuplicateOf")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int?>("FoundOn")
                         .HasColumnType("INTEGER");
 
@@ -3143,6 +3146,10 @@ namespace Whetstone.Migrations
 
                     b.Property<bool>("RequiresSpeculationReview")
                         .HasColumnType("INTEGER");
+
+                    b.Property<string>("Resolution")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("ReviewedOn")
                         .HasColumnType("TEXT");

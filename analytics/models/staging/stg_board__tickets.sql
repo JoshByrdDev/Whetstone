@@ -20,6 +20,10 @@ select
         else lower(coalesce("Origin", 'Owner')) end as origin,
     nullif("IntakeChannel", '')    as intake_channel,
     "RegressionOf"                 as regression_of,
+    -- Why it is Done without its work (Ticket.Resolution): NotABug, AlreadyFixed, Duplicate,
+    -- NotNeeded. Null on a ticket closed by its work, and on every ticket not Done.
+    "Resolution"                   as resolution,
+    "DuplicateOf"                  as duplicate_of,
     "DiscoveryId"                  as discovery_id,
     nullif("ReconFrom", '')        as recon_from
 from {{ source('board', 'Tickets') }}

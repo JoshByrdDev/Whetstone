@@ -133,6 +133,9 @@ BOARD_TABLES: dict[str, dict[str, str]] = {
         # Where the ticket came from (TicketOrigin, docs/intake-plan.md section 6), and for an intake
         # ticket its channel. NULL on a database from before TicketOrigin, read as owner.
         "Origin": "VARCHAR", "IntakeChannel": "VARCHAR", "RegressionOf": "INTEGER",
+        # Why it is Done without its work (Ticket.Resolution), and what it duplicates. NULL on a
+        # database from before it was recorded, and on every ticket closed by its work.
+        "Resolution": "VARCHAR", "DuplicateOf": "INTEGER",
     },
     # The Discovery track's record (docs/discovery-track-plan.md). Lists (Jobs, Areas, ObservationIds,
     # EventIds...) are the JSON arrays EF writes; long prose (a proposal's body, a taste file's text)

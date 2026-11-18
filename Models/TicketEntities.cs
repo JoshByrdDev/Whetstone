@@ -643,6 +643,23 @@ public class Ticket
     /// </summary>
     public bool IsBug { get; set; }
 
+    /// <summary>
+    /// Why a Done ticket is done without a delivery: it was not a bug, the base already did it, it
+    /// repeats another ticket, or it is no longer wanted. Null on every ticket closed by its work -
+    /// merged, signed off, closed unchanged after QA proved it on the base - and on every ticket
+    /// not Done. Cleared when a ticket is reopened.
+    /// <para>
+    /// Set only by <c>TicketService.CloseUnneededAsync</c>, which the owner reaches by a REST route
+    /// and the steward through <c>steward_close_not_needed</c>. It replaces deleting such a ticket:
+    /// a deleted ticket takes its transitions, runs and costs with it, so a bug the pipeline filed
+    /// and then threw away would vanish from every count of how many it files and how many hold up.
+    /// </para>
+    /// </summary>
+    public TicketResolution? Resolution { get; set; }
+
+    /// <summary>The ticket this one repeats, when <see cref="Resolution"/> is <see cref="TicketResolution.Duplicate"/>.</summary>
+    public int? DuplicateOf { get; set; }
+
     /// <summary>Set when Phase == Blocked.</summary>
     public string? BlockedReason { get; set; }
 
