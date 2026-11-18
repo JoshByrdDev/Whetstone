@@ -125,7 +125,7 @@ the board's own reaper's rule:
 | `review-<branch>`, detached | every review of that branch has been Done for the retention: one open review keeps it, since the next pass reuses it rather than installing again |
 | `walkthrough-ticket-<id>` (a walk-through or a discovery), detached | its ticket is Done for the retention, gone, or has not moved for the retention - it is the base, checked out, and holds no work |
 
-A retention of 0 keeps everything there as here. The pass then removes only those, and only after
+While the host's last check-in reports its worktree drive under `worktreeReapBelowGb`, "Done for the retention" above is waived for Done tickets: age or space, whichever runs out first, as on the board. A retention of 0 keeps everything there as here. The pass then removes only those, and only after
 its own checks, which the board cannot make: no live run's claim names it (the runner rewrites
 `run/reap-held.json` every loop and before it launches each worker, and the pass reads it again just
 before each move), nothing uncommitted or untracked, no stopped rebase or merge, and nothing git

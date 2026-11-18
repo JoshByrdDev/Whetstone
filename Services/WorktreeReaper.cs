@@ -25,8 +25,12 @@ public class WorktreeReaper : BackgroundService
     /// </summary>
     private static readonly TimeSpan StartDelay = TimeSpan.FromMinutes(1);
 
-    /// <summary>The app stays up for days at a time, so starting is not often enough on its own.</summary>
-    private static readonly TimeSpan Interval = TimeSpan.FromHours(24);
+    /// <summary>
+    /// The app stays up for days at a time, so starting is not often enough on its own. Hourly, not
+    /// daily: a pass with nothing to remove is one query, and a day is long enough for a busy fleet to
+    /// fill the disk between two passes.
+    /// </summary>
+    private static readonly TimeSpan Interval = TimeSpan.FromHours(1);
 
     public const int DefaultRetentionDays = 2;
 
@@ -48,9 +52,11 @@ public class WorktreeReaper : BackgroundService
         {
             try
             {
-                var days = RetentionDays(_registry.GetGlobalConfig());
+                var global = _registry.GetGlobalConfig();
+                var days = RetentionDays(global);
                 if (days > 0)
                 {
+                    var line = DiskFloor.ReapBelowGb(global);
                     using var scope = _scopes.CreateScope();
                     var db = scope.ServiceProvider.GetRequiredService<DashboardDbContext>();
                     var removed = await ReapAsync(db, _worktrees,
@@ -58,7 +64,13 @@ public class WorktreeReaper : BackgroundService
                         TimeSpan.FromDays(days), DateTime.UtcNow, _log, stoppingToken,
                         membersFor: project => _registry.GetProjectConfig(project) is { IsMultiRepo: true } cfg
                             ? cfg.Repos.Select(m => m.Dir).ToArray()
-                            : null);
+                            : null,
+                        // Measured afresh for each worktree, never cached: each removal is what moves it.
+                        pressed: project =>
+                        {
+                            try { return DiskFloor.Pressed(DiskFloor.Measure(new[] { _registry.GetProjectConfig(project).ResolvedWorktreeRoot }), line); }
+                            catch { return null; }
+                        });
                     if (removed > 0)
                         _log.LogInformation("Reaped {Count} worktree(s) of tickets Done for over {Days} day(s)", removed, days);
                 }
@@ -93,10 +105,16 @@ public class WorktreeReaper : BackgroundService
     /// once no repo's folder is left in it - one refusal keeps the whole workspace, since a person
     /// looking at the one repo will want the others beside it.
     /// </para>
+    /// <para>
+    /// Age or space, whichever runs out first: while <paramref name="pressed"/> says a project's
+    /// worktree drive is under the reaping line (<see cref="DiskFloor.Pressed"/>), that project's
+    /// finished worktrees go before their retention is up, the longest-finished first, and only until
+    /// it says the drive is clear again. Every other refusal above still holds under pressure.
+    /// </para>
     /// </summary>
     public static async Task<int> ReapAsync(DashboardDbContext db, GitWorktreeService worktrees,
         Func<string, string?> repoFor, TimeSpan keep, DateTime now, ILogger log, CancellationToken ct = default,
-        Func<string, string[]?>? membersFor = null)
+        Func<string, string[]?>? membersFor = null, Func<string, string?>? pressed = null)
     {
         var cutoff = now - keep;
 
@@ -124,15 +142,22 @@ public class WorktreeReaper : BackgroundService
             .Select(Normalize)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        // No transition row means a ticket older than the table; its last edit is the best there is.
+        DateTime DoneAt(Ticket t) => arrivals.TryGetValue(t.Id, out var at) ? at : t.UpdatedAt;
+
         var removed = 0;
-        foreach (var t in done)
+        // Longest-finished first, so a pass cut short by space coming back has taken the stalest.
+        foreach (var t in done.OrderBy(DoneAt))
         {
             if (ct.IsCancellationRequested) break;
 
-            // No transition row means a ticket older than the table; its last edit is the best there is.
-            var doneAt = arrivals.TryGetValue(t.Id, out var at) ? at : t.UpdatedAt;
-            if (doneAt > cutoff) continue;
+            var doneAt = DoneAt(t);
             if (inUse.Contains(Normalize(t.WorktreePath!))) continue;
+            if (doneAt > cutoff)
+            {
+                if (pressed?.Invoke(t.ProjectKey) is not { } why) continue;
+                log.LogInformation("Reaping the worktree of Done ticket {Id} before its retention: {Why}", t.Id, why);
+            }
 
             var repo = repoFor(t.ProjectKey);
             if (string.IsNullOrWhiteSpace(repo)) continue;

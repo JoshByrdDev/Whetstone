@@ -296,11 +296,13 @@ public static class WorkerHostEndpoints
             var items = (req.Worktrees ?? Array.Empty<HostWorktreeItem>())
                 .Where(i => i is not null && !string.IsNullOrWhiteSpace(i.Name) && i.Name.IndexOfAny(new[] { '/', '\\' }) < 0 && i.Name is not ("." or ".."))
                 .ToList();
-            var days = WorktreeReaper.RetentionDays(registry.GetGlobalConfig());
+            var global = registry.GetGlobalConfig();
+            var days = WorktreeReaper.RetentionDays(global);
+            var pressed = DiskFloor.Pressed(hosts.DisksOf(name), DiskFloor.ReapBelowGb(global));
             using var scope = scopes.CreateScope();
             var verdicts = await HostWorktrees.DecideAsync(scope.ServiceProvider.GetRequiredService<Persistence.DashboardDbContext>(),
                 registry.AllProjects.First(p => p.Equals(req.Project, StringComparison.OrdinalIgnoreCase)),
-                items, TimeSpan.FromDays(Math.Max(0, days)), DateTime.UtcNow, ct);
+                items, TimeSpan.FromDays(Math.Max(0, days)), DateTime.UtcNow, ct, pressed);
             return Results.Ok(new { retentionDays = days, verdicts });
         });
 

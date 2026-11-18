@@ -189,6 +189,43 @@ public class WorktreeReaperTests : IDisposable
         Assert.Null(Recorded(id));
     }
 
+    [Fact]
+    public async Task Under_the_reaping_line_recent_worktrees_go_longest_finished_first_until_there_is_room()
+    {
+        var (oldest, oldPath) = await Seed("ticket-p1", TicketPhase.Done, daysAgo: 1);
+        var (_, midPath) = await Seed("ticket-p2", TicketPhase.Done, daysAgo: 0.5);
+        var (_, newPath) = await Seed("ticket-p3", TicketPhase.Done, daysAgo: 0.1);
+        var (_, busyPath) = await Seed("ticket-p4", TicketPhase.Implementing, daysAgo: 3);
+
+        // Pressed until two worktrees have gone: as a drive comes back over the line.
+        var asked = 0;
+        int removed;
+        using (var ctx = NewCtx())
+            removed = await WorktreeReaper.ReapAsync(ctx, _svc, _ => _repo, Keep, Now, NullLogger.Instance,
+                pressed: _ => asked++ < 2 ? "under the line" : null);
+
+        Assert.Equal(2, removed);
+        Assert.False(Directory.Exists(oldPath));
+        Assert.False(Directory.Exists(midPath));
+        Assert.True(Directory.Exists(newPath));
+        Assert.True(Directory.Exists(busyPath));
+        Assert.Null(Recorded(oldest));
+    }
+
+    [Fact]
+    public async Task Under_the_reaping_line_uncommitted_work_is_still_kept()
+    {
+        var (id, path) = await Seed("ticket-p5", TicketPhase.Done, daysAgo: 0.2);
+        File.WriteAllText(Path.Combine(path, "notes.txt"), "not yet committed\n");
+
+        using (var ctx = NewCtx())
+            Assert.Equal(0, await WorktreeReaper.ReapAsync(ctx, _svc, _ => _repo, Keep, Now, NullLogger.Instance,
+                pressed: _ => "under the line"));
+
+        Assert.True(File.Exists(Path.Combine(path, "notes.txt")));
+        Assert.NotNull(Recorded(id));
+    }
+
     [Theory]
     [InlineData("{}", 2)]
     [InlineData("{\"worktreeRetentionDays\": 30}", 30)]

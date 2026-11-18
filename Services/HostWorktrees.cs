@@ -34,12 +34,20 @@ public record HostWorktreeVerdict(string Name, bool Reap, string Why);
 /// as well: nothing will ever come back for it. And a retention of 0, which keeps every worktree
 /// here, keeps every one there too.
 /// </para>
+/// <para>
+/// Age or space, whichever runs out first, as on the board: <c>pressed</c> is why the host's worktree
+/// drive is under the reaping line (<see cref="DiskFloor.Pressed"/>, from the drives its last check-in
+/// reported), and while it is, a finished ticket's worktree may go before its retention is up. The
+/// board stops once its drive is clear; a runner removes all it is told it may in one pass, so a host
+/// under pressure gives back every finished worktree at once.
+/// </para>
 /// </summary>
 public static class HostWorktrees
 {
     /// <summary>The answer for one project's worktrees, item by item and in the same order.</summary>
     public static async Task<IReadOnlyList<HostWorktreeVerdict>> DecideAsync(DashboardDbContext db, string project,
-        IReadOnlyList<HostWorktreeItem> items, TimeSpan keep, DateTime now, CancellationToken ct = default)
+        IReadOnlyList<HostWorktreeItem> items, TimeSpan keep, DateTime now, CancellationToken ct = default,
+        string? pressed = null)
     {
         if (keep <= TimeSpan.Zero)
             return items.Select(i => new HostWorktreeVerdict(i.Name, false, "worktreeRetentionDays is 0: every worktree is kept")).ToList();
@@ -70,9 +78,11 @@ public static class HostWorktrees
                 return new(item.Name, false, $"ticket #{open.Id} is {open.Phase}");
             var last = named.OrderByDescending(DoneAt).First();
             var at = DoneAt(last);
-            return at > cutoff
-                ? new(item.Name, false, $"ticket #{last.Id} has been Done only since {at:yyyy-MM-dd HH:mm} UTC (kept {days} day(s))")
-                : new(item.Name, true, $"ticket #{last.Id} has been Done since {at:yyyy-MM-dd HH:mm} UTC, past {days} day(s)");
+            if (at <= cutoff)
+                return new(item.Name, true, $"ticket #{last.Id} has been Done since {at:yyyy-MM-dd HH:mm} UTC, past {days} day(s)");
+            return pressed is not null
+                ? new(item.Name, true, $"ticket #{last.Id} has been Done since {at:yyyy-MM-dd HH:mm} UTC, and {pressed}")
+                : new(item.Name, false, $"ticket #{last.Id} has been Done only since {at:yyyy-MM-dd HH:mm} UTC (kept {days} day(s))");
         }
 
         var result = new List<HostWorktreeVerdict>();

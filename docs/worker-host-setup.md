@@ -324,7 +324,8 @@ Check: time a fresh install on that machine (`git worktree add`, then the projec
   and their tickets go back to the queue. When it comes back, the runner kills anything it was
   still holding without handing it back.
 - **Disk space.** The runner removes the worktree of a ticket that has been Done for
-  `worktreeRetentionDays` (2), checked hourly with the board, keeping its branch - and never one a
+  `worktreeRetentionDays` (2), or sooner while its drive has less than `worktreeReapBelowGb`
+  (40 GB) free, checked hourly with the board, keeping its branch - and never one a
   run there holds, one with uncommitted files or a stopped rebase, or anything outside the worktree
   root. Its log says what it reaped (`Reaped worktree alpha/...`) and what it kept though the board
   said it may go, and why. Should the drive still fall below `workerDiskFloorGb` (10 GB), the board

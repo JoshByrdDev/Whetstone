@@ -151,6 +151,29 @@ public class WorkerHostWorktreeTests : IDisposable
         Assert.False((await Ask(new HostWorktreeItem("odd", "mystery"))).Reap);
         Assert.False((await Ask(new HostWorktreeItem("walkthrough-ticket-x", "base"))).Reap);
     }
+
+    private async Task<HostWorktreeVerdict> AskPressed(HostWorktreeItem item)
+    {
+        using var ctx = new DashboardDbContext(_options);
+        return Assert.Single(await HostWorktrees.DecideAsync(ctx, "alpha", new[] { item }, Keep, Now,
+            pressed: "only 5 GB free on /, under the 40 GB reaping line (worktreeReapBelowGb)"));
+    }
+
+    [Fact]
+    public async Task Under_the_reaping_line_a_ticket_done_recently_may_go_and_says_why()
+    {
+        await Seed(TicketPhase.Done, 0.1, branch: "tk-press");
+        var v = await AskPressed(Branch("tk-press"));
+        Assert.True(v.Reap);
+        Assert.Contains("reaping line", v.Why);
+    }
+
+    [Fact]
+    public async Task Under_the_reaping_line_a_ticket_still_in_flight_is_still_kept()
+    {
+        await Seed(TicketPhase.Implementing, 0.1, branch: "tk-busy");
+        Assert.False((await AskPressed(Branch("tk-busy"))).Reap);
+    }
 }
 
 /// <summary>The low-disk guard (<see cref="DiskFloor"/>): what holds a machine, and what it says.</summary>
@@ -178,6 +201,19 @@ public class WorkerHostDiskTests
         Assert.Null(DiskFloor.Low(new[] { new HostDisk("C:\\", 11 * Gb) }, 10));
         Assert.Null(DiskFloor.Low(new[] { new HostDisk("C:\\", 1 * Gb) }, 0));      // off
         Assert.Null(DiskFloor.Low(null, 10));                                       // never said
+    }
+
+    [Fact]
+    public void The_reaping_line_defaults_to_forty_and_says_which_drive_is_under_it()
+    {
+        Assert.Equal(40, DiskFloor.ReapBelowGb(new Dictionary<string, JsonElement>()));
+        Assert.Equal(0, DiskFloor.ReapBelowGb(JsonSerializer.Deserialize<Dictionary<string, JsonElement>>("""{ "worktreeReapBelowGb": 0 }""")!));
+        var why = DiskFloor.Pressed(new[] { new HostDisk("/", 12 * Gb) }, 40);
+        Assert.Contains("12 GB free on /", why);
+        Assert.Contains("worktreeReapBelowGb", why);
+        Assert.Null(DiskFloor.Pressed(new[] { new HostDisk("/", 41 * Gb) }, 40));
+        Assert.Null(DiskFloor.Pressed(new[] { new HostDisk("/", 1 * Gb) }, 0));    // off
+        Assert.Null(DiskFloor.Pressed(null, 40));                                  // never said
     }
 
     [Fact]

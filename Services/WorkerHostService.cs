@@ -262,6 +262,13 @@ public class WorkerHostService
     public WorkerHostConfig? Find(string name) =>
         _config().FirstOrDefault(h => h.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>The drives a host's last check-in reported, or null when it has reported none.</summary>
+    public IReadOnlyList<HostDisk>? DisksOf(string name)
+    {
+        lock (_lock)
+            return _hosts.TryGetValue(name, out var s) ? s.Disks?.ToList() : null;
+    }
+
     private State StateOf(string name)
     {
         if (!_hosts.TryGetValue(name, out var s)) _hosts[name] = s = new State();

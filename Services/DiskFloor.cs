@@ -45,6 +45,38 @@ public static class DiskFloor
     public static string Gb(long bytes) => (bytes / 1024.0 / 1024 / 1024).ToString("0.#");
 
     /// <summary>
+    /// The reaping line, <c>worktreeReapBelowGb</c>: under it, a finished ticket's worktree goes before
+    /// its retention is up (<see cref="WorktreeReaper"/>, <see cref="HostWorktrees"/>) - age or space,
+    /// whichever runs out first. It sits well above the floor on purpose: the floor stops new runs, and
+    /// by then the runs already out are installing packages into whatever is left. Zero turns it off.
+    /// <para>
+    /// The retention alone was measured in days when a fleet finished thirty tickets a day; at ninety a
+    /// day, each worktree a gigabyte and more of installed packages, two days of finished worktrees
+    /// filled a 460 GB disk to the last hundred megabytes and stopped every run on it.
+    /// </para>
+    /// </summary>
+    public const string ReapConfigKey = "worktreeReapBelowGb";
+    public const double DefaultReapGb = 40;
+
+    public static double ReapBelowGb(IReadOnlyDictionary<string, JsonElement> global) =>
+        global.TryGetValue(ReapConfigKey, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var gb)
+            ? gb
+            : DefaultReapGb;
+
+    /// <summary>
+    /// Why finished worktrees on these drives should go before their retention is up, or null:
+    /// the fullest drive is under the reaping line. Nothing reported is nothing known, and not pressed.
+    /// </summary>
+    public static string? Pressed(IEnumerable<HostDisk>? disks, double belowGb)
+    {
+        if (belowGb <= 0 || disks is null) return null;
+        var line = (long)(belowGb * 1024 * 1024 * 1024);
+        var worst = disks.Where(d => d.FreeBytes < line).OrderBy(d => d.FreeBytes).FirstOrDefault();
+        return worst is null ? null
+            : $"only {Gb(worst.FreeBytes)} GB free on {worst.Root}, under the {belowGb:0.#} GB reaping line ({ReapConfigKey})";
+    }
+
+    /// <summary>
     /// The drives these folders are on, each once. A folder that does not exist yet is measured by
     /// the nearest one above it that does - a project's worktree root is made by its first run.
     /// Drives that cannot be read are left out rather than guessed at.
